@@ -58,7 +58,7 @@ const affordable = computed(() => {
     <h3>Construct</h3>
     <table class="obsisim-table">
       <thead>
-        <tr><th>Building</th><th>Cost</th><th>Slots</th><th>Recipe</th><th></th></tr>
+        <tr><th>Building</th><th>Cost</th><th>Slots</th><th>Recipe</th><th /></tr>
       </thead>
       <tbody>
         <tr v-for="id in BUILDING_IDS" :key="id">

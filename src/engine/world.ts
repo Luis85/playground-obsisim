@@ -73,6 +73,46 @@ export function initialSave(): SaveGameV1 {
   };
 }
 
+// Object.hasOwn, never `in`: inherited keys like "toString" pass `in` and
+// then indexing the catalog throws inside the guard
+function isStockpileValid(stockpile: SaveGameV1['stockpile']): boolean {
+  return Object.entries(stockpile).every(
+    ([id, amount]) => Object.hasOwn(RESOURCES, id) && Number.isFinite(amount) && (amount as number) >= 0,
+  );
+}
+
+function isBuildingsValid(buildings: SaveGameV1['buildings']): boolean {
+  return buildings.every(
+    (b) => Object.hasOwn(BUILDINGS, b.defId) && b.progress >= 0 && b.progress <= BUILDINGS[b.defId].recipe.ticksPerBatch,
+  );
+}
+
+function isWorkerRecordValid(w: SaveGameV1['workers'][number], buildingCount: number): boolean {
+  if (w.hunger < 0 || w.hunger > BALANCE.hungerMax) return false;
+  if (!Number.isInteger(w.toolTicks) || w.toolTicks < 0 || w.toolTicks > BALANCE.toolDurationTicks) return false;
+  if (w.buildingIndex === null) return true;
+  return Number.isInteger(w.buildingIndex) && w.buildingIndex >= 0 && w.buildingIndex < buildingCount;
+}
+
+// Only called once every worker record has already passed isWorkerRecordValid,
+// so each buildingIndex here is guaranteed null or a valid in-range integer.
+function isStaffingValid(data: SaveGameV1): boolean {
+  const staffCount = new Map<number, number>();
+  for (const w of data.workers) {
+    if (w.buildingIndex === null) continue;
+    staffCount.set(w.buildingIndex, (staffCount.get(w.buildingIndex) ?? 0) + 1);
+  }
+  for (const [index, count] of staffCount) {
+    if (count > BUILDINGS[data.buildings[index].defId].workerSlots) return false;
+  }
+  return true;
+}
+
+function isWorkersValid(data: SaveGameV1): boolean {
+  if (!data.workers.every((w) => isWorkerRecordValid(w, data.buildings.length))) return false;
+  return isStaffingValid(data);
+}
+
 /**
  * Structural validity (isSaveGameV1) plus referential integrity against the content
  * catalog. The Obsidian shell must use THIS before restoring: a stale or hand-edited
@@ -91,33 +131,9 @@ export function isLoadableSave(data: unknown): data is SaveGameV1 {
     data.lastRecruitTick < -BALANCE.recruitCooldownTicks ||
     data.lastRecruitTick > data.tick
   ) return false;
-  // Object.hasOwn, never `in`: inherited keys like "toString" pass `in` and
-  // then indexing the catalog throws inside the guard
-  const stockpileOk = Object.entries(data.stockpile).every(
-    ([id, amount]) => Object.hasOwn(RESOURCES, id) && Number.isFinite(amount) && (amount as number) >= 0,
-  );
-  if (!stockpileOk) return false;
-  const buildingsOk = data.buildings.every(
-    (b) =>
-      Object.hasOwn(BUILDINGS, b.defId) &&
-      b.progress >= 0 &&
-      b.progress <= BUILDINGS[b.defId].recipe.ticksPerBatch,
-  );
-  if (!buildingsOk) return false;
-  const staffCount = new Map<number, number>();
-  for (const w of data.workers) {
-    if (w.hunger < 0 || w.hunger > BALANCE.hungerMax) return false;
-    if (!Number.isInteger(w.toolTicks) || w.toolTicks < 0 || w.toolTicks > BALANCE.toolDurationTicks) return false;
-    if (w.buildingIndex === null) continue;
-    if (!Number.isInteger(w.buildingIndex) || w.buildingIndex < 0 || w.buildingIndex >= data.buildings.length) {
-      return false;
-    }
-    staffCount.set(w.buildingIndex, (staffCount.get(w.buildingIndex) ?? 0) + 1);
-  }
-  for (const [index, count] of staffCount) {
-    if (count > BUILDINGS[data.buildings[index].defId].workerSlots) return false;
-  }
-  return true;
+  if (!isStockpileValid(data.stockpile)) return false;
+  if (!isBuildingsValid(data.buildings)) return false;
+  return isWorkersValid(data);
 }
 
 export function spawnBuilding(prep: IPreptimeWorld, ids: IdCounter, saved: SavedBuilding): IEntity {
@@ -274,8 +290,15 @@ function buildInitialSnapshot(save: SaveGameV1, buildingIds: number[], workerIds
  * world created by createColonyWorld — without the macrotask yield that loop
  * would never cede the event loop and would hang until an external `stop()`.
  * The engine drives time exclusively through discrete `step()` calls.
+ *
+ * sim-ecs types `executionFunction` as `(callback: Function) => any` (loose,
+ * to also accept `setTimeout`/`requestAnimationFrame` directly) but always
+ * invokes it with exactly one zero-arg callback (verified against sim-ecs
+ * 0.6.4's compiled runtime-world source). `() => void` is therefore the true
+ * call shape; the cast below is scoped to this one invocation, not a bypass.
  */
-const runSynchronously = (callback: () => void): void => callback();
+// eslint-disable-next-line @typescript-eslint/no-unsafe-function-type -- mirrors sim-ecs's TExecutionFunction callback type exactly
+const runSynchronously = (callback: Function): void => (callback as () => void)();
 
 export async function createColonyWorld(save?: SaveGameV1): Promise<IRuntimeWorld> {
   return buildColonyPrepWorld({ save }).prepareRun({ executionFunction: runSynchronously });

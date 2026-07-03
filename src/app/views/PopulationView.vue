@@ -12,6 +12,17 @@ const jobNames = computed(() => {
   for (const b of store.snapshot?.buildings ?? []) names.set(b.id, BUILDINGS[b.defId].name);
   return names;
 });
+
+// Pulled out of the template so the markup's own branching stays low: each
+// helper is a single small unit rather than inline ternaries per cell.
+function jobLabel(buildingId: number | null): string {
+  if (buildingId === null) return 'Idle';
+  return jobNames.value.get(buildingId) ?? '?';
+}
+
+function toolLabel(toolTicks: number): string {
+  return toolTicks > 0 ? `⚒ ${toolTicks}t` : '—';
+}
 </script>
 
 <template>
@@ -33,10 +44,10 @@ const jobNames = computed(() => {
       <tbody>
         <tr v-for="w in store.snapshot.workers" :key="w.id">
           <td>#{{ w.id }}</td>
-          <td>{{ w.buildingId === null ? 'Idle' : jobNames.get(w.buildingId) ?? '?' }}</td>
+          <td>{{ jobLabel(w.buildingId) }}</td>
           <td>{{ w.hunger }} / 100</td>
           <td>{{ (w.efficiency * 100).toFixed(0) }}%</td>
-          <td>{{ w.toolTicks > 0 ? `⚒ ${w.toolTicks}t` : '—' }}</td>
+          <td>{{ toolLabel(w.toolTicks) }}</td>
         </tr>
       </tbody>
     </table>

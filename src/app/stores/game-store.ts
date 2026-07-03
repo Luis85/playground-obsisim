@@ -2,7 +2,7 @@ import { defineStore } from 'pinia';
 import type { EngineStatus, Snapshot } from '../../shared/snapshot';
 import { BALANCE } from '../../engine/content/balance';
 
-export interface NoticeEntry {
+interface NoticeEntry {
   tick: number;
   message: string;
 }

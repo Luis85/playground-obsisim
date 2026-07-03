@@ -2,6 +2,7 @@
 import { useRoute } from 'vue-router';
 import { useGameStore } from './stores/game-store';
 import TopBar from './components/TopBar.vue';
+import NoticeBanner from './components/NoticeBanner.vue';
 
 const store = useGameStore();
 const route = useRoute();
@@ -19,11 +20,7 @@ const tabs = [
     <div v-if="store.error" class="obsisim-error" data-test="error-banner">
       Simulation paused on error: {{ store.error }}
     </div>
-    <div v-if="store.recentNotices.length" class="obsisim-notices">
-      <div v-for="notice in store.recentNotices" :key="notice.tick + notice.message" class="obsisim-notice">
-        [t{{ notice.tick }}] {{ notice.message }}
-      </div>
-    </div>
+    <NoticeBanner />
     <nav class="obsisim-nav">
       <router-link
         v-for="tab in tabs"

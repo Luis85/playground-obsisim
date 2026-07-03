@@ -8,6 +8,10 @@ interface PluginData {
   corruptBackup?: unknown;
 }
 
+function isMissingSave(data: PluginData): boolean {
+  return data.save === undefined || data.save === null;
+}
+
 export default class ObsiSimPlugin extends Plugin {
   async onload(): Promise<void> {
     this.registerView(VIEW_TYPE_OBSISIM, (leaf) => new GameView(leaf, this));
@@ -57,11 +61,15 @@ export default class ObsiSimPlugin extends Plugin {
     // wait out any in-flight write (e.g. a closing view's save) before reading
     await this.saveQueue;
     const data = ((await this.loadData()) as PluginData | null) ?? {};
-    if (data.save === undefined || data.save === null) return null;
+    if (isMissingSave(data)) return null;
     if (isLoadableSave(data.save)) return data.save; // catalog-aware guard, not bare isSaveGameV1
-    // spec 7.2: corrupt/incompatible save -> back it up, start fresh, tell the user
+    await this.backupCorruptSave();
+    return null;
+  }
+
+  // spec 7.2: corrupt/incompatible save -> back it up, start fresh, tell the user
+  private async backupCorruptSave(): Promise<void> {
     new Notice('ObsiSim: save was corrupt or incompatible — starting a fresh colony (old save backed up).');
     await this.enqueueDataWrite((current) => ({ ...current, save: undefined, corruptBackup: current.save }));
-    return null;
   }
 }

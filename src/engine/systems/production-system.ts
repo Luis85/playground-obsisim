@@ -19,16 +19,14 @@ export const ProductionSystem = () => createSystem({
       powerByBuilding.set(job.buildingId, (powerByBuilding.get(job.buildingId) ?? 0) + contribution);
     }
 
-    for (const { building, production } of buildings.iter()) {
-      const workPower = powerByBuilding.get(building.id) ?? 0;
-      if (workPower === 0) continue;
-
+    // Isolated so the run function itself stays a flat dispatch loop.
+    const advanceBatches = (building: Building, production: Production, workPower: number) => {
       const recipe = BUILDINGS[building.defId].recipe;
       if (!production.batchActive && stockpile.pay(recipe.inputs)) {
         production.batchActive = true;
         production.progress = 0;
       }
-      if (!production.batchActive) continue;
+      if (!production.batchActive) return;
 
       production.progress += workPower;
       while (production.batchActive && production.progress >= recipe.ticksPerBatch) {
@@ -41,6 +39,12 @@ export const ProductionSystem = () => createSystem({
         production.batchActive = stockpile.pay(recipe.inputs);
       }
       if (!production.batchActive) production.progress = 0; // stalled: don't bank effort
+    };
+
+    for (const { building, production } of buildings.iter()) {
+      const workPower = powerByBuilding.get(building.id) ?? 0;
+      if (workPower === 0) continue;
+      advanceBatches(building, production, workPower);
     }
   })
   .build();

@@ -117,4 +117,16 @@ describe('GameEngine', () => {
     expect(engine.snapshot!.tick).toBe(1); // fully stepped, not half-applied
     await pending;
   });
+
+  it('a thrown step captures the error and pauses, without crashing the caller', async () => {
+    const engine = await GameEngine.create();
+    engine.start();
+    // Force the next world.step() to reject; runStep's catch must record the
+    // error and pause rather than let it propagate out of stepOnce().
+    const world = (engine as unknown as { world: { step(): Promise<void> } }).world;
+    world.step = () => Promise.reject(new Error('sim-ecs blew up'));
+    await engine.stepOnce();
+    expect(engine.status.error).toBe('sim-ecs blew up');
+    expect(engine.status.paused).toBe(true);
+  });
 });

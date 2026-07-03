@@ -57,4 +57,13 @@ describe('useGameStore', () => {
     store.ingest(makeSnapshot({ tick: 40, lastRecruitTick: 0 }), status);
     expect(store.recruitCooldownRemaining).toBe(0);
   });
+
+  it('defaults lowFood and recruitCooldownRemaining before the first snapshot arrives', () => {
+    // App.vue renders a loading state while store.snapshot is still null (pre-first-tick);
+    // both getters must degrade safely rather than throw on the missing snapshot.
+    const store = useGameStore();
+    expect(store.snapshot).toBeNull();
+    expect(store.lowFood).toBe(false);
+    expect(store.recruitCooldownRemaining).toBe(0);
+  });
 });

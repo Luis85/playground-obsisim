@@ -21,65 +21,82 @@ export const SnapshotSystem = () => createSystem({
   }),
 })
   .withName('SnapshotSystem')
+  // Split into one builder per snapshot section: keeps each unit's complexity
+  // low and mirrors the shape of the Snapshot type being assembled.
   .withRunFunction(({ clock, stockpile, stats, notices, store, buildings, workers }) => {
-    const workerSnaps: WorkerSnapshot[] = [];
     const staffCount = new Map<number, number>();
     const powerByBuilding = new Map<number, number>();
     const tooledByBuilding = new Map<number, number>();
-    for (const { worker, hunger, job, efficiency, coverage } of workers.iter()) {
-      workerSnaps.push({
-        id: worker.id,
-        hunger: hunger.value,
-        efficiency: efficiency.value,
-        buildingId: job.buildingId,
-        toolTicks: coverage.remainingTicks,
-      });
-      if (job.buildingId !== null) {
-        const tooled = coverage.remainingTicks > 0;
-        staffCount.set(job.buildingId, (staffCount.get(job.buildingId) ?? 0) + 1);
-        powerByBuilding.set(
-          job.buildingId,
-          (powerByBuilding.get(job.buildingId) ?? 0) + efficiency.value * (tooled ? BALANCE.toolMultiplier : 1),
-        );
-        if (tooled) tooledByBuilding.set(job.buildingId, (tooledByBuilding.get(job.buildingId) ?? 0) + 1);
+
+    const buildWorkerSnaps = (): WorkerSnapshot[] => {
+      const snaps: WorkerSnapshot[] = [];
+      for (const { worker, hunger, job, efficiency, coverage } of workers.iter()) {
+        snaps.push({
+          id: worker.id,
+          hunger: hunger.value,
+          efficiency: efficiency.value,
+          buildingId: job.buildingId,
+          toolTicks: coverage.remainingTicks,
+        });
+        if (job.buildingId !== null) {
+          const tooled = coverage.remainingTicks > 0;
+          staffCount.set(job.buildingId, (staffCount.get(job.buildingId) ?? 0) + 1);
+          powerByBuilding.set(
+            job.buildingId,
+            (powerByBuilding.get(job.buildingId) ?? 0) + efficiency.value * (tooled ? BALANCE.toolMultiplier : 1),
+          );
+          if (tooled) tooledByBuilding.set(job.buildingId, (tooledByBuilding.get(job.buildingId) ?? 0) + 1);
+        }
       }
-    }
-    workerSnaps.sort((a, b) => a.id - b.id);
+      snaps.sort((a, b) => a.id - b.id);
+      return snaps;
+    };
 
-    const buildingSnaps: BuildingSnapshot[] = [];
-    for (const { building, slots, production } of buildings.iter()) {
-      const def = BUILDINGS[building.defId];
-      const staffed = staffCount.get(building.id) ?? 0;
-      buildingSnaps.push({
-        id: building.id,
-        defId: building.defId,
-        workers: staffed,
-        workerSlots: slots.max,
-        state: staffed === 0 ? 'unstaffed' : production.batchActive ? 'producing' : 'waitingForInput',
-        progress: production.progress,
-        batchActive: production.batchActive,
-        progressPct: Math.min(100, Math.round((production.progress / def.recipe.ticksPerBatch) * 100)),
-        tooledWorkers: tooledByBuilding.get(building.id) ?? 0,
-        workPower: powerByBuilding.get(building.id) ?? 0,
-      });
-    }
-    buildingSnaps.sort((a, b) => a.id - b.id);
+    // Depends on staffCount/powerByBuilding/tooledByBuilding, so must run after buildWorkerSnaps.
+    const buildBuildingSnaps = (): BuildingSnapshot[] => {
+      const snaps: BuildingSnapshot[] = [];
+      for (const { building, slots, production } of buildings.iter()) {
+        const def = BUILDINGS[building.defId];
+        const staffed = staffCount.get(building.id) ?? 0;
+        snaps.push({
+          id: building.id,
+          defId: building.defId,
+          workers: staffed,
+          workerSlots: slots.max,
+          state: staffed === 0 ? 'unstaffed' : production.batchActive ? 'producing' : 'waitingForInput',
+          progress: production.progress,
+          batchActive: production.batchActive,
+          progressPct: Math.min(100, Math.round((production.progress / def.recipe.ticksPerBatch) * 100)),
+          tooledWorkers: tooledByBuilding.get(building.id) ?? 0,
+          workPower: powerByBuilding.get(building.id) ?? 0,
+        });
+      }
+      snaps.sort((a, b) => a.id - b.id);
+      return snaps;
+    };
 
-    const stockpileStats = {} as Record<ResourceId, ResourceStats>;
-    let colonyWealth = 0;
-    for (const id of RESOURCE_IDS) {
-      const stock = stockpile.get(id);
-      const { production, consumption } = stats.rates(id);
-      const stockValue = stock * RESOURCES[id].value;
-      colonyWealth += stockValue;
-      stockpileStats[id] = {
-        stock,
-        productionRate: production,
-        consumptionRate: consumption,
-        netFlow: production - consumption,
-        stockValue,
-      };
-    }
+    const buildStockpileStats = (): { stockpileStats: Record<ResourceId, ResourceStats>; colonyWealth: number } => {
+      const stockpileStats = {} as Record<ResourceId, ResourceStats>;
+      let colonyWealth = 0;
+      for (const id of RESOURCE_IDS) {
+        const stock = stockpile.get(id);
+        const { production, consumption } = stats.rates(id);
+        const stockValue = stock * RESOURCES[id].value;
+        colonyWealth += stockValue;
+        stockpileStats[id] = {
+          stock,
+          productionRate: production,
+          consumptionRate: consumption,
+          netFlow: production - consumption,
+          stockValue,
+        };
+      }
+      return { stockpileStats, colonyWealth };
+    };
+
+    const workerSnaps = buildWorkerSnaps();
+    const buildingSnaps = buildBuildingSnaps();
+    const { stockpileStats, colonyWealth } = buildStockpileStats();
 
     store.latest = {
       tick: clock.tick,

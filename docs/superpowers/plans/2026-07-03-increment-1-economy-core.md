@@ -1795,6 +1795,7 @@ describe('ProductionSystem', () => {
   it('only covered workers get the multiplier (mixed staffing)', async () => {
     const save = initialSave();
     save.workers = [];
+    save.stockpile = {}; // starting wood would mask the 'no output yet' assertion
     const prep = buildColonyPrepWorld({ save, systems: [ProductionSystem] });
     const ids = getPrepResource(prep, IdCounter);
     // one covered worker (1.5) + one bare worker (1.0) = 2.5 power/tick, forester batch is 3

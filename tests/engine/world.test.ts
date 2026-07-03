@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Hunger, JobAssignment, Worker } from '../../src/engine/components';
 import { IdCounter, SimClock, SnapshotStore, Stockpile } from '../../src/engine/resources';
 import { buildColonyPrepWorld, createColonyWorld, getPrepResource, initialSave, isLoadableSave } from '../../src/engine/world';
+import { MAX_SAVED_ENTITIES } from '../../src/shared/save';
 
 describe('initialSave', () => {
   it('matches the spec starting state', () => {
@@ -110,6 +111,18 @@ describe('isLoadableSave', () => {
     save.buildings.push({ id: 4, defId: 'forester', progress: 0, batchActive: false });
     save.nextEntityId = 4; // must be strictly greater than the max id (4)
     expect(isLoadableSave(save)).toBe(false);
+  });
+
+  it('rejects saves with absurd entity counts before walking them', () => {
+    const flooded = initialSave();
+    flooded.workers = Array.from({ length: MAX_SAVED_ENTITIES + 1 }, (_, index) => ({
+      id: index + 1,
+      hunger: 0,
+      buildingId: null,
+      toolTicks: 0,
+    }));
+    flooded.nextEntityId = MAX_SAVED_ENTITIES + 2;
+    expect(isLoadableSave(flooded)).toBe(false);
   });
 });
 

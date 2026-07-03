@@ -1,5 +1,13 @@
 import type { BuildingDefId, ResourceId } from './content-types';
 
+/**
+ * Hard ceiling per entity array in a save. Organic play cannot approach this
+ * (recruiting is cooldown-gated), but a synced/hand-edited data.json with
+ * millions of records would otherwise freeze the renderer during entity
+ * spawning. Checked BEFORE any per-record validation walks the arrays.
+ */
+export const MAX_SAVED_ENTITIES = 10_000;
+
 export interface SavedBuilding {
   id: number;
   defId: BuildingDefId;
@@ -38,6 +46,7 @@ export function isSaveGameV1(data: unknown): data is SaveGameV1 {
     Number.isFinite(save.nextEntityId) &&
     typeof save.stockpile === 'object' && save.stockpile !== null &&
     Array.isArray(save.buildings) &&
+    save.buildings.length <= MAX_SAVED_ENTITIES &&
     save.buildings.every((b: unknown) =>
       typeof b === 'object' && b !== null &&
       Number.isFinite((b as SavedBuilding).id) &&
@@ -45,6 +54,7 @@ export function isSaveGameV1(data: unknown): data is SaveGameV1 {
       Number.isFinite((b as SavedBuilding).progress) &&
       typeof (b as SavedBuilding).batchActive === 'boolean') &&
     Array.isArray(save.workers) &&
+    save.workers.length <= MAX_SAVED_ENTITIES &&
     save.workers.every((w: unknown) =>
       typeof w === 'object' && w !== null &&
       Number.isFinite((w as SavedWorker).id) &&

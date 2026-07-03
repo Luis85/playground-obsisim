@@ -167,8 +167,12 @@ export function isLoadableSave(data: unknown): data is SaveGameV1 {
   if (!isSaveGameV1(data)) return false;
   // SAFE integers: a fractional tick would desync every modulo-based cadence
   // (autosave, recruit cooldown) forever; past 2^53, ++ stops incrementing.
-  // Bounded below the ceiling so post-load increments stay safe too.
-  if (!Number.isSafeInteger(data.tick) || data.tick < 0 || data.tick > MAX_SAVED_COUNTER) return false;
+  // No upper REJECT bound: any hard accept-bound would orphan a save that
+  // plays past it, so oversized ticks are CLAMPED on load instead (the tick
+  // only feeds the autosave modulo and display). nextEntityId keeps its hard
+  // bound below: it cannot be clamped without breaking id uniqueness, and
+  // crossing it organically would require creating ~9e15 entities.
+  if (!Number.isSafeInteger(data.tick) || data.tick < 0) return false;
   // Lower bound intentionally NOT checked against -BALANCE.recruitCooldownTicks:
   // a value lower than the current sentinel just means "cooldown long expired",
   // which is harmless (isSafeInteger already floors it to a real number, and
@@ -241,8 +245,10 @@ export function buildColonyPrepWorld(
   const prep = builder.build();
 
   const clock = new SimClock();
-  clock.tick = save.tick;
-  clock.lastRecruitTick = save.lastRecruitTick;
+  // clamp on load (never reject): leaves 2^32 increments of headroom every
+  // session regardless of what a prior session wrote
+  clock.tick = Math.min(save.tick, MAX_SAVED_COUNTER);
+  clock.lastRecruitTick = Math.min(save.lastRecruitTick, clock.tick);
   const ids = new IdCounter(save.nextEntityId);
   const store = new SnapshotStore();
   const instances = [
@@ -311,8 +317,8 @@ function buildInitialSnapshot(save: SaveGameV1): Snapshot {
     stockpile[resourceId] = { stock, productionRate: 0, consumptionRate: 0, netFlow: 0, stockValue };
   }
   return {
-    tick: save.tick,
-    lastRecruitTick: save.lastRecruitTick,
+    tick: Math.min(save.tick, MAX_SAVED_COUNTER), // same clamp as the spawned clock
+    lastRecruitTick: Math.min(save.lastRecruitTick, Math.min(save.tick, MAX_SAVED_COUNTER)),
     stockpile,
     colonyWealth,
     population,

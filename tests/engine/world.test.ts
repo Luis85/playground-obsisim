@@ -133,13 +133,27 @@ describe('isLoadableSave', () => {
     expect(isLoadableSave(unsafeTick)).toBe(false);
   });
 
-  it('rejects counters at the safe-integer ceiling (no headroom for post-load ++)', () => {
+  it('accepts ceiling-magnitude ticks (clamped on load) but rejects a ceiling id counter', async () => {
+    // any hard accept-bound on tick would orphan a save that plays past it,
+    // so ticks clamp on load instead; the id counter cannot clamp (uniqueness)
+    // and keeps its hard bound.
     const ceilingTick = initialSave();
-    ceilingTick.tick = Number.MAX_SAFE_INTEGER; // passes isSafeInteger, stalls on the next ++
-    expect(isLoadableSave(ceilingTick)).toBe(false);
+    ceilingTick.tick = Number.MAX_SAFE_INTEGER;
+    ceilingTick.lastRecruitTick = 0;
+    expect(isLoadableSave(ceilingTick)).toBe(true);
+    const world = await createColonyWorld(ceilingTick);
+    const seededTick = world.getResource(SnapshotStore).latest!.tick;
+    expect(seededTick).toBeLessThan(Number.MAX_SAFE_INTEGER); // clamped: headroom restored
+    expect(world.getResource(SimClock).tick).toBe(seededTick); // clock and snapshot agree
     const ceilingCounter = initialSave();
     ceilingCounter.nextEntityId = Number.MAX_SAFE_INTEGER;
     expect(isLoadableSave(ceilingCounter)).toBe(false);
+  });
+
+  it('rejects array-shaped stockpiles (would silently restore empty)', () => {
+    const arrayStockpile = initialSave();
+    (arrayStockpile as { stockpile: unknown }).stockpile = [];
+    expect(isLoadableSave(arrayStockpile)).toBe(false);
   });
 
   it('rejects fractional ticks and inherited-object-key building ids', () => {

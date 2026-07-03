@@ -45,6 +45,7 @@ export function isSaveGameV1(data: unknown): data is SaveGameV1 {
     Number.isFinite(save.lastRecruitTick) &&
     Number.isFinite(save.nextEntityId) &&
     typeof save.stockpile === 'object' && save.stockpile !== null &&
+    !Array.isArray(save.stockpile) && // an array passes typeof 'object' but would restore as an empty stockpile
     Array.isArray(save.buildings) &&
     save.buildings.length <= MAX_SAVED_ENTITIES &&
     save.buildings.every((b: unknown) =>

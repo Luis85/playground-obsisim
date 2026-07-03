@@ -1,29 +1,27 @@
 import type { IRuntimeWorld } from 'sim-ecs';
 import type { Command } from '../shared/commands';
 import type { EngineStatus, Snapshot } from '../shared/snapshot';
-import type { SaveGameV1, SavedBuilding } from '../shared/save';
+import type { SaveGameV1, SavedBuilding, SavedWorker } from '../shared/save';
 import { BALANCE } from './content/balance';
 import { Building, Hunger, JobAssignment, Production, ToolCoverage, Worker } from './components';
-import { CommandQueue, SimClock, SnapshotStore, Stockpile } from './resources';
+import { CommandQueue, IdCounter, SimClock, SnapshotStore, Stockpile } from './resources';
 import { createColonyWorld, initialSave, refreshEntitySections } from './world';
 
 export type UpdateListener = (snapshot: Snapshot | null, status: EngineStatus) => void;
 
 export function buildSaveFromWorld(world: IRuntimeWorld): SaveGameV1 {
   const clock = world.getResource(SimClock);
-  const buildings: { id: number; saved: SavedBuilding }[] = [];
-  const workers: { id: number; hunger: number; buildingId: number | null; toolTicks: number }[] = [];
+  const buildings: SavedBuilding[] = [];
+  const workers: SavedWorker[] = [];
   for (const entity of world.getEntities()) {
     const building = entity.getComponent(Building);
     if (building) {
       const production = entity.getComponent(Production)!;
       buildings.push({
         id: building.id,
-        saved: {
-          defId: building.defId,
-          progress: production.progress,
-          batchActive: production.batchActive,
-        },
+        defId: building.defId,
+        progress: production.progress,
+        batchActive: production.batchActive,
       });
       continue;
     }
@@ -39,18 +37,14 @@ export function buildSaveFromWorld(world: IRuntimeWorld): SaveGameV1 {
   }
   buildings.sort((a, b) => a.id - b.id);
   workers.sort((a, b) => a.id - b.id);
-  const buildingIndexById = new Map(buildings.map((b, index) => [b.id, index]));
   return {
     version: 1,
     tick: clock.tick,
     lastRecruitTick: clock.lastRecruitTick,
     stockpile: world.getResource(Stockpile).toJSON(),
-    buildings: buildings.map((b) => b.saved),
-    workers: workers.map((w) => ({
-      hunger: w.hunger,
-      toolTicks: w.toolTicks,
-      buildingIndex: w.buildingId === null ? null : (buildingIndexById.get(w.buildingId) ?? null),
-    })),
+    buildings,
+    workers,
+    nextEntityId: world.getResource(IdCounter).peek(),
   };
 }
 

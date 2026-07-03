@@ -74,7 +74,7 @@ describe('GameEngine', () => {
     engine.dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
     await engine.stepOnce(); // tick 100 -> autosave fires
     const save: SaveGameV1 = autosave.mock.calls[0][0];
-    expect(save.buildings).toEqual([{ defId: 'forester', progress: 0, batchActive: false }]);
+    expect(save.buildings).toEqual([{ id: 4, defId: 'forester', progress: 0, batchActive: false }]);
     expect(save.stockpile.wood).toBe(20); // cost paid AND building present
   });
 
@@ -123,7 +123,7 @@ describe('GameEngine', () => {
     engine.dispatch({ type: 'constructBuilding', buildingDefId: 'forester' }); // paused: no tick runs
     await engine.flush(); // runs one final tick to process the queue
     const save = engine.serialize();
-    expect(save.buildings).toEqual([{ defId: 'forester', progress: 0, batchActive: false }]);
+    expect(save.buildings).toEqual([{ id: 4, defId: 'forester', progress: 0, batchActive: false }]);
     expect(save.stockpile.wood).toBe(20); // cost paid AND building present
     await engine.flush(); // empty queue: no extra tick
     expect(engine.serialize().tick).toBe(1);
@@ -136,6 +136,21 @@ describe('GameEngine', () => {
     expect(engine.snapshot!.buildings).toHaveLength(1);
     expect(engine.snapshot!.buildings[0].defId).toBe('forester');
     expect(engine.snapshot!.stockpile.wood.stock).toBe(20);
+  });
+
+  it('save/restore preserves entity ids and the id counter keeps incrementing past them', async () => {
+    const engine = await GameEngine.create();
+    engine.dispatch({ type: 'constructBuilding', buildingDefId: 'forester' }); // workers 1-3 exist -> gets id 4
+    await steps(engine, 3);
+    const save = engine.serialize();
+
+    const restored = await GameEngine.create(save);
+    expect(restored.snapshot!.workers.map((w) => w.id).sort((a, b) => a - b)).toEqual([1, 2, 3]);
+    expect(restored.snapshot!.buildings.map((b) => b.id)).toEqual([4]);
+
+    restored.dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
+    await restored.stepOnce();
+    expect(restored.snapshot!.buildings.map((b) => b.id).sort((a, b) => a - b)).toEqual([4, 5]);
   });
 
   it('a thrown step captures the error and pauses, without crashing the caller', async () => {

@@ -8,8 +8,10 @@ describe('initialSave', () => {
     const save = initialSave();
     expect(save.stockpile).toEqual({ wood: 30, berries: 20 });
     expect(save.workers).toHaveLength(3);
+    expect(save.workers.map((w) => w.id)).toEqual([1, 2, 3]);
     expect(save.buildings).toHaveLength(0);
     expect(save.tick).toBe(0);
+    expect(save.nextEntityId).toBe(4);
   });
 });
 
@@ -20,13 +22,13 @@ describe('isLoadableSave', () => {
 
   it('rejects unknown building def ids', () => {
     const save = initialSave();
-    save.buildings.push({ defId: 'castle' as never, progress: 0, batchActive: false });
+    save.buildings.push({ id: 4, defId: 'castle' as never, progress: 0, batchActive: false });
     expect(isLoadableSave(save)).toBe(false);
   });
 
-  it('rejects out-of-range worker building indices', () => {
+  it('rejects a worker buildingId referencing a nonexistent building', () => {
     const save = initialSave();
-    save.workers[0].buildingIndex = 3; // no buildings exist
+    save.workers[0].buildingId = 3; // no buildings exist
     expect(isLoadableSave(save)).toBe(false);
   });
 
@@ -56,14 +58,16 @@ describe('isLoadableSave', () => {
     tooled.workers[0].toolTicks = -1;
     expect(isLoadableSave(tooled)).toBe(false);
     const overworked = initialSave();
-    overworked.buildings.push({ defId: 'forester', progress: 99, batchActive: true }); // ticksPerBatch is 3
+    overworked.buildings.push({ id: 4, defId: 'forester', progress: 99, batchActive: true }); // ticksPerBatch is 3
     expect(isLoadableSave(overworked)).toBe(false);
   });
 
   it('rejects more assigned workers than a building has slots', () => {
     const save = initialSave();
-    save.buildings.push({ defId: 'forester', progress: 0, batchActive: false }); // 2 slots
-    save.workers = [0, 1, 2].map(() => ({ hunger: 0, buildingIndex: 0, toolTicks: 0 }));
+    const building = { id: 4, defId: 'forester' as const, progress: 0, batchActive: false }; // 2 slots
+    save.buildings.push(building);
+    save.nextEntityId = 5;
+    save.workers = [1, 2, 3].map((id) => ({ id, hunger: 0, buildingId: building.id, toolTicks: 0 }));
     expect(isLoadableSave(save)).toBe(false);
   });
 
@@ -81,17 +85,31 @@ describe('isLoadableSave', () => {
     fractional.tick = 0.5; // would desync the autosave modulo forever
     expect(isLoadableSave(fractional)).toBe(false);
     const inherited = initialSave();
-    inherited.buildings.push({ defId: 'toString' as never, progress: 0, batchActive: false });
+    inherited.buildings.push({ id: 4, defId: 'toString' as never, progress: 0, batchActive: false });
     expect(isLoadableSave(inherited)).toBe(false); // must return false, not throw
   });
 
   it('rejects batch progress the engine could never serialize', () => {
     const completed = initialSave();
-    completed.buildings.push({ defId: 'forester', progress: 3, batchActive: true }); // == ticksPerBatch
+    completed.buildings.push({ id: 4, defId: 'forester', progress: 3, batchActive: true }); // == ticksPerBatch
     expect(isLoadableSave(completed)).toBe(false);
     const banked = initialSave();
-    banked.buildings.push({ defId: 'forester', progress: 1, batchActive: false }); // inactive with progress
+    banked.buildings.push({ id: 4, defId: 'forester', progress: 1, batchActive: false }); // inactive with progress
     expect(isLoadableSave(banked)).toBe(false);
+  });
+
+  it('rejects duplicate ids shared across buildings and workers', () => {
+    const save = initialSave();
+    save.buildings.push({ id: 3, defId: 'forester', progress: 0, batchActive: false }); // collides with worker 3
+    save.nextEntityId = 5;
+    expect(isLoadableSave(save)).toBe(false);
+  });
+
+  it('rejects nextEntityId that does not exceed every saved id', () => {
+    const save = initialSave();
+    save.buildings.push({ id: 4, defId: 'forester', progress: 0, batchActive: false });
+    save.nextEntityId = 4; // must be strictly greater than the max id (4)
+    expect(isLoadableSave(save)).toBe(false);
   });
 });
 

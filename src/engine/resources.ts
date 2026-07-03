@@ -86,10 +86,19 @@ export class NoticeBoard {
 }
 
 export class IdCounter {
-  private next = 1;
+  private next: number;
+
+  constructor(start = 1) {
+    this.next = start;
+  }
 
   take(): number {
     return this.next++;
+  }
+
+  /** Next id that would be handed out, without consuming it. Used for serialization. */
+  peek(): number {
+    return this.next;
   }
 }
 

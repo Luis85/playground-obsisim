@@ -20,7 +20,8 @@ function dispatch(world: Awaited<ReturnType<typeof createColonyWorld>>, ...comma
 function richSave(): SaveGameV1 {
   const save = initialSave();
   save.stockpile = { wood: 500, planks: 200, berries: 200 };
-  save.workers = Array.from({ length: 14 }, () => ({ hunger: 0, buildingIndex: null, toolTicks: 0 }));
+  save.workers = Array.from({ length: 14 }, (_, i) => ({ id: i + 1, hunger: 0, buildingId: null, toolTicks: 0 }));
+  save.nextEntityId = 15;
   return save;
 }
 

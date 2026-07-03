@@ -71,7 +71,13 @@ export function initialSave(): SaveGameV1 {
     lastRecruitTick: -BALANCE.recruitCooldownTicks,
     stockpile: { ...STARTING_STOCK },
     buildings: [],
-    workers: Array.from({ length: STARTING_WORKERS }, () => ({ hunger: 0, buildingIndex: null, toolTicks: 0 })),
+    workers: Array.from({ length: STARTING_WORKERS }, (_, index) => ({
+      id: index + 1,
+      hunger: 0,
+      buildingId: null,
+      toolTicks: 0,
+    })),
+    nextEntityId: STARTING_WORKERS + 1,
   };
 }
 
@@ -95,30 +101,43 @@ function isBuildingsValid(buildings: SaveGameV1['buildings']): boolean {
   });
 }
 
-function isWorkerRecordValid(w: SaveGameV1['workers'][number], buildingCount: number): boolean {
+function isWorkerRecordValid(w: SaveGameV1['workers'][number], buildingIds: ReadonlySet<number>): boolean {
   if (w.hunger < 0 || w.hunger > BALANCE.hungerMax) return false;
   if (!Number.isInteger(w.toolTicks) || w.toolTicks < 0 || w.toolTicks > BALANCE.toolDurationTicks) return false;
-  if (w.buildingIndex === null) return true;
-  return Number.isInteger(w.buildingIndex) && w.buildingIndex >= 0 && w.buildingIndex < buildingCount;
+  if (w.buildingId === null) return true;
+  return buildingIds.has(w.buildingId);
 }
 
 // Only called once every worker record has already passed isWorkerRecordValid,
-// so each buildingIndex here is guaranteed null or a valid in-range integer.
+// so each buildingId here is guaranteed null or a valid saved building id.
 function isStaffingValid(data: SaveGameV1): boolean {
   const staffCount = new Map<number, number>();
   for (const w of data.workers) {
-    if (w.buildingIndex === null) continue;
-    staffCount.set(w.buildingIndex, (staffCount.get(w.buildingIndex) ?? 0) + 1);
+    if (w.buildingId === null) continue;
+    staffCount.set(w.buildingId, (staffCount.get(w.buildingId) ?? 0) + 1);
   }
-  for (const [index, count] of staffCount) {
-    if (count > BUILDINGS[data.buildings[index].defId].workerSlots) return false;
+  const buildingById = new Map(data.buildings.map((b) => [b.id, b]));
+  for (const [buildingId, count] of staffCount) {
+    if (count > BUILDINGS[buildingById.get(buildingId)!.defId].workerSlots) return false;
   }
   return true;
 }
 
 function isWorkersValid(data: SaveGameV1): boolean {
-  if (!data.workers.every((w) => isWorkerRecordValid(w, data.buildings.length))) return false;
+  const buildingIds = new Set(data.buildings.map((b) => b.id));
+  if (!data.workers.every((w) => isWorkerRecordValid(w, buildingIds))) return false;
   return isStaffingValid(data);
+}
+
+// Cross-array id validity: positive integers, unique across buildings AND
+// workers combined (they share one id space), and nextEntityId strictly past
+// every id already handed out so the restored IdCounter can never collide.
+function isIdsValid(data: SaveGameV1): boolean {
+  const allIds = [...data.buildings.map((b) => b.id), ...data.workers.map((w) => w.id)];
+  if (!allIds.every((id) => Number.isInteger(id) && id > 0)) return false;
+  if (new Set(allIds).size !== allIds.length) return false;
+  if (!Number.isInteger(data.nextEntityId) || data.nextEntityId < 1) return false;
+  return allIds.every((id) => id < data.nextEntityId);
 }
 
 /**
@@ -141,14 +160,19 @@ export function isLoadableSave(data: unknown): data is SaveGameV1 {
   ) return false;
   if (!isStockpileValid(data.stockpile)) return false;
   if (!isBuildingsValid(data.buildings)) return false;
+  if (!isIdsValid(data)) return false;
   return isWorkersValid(data);
 }
 
-export function spawnBuilding(prep: IPreptimeWorld, ids: IdCounter, saved: SavedBuilding): IEntity {
+export function spawnBuilding(
+  prep: IPreptimeWorld,
+  ids: IdCounter,
+  saved: Omit<SavedBuilding, 'id'> & { id?: number },
+): IEntity {
   const def = BUILDINGS[saved.defId];
   return prep
     .buildEntity()
-    .with(new Building(ids.take(), saved.defId))
+    .with(new Building(saved.id ?? ids.take(), saved.defId))
     .with(new WorkerSlots(def.workerSlots))
     .with(new Production(saved.progress, saved.batchActive))
     .build();
@@ -157,11 +181,11 @@ export function spawnBuilding(prep: IPreptimeWorld, ids: IdCounter, saved: Saved
 export function spawnWorker(
   prep: IPreptimeWorld,
   ids: IdCounter,
-  opts: { hunger?: number; buildingId?: number | null; efficiency?: number; toolTicks?: number } = {},
+  opts: { id?: number; hunger?: number; buildingId?: number | null; efficiency?: number; toolTicks?: number } = {},
 ): IEntity {
   return prep
     .buildEntity()
-    .with(new Worker(ids.take()))
+    .with(new Worker(opts.id ?? ids.take()))
     .with(new Hunger(opts.hunger ?? 0))
     .with(new JobAssignment(opts.buildingId ?? null))
     .with(new Efficiency(opts.efficiency ?? 1))
@@ -189,7 +213,7 @@ export function buildColonyPrepWorld(
   const clock = new SimClock();
   clock.tick = save.tick;
   clock.lastRecruitTick = save.lastRecruitTick;
-  const ids = new IdCounter();
+  const ids = new IdCounter(save.nextEntityId);
   const store = new SnapshotStore();
   const instances = [
     new Stockpile(save.stockpile),
@@ -207,35 +231,33 @@ export function buildColonyPrepWorld(
   }
   PREP_RESOURCES.set(prep, registry);
 
-  const buildingIds = save.buildings.map(
-    (saved) => spawnBuilding(prep, ids, saved).getComponent(Building)!.id,
-  );
-  const workerIds = save.workers.map(
-    (saved) =>
-      spawnWorker(prep, ids, {
-        hunger: saved.hunger,
-        toolTicks: saved.toolTicks,
-        buildingId: saved.buildingIndex === null ? null : buildingIds[saved.buildingIndex],
-      }).getComponent(Worker)!.id,
-  );
+  for (const saved of save.buildings) spawnBuilding(prep, ids, saved);
+  for (const saved of save.workers) {
+    spawnWorker(prep, ids, {
+      id: saved.id,
+      hunger: saved.hunger,
+      toolTicks: saved.toolTicks,
+      buildingId: saved.buildingId,
+    });
+  }
   // The UI must never see a null snapshot: a reset or freshly created engine is
   // paused until its first tick, so seed the store from the save. SnapshotSystem
   // replaces this on the first step.
-  store.latest = buildInitialSnapshot(save, buildingIds, workerIds);
+  store.latest = buildInitialSnapshot(save);
 
   return prep;
 }
 
-function buildInitialSnapshot(save: SaveGameV1, buildingIds: number[], workerIds: number[]): Snapshot {
-  const workerFacts: WorkerFacts[] = save.workers.map((saved, index) => ({
-    id: workerIds[index],
+function buildInitialSnapshot(save: SaveGameV1): Snapshot {
+  const workerFacts: WorkerFacts[] = save.workers.map((saved) => ({
+    id: saved.id,
     hunger: saved.hunger,
     efficiency: workerEfficiency(saved.hunger),
-    buildingId: saved.buildingIndex === null ? null : buildingIds[saved.buildingIndex],
+    buildingId: saved.buildingId,
     toolTicks: saved.toolTicks,
   }));
-  const buildingFacts: BuildingFacts[] = save.buildings.map((saved, index) => ({
-    id: buildingIds[index],
+  const buildingFacts: BuildingFacts[] = save.buildings.map((saved) => ({
+    id: saved.id,
     defId: saved.defId,
     workerSlots: BUILDINGS[saved.defId].workerSlots,
     progress: saved.progress,

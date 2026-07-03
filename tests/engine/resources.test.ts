@@ -64,6 +64,13 @@ describe('small resources', () => {
     expect(ids.take()).toBe(2);
   });
 
+  it('IdCounter can be seeded to continue past previously issued ids', () => {
+    const ids = new IdCounter(4);
+    expect(ids.peek()).toBe(4);
+    expect(ids.take()).toBe(4);
+    expect(ids.peek()).toBe(5);
+  });
+
   it('CommandQueue drain empties the queue', () => {
     const queue = new CommandQueue();
     queue.pending.push({ type: 'recruitWorker' });

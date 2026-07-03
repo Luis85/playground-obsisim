@@ -1,15 +1,17 @@
 import type { BuildingDefId, ResourceId } from './content-types';
 
 export interface SavedBuilding {
+  id: number;
   defId: BuildingDefId;
   progress: number;
   batchActive: boolean;
 }
 
 export interface SavedWorker {
+  id: number;
   hunger: number;
-  /** Index into SaveGameV1.buildings, or null when idle. */
-  buildingIndex: number | null;
+  /** Building id this worker is assigned to, or null when idle. */
+  buildingId: number | null;
   /** Remaining ticks of this worker's tool coverage (0 = none). */
   toolTicks: number;
 }
@@ -21,6 +23,7 @@ export interface SaveGameV1 {
   stockpile: Partial<Record<ResourceId, number>>;
   buildings: SavedBuilding[];
   workers: SavedWorker[];
+  nextEntityId: number;
 }
 
 export function isSaveGameV1(data: unknown): data is SaveGameV1 {
@@ -32,18 +35,21 @@ export function isSaveGameV1(data: unknown): data is SaveGameV1 {
     save.version === 1 &&
     Number.isFinite(save.tick) &&
     Number.isFinite(save.lastRecruitTick) &&
+    Number.isFinite(save.nextEntityId) &&
     typeof save.stockpile === 'object' && save.stockpile !== null &&
     Array.isArray(save.buildings) &&
     save.buildings.every((b: unknown) =>
       typeof b === 'object' && b !== null &&
+      Number.isFinite((b as SavedBuilding).id) &&
       typeof (b as SavedBuilding).defId === 'string' &&
       Number.isFinite((b as SavedBuilding).progress) &&
       typeof (b as SavedBuilding).batchActive === 'boolean') &&
     Array.isArray(save.workers) &&
     save.workers.every((w: unknown) =>
       typeof w === 'object' && w !== null &&
+      Number.isFinite((w as SavedWorker).id) &&
       Number.isFinite((w as SavedWorker).hunger) &&
       Number.isFinite((w as SavedWorker).toolTicks) &&
-      ((w as SavedWorker).buildingIndex === null || Number.isFinite((w as SavedWorker).buildingIndex)))
+      ((w as SavedWorker).buildingId === null || Number.isFinite((w as SavedWorker).buildingId)))
   );
 }

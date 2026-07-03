@@ -101,11 +101,10 @@ function isBuildingsValid(buildings: SaveGameV1['buildings']): boolean {
     if (b.batchActive) {
       // Upper bound intentionally NOT checked against the current recipe's
       // ticksPerBatch: a recipe retuned smaller after this save was written
-      // would otherwise orphan it. The production while-loop deterministically
-      // absorbs oversized progress on the next tick — but only below the
-      // shared counter ceiling: at float magnitudes past 2^53, subtracting a
-      // small recipe size no longer changes the value and the loop would hang.
-      return b.progress >= 0 && b.progress <= MAX_SAVED_COUNTER;
+      // would otherwise orphan it. Magnitude is irrelevant here because
+      // spawnBuilding clamps active progress to the CURRENT batch size, so
+      // the production loop never has a huge remainder to grind through.
+      return b.progress >= 0 && Number.isFinite(b.progress);
     }
     return b.progress === 0; // stalled/idle buildings never bank progress (balance-independent engine invariant)
   });
@@ -190,11 +189,16 @@ export function spawnBuilding(
   saved: Omit<SavedBuilding, 'id'> & { id?: number },
 ): IEntity {
   const def = BUILDINGS[saved.defId];
+  // Balance-coupled clamp (spec 4.5): progress from a save written under a
+  // larger recipe (or hand-edited to an absurd magnitude) clamps to the
+  // CURRENT batch size — the save still loads, at most one batch completes
+  // instantly, and the production loop can never spin on a huge remainder.
+  const progress = Math.min(saved.progress, def.recipe.ticksPerBatch);
   return prep
     .buildEntity()
     .with(new Building(saved.id ?? ids.take(), saved.defId))
     .with(new WorkerSlots(def.workerSlots))
-    .with(new Production(saved.progress, saved.batchActive))
+    .with(new Production(progress, saved.batchActive))
     .build();
 }
 
@@ -292,7 +296,9 @@ function buildInitialSnapshot(save: SaveGameV1): Snapshot {
     id: saved.id,
     defId: saved.defId,
     workerSlots: BUILDINGS[saved.defId].workerSlots,
-    progress: saved.progress,
+    // same balance-coupled clamp as spawnBuilding, so the seeded snapshot
+    // matches the spawned world
+    progress: Math.min(saved.progress, BUILDINGS[saved.defId].recipe.ticksPerBatch),
     batchActive: saved.batchActive,
   }));
   const { workers, buildings, population, idleWorkers } = buildEntitySections(workerFacts, buildingFacts);

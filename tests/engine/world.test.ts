@@ -85,12 +85,21 @@ describe('isLoadableSave', () => {
     overworked.buildings.push({ id: 4, defId: 'forester', progress: 99, batchActive: true });
     overworked.nextEntityId = 5;
     expect(isLoadableSave(overworked)).toBe(true);
-    // ...but only below the counter ceiling: past 2^53, progress - ticksPerBatch
-    // no longer changes the value and the production loop would hang.
+    // magnitude is harmless: spawnBuilding clamps active progress to the
+    // CURRENT batch size, so even absurd values load without loop hazards.
     const astronomical = initialSave();
     astronomical.buildings.push({ id: 4, defId: 'forester', progress: 1e308, batchActive: true });
     astronomical.nextEntityId = 5;
-    expect(isLoadableSave(astronomical)).toBe(false);
+    expect(isLoadableSave(astronomical)).toBe(true);
+  });
+
+  it('clamps oversized active progress to the current batch size on load', async () => {
+    const save = initialSave();
+    save.buildings.push({ id: 4, defId: 'forester', progress: 1e308, batchActive: true });
+    save.nextEntityId = 5;
+    const world = await createColonyWorld(save);
+    const seeded = world.getResource(SnapshotStore).latest!;
+    expect(seeded.buildings[0].progress).toBeLessThanOrEqual(3); // forester ticksPerBatch
   });
 
   it('accepts and grandfathers more assigned workers than a building CURRENTLY has slots (spec 4.5)', () => {

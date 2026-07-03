@@ -43,6 +43,12 @@ describe('isLoadableSave', () => {
     const negative = initialSave();
     negative.stockpile.wood = -5;
     expect(isLoadableSave(negative)).toBe(false);
+    const overflowing = initialSave();
+    overflowing.stockpile.tools = 1e308; // finite, but stock x value would go Infinity
+    expect(isLoadableSave(overflowing)).toBe(false);
+    const fractional = initialSave();
+    fractional.stockpile.wood = 1.5; // organic stockpiles are integral
+    expect(isLoadableSave(fractional)).toBe(false);
   });
 
   it('rejects unknown stockpile resource ids', () => {

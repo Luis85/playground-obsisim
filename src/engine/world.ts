@@ -82,10 +82,16 @@ export function initialSave(): SaveGameV1 {
 }
 
 // Object.hasOwn, never `in`: inherited keys like "toString" pass `in` and
-// then indexing the catalog throws inside the guard
+// then indexing the catalog throws inside the guard.
+// Safe-integer amounts only: organic stockpiles are integral, and an absurd
+// magnitude (e.g. 1e308) would turn stock-value/wealth arithmetic infinite.
 function isStockpileValid(stockpile: SaveGameV1['stockpile']): boolean {
   return Object.entries(stockpile).every(
-    ([id, amount]) => Object.hasOwn(RESOURCES, id) && Number.isFinite(amount) && (amount as number) >= 0,
+    ([id, amount]) =>
+      Object.hasOwn(RESOURCES, id) &&
+      Number.isSafeInteger(amount) &&
+      (amount as number) >= 0 &&
+      (amount as number) <= MAX_SAVED_COUNTER,
   );
 }
 

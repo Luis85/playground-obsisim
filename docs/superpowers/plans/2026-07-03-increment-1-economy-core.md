@@ -124,7 +124,7 @@ import { Actions, buildWorld, createSystem, queryComponents, Read, Write,
     "@vue/test-utils": "^2.4.6",
     "eslint": "^9.20.0",
     "eslint-plugin-vue": "^10.0.0",
-    "happy-dom": "^17.0.0",
+    "happy-dom": "^20.10.6",
     "obsidian": "^1.7.2",
     "typescript": "^5.7.3",
     "typescript-eslint": "^8.24.0",
@@ -335,7 +335,7 @@ git commit -m "chore: scaffold Obsidian plugin project (vite, vitest, eslint, de
   - `Command` union (commands)
   - `Snapshot`, `BuildingSnapshot`, `WorkerSnapshot`, `ResourceStats`, `BuildingState`, `EngineStatus` (snapshot)
   - `SaveGameV1`, `SavedBuilding`, `SavedWorker`, `isSaveGameV1(data: unknown): data is SaveGameV1` (save)
-  - `BALANCE`, `workerEfficiency(hunger: number): number`, `toolMultiplierFor(staffed: number, paidWorkers: number, buffActive: boolean): number`, `STARTING_STOCK`, `STARTING_WORKERS` (balance)
+  - `BALANCE`, `workerEfficiency(hunger: number): number`, `STARTING_STOCK`, `STARTING_WORKERS` (balance)
   - `RESOURCES: Record<ResourceId, ResourceDef>`, `RESOURCE_IDS: readonly ResourceId[]` (resources)
   - `BUILDINGS: Record<BuildingDefId, BuildingDef>`, `BUILDING_IDS: readonly BuildingDefId[]` (buildings)
   - `CHAINS: readonly Chain[]` (chains)
@@ -346,7 +346,7 @@ git commit -m "chore: scaffold Obsidian plugin project (vite, vitest, eslint, de
 
 ```ts
 import { describe, expect, it } from 'vitest';
-import { BALANCE, STARTING_STOCK, toolMultiplierFor, workerEfficiency } from '../../src/engine/content/balance';
+import { BALANCE, STARTING_STOCK, workerEfficiency } from '../../src/engine/content/balance';
 import { RESOURCES, RESOURCE_IDS } from '../../src/engine/content/resources';
 import { BUILDINGS, BUILDING_IDS } from '../../src/engine/content/buildings';
 import { CHAINS } from '../../src/engine/content/chains';
@@ -408,14 +408,6 @@ describe('content catalog', () => {
     expect(workerEfficiency(BALANCE.mealThreshold)).toBe(1);
     expect(workerEfficiency(75)).toBeCloseTo(0.6);
     expect(workerEfficiency(100)).toBeCloseTo(0.2);
-  });
-
-  it('toolMultiplierFor scales with paid coverage', () => {
-    expect(toolMultiplierFor(2, 2, true)).toBeCloseTo(1.5);
-    expect(toolMultiplierFor(2, 1, true)).toBeCloseTo(1.25);
-    expect(toolMultiplierFor(2, 0, true)).toBe(1);
-    expect(toolMultiplierFor(2, 5, false)).toBe(1); // inactive buff
-    expect(toolMultiplierFor(0, 3, true)).toBe(1); // unstaffed
   });
 });
 ```
@@ -509,8 +501,9 @@ export interface BuildingSnapshot {
   batchActive: boolean;
   /** 0-100, for display. */
   progressPct: number;
-  toolBuffTicks: number;
-  /** Effective work per tick: sum of assigned worker efficiencies x tool multiplier. */
+  /** Assigned workers whose tool coverage is currently active. */
+  tooledWorkers: number;
+  /** Effective work per tick: sum of assigned worker efficiencies x per-worker tool multiplier. */
   workPower: number;
 }
 
@@ -519,6 +512,8 @@ export interface WorkerSnapshot {
   hunger: number;
   efficiency: number;
   buildingId: number | null;
+  /** Remaining ticks of this worker's tool coverage (0 = none). */
+  toolTicks: number;
 }
 
 export interface ResourceStats {
@@ -558,14 +553,14 @@ export interface SavedBuilding {
   defId: BuildingDefId;
   progress: number;
   batchActive: boolean;
-  toolBuffTicks: number;
-  toolBuffPaidWorkers: number;
 }
 
 export interface SavedWorker {
   hunger: number;
   /** Index into SaveGameV1.buildings, or null when idle. */
   buildingIndex: number | null;
+  /** Remaining ticks of this worker's tool coverage (0 = none). */
+  toolTicks: number;
 }
 
 export interface SaveGameV1 {
@@ -592,13 +587,12 @@ export function isSaveGameV1(data: unknown): data is SaveGameV1 {
       typeof b === 'object' && b !== null &&
       typeof (b as SavedBuilding).defId === 'string' &&
       Number.isFinite((b as SavedBuilding).progress) &&
-      typeof (b as SavedBuilding).batchActive === 'boolean' &&
-      Number.isFinite((b as SavedBuilding).toolBuffTicks) &&
-      Number.isFinite((b as SavedBuilding).toolBuffPaidWorkers)) &&
+      typeof (b as SavedBuilding).batchActive === 'boolean') &&
     Array.isArray(save.workers) &&
     save.workers.every((w: unknown) =>
       typeof w === 'object' && w !== null &&
       Number.isFinite((w as SavedWorker).hunger) &&
+      Number.isFinite((w as SavedWorker).toolTicks) &&
       ((w as SavedWorker).buildingIndex === null || Number.isFinite((w as SavedWorker).buildingIndex)))
   );
 }
@@ -630,17 +624,6 @@ export function workerEfficiency(hunger: number): number {
   if (hunger <= BALANCE.mealThreshold) return 1;
   const starvation = (hunger - BALANCE.mealThreshold) / (BALANCE.hungerMax - BALANCE.mealThreshold);
   return 1 - (1 - BALANCE.starvingEfficiency) * starvation;
-}
-
-/**
- * Tool buffs only boost workers that tools were actually paid for: the +50%
- * scales linearly with coverage (paidWorkers / staffed). Full coverage -> 1.5x,
- * no paid workers -> 1x, half coverage -> 1.25x.
- */
-export function toolMultiplierFor(staffed: number, paidWorkers: number, buffActive: boolean): number {
-  if (!buffActive || staffed === 0) return 1;
-  const coverage = Math.min(paidWorkers, staffed) / staffed;
-  return 1 + (BALANCE.toolMultiplier - 1) * coverage;
 }
 
 export const STARTING_STOCK: Partial<Record<ResourceId, number>> = {
@@ -737,7 +720,7 @@ export const CHAINS: readonly Chain[] = [
 - [ ] **Step 5: Run test to verify it passes**
 
 Run: `npx vitest run tests/engine/content.test.ts`
-Expected: PASS (8 tests).
+Expected: PASS (7 tests).
 
 - [ ] **Step 6: Lint and commit**
 
@@ -758,7 +741,7 @@ git commit -m "feat: shared contracts and content catalog with validation tests"
 **Interfaces:**
 - Consumes: `ResourceId`, `CostMap` (Task 2), `BALANCE` (Task 2), `Command` (Task 2), `Snapshot` (Task 2).
 - Produces:
-  - Components: `Building(id, defId)`, `WorkerSlots(max)`, `Production(progress=0, batchActive=false)`, `ToolBuff(remainingTicks=0)`, `Worker(id)`, `Hunger(value=0)`, `JobAssignment(buildingId=null)`, `Efficiency(value=1)` — all plain classes with public constructor fields.
+  - Components: `Building(id, defId)`, `WorkerSlots(max)`, `Production(progress=0, batchActive=false)`, `Worker(id)`, `Hunger(value=0)`, `JobAssignment(buildingId=null)`, `Efficiency(value=1)`, `ToolCoverage(remainingTicks=0)` (on workers) — all plain classes with public constructor fields.
   - World resources: `Stockpile(initial?)` with `get/add/take/pay/canAfford/resetTickFlows/toJSON` and `producedThisTick`/`consumedThisTick` maps; `SimClock` with `tick`, `lastRecruitTick`; `CommandQueue` with `pending: Command[]` and `drain(): Command[]`; `NoticeBoard` with `push(msg)` / `takeAll(): string[]`; `IdCounter` with `take(): number`; `StatsHistory` with `record(produced, consumed)` / `rates(id): { production, consumption }`; `SnapshotStore` with `latest: Snapshot | null`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -872,8 +855,8 @@ export class Production {
   constructor(public progress = 0, public batchActive = false) {}
 }
 
-export class ToolBuff {
-  constructor(public remainingTicks = 0, public paidWorkers = 0) {}
+export class ToolCoverage {
+  constructor(public remainingTicks = 0) {}
 }
 
 export class Worker {
@@ -1047,9 +1030,10 @@ git commit -m "feat: ECS components and world resources with unit tests"
   - `initialSave(): SaveGameV1` — fresh-colony save (starting stock, 3 idle workers, no buildings).
   - `buildColonyPrepWorld(options?: { save?: SaveGameV1; systems?: readonly TColonySystem[] }): IPreptimeWorld` — builds the prep world with ALL components registered, ALL resources added (initialized from the save), and save entities spawned. `systems` defaults to `ALL_SYSTEMS` (empty until Task 11 fills it); tests pass a subset to isolate one system.
   - `spawnBuilding(prep: IPreptimeWorld, ids: IdCounter, saved: SavedBuilding): IEntity`
-  - `spawnWorker(prep: IPreptimeWorld, ids: IdCounter, opts?: { hunger?: number; buildingId?: number | null; efficiency?: number }): IEntity`
+  - `spawnWorker(prep: IPreptimeWorld, ids: IdCounter, opts?: { hunger?: number; buildingId?: number | null; efficiency?: number; toolTicks?: number }): IEntity`
   - `createColonyWorld(save?: SaveGameV1): Promise<IRuntimeWorld>` — prep + `prepareRun()`.
-  - `isLoadableSave(data: unknown): data is SaveGameV1` — structural guard + catalog referential integrity + stockpile content validation (known resource ids, finite non-negative amounts); the Obsidian shell's load path (Task 16) uses this, never bare `isSaveGameV1`.
+  - `isLoadableSave(data: unknown): data is SaveGameV1` — structural guard + catalog referential integrity + content-range validation: known resource/building ids; finite non-negative stockpile amounts; `tick >= 0`; `0 <= hunger <= hungerMax`; `0 <= toolTicks <= toolDurationTicks`; `0 <= progress <= that building's ticksPerBatch`; assignment indices in range and no building staffed beyond its worker slots. The Obsidian shell's load path (Task 16) uses this, never bare `isSaveGameV1`.
+  - `buildColonyPrepWorld` seeds `SnapshotStore.latest` with an initial snapshot derived from the save (zero rates, notices empty) so the UI never renders from a null snapshot while the engine is paused pre-first-tick (fresh create and reset both hit this).
   - `ALL_SYSTEMS: TColonySystem[]` — mutable array, filled in Task 11 (type alias `TColonySystem` for sim-ecs's built system type).
 
 - [ ] **Step 1: Write the failing test**
@@ -1059,7 +1043,7 @@ git commit -m "feat: ECS components and world resources with unit tests"
 ```ts
 import { describe, expect, it } from 'vitest';
 import { Hunger, JobAssignment, Worker } from '../../src/engine/components';
-import { IdCounter, SimClock, Stockpile } from '../../src/engine/resources';
+import { IdCounter, SimClock, SnapshotStore, Stockpile } from '../../src/engine/resources';
 import { buildColonyPrepWorld, createColonyWorld, initialSave, isLoadableSave } from '../../src/engine/world';
 
 describe('initialSave', () => {
@@ -1079,7 +1063,7 @@ describe('isLoadableSave', () => {
 
   it('rejects unknown building def ids', () => {
     const save = initialSave();
-    save.buildings.push({ defId: 'castle' as never, progress: 0, batchActive: false, toolBuffTicks: 0, toolBuffPaidWorkers: 0 });
+    save.buildings.push({ defId: 'castle' as never, progress: 0, batchActive: false });
     expect(isLoadableSave(save)).toBe(false);
   });
 
@@ -1104,6 +1088,25 @@ describe('isLoadableSave', () => {
   it('rejects unknown stockpile resource ids', () => {
     const save = initialSave();
     (save.stockpile as Record<string, unknown>).gold = 5;
+    expect(isLoadableSave(save)).toBe(false);
+  });
+
+  it('rejects out-of-range sim counters (hunger, toolTicks, progress)', () => {
+    const hungry = initialSave();
+    hungry.workers[0].hunger = 1000;
+    expect(isLoadableSave(hungry)).toBe(false);
+    const tooled = initialSave();
+    tooled.workers[0].toolTicks = -1;
+    expect(isLoadableSave(tooled)).toBe(false);
+    const overworked = initialSave();
+    overworked.buildings.push({ defId: 'forester', progress: 99, batchActive: true }); // ticksPerBatch is 3
+    expect(isLoadableSave(overworked)).toBe(false);
+  });
+
+  it('rejects more assigned workers than a building has slots', () => {
+    const save = initialSave();
+    save.buildings.push({ defId: 'forester', progress: 0, batchActive: false }); // 2 slots
+    save.workers = [0, 1, 2].map(() => ({ hunger: 0, buildingIndex: 0, toolTicks: 0 }));
     expect(isLoadableSave(save)).toBe(false);
   });
 });
@@ -1131,6 +1134,17 @@ describe('createColonyWorld', () => {
     const ids = prep.getResource(IdCounter);
     expect(ids.take()).toBe(4); // workers took 1..3
   });
+
+  it('seeds an initial snapshot so the UI never sees null', async () => {
+    const world = await createColonyWorld();
+    const snapshot = world.getResource(SnapshotStore).latest!;
+    expect(snapshot.tick).toBe(0);
+    expect(snapshot.population).toBe(3);
+    expect(snapshot.idleWorkers).toBe(3);
+    expect(snapshot.stockpile.wood.stock).toBe(30);
+    expect(snapshot.colonyWealth).toBe(50); // 30 wood@1 + 20 berries@1
+    expect(snapshot.notices).toEqual([]);
+  });
 });
 ```
 
@@ -1148,11 +1162,13 @@ import { buildWorld } from 'sim-ecs';
 import type { IEntity, IPreptimeWorld, IRuntimeWorld } from 'sim-ecs';
 import { isSaveGameV1 } from '../shared/save';
 import type { SaveGameV1, SavedBuilding } from '../shared/save';
-import { BALANCE, STARTING_STOCK, STARTING_WORKERS } from './content/balance';
+import type { ResourceId } from '../shared/content-types';
+import type { BuildingState, ResourceStats, Snapshot } from '../shared/snapshot';
+import { BALANCE, STARTING_STOCK, STARTING_WORKERS, workerEfficiency } from './content/balance';
 import { BUILDINGS } from './content/buildings';
-import { RESOURCES } from './content/resources';
+import { RESOURCES, RESOURCE_IDS } from './content/resources';
 import {
-  Building, Efficiency, Hunger, JobAssignment, Production, ToolBuff, Worker, WorkerSlots,
+  Building, Efficiency, Hunger, JobAssignment, Production, ToolCoverage, Worker, WorkerSlots,
 } from './components';
 import {
   CommandQueue, IdCounter, NoticeBoard, SimClock, SnapshotStore, StatsHistory, Stockpile,
@@ -1168,7 +1184,7 @@ export type TColonySystem = Parameters<
 /** Filled in Task 11 (world composition). Empty until then so early tests can build worlds. */
 export const ALL_SYSTEMS: TColonySystem[] = [];
 
-const COMPONENT_TYPES = [Building, WorkerSlots, Production, ToolBuff, Worker, Hunger, JobAssignment, Efficiency];
+const COMPONENT_TYPES = [Building, WorkerSlots, Production, Worker, Hunger, JobAssignment, Efficiency, ToolCoverage];
 
 export function initialSave(): SaveGameV1 {
   return {
@@ -1177,7 +1193,7 @@ export function initialSave(): SaveGameV1 {
     lastRecruitTick: -BALANCE.recruitCooldownTicks,
     stockpile: { ...STARTING_STOCK },
     buildings: [],
-    workers: Array.from({ length: STARTING_WORKERS }, () => ({ hunger: 0, buildingIndex: null })),
+    workers: Array.from({ length: STARTING_WORKERS }, () => ({ hunger: 0, buildingIndex: null, toolTicks: 0 })),
   };
 }
 
@@ -1189,17 +1205,32 @@ export function initialSave(): SaveGameV1 {
  */
 export function isLoadableSave(data: unknown): data is SaveGameV1 {
   if (!isSaveGameV1(data)) return false;
-  return (
-    Object.entries(data.stockpile).every(
-      ([id, amount]) => id in RESOURCES && Number.isFinite(amount) && (amount as number) >= 0,
-    ) &&
-    data.buildings.every((b) => b.defId in BUILDINGS) &&
-    data.workers.every(
-      (w) =>
-        w.buildingIndex === null ||
-        (Number.isInteger(w.buildingIndex) && w.buildingIndex >= 0 && w.buildingIndex < data.buildings.length),
-    )
+  if (data.tick < 0) return false;
+  const stockpileOk = Object.entries(data.stockpile).every(
+    ([id, amount]) => id in RESOURCES && Number.isFinite(amount) && (amount as number) >= 0,
   );
+  if (!stockpileOk) return false;
+  const buildingsOk = data.buildings.every(
+    (b) =>
+      b.defId in BUILDINGS &&
+      b.progress >= 0 &&
+      b.progress <= BUILDINGS[b.defId].recipe.ticksPerBatch,
+  );
+  if (!buildingsOk) return false;
+  const staffCount = new Map<number, number>();
+  for (const w of data.workers) {
+    if (w.hunger < 0 || w.hunger > BALANCE.hungerMax) return false;
+    if (w.toolTicks < 0 || w.toolTicks > BALANCE.toolDurationTicks) return false;
+    if (w.buildingIndex === null) continue;
+    if (!Number.isInteger(w.buildingIndex) || w.buildingIndex < 0 || w.buildingIndex >= data.buildings.length) {
+      return false;
+    }
+    staffCount.set(w.buildingIndex, (staffCount.get(w.buildingIndex) ?? 0) + 1);
+  }
+  for (const [index, count] of staffCount) {
+    if (count > BUILDINGS[data.buildings[index].defId].workerSlots) return false;
+  }
+  return true;
 }
 
 export function spawnBuilding(prep: IPreptimeWorld, ids: IdCounter, saved: SavedBuilding): IEntity {
@@ -1209,14 +1240,13 @@ export function spawnBuilding(prep: IPreptimeWorld, ids: IdCounter, saved: Saved
     .with(new Building(ids.take(), saved.defId))
     .with(new WorkerSlots(def.workerSlots))
     .with(new Production(saved.progress, saved.batchActive))
-    .with(new ToolBuff(saved.toolBuffTicks, saved.toolBuffPaidWorkers))
     .build();
 }
 
 export function spawnWorker(
   prep: IPreptimeWorld,
   ids: IdCounter,
-  opts: { hunger?: number; buildingId?: number | null; efficiency?: number } = {},
+  opts: { hunger?: number; buildingId?: number | null; efficiency?: number; toolTicks?: number } = {},
 ): IEntity {
   return prep
     .buildEntity()
@@ -1224,6 +1254,7 @@ export function spawnWorker(
     .with(new Hunger(opts.hunger ?? 0))
     .with(new JobAssignment(opts.buildingId ?? null))
     .with(new Efficiency(opts.efficiency ?? 1))
+    .with(new ToolCoverage(opts.toolTicks ?? 0))
     .build();
 }
 
@@ -1255,19 +1286,83 @@ export function buildColonyPrepWorld(
   prep.addResource(new NoticeBoard());
   prep.addResource(ids);
   prep.addResource(new StatsHistory());
-  prep.addResource(new SnapshotStore());
+  const store = new SnapshotStore();
+  prep.addResource(store);
 
   const buildingIds = save.buildings.map(
     (saved) => spawnBuilding(prep, ids, saved).getComponent(Building)!.id,
   );
-  for (const saved of save.workers) {
-    spawnWorker(prep, ids, {
-      hunger: saved.hunger,
-      buildingId: saved.buildingIndex === null ? null : buildingIds[saved.buildingIndex],
-    });
-  }
+  const workerIds = save.workers.map(
+    (saved) =>
+      spawnWorker(prep, ids, {
+        hunger: saved.hunger,
+        toolTicks: saved.toolTicks,
+        buildingId: saved.buildingIndex === null ? null : buildingIds[saved.buildingIndex],
+      }).getComponent(Worker)!.id,
+  );
+  // The UI must never see a null snapshot: a reset or freshly created engine is
+  // paused until its first tick, so seed the store from the save. SnapshotSystem
+  // replaces this on the first step.
+  store.latest = buildInitialSnapshot(save, buildingIds, workerIds);
 
   return prep;
+}
+
+function buildInitialSnapshot(save: SaveGameV1, buildingIds: number[], workerIds: number[]): Snapshot {
+  const staffCount = new Map<number, number>();
+  const powerByBuilding = new Map<number, number>();
+  const tooledByBuilding = new Map<number, number>();
+  const workers = save.workers.map((saved, index) => {
+    const buildingId = saved.buildingIndex === null ? null : buildingIds[saved.buildingIndex];
+    const efficiency = workerEfficiency(saved.hunger);
+    const tooled = saved.toolTicks > 0;
+    if (buildingId !== null) {
+      staffCount.set(buildingId, (staffCount.get(buildingId) ?? 0) + 1);
+      powerByBuilding.set(
+        buildingId,
+        (powerByBuilding.get(buildingId) ?? 0) + efficiency * (tooled ? BALANCE.toolMultiplier : 1),
+      );
+      if (tooled) tooledByBuilding.set(buildingId, (tooledByBuilding.get(buildingId) ?? 0) + 1);
+    }
+    return { id: workerIds[index], hunger: saved.hunger, efficiency, buildingId, toolTicks: saved.toolTicks };
+  });
+  const buildings = save.buildings.map((saved, index) => {
+    const def = BUILDINGS[saved.defId];
+    const id = buildingIds[index];
+    const staffed = staffCount.get(id) ?? 0;
+    const state: BuildingState = staffed === 0 ? 'unstaffed' : saved.batchActive ? 'producing' : 'waitingForInput';
+    return {
+      id,
+      defId: saved.defId,
+      workers: staffed,
+      workerSlots: def.workerSlots,
+      state,
+      progress: saved.progress,
+      batchActive: saved.batchActive,
+      progressPct: Math.min(100, Math.round((saved.progress / def.recipe.ticksPerBatch) * 100)),
+      tooledWorkers: tooledByBuilding.get(id) ?? 0,
+      workPower: powerByBuilding.get(id) ?? 0,
+    };
+  });
+  const stockpile = {} as Record<ResourceId, ResourceStats>;
+  let colonyWealth = 0;
+  for (const resourceId of RESOURCE_IDS) {
+    const stock = save.stockpile[resourceId] ?? 0;
+    const stockValue = stock * RESOURCES[resourceId].value;
+    colonyWealth += stockValue;
+    stockpile[resourceId] = { stock, productionRate: 0, consumptionRate: 0, netFlow: 0, stockValue };
+  }
+  return {
+    tick: save.tick,
+    lastRecruitTick: save.lastRecruitTick,
+    stockpile,
+    colonyWealth,
+    population: workers.length,
+    idleWorkers: workers.filter((w) => w.buildingId === null).length,
+    buildings,
+    workers,
+    notices: [],
+  };
 }
 
 export async function createColonyWorld(save?: SaveGameV1): Promise<IRuntimeWorld> {
@@ -1280,14 +1375,14 @@ If the `TColonySystem` conditional-type extraction fails to compile against 0.6.
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run tests/engine/world.test.ts`
-Expected: PASS (9 tests).
+Expected: PASS (12 tests).
 
 - [ ] **Step 5: Lint and commit**
 
 ```bash
 npm run lint && npm test
 git add -A
-git commit -m "feat: colony world scaffolding, save-driven spawning, initial save"
+git commit -m "feat: colony world scaffolding, save-driven spawning, seeded snapshot"
 ```
 
 ---
@@ -1412,8 +1507,8 @@ git commit -m "feat: hunger system - meals from bread then berries, capped starv
 - Test: `tests/engine/systems/efficiency-system.test.ts`
 
 **Interfaces:**
-- Consumes: `Hunger`, `JobAssignment`, `Efficiency`, `Building`, `ToolBuff` components; `Stockpile`; `workerEfficiency`; `BALANCE`; world helpers.
-- Produces: `EfficiencySystem`. Behavior contract: sets every worker's `Efficiency.value = workerEfficiency(hunger)`. Per building: while a buff is active, first top-up-charge for workers added mid-buff (`staff - paidWorkers` tools, all-or-nothing best effort), then decrement `remainingTicks` (resetting `paidWorkers` on expiry). With no buff active, pay `{ tools: staff }` and on success set `remainingTicks = BALANCE.toolDurationTicks` and `paidWorkers = staff`. This keeps the spec's "1 tool per worker" honest when staffing changes mid-buff (Codex review P2).
+- Consumes: `Hunger`, `JobAssignment`, `Efficiency`, `ToolCoverage` components; `Stockpile`; `workerEfficiency`; `BALANCE`; world helpers.
+- Produces: `EfficiencySystem`. Behavior contract, per worker each tick: `Efficiency.value = workerEfficiency(hunger)`. Tool coverage is **per worker**: if `ToolCoverage.remainingTicks > 0` it decrements (whether assigned or idle — a benched tool still wears); otherwise a STAFFED worker tries `stockpile.take('tools', 1)` and on success gets `remainingTicks = BALANCE.toolDurationTicks`. Idle workers never consume new tools. Coverage follows the worker across reassignment, so replacement workers pay for their own tool — headcount-based building buffs proved exploitable in review (Codex P2 x3).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1421,82 +1516,81 @@ git commit -m "feat: hunger system - meals from bread then berries, capped starv
 
 ```ts
 import { describe, expect, it } from 'vitest';
-import { Building, Efficiency, ToolBuff } from '../../../src/engine/components';
+import { Building, Efficiency, JobAssignment, ToolCoverage } from '../../../src/engine/components';
 import { IdCounter, Stockpile } from '../../../src/engine/resources';
 import { EfficiencySystem } from '../../../src/engine/systems/efficiency-system';
 import { buildColonyPrepWorld, initialSave, spawnBuilding, spawnWorker } from '../../../src/engine/world';
 
-async function setup(opts: { workerHunger?: number; tools?: number; staffed?: boolean }) {
+function makePrep(tools: number) {
   const save = initialSave();
   save.workers = [];
-  save.stockpile = { tools: opts.tools ?? 0 };
-  const prep = buildColonyPrepWorld({ save, systems: [EfficiencySystem] });
-  const ids = prep.getResource(IdCounter);
-  const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, toolBuffTicks: 0, toolBuffPaidWorkers: 0 });
-  const buildingId = building.getComponent(Building)!.id;
-  const worker = spawnWorker(prep, ids, {
-    hunger: opts.workerHunger ?? 0,
-    buildingId: opts.staffed === false ? null : buildingId,
-  });
-  const world = await prep.prepareRun();
-  return { world, building, worker, stockpile: world.getResource(Stockpile) };
+  save.stockpile = { tools };
+  return buildColonyPrepWorld({ save, systems: [EfficiencySystem] });
 }
 
 describe('EfficiencySystem', () => {
   it('computes worker efficiency from hunger', async () => {
-    const { world, worker } = await setup({ workerHunger: 75 });
+    const prep = makePrep(0);
+    const worker = spawnWorker(prep, prep.getResource(IdCounter), { hunger: 75 });
+    const world = await prep.prepareRun();
     await world.step();
     expect(worker.getComponent(Efficiency)!.value).toBeCloseTo(0.6);
   });
 
-  it('consumes one tool per assigned worker and starts a 300-tick buff', async () => {
-    const { world, building, stockpile } = await setup({ tools: 2 });
-    await world.step();
-    expect(stockpile.get('tools')).toBe(1);
-    expect(building.getComponent(ToolBuff)!.remainingTicks).toBe(300);
-    await world.step(); // buff active: ticks down, no extra tool consumed
-    expect(stockpile.get('tools')).toBe(1);
-    expect(building.getComponent(ToolBuff)!.remainingTicks).toBe(299);
-  });
-
-  it('does not consume tools for unstaffed buildings', async () => {
-    const { world, building, stockpile } = await setup({ tools: 2, staffed: false });
-    await world.step();
-    expect(stockpile.get('tools')).toBe(2);
-    expect(building.getComponent(ToolBuff)!.remainingTicks).toBe(0);
-  });
-
-  it('does not partially consume when there are fewer tools than workers', async () => {
-    // 2 workers, 1 tool -> all-or-nothing means no buff, tool stays
-    const save = initialSave();
-    save.workers = [];
-    save.stockpile = { tools: 1 };
-    const prep = buildColonyPrepWorld({ save, systems: [EfficiencySystem] });
+  it('staffed worker consumes one tool for a 300-tick coverage that ticks down', async () => {
+    const prep = makePrep(2);
     const ids = prep.getResource(IdCounter);
-    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, toolBuffTicks: 0, toolBuffPaidWorkers: 0 });
-    const buildingId = building.getComponent(Building)!.id;
-    spawnWorker(prep, ids, { buildingId });
-    spawnWorker(prep, ids, { buildingId });
+    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false });
+    const worker = spawnWorker(prep, ids, { buildingId: building.getComponent(Building)!.id });
     const world = await prep.prepareRun();
     await world.step();
     expect(world.getResource(Stockpile).get('tools')).toBe(1);
-    expect(building.getComponent(ToolBuff)!.remainingTicks).toBe(0);
+    expect(worker.getComponent(ToolCoverage)!.remainingTicks).toBe(300);
+    await world.step(); // covered: ticks down, no extra tool consumed
+    expect(world.getResource(Stockpile).get('tools')).toBe(1);
+    expect(worker.getComponent(ToolCoverage)!.remainingTicks).toBe(299);
   });
 
-  it('charges a top-up tool when a worker joins mid-buff', async () => {
-    const save = initialSave();
-    save.workers = [];
-    save.stockpile = { tools: 5 };
-    const prep = buildColonyPrepWorld({ save, systems: [EfficiencySystem] });
-    const ids = prep.getResource(IdCounter);
-    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, toolBuffTicks: 100, toolBuffPaidWorkers: 1 });
-    const buildingId = building.getComponent(Building)!.id;
-    spawnWorker(prep, ids, { buildingId });
-    spawnWorker(prep, ids, { buildingId }); // second worker beyond the paid one
+  it('idle workers never consume tools', async () => {
+    const prep = makePrep(2);
+    const worker = spawnWorker(prep, prep.getResource(IdCounter), {});
     const world = await prep.prepareRun();
     await world.step();
-    expect(world.getResource(Stockpile).get('tools')).toBe(4); // 1 top-up charged
-    expect(building.getComponent(ToolBuff)!.paidWorkers).toBe(2);
+    expect(world.getResource(Stockpile).get('tools')).toBe(2);
+    expect(worker.getComponent(ToolCoverage)!.remainingTicks).toBe(0);
+  });
+
+  it('covers exactly as many workers as there are tools', async () => {
+    const prep = makePrep(1);
+    const ids = prep.getResource(IdCounter);
+    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false });
+    const buildingId = building.getComponent(Building)!.id;
+    const first = spawnWorker(prep, ids, { buildingId });
+    const second = spawnWorker(prep, ids, { buildingId });
+    const world = await prep.prepareRun();
+    await world.step();
+    const covered = [first, second].filter((w) => w.getComponent(ToolCoverage)!.remainingTicks > 0);
+    expect(covered).toHaveLength(1);
+    expect(world.getResource(Stockpile).get('tools')).toBe(0);
+  });
+
+  it('coverage follows the worker: replacements pay for their own tool', async () => {
+    const prep = makePrep(2);
+    const ids = prep.getResource(IdCounter);
+    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false });
+    const buildingId = building.getComponent(Building)!.id;
+    const veteran = spawnWorker(prep, ids, { buildingId, toolTicks: 100 });
+    const replacement = spawnWorker(prep, ids, {});
+    const world = await prep.prepareRun();
+    await world.step(); // veteran already covered, replacement idle: nothing charged
+    expect(world.getResource(Stockpile).get('tools')).toBe(2);
+    // swap the staff without changing the headcount
+    veteran.getComponent(JobAssignment)!.buildingId = null;
+    replacement.getComponent(JobAssignment)!.buildingId = buildingId;
+    await world.step();
+    expect(world.getResource(Stockpile).get('tools')).toBe(1); // replacement paid
+    expect(replacement.getComponent(ToolCoverage)!.remainingTicks).toBe(300);
+    expect(veteran.getComponent(ToolCoverage)!.remainingTicks).toBeGreaterThan(0); // keeps his own
   });
 });
 ```
@@ -1511,37 +1605,27 @@ Expected: FAIL — module not found.
 ```ts
 import { createSystem, queryComponents, Read, Write, WriteResource } from 'sim-ecs';
 import { BALANCE, workerEfficiency } from '../content/balance';
-import { Building, Efficiency, Hunger, JobAssignment, ToolBuff } from '../components';
+import { Efficiency, Hunger, JobAssignment, ToolCoverage } from '../components';
 import { Stockpile } from '../resources';
 
 export const EfficiencySystem = createSystem({
   stockpile: WriteResource(Stockpile),
-  workers: queryComponents({ hunger: Read(Hunger), job: Read(JobAssignment), efficiency: Write(Efficiency) }),
-  buildings: queryComponents({ building: Read(Building), buff: Write(ToolBuff) }),
+  workers: queryComponents({
+    hunger: Read(Hunger),
+    job: Read(JobAssignment),
+    efficiency: Write(Efficiency),
+    coverage: Write(ToolCoverage),
+  }),
 })
   .withName('EfficiencySystem')
-  .withRunFunction(({ stockpile, workers, buildings }) => {
-    const staffCount = new Map<number, number>();
-    for (const { hunger, job, efficiency } of workers.iter()) {
+  .withRunFunction(({ stockpile, workers }) => {
+    for (const { hunger, job, efficiency, coverage } of workers.iter()) {
       efficiency.value = workerEfficiency(hunger.value);
-      if (job.buildingId !== null) {
-        staffCount.set(job.buildingId, (staffCount.get(job.buildingId) ?? 0) + 1);
-      }
-    }
-    for (const { building, buff } of buildings.iter()) {
-      const staff = staffCount.get(building.id) ?? 0;
-      if (buff.remainingTicks > 0) {
-        // top-up: workers assigned mid-buff must be tooled too (1 tool per worker)
-        if (staff > buff.paidWorkers && stockpile.pay({ tools: staff - buff.paidWorkers })) {
-          buff.paidWorkers = staff;
-        }
-        buff.remainingTicks--;
-        if (buff.remainingTicks === 0) buff.paidWorkers = 0;
-        continue;
-      }
-      if (staff > 0 && stockpile.pay({ tools: staff })) {
-        buff.remainingTicks = BALANCE.toolDurationTicks;
-        buff.paidWorkers = staff;
+      if (coverage.remainingTicks > 0) {
+        // wears down whether assigned or idle: simple and deterministic
+        coverage.remainingTicks--;
+      } else if (job.buildingId !== null && stockpile.take('tools', 1)) {
+        coverage.remainingTicks = BALANCE.toolDurationTicks;
       }
     }
   })
@@ -1558,7 +1642,7 @@ Expected: PASS (5 tests).
 ```bash
 npm run lint && npm test
 git add -A
-git commit -m "feat: efficiency system - hunger curve and tool buffs"
+git commit -m "feat: efficiency system - hunger curve and per-worker tool coverage"
 ```
 
 ---
@@ -1570,8 +1654,8 @@ git commit -m "feat: efficiency system - hunger curve and tool buffs"
 - Test: `tests/engine/systems/production-system.test.ts`
 
 **Interfaces:**
-- Consumes: `Building`, `Production`, `ToolBuff`, `JobAssignment`, `Efficiency` components; `Stockpile`; `BUILDINGS`; `BALANCE`.
-- Produces: `ProductionSystem`. Behavior contract per staffed building (workPower = Σ assigned `Efficiency.value`, × `toolMultiplierFor(staffed, buff.paidWorkers, buff.remainingTicks > 0)` — the +50% covers only tool-paid workers, scaling linearly with coverage; Codex review P2):
+- Consumes: `Building`, `Production`, `JobAssignment`, `Efficiency`, `ToolCoverage` components; `Stockpile`; `BUILDINGS`; `BALANCE`.
+- Produces: `ProductionSystem`. Behavior contract per staffed building (workPower = Σ over assigned workers of `efficiency.value × (coverage.remainingTicks > 0 ? BALANCE.toolMultiplier : 1)` — each worker's own tool coverage determines their multiplier):
   1. If no batch active, try `stockpile.pay(recipe.inputs)` → batch starts (empty inputs always start).
   2. If a batch is active, `progress += workPower`; at `progress >= ticksPerBatch` the outputs are added, then it immediately tries to start the next batch (so continuously supplied buildings stay in `producing` state).
   3. At most one batch completes per tick; leftover progress is discarded (documented determinism trade-off).
@@ -1590,15 +1674,15 @@ import { ProductionSystem } from '../../../src/engine/systems/production-system'
 import { buildColonyPrepWorld, initialSave, spawnBuilding, spawnWorker } from '../../../src/engine/world';
 import type { BuildingDefId, ResourceId } from '../../../src/shared/content-types';
 
-async function setup(defId: BuildingDefId, stock: Partial<Record<ResourceId, number>>, workerCount = 1, toolBuffTicks = 0) {
+async function setup(defId: BuildingDefId, stock: Partial<Record<ResourceId, number>>, workerCount = 1, workerToolTicks = 0) {
   const save = initialSave();
   save.workers = [];
   save.stockpile = stock;
   const prep = buildColonyPrepWorld({ save, systems: [ProductionSystem] });
   const ids = prep.getResource(IdCounter);
-  const building: IEntity = spawnBuilding(prep, ids, { defId, progress: 0, batchActive: false, toolBuffTicks, toolBuffPaidWorkers: toolBuffTicks > 0 ? workerCount : 0 });
+  const building: IEntity = spawnBuilding(prep, ids, { defId, progress: 0, batchActive: false });
   const buildingId = building.getComponent(Building)!.id;
-  for (let i = 0; i < workerCount; i++) spawnWorker(prep, ids, { buildingId });
+  for (let i = 0; i < workerCount; i++) spawnWorker(prep, ids, { buildingId, toolTicks: workerToolTicks });
   const world = await prep.prepareRun();
   return { world, building, stockpile: world.getResource(Stockpile) };
 }
@@ -1637,22 +1721,22 @@ describe('ProductionSystem', () => {
     expect(stockpile.get('wood')).toBe(0);
   });
 
-  it('tool buff multiplies work power by 1.5', async () => {
-    // forester needs 3 worker-ticks; 2 workers x 1.5 = 3 power/tick -> 1 wood per tick
+  it('tooled workers contribute 1.5x work power', async () => {
+    // forester needs 3 worker-ticks; 2 covered workers x 1.5 = 3 power/tick -> 1 wood per tick
     const { world, stockpile } = await setup('forester', {}, 2, 1000);
     await world.step();
     expect(stockpile.get('wood')).toBe(1);
   });
 
-  it('scales the multiplier down for unpaid workers (partial coverage)', async () => {
+  it('only covered workers get the multiplier (mixed staffing)', async () => {
     const save = initialSave();
     save.workers = [];
     const prep = buildColonyPrepWorld({ save, systems: [ProductionSystem] });
     const ids = prep.getResource(IdCounter);
-    // buff paid for 1 worker, but 2 assigned: multiplier 1 + 0.5 x (1/2) = 1.25 -> 2.5 power/tick
-    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, toolBuffTicks: 1000, toolBuffPaidWorkers: 1 });
+    // one covered worker (1.5) + one bare worker (1.0) = 2.5 power/tick, forester batch is 3
+    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false });
     const buildingId = building.getComponent(Building)!.id;
-    spawnWorker(prep, ids, { buildingId });
+    spawnWorker(prep, ids, { buildingId, toolTicks: 1000 });
     spawnWorker(prep, ids, { buildingId });
     const world = await prep.prepareRun();
     await world.step(); // 2.5 < 3: batch not done
@@ -1681,30 +1765,27 @@ Expected: FAIL — module not found.
 ```ts
 import { createSystem, queryComponents, Read, Write, WriteResource } from 'sim-ecs';
 import type { ResourceId } from '../../shared/content-types';
-import { toolMultiplierFor } from '../content/balance';
+import { BALANCE } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
-import { Building, Efficiency, JobAssignment, Production, ToolBuff } from '../components';
+import { Building, Efficiency, JobAssignment, Production, ToolCoverage } from '../components';
 import { Stockpile } from '../resources';
 
 export const ProductionSystem = createSystem({
   stockpile: WriteResource(Stockpile),
-  buildings: queryComponents({ building: Read(Building), production: Write(Production), buff: Read(ToolBuff) }),
-  workers: queryComponents({ job: Read(JobAssignment), efficiency: Read(Efficiency) }),
+  buildings: queryComponents({ building: Read(Building), production: Write(Production) }),
+  workers: queryComponents({ job: Read(JobAssignment), efficiency: Read(Efficiency), coverage: Read(ToolCoverage) }),
 })
   .withName('ProductionSystem')
   .withRunFunction(({ stockpile, buildings, workers }) => {
     const powerByBuilding = new Map<number, number>();
-    const staffByBuilding = new Map<number, number>();
-    for (const { job, efficiency } of workers.iter()) {
+    for (const { job, efficiency, coverage } of workers.iter()) {
       if (job.buildingId === null) continue;
-      powerByBuilding.set(job.buildingId, (powerByBuilding.get(job.buildingId) ?? 0) + efficiency.value);
-      staffByBuilding.set(job.buildingId, (staffByBuilding.get(job.buildingId) ?? 0) + 1);
+      const contribution = efficiency.value * (coverage.remainingTicks > 0 ? BALANCE.toolMultiplier : 1);
+      powerByBuilding.set(job.buildingId, (powerByBuilding.get(job.buildingId) ?? 0) + contribution);
     }
 
-    for (const { building, production, buff } of buildings.iter()) {
-      const staffed = staffByBuilding.get(building.id) ?? 0;
-      const toolMultiplier = toolMultiplierFor(staffed, buff.paidWorkers, buff.remainingTicks > 0);
-      const workPower = (powerByBuilding.get(building.id) ?? 0) * toolMultiplier;
+    for (const { building, production } of buildings.iter()) {
+      const workPower = powerByBuilding.get(building.id) ?? 0;
       if (workPower === 0) continue;
 
       const recipe = BUILDINGS[building.defId].recipe;
@@ -1738,7 +1819,7 @@ Expected: PASS (7 tests).
 ```bash
 npm run lint && npm test
 git add -A
-git commit -m "feat: production system - batch recipes with input consumption and tool multiplier"
+git commit -m "feat: production system - batch recipes with per-worker tool multipliers"
 ```
 
 ---
@@ -1771,9 +1852,9 @@ describe('SnapshotSystem', () => {
     save.stockpile = { wood: 10, bread: 2 };
     const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
     const ids = prep.getResource(IdCounter);
-    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 1.5, batchActive: true, toolBuffTicks: 10, toolBuffPaidWorkers: 1 });
+    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 1.5, batchActive: true });
     const buildingId = building.getComponent(Building)!.id;
-    spawnWorker(prep, ids, { buildingId, hunger: 20 });
+    spawnWorker(prep, ids, { buildingId, hunger: 20, toolTicks: 10 });
     spawnWorker(prep, ids); // idle
     prep.getResource(NoticeBoard).push('test notice');
 
@@ -1792,10 +1873,11 @@ describe('SnapshotSystem', () => {
     expect(b.workers).toBe(1);
     expect(b.state).toBe('producing');
     expect(b.progressPct).toBe(50); // 1.5 / 3
-    expect(b.toolBuffTicks).toBe(10);
-    expect(b.workPower).toBeCloseTo(1.5); // 1 worker eff 1.0 x tool 1.5
+    expect(b.tooledWorkers).toBe(1);
+    expect(b.workPower).toBeCloseTo(1.5); // 1 covered worker: eff 1.0 x tool 1.5
 
     expect(snapshot.workers.map((w) => w.buildingId)).toEqual([buildingId, null]);
+    expect(snapshot.workers[0].toolTicks).toBe(10);
   });
 
   it('marks unstaffed and waiting states', async () => {
@@ -1803,8 +1885,8 @@ describe('SnapshotSystem', () => {
     save.workers = [];
     const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
     const ids = prep.getResource(IdCounter);
-    spawnBuilding(prep, ids, { defId: 'mill', progress: 0, batchActive: false, toolBuffTicks: 0, toolBuffPaidWorkers: 0 });
-    const staffed = spawnBuilding(prep, ids, { defId: 'mill', progress: 0, batchActive: false, toolBuffTicks: 0, toolBuffPaidWorkers: 0 });
+    spawnBuilding(prep, ids, { defId: 'mill', progress: 0, batchActive: false });
+    const staffed = spawnBuilding(prep, ids, { defId: 'mill', progress: 0, batchActive: false });
     spawnWorker(prep, ids, { buildingId: staffed.getComponent(Building)!.id });
     const world = await prep.prepareRun();
     await world.step();
@@ -1835,10 +1917,10 @@ Expected: FAIL — module not found.
 import { createSystem, queryComponents, Read, ReadResource, WriteResource } from 'sim-ecs';
 import type { BuildingSnapshot, ResourceStats, WorkerSnapshot } from '../../shared/snapshot';
 import type { ResourceId } from '../../shared/content-types';
-import { toolMultiplierFor } from '../content/balance';
+import { BALANCE } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
 import { RESOURCES, RESOURCE_IDS } from '../content/resources';
-import { Building, Efficiency, Hunger, JobAssignment, Production, ToolBuff, Worker, WorkerSlots } from '../components';
+import { Building, Efficiency, Hunger, JobAssignment, Production, ToolCoverage, Worker, WorkerSlots } from '../components';
 import { NoticeBoard, SimClock, SnapshotStore, StatsHistory, Stockpile } from '../resources';
 
 export const SnapshotSystem = createSystem({
@@ -1848,10 +1930,10 @@ export const SnapshotSystem = createSystem({
   notices: WriteResource(NoticeBoard),
   store: WriteResource(SnapshotStore),
   buildings: queryComponents({
-    building: Read(Building), slots: Read(WorkerSlots), production: Read(Production), buff: Read(ToolBuff),
+    building: Read(Building), slots: Read(WorkerSlots), production: Read(Production),
   }),
   workers: queryComponents({
-    worker: Read(Worker), hunger: Read(Hunger), job: Read(JobAssignment), efficiency: Read(Efficiency),
+    worker: Read(Worker), hunger: Read(Hunger), job: Read(JobAssignment), efficiency: Read(Efficiency), coverage: Read(ToolCoverage),
   }),
 })
   .withName('SnapshotSystem')
@@ -1859,20 +1941,31 @@ export const SnapshotSystem = createSystem({
     const workerSnaps: WorkerSnapshot[] = [];
     const staffCount = new Map<number, number>();
     const powerByBuilding = new Map<number, number>();
-    for (const { worker, hunger, job, efficiency } of workers.iter()) {
-      workerSnaps.push({ id: worker.id, hunger: hunger.value, efficiency: efficiency.value, buildingId: job.buildingId });
+    const tooledByBuilding = new Map<number, number>();
+    for (const { worker, hunger, job, efficiency, coverage } of workers.iter()) {
+      workerSnaps.push({
+        id: worker.id,
+        hunger: hunger.value,
+        efficiency: efficiency.value,
+        buildingId: job.buildingId,
+        toolTicks: coverage.remainingTicks,
+      });
       if (job.buildingId !== null) {
+        const tooled = coverage.remainingTicks > 0;
         staffCount.set(job.buildingId, (staffCount.get(job.buildingId) ?? 0) + 1);
-        powerByBuilding.set(job.buildingId, (powerByBuilding.get(job.buildingId) ?? 0) + efficiency.value);
+        powerByBuilding.set(
+          job.buildingId,
+          (powerByBuilding.get(job.buildingId) ?? 0) + efficiency.value * (tooled ? BALANCE.toolMultiplier : 1),
+        );
+        if (tooled) tooledByBuilding.set(job.buildingId, (tooledByBuilding.get(job.buildingId) ?? 0) + 1);
       }
     }
     workerSnaps.sort((a, b) => a.id - b.id);
 
     const buildingSnaps: BuildingSnapshot[] = [];
-    for (const { building, slots, production, buff } of buildings.iter()) {
+    for (const { building, slots, production } of buildings.iter()) {
       const def = BUILDINGS[building.defId];
       const staffed = staffCount.get(building.id) ?? 0;
-      const toolMultiplier = toolMultiplierFor(staffed, buff.paidWorkers, buff.remainingTicks > 0);
       buildingSnaps.push({
         id: building.id,
         defId: building.defId,
@@ -1882,8 +1975,8 @@ export const SnapshotSystem = createSystem({
         progress: production.progress,
         batchActive: production.batchActive,
         progressPct: Math.min(100, Math.round((production.progress / def.recipe.ticksPerBatch) * 100)),
-        toolBuffTicks: buff.remainingTicks,
-        workPower: (powerByBuilding.get(building.id) ?? 0) * toolMultiplier,
+        tooledWorkers: tooledByBuilding.get(building.id) ?? 0,
+        workPower: powerByBuilding.get(building.id) ?? 0,
       });
     }
     buildingSnaps.sort((a, b) => a.id - b.id);
@@ -1942,8 +2035,8 @@ git commit -m "feat: snapshot system - immutable per-tick world projection"
 **Interfaces:**
 - Consumes: `Command` union, all components, `CommandQueue`, `SimClock`, `Stockpile`, `IdCounter`, `NoticeBoard`, `BUILDINGS`, `BALANCE`; `SnapshotSystem` (as a test probe: constructed entities only appear after the step's sync point, so tests read the *next* tick's snapshot).
 - Produces: `CommandSystem`. Behavior contract:
-  - `constructBuilding`: pay `def.cost` (all-or-nothing) → queue new building entity (`Building(ids.take(), defId)`, `WorkerSlots`, `Production()`, `ToolBuff()`); on failure push notice `` `Cannot afford ${def.name}.` ``
-  - `recruitWorker`: reject with notice `'Recruiting is still on cooldown.'` unless `tick >= lastRecruitTick + recruitCooldownTicks`; on success set `lastRecruitTick = tick` and queue worker entity (`Worker(ids.take())`, `Hunger()`, `JobAssignment()`, `Efficiency()`).
+  - `constructBuilding`: pay `def.cost` (all-or-nothing) → queue new building entity (`Building(ids.take(), defId)`, `WorkerSlots`, `Production()`); on failure push notice `` `Cannot afford ${def.name}.` ``
+  - `recruitWorker`: reject with notice `'Recruiting is still on cooldown.'` unless `tick >= lastRecruitTick + recruitCooldownTicks`; on success set `lastRecruitTick = tick` and queue worker entity (`Worker(ids.take())`, `Hunger()`, `JobAssignment()`, `Efficiency()`, `ToolCoverage()`).
   - `assignWorker {buildingId}`: notices `'Building not found.'` / `'No free worker slots at this building.'` / `'No idle workers available.'`; otherwise sets the first idle worker's `JobAssignment.buildingId`.
   - `unassignWorker {buildingId}`: unassigns the first worker of that building, or notices `'No worker assigned to this building.'`
   - New entities exist from the **next** tick (sim-ecs applies entity commands at the end of the step).
@@ -2045,7 +2138,7 @@ Expected: FAIL — module not found.
 import { Actions, createSystem, queryComponents, Read, Write, WriteResource } from 'sim-ecs';
 import { BALANCE } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
-import { Building, Efficiency, Hunger, JobAssignment, Production, ToolBuff, Worker, WorkerSlots } from '../components';
+import { Building, Efficiency, Hunger, JobAssignment, Production, ToolCoverage, Worker, WorkerSlots } from '../components';
 import { CommandQueue, IdCounter, NoticeBoard, SimClock, Stockpile } from '../resources';
 
 export const CommandSystem = createSystem({
@@ -2073,7 +2166,6 @@ export const CommandSystem = createSystem({
             .with(new Building(ids.take(), def.id))
             .with(new WorkerSlots(def.workerSlots))
             .with(new Production())
-            .with(new ToolBuff())
             .build();
           break;
         }
@@ -2089,6 +2181,7 @@ export const CommandSystem = createSystem({
             .with(new Hunger())
             .with(new JobAssignment())
             .with(new Efficiency())
+            .with(new ToolCoverage())
             .build();
           break;
         }
@@ -2184,7 +2277,7 @@ describe('StatsSystem', () => {
     const prep = buildColonyPrepWorld({ save, systems: [ProductionSystem, StatsSystem, SnapshotSystem] });
     const ids = prep.getResource(IdCounter);
     // 3 workers on a forester = 1 wood per tick
-    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, toolBuffTicks: 0, toolBuffPaidWorkers: 0 });
+    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false });
     const buildingId = building.getComponent(Building)!.id;
     for (let i = 0; i < 3; i++) spawnWorker(prep, ids, { buildingId });
     const world = await prep.prepareRun();
@@ -2298,7 +2391,7 @@ function dispatch(world: Awaited<ReturnType<typeof createColonyWorld>>, ...comma
 function richSave(): SaveGameV1 {
   const save = initialSave();
   save.stockpile = { wood: 500, planks: 200, berries: 200 };
-  save.workers = Array.from({ length: 14 }, () => ({ hunger: 0, buildingIndex: null }));
+  save.workers = Array.from({ length: 14 }, () => ({ hunger: 0, buildingIndex: null, toolTicks: 0 }));
   return save;
 }
 
@@ -2440,7 +2533,8 @@ describe('GameEngine', () => {
   it('publishes snapshots and status to listeners on every step', async () => {
     const engine = await GameEngine.create();
     const listener = vi.fn();
-    engine.onUpdate(listener);
+    engine.onUpdate(listener); // fires immediately with the seeded tick-0 snapshot
+    expect(listener.mock.calls[0][0].tick).toBe(0);
     await engine.stepOnce();
     const [snapshot, status] = listener.mock.calls.at(-1)!;
     expect(snapshot.tick).toBe(1);
@@ -2489,9 +2583,7 @@ describe('GameEngine', () => {
     engine.dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
     await engine.stepOnce(); // tick 100 -> autosave fires
     const save: SaveGameV1 = autosave.mock.calls[0][0];
-    expect(save.buildings).toEqual([
-      { defId: 'forester', progress: 0, batchActive: false, toolBuffTicks: 0, toolBuffPaidWorkers: 0 },
-    ]);
+    expect(save.buildings).toEqual([{ defId: 'forester', progress: 0, batchActive: false }]);
     expect(save.stockpile.wood).toBe(20); // cost paid AND building present
   });
 
@@ -2500,10 +2592,15 @@ describe('GameEngine', () => {
     expect(engine.serialize().stockpile).toEqual({ wood: 30, berries: 20 });
   });
 
-  it('reset returns to the initial colony', async () => {
+  it('reset returns to the initial colony and publishes a fresh, non-null snapshot', async () => {
     const engine = await scriptedRun(50);
     await engine.reset();
     expect(engine.serialize()).toEqual((await GameEngine.create()).serialize());
+    // seeded snapshot: the UI must show the fresh colony while still paused,
+    // not fall back to a loading screen (Codex P2)
+    expect(engine.snapshot).not.toBeNull();
+    expect(engine.snapshot!.tick).toBe(0);
+    expect(engine.snapshot!.stockpile.wood.stock).toBe(30);
   });
 
   it('start/pause drive the interval loop', async () => {
@@ -2537,7 +2634,7 @@ import type { Command } from '../shared/commands';
 import type { EngineStatus, Snapshot } from '../shared/snapshot';
 import type { SaveGameV1, SavedBuilding } from '../shared/save';
 import { BALANCE } from './content/balance';
-import { Building, Hunger, JobAssignment, Production, ToolBuff, Worker } from './components';
+import { Building, Hunger, JobAssignment, Production, ToolCoverage, Worker } from './components';
 import { CommandQueue, SimClock, SnapshotStore, Stockpile } from './resources';
 import { createColonyWorld, initialSave } from './world';
 
@@ -2546,20 +2643,17 @@ export type UpdateListener = (snapshot: Snapshot | null, status: EngineStatus) =
 export function buildSaveFromWorld(world: IRuntimeWorld): SaveGameV1 {
   const clock = world.getResource(SimClock);
   const buildings: { id: number; saved: SavedBuilding }[] = [];
-  const workers: { id: number; hunger: number; buildingId: number | null }[] = [];
+  const workers: { id: number; hunger: number; buildingId: number | null; toolTicks: number }[] = [];
   for (const entity of world.getEntities()) {
     const building = entity.getComponent(Building);
     if (building) {
       const production = entity.getComponent(Production)!;
-      const buff = entity.getComponent(ToolBuff)!;
       buildings.push({
         id: building.id,
         saved: {
           defId: building.defId,
           progress: production.progress,
           batchActive: production.batchActive,
-          toolBuffTicks: buff.remainingTicks,
-          toolBuffPaidWorkers: buff.paidWorkers,
         },
       });
       continue;
@@ -2570,6 +2664,7 @@ export function buildSaveFromWorld(world: IRuntimeWorld): SaveGameV1 {
         id: worker.id,
         hunger: entity.getComponent(Hunger)!.value,
         buildingId: entity.getComponent(JobAssignment)!.buildingId,
+        toolTicks: entity.getComponent(ToolCoverage)!.remainingTicks,
       });
     }
   }
@@ -2584,6 +2679,7 @@ export function buildSaveFromWorld(world: IRuntimeWorld): SaveGameV1 {
     buildings: buildings.map((b) => b.saved),
     workers: workers.map((w) => ({
       hunger: w.hunger,
+      toolTicks: w.toolTicks,
       buildingIndex: w.buildingId === null ? null : (buildingIndexById.get(w.buildingId) ?? null),
     })),
   };
@@ -3149,7 +3245,7 @@ function mountView(stock: { wood?: number } = {}) {
   const snapshot = makeSnapshot({
     buildings: [{
       id: 7, defId: 'forester', workers: 1, workerSlots: 2, state: 'producing',
-      progress: 1, batchActive: true, progressPct: 33, toolBuffTicks: 0, workPower: 1,
+      progress: 1, batchActive: true, progressPct: 33, tooledWorkers: 0, workPower: 1,
     }],
     idleWorkers: 2,
   });
@@ -3247,7 +3343,7 @@ const affordable = computed(() => {
           <td>{{ b.state }}</td>
           <td>{{ b.progressPct }}%</td>
           <td>{{ b.workPower.toFixed(2) }}</td>
-          <td>{{ b.toolBuffTicks > 0 ? `⚒ ${b.toolBuffTicks}t` : '—' }}</td>
+          <td>{{ b.tooledWorkers > 0 ? `⚒ ${b.tooledWorkers}/${b.workers}` : '—' }}</td>
         </tr>
         <tr v-if="store.snapshot.buildings.length === 0">
           <td colspan="6">No buildings yet — construct one below.</td>
@@ -3359,7 +3455,7 @@ const jobNames = computed(() => {
     </div>
     <table class="obsisim-table">
       <thead>
-        <tr><th>Worker</th><th>Job</th><th>Hunger</th><th>Efficiency</th></tr>
+        <tr><th>Worker</th><th>Job</th><th>Hunger</th><th>Efficiency</th><th>Tool</th></tr>
       </thead>
       <tbody>
         <tr v-for="w in store.snapshot.workers" :key="w.id">
@@ -3367,6 +3463,7 @@ const jobNames = computed(() => {
           <td>{{ w.buildingId === null ? 'Idle' : jobNames.get(w.buildingId) ?? '?' }}</td>
           <td>{{ w.hunger }} / 100</td>
           <td>{{ (w.efficiency * 100).toFixed(0) }}%</td>
+          <td>{{ w.toolTicks > 0 ? `⚒ ${w.toolTicks}t` : '—' }}</td>
         </tr>
       </tbody>
     </table>
@@ -3699,7 +3796,7 @@ simulated production chains — displayed, for now, entirely in tables.
 - Deterministic tick simulation (sim-ecs): 2 ticks/s, pause / 2× / 4× / single-step
 - Two production chains: berries & wheat→flour→bread, wood→planks→tools
 - Workers with hunger-driven efficiency (soft pressure — nobody dies)
-- Tools grant +50% building efficiency while stocked
+- Tooled workers gain +50% efficiency while their tool lasts (1 tool per worker per 300 ticks)
 - Single-slot autosave into the plugin's data.json
 
 ## Development

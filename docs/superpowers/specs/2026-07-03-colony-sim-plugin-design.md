@@ -105,7 +105,7 @@ Seven building types. Each has: a construction cost (paid instantly from the sto
 
 Recipes are the universal production unit: `inputs → outputs over N worker-ticks per batch`.
 
-- A staffed building accumulates progress each tick: `progress += assignedWorkers × avgWorkerEfficiency × toolMultiplier`.
+- A staffed building accumulates progress each tick: `progress += Σ over assigned workers (workerEfficiency × workerToolMultiplier)` — each worker's own tool coverage determines their multiplier.
 - Input availability is checked when a batch **starts**; inputs are consumed at batch start. When `progress ≥ ticksPerBatch`, outputs are added to the stockpile and the next batch may start.
 - A building missing inputs stalls and reports "waiting for input" in its snapshot state. An unstaffed building reports "unstaffed".
 
@@ -118,7 +118,7 @@ Recipes are the universal production unit: `inputs → outputs over N worker-tic
 
 ### 3.6 Tools loop
 
-A staffed building consumes **1 tool per worker per 300 ticks** *if tools are available*; while tooled-up, the building runs at **+50% efficiency** (the `toolMultiplier` above: 1.5 vs 1.0). Tools are never mandatory — just profitable. This closes the economy: industry output feeds back into everyone's productivity.
+Tool coverage is **per worker**: each staffed worker consumes **1 tool per 300 ticks** *if tools are available*, and a covered worker works at **+50% efficiency** (tool multiplier 1.5 vs 1.0). Coverage belongs to the worker — it follows them across reassignment, wears down over time whether assigned or idle, and a replacement worker pays for their own tool (building-level buffs keyed on headcount proved exploitable in review). Idle workers never consume new tools. Tools are never mandatory — just profitable. This closes the economy: industry output feeds back into everyone's productivity.
 
 ### 3.7 Tick model and speed
 
@@ -139,13 +139,13 @@ Plain typed data modules (no entities): `ResourceDef`, `RecipeDef`, `BuildingDef
 - `Building { defId }`
 - `WorkerSlots { max }`
 - `Production { progress, batchActive }`
-- `ToolBuff { remainingTicks }` (0 = no buff)
 
 **Worker entity:**
 - `Worker {}` (tag)
 - `Hunger { value }`
 - `JobAssignment { buildingId | null }`
 - `Efficiency { value }` (recomputed each tick)
+- `ToolCoverage { remainingTicks }` (0 = no tool)
 
 ### 4.3 World resources (singletons)
 
@@ -160,7 +160,7 @@ Execution order is part of the spec — it is what makes runs reproducible.
 
 1. **CommandSystem** — drains the queue: construct building (validates and pays cost), recruit worker (validates cooldown), assign/unassign worker (validates slots), reset colony. Invalid commands are rejected with a reason string surfaced to the UI.
 2. **HungerSystem** — raises hunger; workers at the meal threshold eat from the stockpile (bread, then berries).
-3. **EfficiencySystem** — computes each worker's efficiency from hunger; starts/expires tool buffs per building and consumes tools.
+3. **EfficiencySystem** — computes each worker's efficiency from hunger; maintains per-worker tool coverage (staffed, uncovered workers consume a tool; coverage wears down each tick).
 4. **ProductionSystem** — per staffed building: start a batch if inputs are available (consuming them), advance progress, emit outputs on completion.
 5. **StatsSystem** — records per-tick flows into rolling averages; computes colony wealth.
 6. **SnapshotSystem** — projects world state into an immutable `Snapshot` and invokes the engine's snapshot callback. This is the only place the UI boundary is touched.
@@ -240,7 +240,7 @@ The sim is the product, so engine tests carry the weight:
 1. The plugin loads in Obsidian, opens its view from the ribbon, and survives view close/reopen and Obsidian restart with state intact (autosave).
 2. From the starting state, a player can bootstrap both full chains and reach steady bread + tools production, using only the table UI.
 3. Hunger works: cutting off food visibly drops worker efficiency toward 0.2, and restoring food recovers it; nobody dies.
-4. Tools work: a tooled building demonstrably runs +50% faster and consumes tools over time.
+4. Tools work: tooled workers demonstrably work +50% faster and tools are consumed over time.
 5. Pause/speed/step behave deterministically — N ticks produce identical state regardless of speed, verified by test.
 6. All engine behavior above is covered by headless vitest tests; lint and tests pass clean.
 

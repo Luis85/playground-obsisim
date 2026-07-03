@@ -21,8 +21,16 @@ export type TColonySystem = Parameters<
   ? S extends { addSystem(system: infer Sys): unknown } ? Sys : never
   : never;
 
+/**
+ * A BUILT system instance can only ever be registered in one world — sim-ecs
+ * 0.6.4 throws on the second prepareRun. Systems are therefore passed around
+ * as factories and each world builds its own instances (createColonyWorld runs
+ * many times: tests, reset, restore).
+ */
+export type TColonySystemFactory = () => TColonySystem;
+
 /** Filled in Task 11 (world composition). Empty until then so early tests can build worlds. */
-export const ALL_SYSTEMS: TColonySystem[] = [];
+export const ALL_SYSTEMS: TColonySystemFactory[] = [];
 
 /**
  * sim-ecs 0.6.4 gotcha: getResource() works on RUNTIME worlds only. The
@@ -125,14 +133,14 @@ export function spawnWorker(
 }
 
 export function buildColonyPrepWorld(
-  options: { save?: SaveGameV1; systems?: readonly TColonySystem[] } = {},
+  options: { save?: SaveGameV1; systems?: readonly TColonySystemFactory[] } = {},
 ): IPreptimeWorld {
   const save = options.save ?? initialSave();
   const systems = options.systems ?? ALL_SYSTEMS;
 
   let builder = buildWorld().withDefaultScheduling((root) => {
-    for (const system of systems) {
-      root = root.addNewStage((stage) => stage.addSystem(system));
+    for (const systemFactory of systems) {
+      root = root.addNewStage((stage) => stage.addSystem(systemFactory()));
     }
     return root;
   });

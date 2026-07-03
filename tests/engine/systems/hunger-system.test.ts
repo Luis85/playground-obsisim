@@ -9,7 +9,7 @@ async function setup(hunger: number, stock: Partial<Record<'bread' | 'berries', 
   const save = initialSave();
   save.workers = [];
   save.stockpile = stock;
-  const prep = buildColonyPrepWorld({ save, systems: [HungerSystem()] });
+  const prep = buildColonyPrepWorld({ save, systems: [HungerSystem] });
   const worker: IEntity = spawnWorker(prep, getPrepResource(prep, IdCounter), { hunger });
   const world = await prep.prepareRun();
   return { world, worker, stockpile: world.getResource(Stockpile) };

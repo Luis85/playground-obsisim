@@ -90,6 +90,15 @@ describe('isLoadableSave', () => {
     expect(isLoadableSave(unsafeTick)).toBe(false);
   });
 
+  it('rejects counters at the safe-integer ceiling (no headroom for post-load ++)', () => {
+    const ceilingTick = initialSave();
+    ceilingTick.tick = Number.MAX_SAFE_INTEGER; // passes isSafeInteger, stalls on the next ++
+    expect(isLoadableSave(ceilingTick)).toBe(false);
+    const ceilingCounter = initialSave();
+    ceilingCounter.nextEntityId = Number.MAX_SAFE_INTEGER;
+    expect(isLoadableSave(ceilingCounter)).toBe(false);
+  });
+
   it('rejects fractional ticks and inherited-object-key building ids', () => {
     const fractional = initialSave();
     fractional.tick = 0.5; // would desync the autosave modulo forever

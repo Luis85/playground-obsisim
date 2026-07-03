@@ -129,6 +129,13 @@ function isWorkersValid(data: SaveGameV1): boolean {
   return isStaffingValid(data);
 }
 
+/**
+ * Counters keep incrementing after load, so a save sitting AT the safe-integer
+ * ceiling would stop advancing precisely on its next ++. Require generous
+ * headroom: ~4 billion post-load increments (~17 years of play at 8 ticks/s).
+ */
+const MAX_SAVED_COUNTER = Number.MAX_SAFE_INTEGER - 2 ** 32;
+
 // Cross-array id validity: positive integers, unique across buildings AND
 // workers combined (they share one id space), and nextEntityId strictly past
 // every id already handed out so the restored IdCounter can never collide.
@@ -137,7 +144,11 @@ function isIdsValid(data: SaveGameV1): boolean {
   // SAFE integers: past 2^53, ++ stops incrementing and ids would collide
   if (!allIds.every((id) => Number.isSafeInteger(id) && id > 0)) return false;
   if (new Set(allIds).size !== allIds.length) return false;
-  if (!Number.isSafeInteger(data.nextEntityId) || data.nextEntityId < 1) return false;
+  if (
+    !Number.isSafeInteger(data.nextEntityId) ||
+    data.nextEntityId < 1 ||
+    data.nextEntityId > MAX_SAVED_COUNTER
+  ) return false;
   return allIds.every((id) => id < data.nextEntityId);
 }
 
@@ -150,8 +161,9 @@ function isIdsValid(data: SaveGameV1): boolean {
 export function isLoadableSave(data: unknown): data is SaveGameV1 {
   if (!isSaveGameV1(data)) return false;
   // SAFE integers: a fractional tick would desync every modulo-based cadence
-  // (autosave, recruit cooldown) forever; past 2^53, ++ stops incrementing
-  if (!Number.isSafeInteger(data.tick) || data.tick < 0) return false;
+  // (autosave, recruit cooldown) forever; past 2^53, ++ stops incrementing.
+  // Bounded below the ceiling so post-load increments stay safe too.
+  if (!Number.isSafeInteger(data.tick) || data.tick < 0 || data.tick > MAX_SAVED_COUNTER) return false;
   // the engine only ever sets lastRecruitTick to -recruitCooldownTicks (fresh
   // colony) or to a past tick; anything else blocks recruiting spuriously
   if (

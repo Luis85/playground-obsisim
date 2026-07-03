@@ -13,6 +13,12 @@ import {
 import {
   CommandQueue, IdCounter, NoticeBoard, SimClock, SnapshotStore, StatsHistory, Stockpile,
 } from './resources';
+import { CommandSystem } from './systems/command-system';
+import { HungerSystem } from './systems/hunger-system';
+import { EfficiencySystem } from './systems/efficiency-system';
+import { ProductionSystem } from './systems/production-system';
+import { StatsSystem } from './systems/stats-system';
+import { SnapshotSystem } from './systems/snapshot-system';
 
 // sim-ecs's built system type; kept loose so ALL_SYSTEMS can be filled in world composition.
 export type TColonySystem = Parameters<
@@ -29,8 +35,15 @@ export type TColonySystem = Parameters<
  */
 export type TColonySystemFactory = () => TColonySystem;
 
-/** Filled in Task 11 (world composition). Empty until then so early tests can build worlds. */
-export const ALL_SYSTEMS: TColonySystemFactory[] = [];
+/** Fixed execution order per spec 4.4 — one system per stage; never reorder. Factories: each world builds fresh instances. */
+export const ALL_SYSTEMS: TColonySystemFactory[] = [
+  CommandSystem,
+  HungerSystem,
+  EfficiencySystem,
+  ProductionSystem,
+  StatsSystem,
+  SnapshotSystem,
+];
 
 /**
  * sim-ecs 0.6.4 gotcha: getResource() works on RUNTIME worlds only. The

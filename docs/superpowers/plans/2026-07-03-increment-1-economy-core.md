@@ -3680,7 +3680,12 @@ export class GameView extends ItemView {
   async onOpen(): Promise<void> {
     const save = await this.plugin.loadSave();
     this.engine = await GameEngine.create(save);
-    this.engine.onAutosave((s) => void this.plugin.saveSave(s));
+    this.engine.onAutosave((save) => {
+      this.plugin.saveSave(save).catch((error: unknown) => {
+        console.error('ObsiSim: autosave failed', error);
+        new Notice('ObsiSim: autosave failed — your colony may not persist.');
+      });
+    });
     this.engine.onUpdate((_snapshot, status) => {
       if (status.error && status.error !== this.lastError) {
         new Notice(`ObsiSim paused on error: ${status.error}`);
@@ -3695,9 +3700,16 @@ export class GameView extends ItemView {
     if (this.engine) {
       this.engine.pause();
       await this.engine.settle(); // drain any in-flight tick before the close-save
-      await this.plugin.saveSave(this.engine.serialize());
-      this.engine.destroy();
-      this.engine = null;
+      try {
+        await this.plugin.saveSave(this.engine.serialize());
+      } catch (error) {
+        console.error('ObsiSim: close-save failed', error);
+        new Notice('ObsiSim: failed to save the colony — recent progress may be lost.');
+      } finally {
+        // cleanup must run even when the save fails (review finding)
+        this.engine.destroy();
+        this.engine = null;
+      }
     }
     this.vueApp?.unmount();
     this.vueApp = null;
@@ -3740,16 +3752,6 @@ export default class ObsiSimPlugin extends Plugin {
     await leaf.setViewState({ type: VIEW_TYPE_OBSISIM, active: true });
   }
 
-  async loadSave(): Promise<SaveGameV1 | null> {
-    const data = ((await this.loadData()) as PluginData | null) ?? {};
-    if (data.save === undefined || data.save === null) return null;
-    if (isLoadableSave(data.save)) return data.save; // catalog-aware guard, not bare isSaveGameV1
-    // spec 7.2: corrupt/incompatible save -> back it up, start fresh, tell the user
-    new Notice('ObsiSim: save was corrupt or incompatible — starting a fresh colony (old save backed up).');
-    await this.saveData({ ...data, save: undefined, corruptBackup: data.save } satisfies PluginData);
-    return null;
-  }
-
   /**
    * All data.json writes flow through one FIFO promise chain: autosaves are
    * fire-and-forget, so without ordering a slow autosave could resolve AFTER
@@ -3757,13 +3759,33 @@ export default class ObsiSimPlugin extends Plugin {
    */
   private saveQueue: Promise<void> = Promise.resolve();
 
-  saveSave(save: SaveGameV1): Promise<void> {
+  /**
+   * Every data.json write — including the corrupt-save backup — goes through
+   * this queue, so no two read-modify-write cycles can interleave.
+   */
+  private enqueueDataWrite(mutate: (data: PluginData) => PluginData): Promise<void> {
     const write = this.saveQueue.then(async () => {
       const data = ((await this.loadData()) as PluginData | null) ?? {};
-      await this.saveData({ ...data, save } satisfies PluginData);
+      await this.saveData(mutate(data));
     });
     this.saveQueue = write.catch(() => undefined); // keep the chain alive on failure
     return write;
+  }
+
+  saveSave(save: SaveGameV1): Promise<void> {
+    return this.enqueueDataWrite((data) => ({ ...data, save }));
+  }
+
+  async loadSave(): Promise<SaveGameV1 | null> {
+    // wait out any in-flight write (e.g. a closing view's save) before reading
+    await this.saveQueue;
+    const data = ((await this.loadData()) as PluginData | null) ?? {};
+    if (data.save === undefined || data.save === null) return null;
+    if (isLoadableSave(data.save)) return data.save; // catalog-aware guard, not bare isSaveGameV1
+    // spec 7.2: corrupt/incompatible save -> back it up, start fresh, tell the user
+    new Notice('ObsiSim: save was corrupt or incompatible — starting a fresh colony (old save backed up).');
+    await this.enqueueDataWrite((current) => ({ ...current, save: undefined, corruptBackup: current.save }));
+    return null;
   }
 }
 ```

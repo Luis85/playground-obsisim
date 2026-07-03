@@ -2527,7 +2527,7 @@ git commit -m "feat: compose full colony world; integration tests for both chain
 **Interfaces:**
 - Consumes: `createColonyWorld`, `initialSave`, resources (Task 4/3), `BALANCE`, `Snapshot`/`EngineStatus`/`SaveGameV1`/`Command` types, `RESOURCE_IDS`.
 - Produces (the UI and Obsidian shell program against exactly this):
-  - `class GameEngine` with: `static create(save?: SaveGameV1 | null): Promise<GameEngine>`; `dispatch(command: Command): void`; `stepOnce(): Promise<void>`; `start(): void`; `pause(): void`; `setSpeed(speed: 1 | 2 | 4): void`; `reset(): Promise<void>`; `serialize(): SaveGameV1`; `destroy(): void`; `get snapshot(): Snapshot | null`; `get status(): EngineStatus`; `onUpdate(listener: (snapshot: Snapshot | null, status: EngineStatus) => void): void` (multiple listeners allowed); `onAutosave(listener: (save: SaveGameV1) => void): void`.
+  - `class GameEngine` with: `static create(save?: SaveGameV1 | null): Promise<GameEngine>`; `dispatch(command: Command): void`; `stepOnce(): Promise<void>`; `start(): void`; `pause(): void`; `setSpeed(speed: 1 | 2 | 4): void`; `reset(): Promise<void>`; `settle(): Promise<void>` (resolves once any in-flight tick finishes — callers MUST pause + settle before serializing for a close-save, or the save can capture a half-stepped world); `serialize(): SaveGameV1`; `destroy(): void`; `get snapshot(): Snapshot | null`; `get status(): EngineStatus`; `onUpdate(listener: (snapshot: Snapshot | null, status: EngineStatus) => void): void` (multiple listeners allowed); `onAutosave(listener: (save: SaveGameV1) => void): void`.
   - `buildSaveFromWorld(world: IRuntimeWorld): SaveGameV1` (exported for tests). Serialization reads LIVE ECS state, never the snapshot: entities created by a command are applied at the step's sync point AFTER SnapshotSystem ran, so a snapshot-based save on that tick would persist the paid cost while dropping the new building/worker (Codex review P1).
   - Timing: `stepOnce` increments `SimClock.tick` then awaits `world.step()`; the interval is `1000 / (BALANCE.baseTicksPerSecond * speed)` ms; re-entrant calls are dropped while a step is in flight. Autosave fires every `BALANCE.autosaveEveryTicks` ticks and after `reset()`. A throwing step stores the message in `status.error` and pauses.
 
@@ -2647,6 +2647,14 @@ describe('GameEngine', () => {
       vi.useRealTimers();
     }
   });
+
+  it('settle() waits out an in-flight tick before a close-save serializes', async () => {
+    const engine = await GameEngine.create();
+    const pending = engine.stepOnce(); // do not await: tick is in flight
+    await engine.settle();
+    expect(engine.snapshot!.tick).toBe(1); // fully stepped, not half-applied
+    await pending;
+  });
 });
 ```
 
@@ -2720,6 +2728,7 @@ export class GameEngine {
   private error: string | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private stepping = false;
+  private inFlight: Promise<void> | null = null;
   private readonly updateListeners: UpdateListener[] = [];
   private autosaveListener: ((save: SaveGameV1) => void) | null = null;
 
@@ -2753,6 +2762,27 @@ export class GameEngine {
   async stepOnce(): Promise<void> {
     if (this.stepping) return;
     this.stepping = true;
+    const step = this.runStep();
+    this.inFlight = step;
+    try {
+      await step;
+    } finally {
+      this.stepping = false;
+      this.inFlight = null;
+    }
+    this.publish();
+  }
+
+  /**
+   * Resolves once any in-flight tick has fully finished (including its
+   * command sync). Close-saves must pause + settle before serialize(), or
+   * they can capture a half-stepped world mid-tick.
+   */
+  async settle(): Promise<void> {
+    if (this.inFlight) await this.inFlight;
+  }
+
+  private async runStep(): Promise<void> {
     try {
       const clock = this.world.getResource(SimClock);
       clock.tick++;
@@ -2763,10 +2793,7 @@ export class GameEngine {
     } catch (err) {
       this.error = err instanceof Error ? err.message : String(err);
       this.pauseInternal();
-    } finally {
-      this.stepping = false;
     }
-    this.publish();
   }
 
   start(): void {
@@ -2793,6 +2820,7 @@ export class GameEngine {
 
   async reset(): Promise<void> {
     this.pauseInternal();
+    await this.settle();
     this.error = null;
     this.world = await createColonyWorld(initialSave());
     this.autosaveListener?.(this.serialize());
@@ -2836,7 +2864,7 @@ export class GameEngine {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run tests/engine/game-engine.test.ts`
-Expected: PASS (9 tests). The round-trip test is the load-bearing one — if it fails, compare the two `SaveGameV1` objects field by field; the usual culprit is sim-affecting state not captured by buildSaveFromWorld (there must be none).
+Expected: PASS (10 tests). The round-trip test is the load-bearing one — if it fails, compare the two `SaveGameV1` objects field by field; the usual culprit is sim-affecting state not captured by buildSaveFromWorld (there must be none).
 
 - [ ] **Step 5: Lint, full suite, commit**
 
@@ -3621,6 +3649,7 @@ export class GameView extends ItemView {
   async onClose(): Promise<void> {
     if (this.engine) {
       this.engine.pause();
+      await this.engine.settle(); // drain any in-flight tick before the close-save
       await this.plugin.saveSave(this.engine.serialize());
       this.engine.destroy();
       this.engine = null;

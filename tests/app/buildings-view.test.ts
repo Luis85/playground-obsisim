@@ -5,7 +5,7 @@ import { createTestingPinia } from '@pinia/testing';
 import BuildingsView from '../../src/app/views/BuildingsView.vue';
 import { ENGINE_KEY } from '../../src/app/engine-key';
 import { useGameStore } from '../../src/app/stores/game-store';
-import { makeSnapshot } from './game-store.test';
+import { makeSnapshot } from './fixtures';
 
 function mountView(stock: { wood?: number } = {}) {
   const engine = { dispatch: vi.fn() };

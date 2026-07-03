@@ -142,6 +142,7 @@ export class GameEngine {
   }
 
   start(): void {
+    this.error = null; // resuming clears a prior error; a recurring one re-pauses
     this.paused = false;
     this.schedule();
     this.publish();

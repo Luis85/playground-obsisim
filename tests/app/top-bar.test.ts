@@ -5,7 +5,7 @@ import { createTestingPinia } from '@pinia/testing';
 import TopBar from '../../src/app/components/TopBar.vue';
 import { ENGINE_KEY } from '../../src/app/engine-key';
 import { useGameStore } from '../../src/app/stores/game-store';
-import { makeSnapshot } from './game-store.test';
+import { makeSnapshot } from './fixtures';
 
 function mountTopBar() {
   const engine = { start: vi.fn(), pause: vi.fn(), setSpeed: vi.fn(), stepOnce: vi.fn(), reset: vi.fn() };

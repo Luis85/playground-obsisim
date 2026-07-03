@@ -139,5 +139,11 @@ describe('GameEngine', () => {
     await engine.stepOnce();
     expect(engine.status.error).toBe('sim-ecs blew up');
     expect(engine.status.paused).toBe(true);
+
+    // Resuming after an error must clear the stale banner, not leave it
+    // showing forever even once play works fine again.
+    engine.start();
+    expect(engine.status.error).toBeNull();
+    engine.pause(); // clean up the interval timer started by start()
   });
 });

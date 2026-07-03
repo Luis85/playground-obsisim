@@ -81,6 +81,15 @@ describe('isLoadableSave', () => {
     expect(isLoadableSave(tooLow)).toBe(false);
   });
 
+  it('rejects counters beyond safe-integer range (++ would stall or collide)', () => {
+    const unsafeCounter = initialSave();
+    unsafeCounter.nextEntityId = Number.MAX_SAFE_INTEGER + 2; // still an "integer" per isInteger
+    expect(isLoadableSave(unsafeCounter)).toBe(false);
+    const unsafeTick = initialSave();
+    unsafeTick.tick = Number.MAX_SAFE_INTEGER + 2;
+    expect(isLoadableSave(unsafeTick)).toBe(false);
+  });
+
   it('rejects fractional ticks and inherited-object-key building ids', () => {
     const fractional = initialSave();
     fractional.tick = 0.5; // would desync the autosave modulo forever

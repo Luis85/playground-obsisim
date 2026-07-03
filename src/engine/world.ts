@@ -134,9 +134,10 @@ function isWorkersValid(data: SaveGameV1): boolean {
 // every id already handed out so the restored IdCounter can never collide.
 function isIdsValid(data: SaveGameV1): boolean {
   const allIds = [...data.buildings.map((b) => b.id), ...data.workers.map((w) => w.id)];
-  if (!allIds.every((id) => Number.isInteger(id) && id > 0)) return false;
+  // SAFE integers: past 2^53, ++ stops incrementing and ids would collide
+  if (!allIds.every((id) => Number.isSafeInteger(id) && id > 0)) return false;
   if (new Set(allIds).size !== allIds.length) return false;
-  if (!Number.isInteger(data.nextEntityId) || data.nextEntityId < 1) return false;
+  if (!Number.isSafeInteger(data.nextEntityId) || data.nextEntityId < 1) return false;
   return allIds.every((id) => id < data.nextEntityId);
 }
 
@@ -148,13 +149,13 @@ function isIdsValid(data: SaveGameV1): boolean {
  */
 export function isLoadableSave(data: unknown): data is SaveGameV1 {
   if (!isSaveGameV1(data)) return false;
-  // integer clocks: a fractional tick would desync every modulo-based cadence
-  // (autosave, recruit cooldown) forever
-  if (!Number.isInteger(data.tick) || data.tick < 0) return false;
+  // SAFE integers: a fractional tick would desync every modulo-based cadence
+  // (autosave, recruit cooldown) forever; past 2^53, ++ stops incrementing
+  if (!Number.isSafeInteger(data.tick) || data.tick < 0) return false;
   // the engine only ever sets lastRecruitTick to -recruitCooldownTicks (fresh
   // colony) or to a past tick; anything else blocks recruiting spuriously
   if (
-    !Number.isInteger(data.lastRecruitTick) ||
+    !Number.isSafeInteger(data.lastRecruitTick) ||
     data.lastRecruitTick < -BALANCE.recruitCooldownTicks ||
     data.lastRecruitTick > data.tick
   ) return false;

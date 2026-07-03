@@ -32,10 +32,16 @@ export default class ObsiSimPlugin extends Plugin {
   }
 
   async activateView(): Promise<void> {
-    const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE_OBSISIM)[0];
-    if (existing) {
-      await this.app.workspace.revealLeaf(existing);
+    const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_OBSISIM);
+    const activeLeaf = leaves.find((leaf) => leaf.view === this.activeGameView);
+    if (this.activeGameView && activeLeaf) {
+      await this.app.workspace.revealLeaf(activeLeaf);
       return;
+    }
+    // no engine-owning view exists: any remaining leaves are inert duplicates
+    // from a workspace restore — clear them so a fresh view can own the engine
+    for (const leaf of leaves) {
+      leaf.detach();
     }
     const leaf = this.app.workspace.getLeaf(true);
     await leaf.setViewState({ type: VIEW_TYPE_OBSISIM, active: true });

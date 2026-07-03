@@ -28,6 +28,15 @@ export class GameView extends ItemView {
   }
 
   async onOpen(): Promise<void> {
+    if (this.plugin.activeGameView && this.plugin.activeGameView !== this) {
+      // a second leaf must stay inert: no engine, no autosaves (see main.ts)
+      this.contentEl.createEl('p', {
+        text: 'ObsiSim is already open in another pane. Close this pane and use the existing one.',
+        cls: 'obsisim-duplicate-view',
+      });
+      return;
+    }
+    this.plugin.activeGameView = this;
     const save = await this.plugin.loadSave();
     this.engine = await GameEngine.create(save);
     this.engine.onAutosave((save) => {
@@ -63,5 +72,8 @@ export class GameView extends ItemView {
     this.vueApp?.unmount();
     this.vueApp = null;
     this.contentEl.empty();
+    if (this.plugin.activeGameView === this) {
+      this.plugin.activeGameView = null;
+    }
   }
 }

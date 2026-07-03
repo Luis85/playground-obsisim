@@ -13,6 +13,14 @@ function isMissingSave(data: PluginData): boolean {
 }
 
 export default class ObsiSimPlugin extends Plugin {
+  /**
+   * The one view that owns a running engine. A second obsisim-game leaf
+   * (workspace restore after a pane split, "open in new window") must NOT
+   * create another engine: two engines would race each other's autosaves
+   * into the single save slot and the idle one could overwrite real progress.
+   */
+  activeGameView: GameView | null = null;
+
   async onload(): Promise<void> {
     this.registerView(VIEW_TYPE_OBSISIM, (leaf) => new GameView(leaf, this));
     this.addRibbonIcon('factory', 'Open ObsiSim', () => void this.activateView());

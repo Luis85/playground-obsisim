@@ -80,3 +80,8 @@
 .obsisim-notice { color: var(--text-muted); font-style: italic; }
 .obsisim-loading { color: var(--text-muted); padding: var(--size-4-4); }
 .obsisim-reset { margin-left: var(--size-4-4); }
+
+.obsisim-duplicate-view {
+  color: var(--text-muted);
+  padding: var(--size-4-4);
+}

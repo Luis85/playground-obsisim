@@ -81,6 +81,9 @@ import { Actions, buildWorld, createSystem, queryComponents, Read, Write,
 // Stages run sequentially → one system per stage enforces our fixed order.
 // prepWorld.addResource(instanceOrCtor)  /  prepWorld.buildEntity().with(instance).build() → IEntity
 // CAUTION: prep.getResource() is broken on preptime worlds in 0.6.4 — use world.ts's getPrepResource(prep, Ctor)
+// CAUTION: a BUILT system may only be registered in ONE world — the second prepareRun throws.
+// System modules therefore export FACTORIES (() => createSystem(...).build()) and
+// buildColonyPrepWorld invokes them, so each world gets fresh system instances.
 // IEntity.getComponent(Ctor) → T | undefined   (tests hold entity refs and inspect them)
 // const runWorld = await prepWorld.prepareRun();  await runWorld.step();  // one full pipeline pass + command sync
 // runWorld.getResource(Ctor) → T
@@ -1029,7 +1032,7 @@ git commit -m "feat: ECS components and world resources with unit tests"
 - Consumes: components + resources (Task 3), catalog (Task 2), `SaveGameV1` (Task 2), sim-ecs (`buildWorld`, `IPreptimeWorld`, `IRuntimeWorld`, `ISystem`, `IEntity`).
 - Produces (systems tasks and the engine rely on these exact signatures):
   - `initialSave(): SaveGameV1` — fresh-colony save (starting stock, 3 idle workers, no buildings).
-  - `buildColonyPrepWorld(options?: { save?: SaveGameV1; systems?: readonly TColonySystem[] }): IPreptimeWorld` — builds the prep world with ALL components registered, ALL resources added (initialized from the save), and save entities spawned. `systems` defaults to `ALL_SYSTEMS` (empty until Task 11 fills it); tests pass a subset to isolate one system.
+  - `buildColonyPrepWorld(options?: { save?: SaveGameV1; systems?: readonly TColonySystem[] }): IPreptimeWorld` — builds the prep world with ALL components registered, ALL resources added (initialized from the save), and save entities spawned. `systems` defaults to `ALL_SYSTEMS` (empty until Task 11 fills it); tests pass a subset to isolate one system. Systems are FACTORIES (`TColonySystemFactory`) invoked per world — a built sim-ecs system instance can only register in one world.
   - `spawnBuilding(prep: IPreptimeWorld, ids: IdCounter, saved: SavedBuilding): IEntity`
   - `spawnWorker(prep: IPreptimeWorld, ids: IdCounter, opts?: { hunger?: number; buildingId?: number | null; efficiency?: number; toolTicks?: number }): IEntity`
   - `createColonyWorld(save?: SaveGameV1): Promise<IRuntimeWorld>` — prep + `prepareRun()`.
@@ -1201,8 +1204,16 @@ export type TColonySystem = Parameters<
   ? S extends { addSystem(system: infer Sys): unknown } ? Sys : never
   : never;
 
+/**
+ * A BUILT system instance can only ever be registered in one world — sim-ecs
+ * 0.6.4 throws on the second prepareRun. Systems are therefore passed around
+ * as factories and each world builds its own instances (createColonyWorld runs
+ * many times: tests, reset, restore).
+ */
+export type TColonySystemFactory = () => TColonySystem;
+
 /** Filled in Task 11 (world composition). Empty until then so early tests can build worlds. */
-export const ALL_SYSTEMS: TColonySystem[] = [];
+export const ALL_SYSTEMS: TColonySystemFactory[] = [];
 
 /**
  * sim-ecs 0.6.4 gotcha: getResource() works on RUNTIME worlds only. The
@@ -1305,14 +1316,14 @@ export function spawnWorker(
 }
 
 export function buildColonyPrepWorld(
-  options: { save?: SaveGameV1; systems?: readonly TColonySystem[] } = {},
+  options: { save?: SaveGameV1; systems?: readonly TColonySystemFactory[] } = {},
 ): IPreptimeWorld {
   const save = options.save ?? initialSave();
   const systems = options.systems ?? ALL_SYSTEMS;
 
   let builder = buildWorld().withDefaultScheduling((root) => {
-    for (const system of systems) {
-      root = root.addNewStage((stage) => stage.addSystem(system));
+    for (const systemFactory of systems) {
+      root = root.addNewStage((stage) => stage.addSystem(systemFactory()));
     }
     return root;
   });
@@ -1448,7 +1459,7 @@ git commit -m "feat: colony world scaffolding, save-driven spawning, seeded snap
 
 **Interfaces:**
 - Consumes: `Hunger` component, `Stockpile` resource, `BALANCE`, world helpers (Task 4).
-- Produces: `HungerSystem` (a built sim-ecs system). Behavior contract: each tick every worker's hunger rises by `BALANCE.hungerPerTick` (capped at `hungerMax`); at `hunger >= mealThreshold` the worker eats — 1 bread resets hunger to 0, else 1 berries reduces hunger by `berriesHungerRestore` (floor 0), else nothing.
+- Produces: `HungerSystem` (a system FACTORY — invoked per world by buildColonyPrepWorld). Behavior contract: each tick every worker's hunger rises by `BALANCE.hungerPerTick` (capped at `hungerMax`); at `hunger >= mealThreshold` the worker eats — 1 bread resets hunger to 0, else 1 berries reduces hunger by `berriesHungerRestore` (floor 0), else nothing.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1519,7 +1530,7 @@ import { BALANCE } from '../content/balance';
 import { Hunger } from '../components';
 import { Stockpile } from '../resources';
 
-export const HungerSystem = createSystem({
+export const HungerSystem = () => createSystem({
   stockpile: WriteResource(Stockpile),
   workers: queryComponents({ hunger: Write(Hunger) }),
 })
@@ -1661,7 +1672,7 @@ import { BALANCE, workerEfficiency } from '../content/balance';
 import { Efficiency, Hunger, JobAssignment, ToolCoverage } from '../components';
 import { Stockpile } from '../resources';
 
-export const EfficiencySystem = createSystem({
+export const EfficiencySystem = () => createSystem({
   stockpile: WriteResource(Stockpile),
   workers: queryComponents({
     hunger: Read(Hunger),
@@ -1830,7 +1841,7 @@ import { BUILDINGS } from '../content/buildings';
 import { Building, Efficiency, JobAssignment, Production, ToolCoverage } from '../components';
 import { Stockpile } from '../resources';
 
-export const ProductionSystem = createSystem({
+export const ProductionSystem = () => createSystem({
   stockpile: WriteResource(Stockpile),
   buildings: queryComponents({ building: Read(Building), production: Write(Production) }),
   workers: queryComponents({ job: Read(JobAssignment), efficiency: Read(Efficiency), coverage: Read(ToolCoverage) }),
@@ -1985,7 +1996,7 @@ import { RESOURCES, RESOURCE_IDS } from '../content/resources';
 import { Building, Efficiency, Hunger, JobAssignment, Production, ToolCoverage, Worker, WorkerSlots } from '../components';
 import { NoticeBoard, SimClock, SnapshotStore, StatsHistory, Stockpile } from '../resources';
 
-export const SnapshotSystem = createSystem({
+export const SnapshotSystem = () => createSystem({
   clock: ReadResource(SimClock),
   stockpile: ReadResource(Stockpile),
   stats: ReadResource(StatsHistory),
@@ -2203,7 +2214,7 @@ import { BUILDINGS } from '../content/buildings';
 import { Building, Efficiency, Hunger, JobAssignment, Production, ToolCoverage, Worker, WorkerSlots } from '../components';
 import { CommandQueue, IdCounter, NoticeBoard, SimClock, Stockpile } from '../resources';
 
-export const CommandSystem = createSystem({
+export const CommandSystem = () => createSystem({
   actions: Actions,
   queue: WriteResource(CommandQueue),
   clock: WriteResource(SimClock),
@@ -2366,7 +2377,7 @@ Expected: FAIL — module not found.
 import { createSystem, WriteResource } from 'sim-ecs';
 import { StatsHistory, Stockpile } from '../resources';
 
-export const StatsSystem = createSystem({
+export const StatsSystem = () => createSystem({
   stockpile: WriteResource(Stockpile),
   stats: WriteResource(StatsHistory),
 })
@@ -2415,8 +2426,8 @@ import { ProductionSystem } from './systems/production-system';
 import { StatsSystem } from './systems/stats-system';
 import { SnapshotSystem } from './systems/snapshot-system';
 
-/** Fixed execution order per spec 4.4 — one system per stage; never reorder. */
-export const ALL_SYSTEMS: TColonySystem[] = [
+/** Fixed execution order per spec 4.4 — one system per stage; never reorder. Factories: each world builds fresh instances. */
+export const ALL_SYSTEMS: TColonySystemFactory[] = [
   CommandSystem,
   HungerSystem,
   EfficiencySystem,

@@ -150,6 +150,27 @@ describe('isLoadableSave', () => {
     expect(isLoadableSave(ceilingCounter)).toBe(false);
   });
 
+  it('every save written from an accepted id state is itself accepted (no boundary ping-pong)', async () => {
+    // No accept-bound alone can deliver this at its own boundary (the state
+    // sitting exactly at any bound writes bound+1), so the id counter
+    // saturates instead: at the ceiling the engine refuses entity creation,
+    // and the written counter never leaves the accepted range.
+    const atCeiling = initialSave();
+    atCeiling.nextEntityId = Number.MAX_SAFE_INTEGER - 2 ** 32; // == MAX_SAVED_COUNTER
+    expect(isLoadableSave(atCeiling)).toBe(true);
+    const justAbove = initialSave();
+    justAbove.nextEntityId = Number.MAX_SAFE_INTEGER - 2 ** 32 + 1;
+    expect(isLoadableSave(justAbove)).toBe(false);
+    const { GameEngine } = await import('../../src/engine/game-engine');
+    const engine = await GameEngine.create(atCeiling);
+    engine.dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
+    await engine.stepOnce();
+    const written = engine.serialize();
+    expect(written.buildings).toHaveLength(0); // creation refused at the ceiling
+    expect(written.nextEntityId).toBe(atCeiling.nextEntityId);
+    expect(isLoadableSave(written)).toBe(true);
+  });
+
   it('rejects array-shaped stockpiles (would silently restore empty)', () => {
     const arrayStockpile = initialSave();
     (arrayStockpile as { stockpile: unknown }).stockpile = [];

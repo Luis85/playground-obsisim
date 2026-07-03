@@ -71,6 +71,15 @@ describe('small resources', () => {
     expect(ids.peek()).toBe(5);
   });
 
+  it('IdCounter saturates exactly at the save-format counter ceiling', () => {
+    const ceiling = Number.MAX_SAFE_INTEGER - 2 ** 32; // == MAX_SAVED_COUNTER
+    const oneBelow = new IdCounter(ceiling - 1);
+    expect(oneBelow.exhausted()).toBe(false); // one id left: take() lands peek() ON the ceiling
+    expect(oneBelow.take()).toBe(ceiling - 1);
+    expect(oneBelow.peek()).toBe(ceiling); // still a loadable nextEntityId
+    expect(oneBelow.exhausted()).toBe(true); // another take() would write ceiling+1
+  });
+
   it('CommandQueue drain empties the queue', () => {
     const queue = new CommandQueue();
     queue.pending.push({ type: 'recruitWorker' });

@@ -1,6 +1,7 @@
 import type { CostMap, ResourceId } from '../shared/content-types';
 import type { Command } from '../shared/commands';
 import type { Snapshot } from '../shared/snapshot';
+import { MAX_SAVED_COUNTER } from '../shared/save';
 import { BALANCE } from './content/balance';
 
 export class Stockpile {
@@ -99,6 +100,17 @@ export class IdCounter {
   /** Next id that would be handed out, without consuming it. Used for serialization. */
   peek(): number {
     return this.next;
+  }
+
+  /**
+   * True when handing out another id would push peek() past MAX_SAVED_COUNTER,
+   * i.e. the serialized save would no longer pass the load guard. Command
+   * handlers MUST check this before take(): saturating here (organically
+   * unreachable — it needs ~9e15 entities) is what lets the guard promise that
+   * every save the engine writes from a loadable state is itself loadable.
+   */
+  exhausted(): boolean {
+    return this.next >= MAX_SAVED_COUNTER;
   }
 }
 

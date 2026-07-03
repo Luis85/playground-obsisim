@@ -71,6 +71,20 @@ describe('CommandSystem', () => {
     expect(snapshot().idleWorkers).toBe(2);
   });
 
+  it('refuses entity creation once the id space is exhausted, without side effects', async () => {
+    const save = initialSave();
+    save.nextEntityId = Number.MAX_SAFE_INTEGER - 2 ** 32; // == MAX_SAVED_COUNTER: nothing left to hand out
+    const { world, tick, dispatch, snapshot } = await setup(save);
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
+    expect(snapshot().notices).toEqual(['Cannot create more entities: id space exhausted.']);
+    expect(world.getResource(Stockpile).get('wood')).toBe(30); // cost not paid
+    await dispatch({ type: 'recruitWorker' });
+    expect(snapshot().notices).toEqual(['Cannot create more entities: id space exhausted.']);
+    await tick();
+    expect(snapshot().buildings).toHaveLength(0);
+    expect(snapshot().population).toBe(3);
+  });
+
   it('notices when assigning to a missing building or with no idle workers', async () => {
     const { dispatch, snapshot } = await setup();
     await dispatch({ type: 'assignWorker', buildingId: 999 });

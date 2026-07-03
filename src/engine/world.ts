@@ -1,6 +1,6 @@
 import { buildWorld } from 'sim-ecs';
 import type { IEntity, IPreptimeWorld, IRuntimeWorld } from 'sim-ecs';
-import { isSaveGameV1 } from '../shared/save';
+import { isSaveGameV1, MAX_SAVED_COUNTER } from '../shared/save';
 import type { SaveGameV1, SavedBuilding } from '../shared/save';
 import type { ResourceId } from '../shared/content-types';
 import type { ResourceStats, Snapshot } from '../shared/snapshot';
@@ -125,16 +125,12 @@ function isWorkersValid(data: SaveGameV1): boolean {
   return data.workers.every((w) => isWorkerRecordValid(w, buildingIds));
 }
 
-/**
- * Counters keep incrementing after load, so a save sitting AT the safe-integer
- * ceiling would stop advancing precisely on its next ++. Require generous
- * headroom: ~4 billion post-load increments (~17 years of play at 8 ticks/s).
- */
-const MAX_SAVED_COUNTER = Number.MAX_SAFE_INTEGER - 2 ** 32;
-
 // Cross-array id validity: positive integers, unique across buildings AND
 // workers combined (they share one id space), and nextEntityId strictly past
 // every id already handed out so the restored IdCounter can never collide.
+// The MAX_SAVED_COUNTER ceiling cannot ping-pong (accepted save -> play ->
+// rejected save): IdCounter saturates at that same ceiling, refusing entity
+// creation instead of writing a counter the guard would refuse to load.
 function isIdsValid(data: SaveGameV1): boolean {
   const allIds = [...data.buildings.map((b) => b.id), ...data.workers.map((w) => w.id)];
   // SAFE integers: past 2^53, ++ stops incrementing and ids would collide

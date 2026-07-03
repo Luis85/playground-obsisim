@@ -20,6 +20,11 @@ export const CommandSystem = () => createSystem({
   // run function itself is just a drain loop + dispatch.
   .withRunFunction(({ actions, queue, clock, stockpile, ids, notices, buildings, workers }) => {
     const handleConstructBuilding = (command: Extract<Command, { type: 'constructBuilding' }>) => {
+      // Checked BEFORE pay(): refusing after payment would swallow the cost.
+      if (ids.exhausted()) {
+        notices.push('Cannot create more entities: id space exhausted.');
+        return;
+      }
       const def = BUILDINGS[command.buildingDefId];
       if (!stockpile.pay(def.cost)) {
         notices.push(`Cannot afford ${def.name}.`);
@@ -34,6 +39,11 @@ export const CommandSystem = () => createSystem({
     };
 
     const handleRecruitWorker = () => {
+      // Checked BEFORE the cooldown write: a refused recruit must not start it.
+      if (ids.exhausted()) {
+        notices.push('Cannot create more entities: id space exhausted.');
+        return;
+      }
       if (clock.tick < clock.lastRecruitTick + BALANCE.recruitCooldownTicks) {
         notices.push('Recruiting is still on cooldown.');
         return;

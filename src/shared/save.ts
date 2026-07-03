@@ -8,6 +8,20 @@ import type { BuildingDefId, ResourceId } from './content-types';
  */
 export const MAX_SAVED_ENTITIES = 10_000;
 
+/**
+ * Counters keep incrementing after load, so a save sitting AT the safe-integer
+ * ceiling would stop advancing precisely on its next ++. Require generous
+ * headroom: ~4 billion post-load increments (~17 years of play at 8 ticks/s).
+ *
+ * Clampable counters (ticks) are clamped to this on load. The id counter can
+ * NEVER clamp (uniqueness), and no accept-bound alone can guarantee that a
+ * save written from an accepted state is re-accepted — the state sitting
+ * exactly at any bound writes bound+1. Instead the id counter SATURATES at
+ * runtime: IdCounter.exhausted() gates entity creation, so the engine
+ * physically cannot write a nextEntityId past this ceiling.
+ */
+export const MAX_SAVED_COUNTER = Number.MAX_SAFE_INTEGER - 2 ** 32;
+
 export interface SavedBuilding {
   id: number;
   defId: BuildingDefId;

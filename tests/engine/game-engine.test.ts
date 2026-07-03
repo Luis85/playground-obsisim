@@ -129,6 +129,15 @@ describe('GameEngine', () => {
     expect(engine.serialize().tick).toBe(1);
   });
 
+  it('a manual step publishes a snapshot including entities its commands created', async () => {
+    const engine = await GameEngine.create();
+    engine.dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
+    await engine.stepOnce(); // paused manual step: no follow-up tick will come
+    expect(engine.snapshot!.buildings).toHaveLength(1);
+    expect(engine.snapshot!.buildings[0].defId).toBe('forester');
+    expect(engine.snapshot!.stockpile.wood.stock).toBe(20);
+  });
+
   it('a thrown step captures the error and pauses, without crashing the caller', async () => {
     const engine = await GameEngine.create();
     engine.start();

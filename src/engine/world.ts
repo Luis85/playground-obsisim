@@ -3,7 +3,7 @@ import type { IEntity, IPreptimeWorld, IRuntimeWorld } from 'sim-ecs';
 import { isSaveGameV1 } from '../shared/save';
 import type { SaveGameV1, SavedBuilding } from '../shared/save';
 import type { ResourceId } from '../shared/content-types';
-import type { BuildingState, ResourceStats, Snapshot } from '../shared/snapshot';
+import type { ResourceStats, Snapshot } from '../shared/snapshot';
 import { BALANCE, STARTING_STOCK, STARTING_WORKERS, workerEfficiency } from './content/balance';
 import { BUILDINGS } from './content/buildings';
 import { RESOURCES, RESOURCE_IDS } from './content/resources';
@@ -13,6 +13,8 @@ import {
 import {
   CommandQueue, IdCounter, NoticeBoard, SimClock, SnapshotStore, StatsHistory, Stockpile,
 } from './resources';
+import type { BuildingFacts, WorkerFacts } from './snapshot-builder';
+import { buildEntitySections } from './snapshot-builder';
 import { CommandSystem } from './systems/command-system';
 import { HungerSystem } from './systems/hunger-system';
 import { EfficiencySystem } from './systems/efficiency-system';
@@ -225,41 +227,21 @@ export function buildColonyPrepWorld(
 }
 
 function buildInitialSnapshot(save: SaveGameV1, buildingIds: number[], workerIds: number[]): Snapshot {
-  const staffCount = new Map<number, number>();
-  const powerByBuilding = new Map<number, number>();
-  const tooledByBuilding = new Map<number, number>();
-  const workers = save.workers.map((saved, index) => {
-    const buildingId = saved.buildingIndex === null ? null : buildingIds[saved.buildingIndex];
-    const efficiency = workerEfficiency(saved.hunger);
-    const tooled = saved.toolTicks > 0;
-    if (buildingId !== null) {
-      staffCount.set(buildingId, (staffCount.get(buildingId) ?? 0) + 1);
-      powerByBuilding.set(
-        buildingId,
-        (powerByBuilding.get(buildingId) ?? 0) + efficiency * (tooled ? BALANCE.toolMultiplier : 1),
-      );
-      if (tooled) tooledByBuilding.set(buildingId, (tooledByBuilding.get(buildingId) ?? 0) + 1);
-    }
-    return { id: workerIds[index], hunger: saved.hunger, efficiency, buildingId, toolTicks: saved.toolTicks };
-  });
-  const buildings = save.buildings.map((saved, index) => {
-    const def = BUILDINGS[saved.defId];
-    const id = buildingIds[index];
-    const staffed = staffCount.get(id) ?? 0;
-    const state: BuildingState = staffed === 0 ? 'unstaffed' : saved.batchActive ? 'producing' : 'waitingForInput';
-    return {
-      id,
-      defId: saved.defId,
-      workers: staffed,
-      workerSlots: def.workerSlots,
-      state,
-      progress: saved.progress,
-      batchActive: saved.batchActive,
-      progressPct: Math.min(100, Math.round((saved.progress / def.recipe.ticksPerBatch) * 100)),
-      tooledWorkers: tooledByBuilding.get(id) ?? 0,
-      workPower: powerByBuilding.get(id) ?? 0,
-    };
-  });
+  const workerFacts: WorkerFacts[] = save.workers.map((saved, index) => ({
+    id: workerIds[index],
+    hunger: saved.hunger,
+    efficiency: workerEfficiency(saved.hunger),
+    buildingId: saved.buildingIndex === null ? null : buildingIds[saved.buildingIndex],
+    toolTicks: saved.toolTicks,
+  }));
+  const buildingFacts: BuildingFacts[] = save.buildings.map((saved, index) => ({
+    id: buildingIds[index],
+    defId: saved.defId,
+    workerSlots: BUILDINGS[saved.defId].workerSlots,
+    progress: saved.progress,
+    batchActive: saved.batchActive,
+  }));
+  const { workers, buildings, population, idleWorkers } = buildEntitySections(workerFacts, buildingFacts);
   const stockpile = {} as Record<ResourceId, ResourceStats>;
   let colonyWealth = 0;
   for (const resourceId of RESOURCE_IDS) {
@@ -273,12 +255,55 @@ function buildInitialSnapshot(save: SaveGameV1, buildingIds: number[], workerIds
     lastRecruitTick: save.lastRecruitTick,
     stockpile,
     colonyWealth,
-    population: workers.length,
-    idleWorkers: workers.filter((w) => w.buildingId === null).length,
+    population,
+    idleWorkers,
     buildings,
     workers,
     notices: [],
   };
+}
+
+/**
+ * sim-ecs syncs entities created by a tick's commands (construct/recruit) only
+ * AFTER all systems — including SnapshotSystem — have run, so the snapshot
+ * SnapshotSystem just wrote can be missing that tick's own new entities. Called
+ * after world.step() resolves, this re-walks the now-fully-synced world and
+ * patches SnapshotStore.latest's entity-derived sections in place, leaving the
+ * stockpile/wealth/notices sections SnapshotSystem already assembled untouched.
+ * No-op before the store has ever been populated (never happens in practice:
+ * buildColonyPrepWorld always seeds it).
+ */
+export function refreshEntitySections(world: IRuntimeWorld): void {
+  const store = world.getResource(SnapshotStore);
+  if (store.latest === null) return;
+
+  const workerFacts: WorkerFacts[] = [];
+  const buildingFacts: BuildingFacts[] = [];
+  for (const entity of world.getEntities()) {
+    const building = entity.getComponent(Building);
+    if (building) {
+      buildingFacts.push({
+        id: building.id,
+        defId: building.defId,
+        workerSlots: entity.getComponent(WorkerSlots)!.max,
+        progress: entity.getComponent(Production)!.progress,
+        batchActive: entity.getComponent(Production)!.batchActive,
+      });
+      continue;
+    }
+    const worker = entity.getComponent(Worker);
+    if (worker) {
+      workerFacts.push({
+        id: worker.id,
+        hunger: entity.getComponent(Hunger)!.value,
+        efficiency: entity.getComponent(Efficiency)!.value,
+        buildingId: entity.getComponent(JobAssignment)!.buildingId,
+        toolTicks: entity.getComponent(ToolCoverage)!.remainingTicks,
+      });
+    }
+  }
+
+  store.latest = { ...store.latest, ...buildEntitySections(workerFacts, buildingFacts) };
 }
 
 /**

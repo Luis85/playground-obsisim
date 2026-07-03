@@ -5,7 +5,7 @@ import type { SaveGameV1, SavedBuilding } from '../shared/save';
 import { BALANCE } from './content/balance';
 import { Building, Hunger, JobAssignment, Production, ToolCoverage, Worker } from './components';
 import { CommandQueue, SimClock, SnapshotStore, Stockpile } from './resources';
-import { createColonyWorld, initialSave } from './world';
+import { createColonyWorld, initialSave, refreshEntitySections } from './world';
 
 export type UpdateListener = (snapshot: Snapshot | null, status: EngineStatus) => void;
 
@@ -132,6 +132,11 @@ export class GameEngine {
       const clock = this.world.getResource(SimClock);
       clock.tick++;
       await this.world.step();
+      // sim-ecs syncs this tick's newly-created entities only after step() resolves,
+      // so SnapshotSystem's snapshot (written mid-tick) can miss them. Patch the
+      // entity-derived sections now, before publishing, so a paused manual step
+      // shows its own commands' effects without waiting on a follow-up tick.
+      refreshEntitySections(this.world);
       if (clock.tick % BALANCE.autosaveEveryTicks === 0) {
         this.autosaveListener?.(this.serialize());
       }

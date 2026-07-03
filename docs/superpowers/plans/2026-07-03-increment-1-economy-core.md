@@ -259,6 +259,7 @@ node_modules/
 dist/
 demo-vault/.obsidian/plugins/
 demo-vault/.obsidian/workspace.json
+.superpowers/
 ```
 
 `demo-vault/.obsidian/app.json`:

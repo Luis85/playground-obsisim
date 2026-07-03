@@ -1,3 +1,57 @@
-import { Plugin } from 'obsidian';
+import { Notice, Plugin } from 'obsidian';
+import type { SaveGameV1 } from './shared/save';
+import { isLoadableSave } from './engine/world';
+import { GameView, VIEW_TYPE_OBSISIM } from './view/game-view';
 
-export default class ObsiSimPlugin extends Plugin {}
+interface PluginData {
+  save?: unknown;
+  corruptBackup?: unknown;
+}
+
+export default class ObsiSimPlugin extends Plugin {
+  async onload(): Promise<void> {
+    this.registerView(VIEW_TYPE_OBSISIM, (leaf) => new GameView(leaf, this));
+    this.addRibbonIcon('factory', 'Open ObsiSim', () => void this.activateView());
+    this.addCommand({
+      id: 'open',
+      name: 'Open game',
+      callback: () => void this.activateView(),
+    });
+  }
+
+  async activateView(): Promise<void> {
+    const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE_OBSISIM)[0];
+    if (existing) {
+      await this.app.workspace.revealLeaf(existing);
+      return;
+    }
+    const leaf = this.app.workspace.getLeaf(true);
+    await leaf.setViewState({ type: VIEW_TYPE_OBSISIM, active: true });
+  }
+
+  async loadSave(): Promise<SaveGameV1 | null> {
+    const data = ((await this.loadData()) as PluginData | null) ?? {};
+    if (data.save === undefined || data.save === null) return null;
+    if (isLoadableSave(data.save)) return data.save; // catalog-aware guard, not bare isSaveGameV1
+    // spec 7.2: corrupt/incompatible save -> back it up, start fresh, tell the user
+    new Notice('ObsiSim: save was corrupt or incompatible — starting a fresh colony (old save backed up).');
+    await this.saveData({ ...data, save: undefined, corruptBackup: data.save } satisfies PluginData);
+    return null;
+  }
+
+  /**
+   * All data.json writes flow through one FIFO promise chain: autosaves are
+   * fire-and-forget, so without ordering a slow autosave could resolve AFTER
+   * the awaited close-save and clobber data.json with an older tick.
+   */
+  private saveQueue: Promise<void> = Promise.resolve();
+
+  saveSave(save: SaveGameV1): Promise<void> {
+    const write = this.saveQueue.then(async () => {
+      const data = ((await this.loadData()) as PluginData | null) ?? {};
+      await this.saveData({ ...data, save } satisfies PluginData);
+    });
+    this.saveQueue = write.catch(() => undefined); // keep the chain alive on failure
+    return write;
+  }
+}

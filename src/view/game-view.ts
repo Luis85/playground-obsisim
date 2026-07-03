@@ -1,0 +1,56 @@
+import { ItemView, Notice, type WorkspaceLeaf } from 'obsidian';
+import type { App as VueApp } from 'vue';
+import { GameEngine } from '../engine/game-engine';
+import { createGameApp } from '../app';
+import type ObsiSimPlugin from '../main';
+
+export const VIEW_TYPE_OBSISIM = 'obsisim-game';
+
+export class GameView extends ItemView {
+  private engine: GameEngine | null = null;
+  private vueApp: VueApp<Element> | null = null;
+  private lastError: string | null = null;
+
+  constructor(leaf: WorkspaceLeaf, private plugin: ObsiSimPlugin) {
+    super(leaf);
+  }
+
+  getViewType(): string {
+    return VIEW_TYPE_OBSISIM;
+  }
+
+  getDisplayText(): string {
+    return 'ObsiSim';
+  }
+
+  getIcon(): string {
+    return 'factory';
+  }
+
+  async onOpen(): Promise<void> {
+    const save = await this.plugin.loadSave();
+    this.engine = await GameEngine.create(save);
+    this.engine.onAutosave((s) => void this.plugin.saveSave(s));
+    this.engine.onUpdate((_snapshot, status) => {
+      if (status.error && status.error !== this.lastError) {
+        new Notice(`ObsiSim paused on error: ${status.error}`);
+      }
+      this.lastError = status.error;
+    });
+    this.vueApp = await createGameApp(this.engine, this.contentEl);
+    this.engine.start();
+  }
+
+  async onClose(): Promise<void> {
+    if (this.engine) {
+      this.engine.pause();
+      await this.engine.settle(); // drain any in-flight tick before the close-save
+      await this.plugin.saveSave(this.engine.serialize());
+      this.engine.destroy();
+      this.engine = null;
+    }
+    this.vueApp?.unmount();
+    this.vueApp = null;
+    this.contentEl.empty();
+  }
+}

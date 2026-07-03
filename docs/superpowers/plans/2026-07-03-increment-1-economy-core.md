@@ -6,7 +6,7 @@
 
 **Architecture:** A UI-agnostic `GameEngine` facade wraps a sim-ecs world that runs six systems in fixed stage order (Command → Hunger → Efficiency → Production → Stats → Snapshot). Each tick, the SnapshotSystem projects an immutable `Snapshot` that a Pinia store ingests; the Vue UI dispatches `Command` objects back through the facade's queue. A thin Obsidian `ItemView` hosts the Vue app and persists saves via `loadData()`/`saveData()`.
 
-**Tech Stack:** TypeScript (strict), sim-ecs 0.6.5, Vue 3 (`<script setup>`), Vue Router 4 (memory history), Pinia, Vite (library mode), Vitest, ESLint flat config, Obsidian plugin API.
+**Tech Stack:** TypeScript (strict), sim-ecs 0.6.4, Vue 3 (`<script setup>`), Vue Router 4 (memory history), Pinia, Vite (library mode), Vitest, ESLint flat config, Obsidian plugin API.
 
 **Spec:** `docs/superpowers/specs/2026-07-03-colony-sim-plugin-design.md` — all balance values and rules come from there.
 
@@ -14,7 +14,7 @@
 
 - Plugin id is `obsisim`; the custom view type is `obsisim-game`.
 - TypeScript `strict: true` everywhere; Vue SFCs use `<script setup lang="ts">`.
-- `sim-ecs` version: `0.6.5` (pin exactly — pre-1.0 minor bumps break APIs).
+- `sim-ecs` version: `0.6.4` (pin exactly — pre-1.0 minor bumps break APIs; 0.6.5 exists only in the GitHub repo, unpublished — npm's latest is 0.6.4, one small commit behind, with every API this plan uses).
 - Layering: `src/engine/` and `src/shared/` MUST NOT import from `vue`, `pinia`, `vue-router`, or `obsidian`. `src/app/` MUST NOT import `sim-ecs` directly (only via the `GameEngine` facade and `Snapshot` types).
 - `src/engine/content/` modules are pure data + pure functions and MUST NOT import `sim-ecs`; the UI is allowed to import them (catalog rendering).
 - Determinism: no `Date.now()`, `Math.random()`, or wall-clock dependence anywhere in `src/engine/` (the `setInterval` in the GameEngine facade is the only timing code, and it only decides *when* to tick, never *what happens*).
@@ -69,7 +69,7 @@ src/
 tests/                        # vitest suites, mirrors src/
 ```
 
-**sim-ecs API cheat sheet** (verified against sim-ecs 0.6.5 source; implementers have zero sim-ecs context):
+**sim-ecs API cheat sheet** (verified against sim-ecs source at v0.6.4; implementers have zero sim-ecs context):
 
 ```ts
 import { Actions, buildWorld, createSystem, queryComponents, Read, Write,
@@ -114,7 +114,7 @@ import { Actions, buildWorld, createSystem, queryComponents, Read, Write,
   },
   "dependencies": {
     "pinia": "^3.0.1",
-    "sim-ecs": "0.6.5",
+    "sim-ecs": "0.6.4",
     "vue": "^3.5.13",
     "vue-router": "^4.5.0"
   },
@@ -301,7 +301,7 @@ it('scaffold smoke test', () => {
 - [ ] **Step 7: Install and verify all gates**
 
 Run: `npm install`
-Expected: resolves cleanly (sim-ecs pinned at 0.6.5).
+Expected: resolves cleanly (sim-ecs pinned at 0.6.4).
 
 Run: `npm run lint`
 Expected: exit 0, no errors.
@@ -4227,6 +4227,6 @@ git commit -m "chore: quality gates and CI - lint policy, LOC/CSS/quality ratche
 ## Execution Notes
 
 - Tasks must run in order — later tasks import earlier tasks' exports.
-- If sim-ecs 0.6.5's typings differ from the cheat-sheet (e.g. `ISystem` naming, `getEntities` location), check `node_modules/sim-ecs/dist/index.d.ts` FIRST and adapt the type import, never the runtime design.
+- If sim-ecs 0.6.4's typings differ from the cheat-sheet (e.g. `ISystem` naming, `getEntities` location), check `node_modules/sim-ecs/dist/index.d.ts` FIRST and adapt the type import, never the runtime design.
 - Never modify balance constants to make a test pass; fix the test fixture or the code.
 - The determinism and round-trip tests (Task 12) are the increment's keystone — if they fail, stop and fix before building UI on top.

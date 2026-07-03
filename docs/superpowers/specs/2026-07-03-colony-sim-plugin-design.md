@@ -194,7 +194,7 @@ Plain HTML tables and buttons, styled minimally with Obsidian CSS variables so t
 - **Language:** TypeScript, strict mode.
 - **Build:** Vite in library mode producing the Obsidian plugin format — single CJS `main.js`, plus `manifest.json` and `styles.css`. `@vitejs/plugin-vue` for SFCs.
 - **Frontend:** Vue 3 (Composition API), Vue Router 4 (memory history), Pinia.
-- **Simulation:** `sim-ecs@0.6.5`.
+- **Simulation:** `sim-ecs@0.6.4`.
 - **Test:** Vitest — Node environment for engine tests, happy-dom for store/component tests.
 - **Lint:** ESLint flat config with `typescript-eslint` and `eslint-plugin-vue`.
 - **Obsidian:** `obsidian` package (types, dev-only dependency).

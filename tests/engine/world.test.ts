@@ -84,6 +84,15 @@ describe('isLoadableSave', () => {
     inherited.buildings.push({ defId: 'toString' as never, progress: 0, batchActive: false });
     expect(isLoadableSave(inherited)).toBe(false); // must return false, not throw
   });
+
+  it('rejects batch progress the engine could never serialize', () => {
+    const completed = initialSave();
+    completed.buildings.push({ defId: 'forester', progress: 3, batchActive: true }); // == ticksPerBatch
+    expect(isLoadableSave(completed)).toBe(false);
+    const banked = initialSave();
+    banked.buildings.push({ defId: 'forester', progress: 1, batchActive: false }); // inactive with progress
+    expect(isLoadableSave(banked)).toBe(false);
+  });
 });
 
 describe('createColonyWorld', () => {

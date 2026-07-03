@@ -82,9 +82,15 @@ function isStockpileValid(stockpile: SaveGameV1['stockpile']): boolean {
 }
 
 function isBuildingsValid(buildings: SaveGameV1['buildings']): boolean {
-  return buildings.every(
-    (b) => Object.hasOwn(BUILDINGS, b.defId) && b.progress >= 0 && b.progress <= BUILDINGS[b.defId].recipe.ticksPerBatch,
-  );
+  return buildings.every((b) => {
+    if (!Object.hasOwn(BUILDINGS, b.defId)) return false;
+    if (b.batchActive) {
+      // the engine completes batches before a tick ends: an active batch is
+      // always serialized strictly below its completion threshold
+      return b.progress >= 0 && b.progress < BUILDINGS[b.defId].recipe.ticksPerBatch;
+    }
+    return b.progress === 0; // stalled/idle buildings never bank progress
+  });
 }
 
 function isWorkerRecordValid(w: SaveGameV1['workers'][number], buildingCount: number): boolean {

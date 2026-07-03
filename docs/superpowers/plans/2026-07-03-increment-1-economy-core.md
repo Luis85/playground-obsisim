@@ -1032,7 +1032,7 @@ git commit -m "feat: ECS components and world resources with unit tests"
   - `spawnBuilding(prep: IPreptimeWorld, ids: IdCounter, saved: SavedBuilding): IEntity`
   - `spawnWorker(prep: IPreptimeWorld, ids: IdCounter, opts?: { hunger?: number; buildingId?: number | null; efficiency?: number; toolTicks?: number }): IEntity`
   - `createColonyWorld(save?: SaveGameV1): Promise<IRuntimeWorld>` — prep + `prepareRun()`.
-  - `isLoadableSave(data: unknown): data is SaveGameV1` — structural guard + catalog referential integrity + content-range validation: known resource/building ids; finite non-negative stockpile amounts; integer `tick >= 0` and integer `lastRecruitTick` (fractional clocks would desync modulo cadences); `0 <= hunger <= hungerMax`; integer `0 <= toolTicks <= toolDurationTicks`; catalog lookups via `Object.hasOwn` (never `in` — inherited keys); `0 <= progress <= that building's ticksPerBatch`; assignment indices in range and no building staffed beyond its worker slots. The Obsidian shell's load path (Task 16) uses this, never bare `isSaveGameV1`.
+  - `isLoadableSave(data: unknown): data is SaveGameV1` — structural guard + catalog referential integrity + content-range validation: known resource/building ids; finite non-negative stockpile amounts; integer `tick >= 0` and integer `lastRecruitTick` bounded to `[-recruitCooldownTicks, tick]` (fractional or future clocks desync cadences / block recruiting); `0 <= hunger <= hungerMax`; integer `0 <= toolTicks <= toolDurationTicks`; catalog lookups via `Object.hasOwn` (never `in` — inherited keys); `0 <= progress <= that building's ticksPerBatch`; assignment indices in range and no building staffed beyond its worker slots. The Obsidian shell's load path (Task 16) uses this, never bare `isSaveGameV1`.
   - `buildColonyPrepWorld` seeds `SnapshotStore.latest` with an initial snapshot derived from the save (zero rates, notices empty) so the UI never renders from a null snapshot while the engine is paused pre-first-tick (fresh create and reset both hit this).
   - `ALL_SYSTEMS: TColonySystem[]` — mutable array, filled in Task 11 (type alias `TColonySystem` for sim-ecs's built system type).
 
@@ -1108,6 +1108,15 @@ describe('isLoadableSave', () => {
     save.buildings.push({ defId: 'forester', progress: 0, batchActive: false }); // 2 slots
     save.workers = [0, 1, 2].map(() => ({ hunger: 0, buildingIndex: 0, toolTicks: 0 }));
     expect(isLoadableSave(save)).toBe(false);
+  });
+
+  it('rejects recruit cooldown timestamps outside the valid engine range', () => {
+    const future = initialSave();
+    future.lastRecruitTick = 1000000; // engine only ever records past ticks
+    expect(isLoadableSave(future)).toBe(false);
+    const tooLow = initialSave();
+    tooLow.lastRecruitTick = -999; // below the fresh-colony floor
+    expect(isLoadableSave(tooLow)).toBe(false);
   });
 
   it('rejects fractional ticks and inherited-object-key building ids', () => {
@@ -1217,7 +1226,13 @@ export function isLoadableSave(data: unknown): data is SaveGameV1 {
   // integer clocks: a fractional tick would desync every modulo-based cadence
   // (autosave, recruit cooldown) forever
   if (!Number.isInteger(data.tick) || data.tick < 0) return false;
-  if (!Number.isInteger(data.lastRecruitTick)) return false;
+  // the engine only ever sets lastRecruitTick to -recruitCooldownTicks (fresh
+  // colony) or to a past tick; anything else blocks recruiting spuriously
+  if (
+    !Number.isInteger(data.lastRecruitTick) ||
+    data.lastRecruitTick < -BALANCE.recruitCooldownTicks ||
+    data.lastRecruitTick > data.tick
+  ) return false;
   // Object.hasOwn, never `in`: inherited keys like "toString" pass `in` and
   // then indexing the catalog throws inside the guard
   const stockpileOk = Object.entries(data.stockpile).every(
@@ -1389,7 +1404,7 @@ If the `TColonySystem` conditional-type extraction fails to compile against 0.6.
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run tests/engine/world.test.ts`
-Expected: PASS (13 tests).
+Expected: PASS (14 tests).
 
 - [ ] **Step 5: Lint and commit**
 
@@ -2993,7 +3008,7 @@ git commit -m "feat: Pinia game store - snapshot read-model with notices and get
 - Produces:
   - `ENGINE_KEY: InjectionKey<GameEngine>` — every component gets the engine via `inject(ENGINE_KEY)!`.
   - `createGameRouter(): Router` — memory history; routes `/` (dashboard), `/buildings`, `/population`, `/economy`.
-  - `createGameApp(engine: GameEngine, container: HTMLElement): App<Element>` — creates Pinia + router + app, provides the engine, wires `engine.onUpdate` into `store.ingest`, mounts, returns the app (caller unmounts).
+  - `createGameApp(engine: GameEngine, container: HTMLElement): Promise<App<Element>>` — creates Pinia + router + app, provides the engine, wires `engine.onUpdate` into `store.ingest`, pushes and awaits the initial `/` route (memory history performs no automatic initial navigation), mounts, returns the app (caller unmounts).
 
 - [ ] **Step 1: Write the failing TopBar test**
 
@@ -3094,16 +3109,21 @@ import { ENGINE_KEY } from './engine-key';
 import { createGameRouter } from './router';
 import { useGameStore } from './stores/game-store';
 
-export function createGameApp(engine: GameEngine, container: HTMLElement): App<Element> {
+export async function createGameApp(engine: GameEngine, container: HTMLElement): Promise<App<Element>> {
   const pinia = createPinia();
   const app = createApp(AppRoot);
   app.use(pinia);
-  app.use(createGameRouter());
+  const router = createGameRouter();
+  app.use(router);
   app.provide(ENGINE_KEY, engine);
 
   const store = useGameStore(pinia);
   engine.onUpdate((snapshot, status) => store.ingest(snapshot, status));
 
+  // memory history performs NO automatic initial navigation (unlike web
+  // history): push the dashboard route and wait, or the first render is a
+  // blank router outlet until the user clicks a tab
+  await router.push('/');
   app.mount(container);
   return app;
 }
@@ -3594,7 +3614,7 @@ export class GameView extends ItemView {
       }
       this.lastError = status.error;
     });
-    this.vueApp = createGameApp(this.engine, this.contentEl);
+    this.vueApp = await createGameApp(this.engine, this.contentEl);
     this.engine.start();
   }
 

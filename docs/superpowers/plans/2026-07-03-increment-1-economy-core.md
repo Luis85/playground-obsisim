@@ -3784,7 +3784,8 @@ git commit -m "feat: Obsidian plugin shell - game view, ribbon, autosave persist
 ### Task 17: Styles, README, and acceptance pass
 
 **Files:**
-- Modify: `styles.css` (replace placeholder), `README.md` (create)
+- Modify: `styles.css` (replace placeholder), `README.md` (create), `package.json` (add test-build script), `.gitignore` (add `.obsidian/`)
+- Create: `scripts/test-build.mjs`
 - Test: none new — this is the final gate + polish task.
 
 **Interfaces:**
@@ -3902,6 +3903,9 @@ simulated production chains — displayed, for now, entirely in tables.
 - Open `demo-vault/` as an Obsidian vault, enable the ObsiSim community plugin,
   and reload Obsidian (Ctrl/Cmd-R) after rebuilds
 - `npm test` / `npm run lint` / `npm run build`
+- `npm run test-build` — build and install into this repo's own
+  `.obsidian/plugins/obsisim/` (open the repository itself as a vault to test);
+  pass a path to target another vault's plugin folder
 
 ## Documentation
 
@@ -3916,12 +3920,39 @@ read-model over those snapshots. `src/view/` + `src/main.ts` are the thin
 Obsidian shell that hosts the app and persists saves.
 ```
 
-- [ ] **Step 3: Full gate run**
+- [ ] **Step 3: Add the test-build script (repo-as-vault install)**
+
+`scripts/test-build.mjs` — builds the plugin and installs it into this repo's own `.obsidian/plugins/obsisim/` folder (created if missing), so the repository itself can be opened as an Obsidian vault for testing; an optional argument targets any other vault's plugin folder:
+
+```js
+#!/usr/bin/env node
+// Build the plugin and install it into an Obsidian vault's plugin folder.
+// Default target is this repo's own .obsidian/plugins/obsisim so the
+// repository can be opened directly as a vault; pass a path to target
+// another vault (e.g. node scripts/test-build.mjs ~/vault/.obsidian/plugins/obsisim).
+import { execFileSync } from 'node:child_process';
+import { copyFileSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+
+const SOURCE = 'demo-vault/.obsidian/plugins/obsisim';
+const TARGET = process.argv[2] ?? '.obsidian/plugins/obsisim';
+
+execFileSync('npx', ['vite', 'build'], { stdio: 'inherit' });
+mkdirSync(TARGET, { recursive: true });
+for (const name of ['main.js', 'manifest.json', 'styles.css']) {
+  copyFileSync(join(SOURCE, name), join(TARGET, name));
+}
+console.log(`test build installed into ${TARGET}`);
+```
+
+Add to `package.json` scripts: `"test-build": "node scripts/test-build.mjs"`. Add `.obsidian/` to `.gitignore` (the built plugin and vault state must not be committed). Verify: `npm run test-build` exits 0 and `.obsidian/plugins/obsisim/{main.js,manifest.json,styles.css}` exist.
+
+- [ ] **Step 4: Full gate run**
 
 Run: `npm run lint && npm test && npm run build`
 Expected: everything green.
 
-- [ ] **Step 4: Acceptance criteria walkthrough (spec section 8)**
+- [ ] **Step 5: Acceptance criteria walkthrough (spec section 8)**
 
 Verify each — automated ones by pointing at the passing test, manual ones in the demo vault:
 
@@ -3934,11 +3965,11 @@ Verify each — automated ones by pointing at the passing test, manual ones in t
 
 Record any manual-check failures as new tasks; do not ship with a red acceptance item.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add -A
-git commit -m "feat: obsidian-themed styles, README, acceptance pass for increment 1"
+git commit -m "feat: obsidian-themed styles, README, test-build script, acceptance pass"
 ```
 
 ---

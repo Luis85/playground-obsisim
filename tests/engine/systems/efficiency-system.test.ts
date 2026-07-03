@@ -75,4 +75,15 @@ describe('EfficiencySystem', () => {
     expect(replacement.getComponent(ToolCoverage)!.remainingTicks).toBe(300);
     expect(veteran.getComponent(ToolCoverage)!.remainingTicks).toBeGreaterThan(0); // keeps his own
   });
+
+  it('renews an expiring tool in the same tick (no untooled gap)', async () => {
+    const prep = makePrep(1);
+    const ids = getPrepResource(prep, IdCounter);
+    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false });
+    const worker = spawnWorker(prep, ids, { buildingId: building.getComponent(Building)!.id, toolTicks: 1 });
+    const world = await prep.prepareRun();
+    await world.step(); // 1 -> 0 -> renewed to 300 within the same tick
+    expect(worker.getComponent(ToolCoverage)!.remainingTicks).toBe(300);
+    expect(world.getResource(Stockpile).get('tools')).toBe(0);
+  });
 });

@@ -19,7 +19,10 @@ export const EfficiencySystem = () => createSystem({
       if (coverage.remainingTicks > 0) {
         // wears down whether assigned or idle: simple and deterministic
         coverage.remainingTicks--;
-      } else if (job.buildingId !== null && stockpile.take('tools', 1)) {
+      }
+      // renew in the same tick coverage hits 0, so a continuously staffed
+      // worker never has an untooled gap tick (exactly 1 tool per 300 ticks)
+      if (coverage.remainingTicks === 0 && job.buildingId !== null && stockpile.take('tools', 1)) {
         coverage.remainingTicks = BALANCE.toolDurationTicks;
       }
     }

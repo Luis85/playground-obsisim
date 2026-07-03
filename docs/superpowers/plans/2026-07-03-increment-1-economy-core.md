@@ -1572,7 +1572,7 @@ git commit -m "feat: hunger system - meals from bread then berries, capped starv
 
 **Interfaces:**
 - Consumes: `Hunger`, `JobAssignment`, `Efficiency`, `ToolCoverage` components; `Stockpile`; `workerEfficiency`; `BALANCE`; world helpers.
-- Produces: `EfficiencySystem`. Behavior contract, per worker each tick: `Efficiency.value = workerEfficiency(hunger)`. Tool coverage is **per worker**: if `ToolCoverage.remainingTicks > 0` it decrements (whether assigned or idle — a benched tool still wears); otherwise a STAFFED worker tries `stockpile.take('tools', 1)` and on success gets `remainingTicks = BALANCE.toolDurationTicks`. Idle workers never consume new tools. Coverage follows the worker across reassignment, so replacement workers pay for their own tool — headcount-based building buffs proved exploitable in review (Codex P2 x3).
+- Produces: `EfficiencySystem`. Behavior contract, per worker each tick: `Efficiency.value = workerEfficiency(hunger)`. Tool coverage is **per worker**: if `ToolCoverage.remainingTicks > 0` it decrements (whether assigned or idle — a benched tool still wears); then any STAFFED worker whose coverage is at 0 (never covered, or expired THIS tick) tries `stockpile.take('tools', 1)` and on success gets `remainingTicks = BALANCE.toolDurationTicks` — same-tick renewal keeps continuously staffed workers at exactly 1 tool per 300 ticks with no untooled gap tick (Codex review). Idle workers never consume new tools. Coverage follows the worker across reassignment, so replacement workers pay for their own tool — headcount-based building buffs proved exploitable in review (Codex P2 x3).
 
 - [ ] **Step 1: Write the failing test**
 

@@ -114,6 +114,19 @@ export class GameEngine {
     if (this.inFlight) await this.inFlight;
   }
 
+  /**
+   * Drain any in-flight tick, then — if the UI queued commands that no tick
+   * has processed yet (dispatch while paused, or a click racing the close) —
+   * run one final tick so a close-save cannot silently drop an accepted
+   * command. No-op when the queue is empty.
+   */
+  async flush(): Promise<void> {
+    await this.settle();
+    if (this.world.getResource(CommandQueue).pending.length > 0) {
+      await this.stepOnce();
+    }
+  }
+
   private async runStep(): Promise<void> {
     try {
       const clock = this.world.getResource(SimClock);

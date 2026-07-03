@@ -49,7 +49,7 @@ export class GameView extends ItemView {
   async onClose(): Promise<void> {
     if (this.engine) {
       this.engine.pause();
-      await this.engine.settle(); // drain any in-flight tick before the close-save
+      await this.engine.flush(); // drain any in-flight tick AND any queued-but-unprocessed commands
       try {
         await this.plugin.saveSave(this.engine.serialize());
       } catch (error) {

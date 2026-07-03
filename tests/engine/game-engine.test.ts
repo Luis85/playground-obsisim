@@ -118,6 +118,17 @@ describe('GameEngine', () => {
     await pending;
   });
 
+  it('flush() processes commands queued while paused so a close-save keeps them', async () => {
+    const engine = await GameEngine.create();
+    engine.dispatch({ type: 'constructBuilding', buildingDefId: 'forester' }); // paused: no tick runs
+    await engine.flush(); // runs one final tick to process the queue
+    const save = engine.serialize();
+    expect(save.buildings).toEqual([{ defId: 'forester', progress: 0, batchActive: false }]);
+    expect(save.stockpile.wood).toBe(20); // cost paid AND building present
+    await engine.flush(); // empty queue: no extra tick
+    expect(engine.serialize().tick).toBe(1);
+  });
+
   it('a thrown step captures the error and pauses, without crashing the caller', async () => {
     const engine = await GameEngine.create();
     engine.start();

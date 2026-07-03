@@ -29,16 +29,6 @@ export default class ObsiSimPlugin extends Plugin {
     await leaf.setViewState({ type: VIEW_TYPE_OBSISIM, active: true });
   }
 
-  async loadSave(): Promise<SaveGameV1 | null> {
-    const data = ((await this.loadData()) as PluginData | null) ?? {};
-    if (data.save === undefined || data.save === null) return null;
-    if (isLoadableSave(data.save)) return data.save; // catalog-aware guard, not bare isSaveGameV1
-    // spec 7.2: corrupt/incompatible save -> back it up, start fresh, tell the user
-    new Notice('ObsiSim: save was corrupt or incompatible — starting a fresh colony (old save backed up).');
-    await this.saveData({ ...data, save: undefined, corruptBackup: data.save } satisfies PluginData);
-    return null;
-  }
-
   /**
    * All data.json writes flow through one FIFO promise chain: autosaves are
    * fire-and-forget, so without ordering a slow autosave could resolve AFTER
@@ -46,12 +36,32 @@ export default class ObsiSimPlugin extends Plugin {
    */
   private saveQueue: Promise<void> = Promise.resolve();
 
-  saveSave(save: SaveGameV1): Promise<void> {
+  /**
+   * Every data.json write — including the corrupt-save backup — goes through
+   * this queue, so no two read-modify-write cycles can interleave.
+   */
+  private enqueueDataWrite(mutate: (data: PluginData) => PluginData): Promise<void> {
     const write = this.saveQueue.then(async () => {
       const data = ((await this.loadData()) as PluginData | null) ?? {};
-      await this.saveData({ ...data, save } satisfies PluginData);
+      await this.saveData(mutate(data));
     });
     this.saveQueue = write.catch(() => undefined); // keep the chain alive on failure
     return write;
+  }
+
+  saveSave(save: SaveGameV1): Promise<void> {
+    return this.enqueueDataWrite((data) => ({ ...data, save }));
+  }
+
+  async loadSave(): Promise<SaveGameV1 | null> {
+    // wait out any in-flight write (e.g. a closing view's save) before reading
+    await this.saveQueue;
+    const data = ((await this.loadData()) as PluginData | null) ?? {};
+    if (data.save === undefined || data.save === null) return null;
+    if (isLoadableSave(data.save)) return data.save; // catalog-aware guard, not bare isSaveGameV1
+    // spec 7.2: corrupt/incompatible save -> back it up, start fresh, tell the user
+    new Notice('ObsiSim: save was corrupt or incompatible — starting a fresh colony (old save backed up).');
+    await this.enqueueDataWrite((current) => ({ ...current, save: undefined, corruptBackup: current.save }));
+    return null;
   }
 }

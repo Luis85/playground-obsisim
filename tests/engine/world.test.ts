@@ -85,6 +85,12 @@ describe('isLoadableSave', () => {
     overworked.buildings.push({ id: 4, defId: 'forester', progress: 99, batchActive: true });
     overworked.nextEntityId = 5;
     expect(isLoadableSave(overworked)).toBe(true);
+    // ...but only below the counter ceiling: past 2^53, progress - ticksPerBatch
+    // no longer changes the value and the production loop would hang.
+    const astronomical = initialSave();
+    astronomical.buildings.push({ id: 4, defId: 'forester', progress: 1e308, batchActive: true });
+    astronomical.nextEntityId = 5;
+    expect(isLoadableSave(astronomical)).toBe(false);
   });
 
   it('accepts and grandfathers more assigned workers than a building CURRENTLY has slots (spec 4.5)', () => {

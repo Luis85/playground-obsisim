@@ -102,8 +102,10 @@ function isBuildingsValid(buildings: SaveGameV1['buildings']): boolean {
       // Upper bound intentionally NOT checked against the current recipe's
       // ticksPerBatch: a recipe retuned smaller after this save was written
       // would otherwise orphan it. The production while-loop deterministically
-      // absorbs oversized progress on the next tick, so this is safe to load.
-      return b.progress >= 0 && Number.isFinite(b.progress);
+      // absorbs oversized progress on the next tick — but only below the
+      // shared counter ceiling: at float magnitudes past 2^53, subtracting a
+      // small recipe size no longer changes the value and the loop would hang.
+      return b.progress >= 0 && b.progress <= MAX_SAVED_COUNTER;
     }
     return b.progress === 0; // stalled/idle buildings never bank progress (balance-independent engine invariant)
   });

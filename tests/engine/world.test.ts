@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { Hunger, JobAssignment, Worker } from '../../src/engine/components';
+import { BALANCE } from '../../src/engine/content/balance';
+import { Hunger, JobAssignment, ToolCoverage, Worker } from '../../src/engine/components';
 import { IdCounter, SimClock, SnapshotStore, Stockpile } from '../../src/engine/resources';
 import { buildColonyPrepWorld, createColonyWorld, getPrepResource, initialSave, isLoadableSave } from '../../src/engine/world';
 import { MAX_SAVED_ENTITIES } from '../../src/shared/save';
@@ -57,34 +58,55 @@ describe('isLoadableSave', () => {
     expect(isLoadableSave(save)).toBe(false);
   });
 
-  it('rejects out-of-range sim counters (hunger, toolTicks, progress)', () => {
-    const hungry = initialSave();
-    hungry.workers[0].hunger = 1000;
-    expect(isLoadableSave(hungry)).toBe(false);
+  it('rejects negative or non-integer sim counters (hunger, toolTicks)', () => {
+    const negativeHunger = initialSave();
+    negativeHunger.workers[0].hunger = -1;
+    expect(isLoadableSave(negativeHunger)).toBe(false);
     const tooled = initialSave();
     tooled.workers[0].toolTicks = -1;
     expect(isLoadableSave(tooled)).toBe(false);
-    const overworked = initialSave();
-    overworked.buildings.push({ id: 4, defId: 'forester', progress: 99, batchActive: true }); // ticksPerBatch is 3
-    expect(isLoadableSave(overworked)).toBe(false);
+    const fractionalTool = initialSave();
+    fractionalTool.workers[0].toolTicks = 1.5;
+    expect(isLoadableSave(fractionalTool)).toBe(false);
   });
 
-  it('rejects more assigned workers than a building has slots', () => {
+  it('accepts and grandfathers balance-coupled values above CURRENT balance (spec 4.5: saves survive retuning)', () => {
+    // hunger/toolTicks above current BALANCE were valid under a prior, higher
+    // balance value; the guard no longer rejects them (spawnWorker clamps instead).
+    const hungry = initialSave();
+    hungry.workers[0].hunger = 1000;
+    expect(isLoadableSave(hungry)).toBe(true);
+    const overTooled = initialSave();
+    overTooled.workers[0].toolTicks = 999999; // above toolDurationTicks (300), within MAX_SAVED_COUNTER
+    expect(isLoadableSave(overTooled)).toBe(true);
+    // an active batch's progress above the CURRENT recipe's ticksPerBatch (3) is
+    // grandfathered: the production while-loop deterministically absorbs it.
+    const overworked = initialSave();
+    overworked.buildings.push({ id: 4, defId: 'forester', progress: 99, batchActive: true });
+    overworked.nextEntityId = 5;
+    expect(isLoadableSave(overworked)).toBe(true);
+  });
+
+  it('accepts and grandfathers more assigned workers than a building CURRENTLY has slots (spec 4.5)', () => {
+    // slots retuned down after this save was written must not orphan it; assign
+    // commands already validate against current slots, so this self-corrects.
     const save = initialSave();
     const building = { id: 4, defId: 'forester' as const, progress: 0, batchActive: false }; // 2 slots
     save.buildings.push(building);
     save.nextEntityId = 5;
     save.workers = [1, 2, 3].map((id) => ({ id, hunger: 0, buildingId: building.id, toolTicks: 0 }));
-    expect(isLoadableSave(save)).toBe(false);
+    expect(isLoadableSave(save)).toBe(true);
   });
 
-  it('rejects recruit cooldown timestamps outside the valid engine range', () => {
+  it('rejects a future recruit cooldown timestamp but accepts one below the fresh-colony sentinel', () => {
     const future = initialSave();
     future.lastRecruitTick = 1000000; // engine only ever records past ticks
     expect(isLoadableSave(future)).toBe(false);
+    // below -recruitCooldownTicks just means "cooldown long expired" under a
+    // prior, larger cooldown value — harmless, so it's grandfathered (spec 4.5).
     const tooLow = initialSave();
-    tooLow.lastRecruitTick = -999; // below the fresh-colony floor
-    expect(isLoadableSave(tooLow)).toBe(false);
+    tooLow.lastRecruitTick = -999;
+    expect(isLoadableSave(tooLow)).toBe(true);
   });
 
   it('rejects counters beyond safe-integer range (++ would stall or collide)', () => {
@@ -114,10 +136,16 @@ describe('isLoadableSave', () => {
     expect(isLoadableSave(inherited)).toBe(false); // must return false, not throw
   });
 
-  it('rejects batch progress the engine could never serialize', () => {
+  it('rejects inactive-batch progress but accepts active progress above the CURRENT recipe size (spec 4.5)', () => {
+    // active progress at/above ticksPerBatch is grandfathered: a recipe retuned
+    // smaller after this save was written must not orphan it (production
+    // deterministically absorbs the overshoot on the next tick).
     const completed = initialSave();
     completed.buildings.push({ id: 4, defId: 'forester', progress: 3, batchActive: true }); // == ticksPerBatch
-    expect(isLoadableSave(completed)).toBe(false);
+    completed.nextEntityId = 5;
+    expect(isLoadableSave(completed)).toBe(true);
+    // stalled/idle buildings never bank progress: this is a balance-independent
+    // engine invariant, so it's still rejected.
     const banked = initialSave();
     banked.buildings.push({ id: 4, defId: 'forester', progress: 1, batchActive: false }); // inactive with progress
     expect(isLoadableSave(banked)).toBe(false);
@@ -166,6 +194,40 @@ describe('createColonyWorld', () => {
     expect(workers).toHaveLength(3);
     expect(workers.map((w) => w.getComponent(Hunger)!.value).sort((a, b) => b - a)[0]).toBe(42);
     expect(workers.every((w) => w.getComponent(JobAssignment)!.buildingId === null)).toBe(true);
+  });
+
+  it('clamps balance-coupled worker fields above CURRENT balance at load (spec 4.5)', async () => {
+    const save = initialSave();
+    save.workers[0].hunger = 1000;
+    save.workers[0].toolTicks = 999999; // within MAX_SAVED_COUNTER, above toolDurationTicks (300)
+    expect(isLoadableSave(save)).toBe(true);
+
+    const world = await createColonyWorld(save);
+    const snapshot = world.getResource(SnapshotStore).latest!;
+    const clamped = snapshot.workers.find((w) => w.id === save.workers[0].id)!;
+    expect(clamped.hunger).toBeLessThanOrEqual(BALANCE.hungerMax);
+    expect(clamped.toolTicks).toBeLessThanOrEqual(BALANCE.toolDurationTicks);
+
+    const prep = buildColonyPrepWorld({ save });
+    const spawnedWorker = [...prep.getEntities()].find(
+      (e) => e.hasComponent(Worker) && e.getComponent(Worker)!.id === save.workers[0].id,
+    )!;
+    expect(spawnedWorker.getComponent(Hunger)!.value).toBeLessThanOrEqual(BALANCE.hungerMax);
+    expect(spawnedWorker.getComponent(ToolCoverage)!.remainingTicks).toBeLessThanOrEqual(BALANCE.toolDurationTicks);
+  });
+
+  it('grandfathers overstaffed buildings from a save (spec 4.5: slots retuned down must not orphan saves)', async () => {
+    const save = initialSave();
+    const building = { id: 4, defId: 'forester' as const, progress: 0, batchActive: false }; // 2 slots
+    save.buildings.push(building);
+    save.nextEntityId = 5;
+    save.workers = [1, 2, 3].map((id) => ({ id, hunger: 0, buildingId: building.id, toolTicks: 0 }));
+    expect(isLoadableSave(save)).toBe(true);
+
+    const world = await createColonyWorld(save);
+    const snapshot = world.getResource(SnapshotStore).latest!;
+    const seededBuilding = snapshot.buildings.find((b) => b.id === building.id)!;
+    expect(seededBuilding.workers).toBe(3); // grandfathered above the current 2-slot cap
   });
 
   it('IdCounter continues past spawned entities', () => {

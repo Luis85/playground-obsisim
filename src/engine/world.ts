@@ -99,40 +99,29 @@ function isBuildingsValid(buildings: SaveGameV1['buildings']): boolean {
   return buildings.every((b) => {
     if (!Object.hasOwn(BUILDINGS, b.defId)) return false;
     if (b.batchActive) {
-      // the engine completes batches before a tick ends: an active batch is
-      // always serialized strictly below its completion threshold
-      return b.progress >= 0 && b.progress < BUILDINGS[b.defId].recipe.ticksPerBatch;
+      // Upper bound intentionally NOT checked against the current recipe's
+      // ticksPerBatch: a recipe retuned smaller after this save was written
+      // would otherwise orphan it. The production while-loop deterministically
+      // absorbs oversized progress on the next tick, so this is safe to load.
+      return b.progress >= 0 && Number.isFinite(b.progress);
     }
-    return b.progress === 0; // stalled/idle buildings never bank progress
+    return b.progress === 0; // stalled/idle buildings never bank progress (balance-independent engine invariant)
   });
 }
 
 function isWorkerRecordValid(w: SaveGameV1['workers'][number], buildingIds: ReadonlySet<number>): boolean {
-  if (w.hunger < 0 || w.hunger > BALANCE.hungerMax) return false;
-  if (!Number.isInteger(w.toolTicks) || w.toolTicks < 0 || w.toolTicks > BALANCE.toolDurationTicks) return false;
+  // Upper bounds intentionally NOT checked against current BALANCE.hungerMax /
+  // toolDurationTicks: those are clamped to current balance at spawn instead
+  // (see spawnWorker), so a save written under a higher balance value still loads.
+  if (!(w.hunger >= 0 && Number.isFinite(w.hunger))) return false;
+  if (!Number.isSafeInteger(w.toolTicks) || w.toolTicks < 0 || w.toolTicks > MAX_SAVED_COUNTER) return false;
   if (w.buildingId === null) return true;
   return buildingIds.has(w.buildingId);
 }
 
-// Only called once every worker record has already passed isWorkerRecordValid,
-// so each buildingId here is guaranteed null or a valid saved building id.
-function isStaffingValid(data: SaveGameV1): boolean {
-  const staffCount = new Map<number, number>();
-  for (const w of data.workers) {
-    if (w.buildingId === null) continue;
-    staffCount.set(w.buildingId, (staffCount.get(w.buildingId) ?? 0) + 1);
-  }
-  const buildingById = new Map(data.buildings.map((b) => [b.id, b]));
-  for (const [buildingId, count] of staffCount) {
-    if (count > BUILDINGS[buildingById.get(buildingId)!.defId].workerSlots) return false;
-  }
-  return true;
-}
-
 function isWorkersValid(data: SaveGameV1): boolean {
   const buildingIds = new Set(data.buildings.map((b) => b.id));
-  if (!data.workers.every((w) => isWorkerRecordValid(w, buildingIds))) return false;
-  return isStaffingValid(data);
+  return data.workers.every((w) => isWorkerRecordValid(w, buildingIds));
 }
 
 /**
@@ -163,6 +152,15 @@ function isIdsValid(data: SaveGameV1): boolean {
  * catalog. The Obsidian shell must use THIS before restoring: a stale or hand-edited
  * save with an unknown building id would otherwise crash createColonyWorld instead of
  * taking the corrupt-save backup path (spec 7.2).
+ *
+ * Principle (spec 4.5 — saves survive balancing changes): reject only what NO
+ * version of the engine could have written (structural/identity invariants —
+ * shape, safe-integer ranges, id uniqueness/headroom, catalog membership,
+ * cross-references). Values coupled to tunable BALANCE/catalog numbers
+ * (hunger max, tool duration, recruit cooldown sentinel, recipe batch size,
+ * worker slots) are deliberately NOT bounds-checked here: they're clamped or
+ * grandfathered at load (see spawnWorker) so retuning balance down never
+ * orphans a previously valid save.
  */
 export function isLoadableSave(data: unknown): data is SaveGameV1 {
   if (!isSaveGameV1(data)) return false;
@@ -170,11 +168,12 @@ export function isLoadableSave(data: unknown): data is SaveGameV1 {
   // (autosave, recruit cooldown) forever; past 2^53, ++ stops incrementing.
   // Bounded below the ceiling so post-load increments stay safe too.
   if (!Number.isSafeInteger(data.tick) || data.tick < 0 || data.tick > MAX_SAVED_COUNTER) return false;
-  // the engine only ever sets lastRecruitTick to -recruitCooldownTicks (fresh
-  // colony) or to a past tick; anything else blocks recruiting spuriously
+  // Lower bound intentionally NOT checked against -BALANCE.recruitCooldownTicks:
+  // a value lower than the current sentinel just means "cooldown long expired",
+  // which is harmless (isSafeInteger already floors it to a real number, and
+  // the upper bound below still guarantees it never blocks recruiting).
   if (
     !Number.isSafeInteger(data.lastRecruitTick) ||
-    data.lastRecruitTick < -BALANCE.recruitCooldownTicks ||
     data.lastRecruitTick > data.tick
   ) return false;
   if (!isStockpileValid(data.stockpile)) return false;
@@ -202,13 +201,19 @@ export function spawnWorker(
   ids: IdCounter,
   opts: { id?: number; hunger?: number; buildingId?: number | null; efficiency?: number; toolTicks?: number } = {},
 ): IEntity {
+  // Balance-coupled fields from old saves clamp to CURRENT balance here: a
+  // save written under a higher hungerMax/toolDurationTicks still loads
+  // (isLoadableSave no longer bounds-checks these against BALANCE), so the
+  // clamp is what actually keeps in-world values sane after a downward retune.
+  const hunger = Math.min(opts.hunger ?? 0, BALANCE.hungerMax);
+  const toolTicks = Math.min(opts.toolTicks ?? 0, BALANCE.toolDurationTicks);
   return prep
     .buildEntity()
     .with(new Worker(opts.id ?? ids.take()))
-    .with(new Hunger(opts.hunger ?? 0))
+    .with(new Hunger(hunger))
     .with(new JobAssignment(opts.buildingId ?? null))
     .with(new Efficiency(opts.efficiency ?? 1))
-    .with(new ToolCoverage(opts.toolTicks ?? 0))
+    .with(new ToolCoverage(toolTicks))
     .build();
 }
 
@@ -268,13 +273,19 @@ export function buildColonyPrepWorld(
 }
 
 function buildInitialSnapshot(save: SaveGameV1): Snapshot {
-  const workerFacts: WorkerFacts[] = save.workers.map((saved) => ({
-    id: saved.id,
-    hunger: saved.hunger,
-    efficiency: workerEfficiency(saved.hunger),
-    buildingId: saved.buildingId,
-    toolTicks: saved.toolTicks,
-  }));
+  const workerFacts: WorkerFacts[] = save.workers.map((saved) => {
+    // Mirror spawnWorker's clamp so the seeded snapshot matches the entities
+    // buildColonyPrepWorld actually spawns (see spawnWorker for rationale).
+    const hunger = Math.min(saved.hunger, BALANCE.hungerMax);
+    const toolTicks = Math.min(saved.toolTicks, BALANCE.toolDurationTicks);
+    return {
+      id: saved.id,
+      hunger,
+      efficiency: workerEfficiency(hunger),
+      buildingId: saved.buildingId,
+      toolTicks,
+    };
+  });
   const buildingFacts: BuildingFacts[] = save.buildings.map((saved) => ({
     id: saved.id,
     defId: saved.defId,

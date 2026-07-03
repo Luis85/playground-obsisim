@@ -171,6 +171,7 @@ Execution order is part of the spec — it is what makes runs reproducible.
 - Custom serializer covering stockpile, clock, buildings, and workers. The content catalog is code, so saves stay small and survive balancing changes.
 - The save embeds a **schema version** for future migrations. A corrupt or incompatible save is copied to a `.bak` key inside `data.json`, and a fresh colony starts with an Obsidian `Notice`.
 - One save slot. A "reset colony" button (with confirmation) starts over.
+- Save validation rejects only structural/identity violations no engine version could have written; balance-coupled values from older saves are clamped or grandfathered on load, so retuning balance never orphans a save.
 
 ---
 

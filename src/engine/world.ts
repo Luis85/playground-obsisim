@@ -259,6 +259,19 @@ function buildInitialSnapshot(save: SaveGameV1, buildingIds: number[], workerIds
   };
 }
 
+/**
+ * sim-ecs's Scheduler drives each step() through `requestAnimationFrame` (or,
+ * absent that global, `setTimeout`) purely to yield a macrotask between frames
+ * for continuous run loops. GameEngine already owns pacing via its own
+ * setInterval and calls step() for single, discrete ticks, so that indirection
+ * only adds latency: under Node's real timers it's a harmless ~1ms, but under
+ * vitest fake timers each hop is clamped to a whole simulated millisecond,
+ * which can push a step() past an exact-boundary `advanceTimersByTimeAsync`
+ * window. Running the executor synchronously removes the extra hop with no
+ * change to simulation order or results.
+ */
+const runSynchronously = (callback: () => void): void => callback();
+
 export async function createColonyWorld(save?: SaveGameV1): Promise<IRuntimeWorld> {
-  return buildColonyPrepWorld({ save }).prepareRun();
+  return buildColonyPrepWorld({ save }).prepareRun({ executionFunction: runSynchronously });
 }

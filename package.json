@@ -8,7 +8,8 @@
     "build": "vite build",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "test-build": "node scripts/test-build.mjs"
   },
   "dependencies": {
     "pinia": "^3.0.1",

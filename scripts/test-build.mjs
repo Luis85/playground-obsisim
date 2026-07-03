@@ -3,14 +3,17 @@
 // Default target is this repo's own .obsidian/plugins/obsisim so the
 // repository can be opened directly as a vault; pass a path to target
 // another vault (e.g. node scripts/test-build.mjs ~/vault/.obsidian/plugins/obsisim).
-import { execFileSync } from 'node:child_process';
+//
+// Uses Vite's Node API instead of spawning `npx vite build`: on Windows,
+// npx is npx.cmd and execFileSync fails with spawnSync ENOENT.
 import { copyFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { build } from 'vite';
 
 const SOURCE = 'demo-vault/.obsidian/plugins/obsisim';
 const TARGET = process.argv[2] ?? '.obsidian/plugins/obsisim';
 
-execFileSync('npx', ['vite', 'build'], { stdio: 'inherit' });
+await build(); // resolves vite.config.ts from the repo root
 mkdirSync(TARGET, { recursive: true });
 for (const name of ['main.js', 'manifest.json', 'styles.css']) {
   copyFileSync(join(SOURCE, name), join(TARGET, name));

@@ -15,9 +15,12 @@ if (existsSync('coverage')) {
   process.exit(1);
 }
 
+// shell:true on Windows: npx is npx.cmd there, and execFileSync without a
+// shell fails with spawnSync ENOENT (static args, so no quoting hazard)
 const raw = execFileSync('npx', ['fallow', '--format', 'json'], {
   encoding: 'utf8',
   maxBuffer: 64 * 1024 * 1024,
+  shell: process.platform === 'win32',
 });
 const report = JSON.parse(raw);
 

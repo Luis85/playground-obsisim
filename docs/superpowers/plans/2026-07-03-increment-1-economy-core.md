@@ -1032,7 +1032,7 @@ git commit -m "feat: ECS components and world resources with unit tests"
   - `spawnBuilding(prep: IPreptimeWorld, ids: IdCounter, saved: SavedBuilding): IEntity`
   - `spawnWorker(prep: IPreptimeWorld, ids: IdCounter, opts?: { hunger?: number; buildingId?: number | null; efficiency?: number; toolTicks?: number }): IEntity`
   - `createColonyWorld(save?: SaveGameV1): Promise<IRuntimeWorld>` — prep + `prepareRun()`.
-  - `isLoadableSave(data: unknown): data is SaveGameV1` — structural guard + catalog referential integrity + content-range validation: known resource/building ids; finite non-negative stockpile amounts; `tick >= 0`; `0 <= hunger <= hungerMax`; `0 <= toolTicks <= toolDurationTicks`; `0 <= progress <= that building's ticksPerBatch`; assignment indices in range and no building staffed beyond its worker slots. The Obsidian shell's load path (Task 16) uses this, never bare `isSaveGameV1`.
+  - `isLoadableSave(data: unknown): data is SaveGameV1` — structural guard + catalog referential integrity + content-range validation: known resource/building ids; finite non-negative stockpile amounts; integer `tick >= 0` and integer `lastRecruitTick` (fractional clocks would desync modulo cadences); `0 <= hunger <= hungerMax`; integer `0 <= toolTicks <= toolDurationTicks`; catalog lookups via `Object.hasOwn` (never `in` — inherited keys); `0 <= progress <= that building's ticksPerBatch`; assignment indices in range and no building staffed beyond its worker slots. The Obsidian shell's load path (Task 16) uses this, never bare `isSaveGameV1`.
   - `buildColonyPrepWorld` seeds `SnapshotStore.latest` with an initial snapshot derived from the save (zero rates, notices empty) so the UI never renders from a null snapshot while the engine is paused pre-first-tick (fresh create and reset both hit this).
   - `ALL_SYSTEMS: TColonySystem[]` — mutable array, filled in Task 11 (type alias `TColonySystem` for sim-ecs's built system type).
 
@@ -1108,6 +1108,15 @@ describe('isLoadableSave', () => {
     save.buildings.push({ defId: 'forester', progress: 0, batchActive: false }); // 2 slots
     save.workers = [0, 1, 2].map(() => ({ hunger: 0, buildingIndex: 0, toolTicks: 0 }));
     expect(isLoadableSave(save)).toBe(false);
+  });
+
+  it('rejects fractional ticks and inherited-object-key building ids', () => {
+    const fractional = initialSave();
+    fractional.tick = 0.5; // would desync the autosave modulo forever
+    expect(isLoadableSave(fractional)).toBe(false);
+    const inherited = initialSave();
+    inherited.buildings.push({ defId: 'toString' as never, progress: 0, batchActive: false });
+    expect(isLoadableSave(inherited)).toBe(false); // must return false, not throw
   });
 });
 
@@ -1205,14 +1214,19 @@ export function initialSave(): SaveGameV1 {
  */
 export function isLoadableSave(data: unknown): data is SaveGameV1 {
   if (!isSaveGameV1(data)) return false;
-  if (data.tick < 0) return false;
+  // integer clocks: a fractional tick would desync every modulo-based cadence
+  // (autosave, recruit cooldown) forever
+  if (!Number.isInteger(data.tick) || data.tick < 0) return false;
+  if (!Number.isInteger(data.lastRecruitTick)) return false;
+  // Object.hasOwn, never `in`: inherited keys like "toString" pass `in` and
+  // then indexing the catalog throws inside the guard
   const stockpileOk = Object.entries(data.stockpile).every(
-    ([id, amount]) => id in RESOURCES && Number.isFinite(amount) && (amount as number) >= 0,
+    ([id, amount]) => Object.hasOwn(RESOURCES, id) && Number.isFinite(amount) && (amount as number) >= 0,
   );
   if (!stockpileOk) return false;
   const buildingsOk = data.buildings.every(
     (b) =>
-      b.defId in BUILDINGS &&
+      Object.hasOwn(BUILDINGS, b.defId) &&
       b.progress >= 0 &&
       b.progress <= BUILDINGS[b.defId].recipe.ticksPerBatch,
   );
@@ -1220,7 +1234,7 @@ export function isLoadableSave(data: unknown): data is SaveGameV1 {
   const staffCount = new Map<number, number>();
   for (const w of data.workers) {
     if (w.hunger < 0 || w.hunger > BALANCE.hungerMax) return false;
-    if (w.toolTicks < 0 || w.toolTicks > BALANCE.toolDurationTicks) return false;
+    if (!Number.isInteger(w.toolTicks) || w.toolTicks < 0 || w.toolTicks > BALANCE.toolDurationTicks) return false;
     if (w.buildingIndex === null) continue;
     if (!Number.isInteger(w.buildingIndex) || w.buildingIndex < 0 || w.buildingIndex >= data.buildings.length) {
       return false;
@@ -1375,7 +1389,7 @@ If the `TColonySystem` conditional-type extraction fails to compile against 0.6.
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run tests/engine/world.test.ts`
-Expected: PASS (12 tests).
+Expected: PASS (13 tests).
 
 - [ ] **Step 5: Lint and commit**
 

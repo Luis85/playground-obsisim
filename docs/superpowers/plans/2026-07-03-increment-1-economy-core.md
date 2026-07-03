@@ -21,7 +21,8 @@
 - All production/consumption rates are **per tick**. 1× speed = 2 ticks/second (`BALANCE.baseTicksPerSecond`).
 - Every balance number comes from the `BALANCE` constant or the content catalog — never inline magic numbers in systems.
 - System execution order is fixed and must never be reordered: CommandSystem → HungerSystem → EfficiencySystem → ProductionSystem → StatsSystem → SnapshotSystem, one system per sim-ecs stage.
-- Run `npm run lint` and `npm test` before every commit; both must pass.
+- Run `npm run lint` and `npm test` before every commit; both must pass. From Task 18 on, the full pre-push gate is `npm run check:all` (lint, LOC guard, CSS guard, quality ratchet, typecheck, tests, build, artifact smoke).
+- Quality-gate policy (Task 18, ported from Luis85/specorator `docs/build-ci/quality-gates.md`): every ratchet baseline starts EMPTY or at zero — this is a greenfield repo, nothing gets grandfathered. Lint is all-error from day one (`warn` tier exists only for staging future rules and stays empty).
 
 ## File Structure (final state)
 
@@ -29,6 +30,10 @@
 manifest.json                 # Obsidian plugin manifest (repo root)
 styles.css                    # Obsidian-theme-aware styles (repo root, copied to build)
 vite.config.ts, vitest.config.ts, eslint.config.js, tsconfig.json, package.json
+.fallowrc.json                # fallow config: architecture boundary zones (Task 18)
+.github/workflows/ci.yml      # CI gate jobs (Task 18)
+scripts/                      # quality-gate scripts + ratchet baselines (Task 18)
+docs/build-ci/quality-gates.md# gate catalogue for this repo (Task 18)
 demo-vault/                   # minimal vault for the dev loop
 src/
   main.ts                     # Plugin entry (Obsidian Plugin subclass)
@@ -574,24 +579,26 @@ export interface SaveGameV1 {
 export function isSaveGameV1(data: unknown): data is SaveGameV1 {
   if (typeof data !== 'object' || data === null) return false;
   const save = data as Record<string, unknown>;
+  // Number.isFinite, never typeof: NaN and Infinity pass typeof === 'number'
+  // and would silently poison sim arithmetic instead of taking the backup path.
   return (
     save.version === 1 &&
-    typeof save.tick === 'number' &&
-    typeof save.lastRecruitTick === 'number' &&
+    Number.isFinite(save.tick) &&
+    Number.isFinite(save.lastRecruitTick) &&
     typeof save.stockpile === 'object' && save.stockpile !== null &&
     Array.isArray(save.buildings) &&
     save.buildings.every((b: unknown) =>
       typeof b === 'object' && b !== null &&
       typeof (b as SavedBuilding).defId === 'string' &&
-      typeof (b as SavedBuilding).progress === 'number' &&
+      Number.isFinite((b as SavedBuilding).progress) &&
       typeof (b as SavedBuilding).batchActive === 'boolean' &&
-      typeof (b as SavedBuilding).toolBuffTicks === 'number' &&
-      typeof (b as SavedBuilding).toolBuffPaidWorkers === 'number') &&
+      Number.isFinite((b as SavedBuilding).toolBuffTicks) &&
+      Number.isFinite((b as SavedBuilding).toolBuffPaidWorkers)) &&
     Array.isArray(save.workers) &&
     save.workers.every((w: unknown) =>
       typeof w === 'object' && w !== null &&
-      typeof (w as SavedWorker).hunger === 'number' &&
-      ((w as SavedWorker).buildingIndex === null || typeof (w as SavedWorker).buildingIndex === 'number'))
+      Number.isFinite((w as SavedWorker).hunger) &&
+      ((w as SavedWorker).buildingIndex === null || Number.isFinite((w as SavedWorker).buildingIndex)))
   );
 }
 ```
@@ -1041,7 +1048,7 @@ git commit -m "feat: ECS components and world resources with unit tests"
   - `spawnBuilding(prep: IPreptimeWorld, ids: IdCounter, saved: SavedBuilding): IEntity`
   - `spawnWorker(prep: IPreptimeWorld, ids: IdCounter, opts?: { hunger?: number; buildingId?: number | null; efficiency?: number }): IEntity`
   - `createColonyWorld(save?: SaveGameV1): Promise<IRuntimeWorld>` — prep + `prepareRun()`.
-  - `isLoadableSave(data: unknown): data is SaveGameV1` — structural guard + catalog referential integrity; the Obsidian shell's load path (Task 16) uses this, never bare `isSaveGameV1`.
+  - `isLoadableSave(data: unknown): data is SaveGameV1` — structural guard + catalog referential integrity + stockpile content validation (known resource ids, finite non-negative amounts); the Obsidian shell's load path (Task 16) uses this, never bare `isSaveGameV1`.
   - `ALL_SYSTEMS: TColonySystem[]` — mutable array, filled in Task 11 (type alias `TColonySystem` for sim-ecs's built system type).
 
 - [ ] **Step 1: Write the failing test**
@@ -1078,6 +1085,24 @@ describe('isLoadableSave', () => {
   it('rejects out-of-range worker building indices', () => {
     const save = initialSave();
     save.workers[0].buildingIndex = 3; // no buildings exist
+    expect(isLoadableSave(save)).toBe(false);
+  });
+
+  it('rejects non-numeric, NaN, or negative stockpile amounts', () => {
+    const bad = initialSave();
+    (bad.stockpile as Record<string, unknown>).wood = 'lots';
+    expect(isLoadableSave(bad)).toBe(false);
+    const nan = initialSave();
+    nan.stockpile.wood = Number.NaN;
+    expect(isLoadableSave(nan)).toBe(false);
+    const negative = initialSave();
+    negative.stockpile.wood = -5;
+    expect(isLoadableSave(negative)).toBe(false);
+  });
+
+  it('rejects unknown stockpile resource ids', () => {
+    const save = initialSave();
+    (save.stockpile as Record<string, unknown>).gold = 5;
     expect(isLoadableSave(save)).toBe(false);
   });
 });
@@ -1124,6 +1149,7 @@ import { isSaveGameV1 } from '../shared/save';
 import type { SaveGameV1, SavedBuilding } from '../shared/save';
 import { BALANCE, STARTING_STOCK, STARTING_WORKERS } from './content/balance';
 import { BUILDINGS } from './content/buildings';
+import { RESOURCES } from './content/resources';
 import {
   Building, Efficiency, Hunger, JobAssignment, Production, ToolBuff, Worker, WorkerSlots,
 } from './components';
@@ -1163,6 +1189,9 @@ export function initialSave(): SaveGameV1 {
 export function isLoadableSave(data: unknown): data is SaveGameV1 {
   if (!isSaveGameV1(data)) return false;
   return (
+    Object.entries(data.stockpile).every(
+      ([id, amount]) => id in RESOURCES && Number.isFinite(amount) && (amount as number) >= 0,
+    ) &&
     data.buildings.every((b) => b.defId in BUILDINGS) &&
     data.workers.every(
       (w) =>
@@ -1250,7 +1279,7 @@ If the `TColonySystem` conditional-type extraction fails to compile against 0.6.
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run tests/engine/world.test.ts`
-Expected: PASS (7 tests).
+Expected: PASS (9 tests).
 
 - [ ] **Step 5: Lint and commit**
 
@@ -3716,6 +3745,480 @@ Record any manual-check failures as new tasks; do not ship with a red acceptance
 ```bash
 git add -A
 git commit -m "feat: obsidian-themed styles, README, acceptance pass for increment 1"
+```
+
+---
+
+### Task 18: Quality gates and CI (specorator guardrails, greenfield-strict)
+
+Ports the machine-enforced guardrails from Luis85/specorator (`docs/build-ci/quality-gates.md`) to this repo. Adaptations, stated once: **every baseline starts empty or at zero** (greenfield — nothing grandfathered); the LOC guard also covers `.vue` files; the CSS guard covers the single root `styles.css`; specorator's provider-boundary guards map to our layer boundaries (fallow zones + `no-restricted-imports` twins); perf scaling guards are deferred until a hot path with unbounded input exists (the determinism tests already pin sim behavior); the test job runs on Linux only for now.
+
+**Files:**
+- Create: `scripts/check-loc.mjs`, `scripts/loc-baseline.json`, `scripts/check-css-important.mjs`, `scripts/css-important-baseline.json`, `scripts/check-quality.mjs`, `scripts/quality-baseline.json`, `scripts/check-artifacts.mjs`, `.fallowrc.json`, `.github/workflows/ci.yml`, `docs/build-ci/quality-gates.md`
+- Modify: `package.json` (scripts, engines, devDeps), `eslint.config.js` (boundary-twin rules), `vitest.config.ts` (coverage thresholds), `.gitignore` (`.fallow/`, `coverage/`)
+
+**Interfaces:**
+- Consumes: the completed codebase (Tasks 1-17).
+- Produces: `npm run check:all` — the single local pre-push gate — plus CI jobs `lint`, `quality`, `typecheck`, `test`, `coverage`, `build`. All gates fail fast with output short enough to act on without opening CI logs.
+
+**Verified tool facts** (probed against `fallow@2.104.0` — do not re-derive): the JSON report has `check.summary.{total_issues,circular_dependencies,re_export_cycles,boundary_violations}`, `dupes.stats.{clone_groups,duplicated_lines}`, `health.summary.{functions_above_threshold,severity_critical_count,average_maintainability}`. Boundary config is `boundaries: { zones: [{ name, patterns }], rules: [{ from, allow, allowTypeOnly? }] }` in `.fallowrc.json`. Fallow parses `.vue` SFCs natively.
+
+- [ ] **Step 1: package.json — scripts, engines, devDeps**
+
+Add to `scripts` (keep the existing ones):
+
+```json
+{
+  "typecheck": "vue-tsc --noEmit",
+  "test:coverage": "vitest run --coverage",
+  "check:loc": "node scripts/check-loc.mjs",
+  "check:css": "node scripts/check-css-important.mjs",
+  "check:quality": "node scripts/check-quality.mjs",
+  "check:artifacts": "node scripts/check-artifacts.mjs",
+  "check:all": "npm run lint && npm run check:loc && npm run check:css && npm run check:quality && npm run typecheck && npm run test && npm run build && npm run check:artifacts"
+}
+```
+
+Add top-level `"engines": { "node": ">=22" }` (CI and any release tooling must run the same Node major). Install the new dev tooling:
+
+```bash
+npm install -D vue-tsc@^2.2.0 @vitest/coverage-v8@^3.0.5 fallow@^2.104.0
+```
+
+Note `check:all` deliberately runs `check:quality` before `test:coverage` ever runs: fallow flips from static-estimated to istanbul coverage when a `coverage/` directory exists, which skews CRAP-based counts (specorator campaign run 9 lesson). `check-quality.mjs` hard-fails if `coverage/` is present.
+
+- [ ] **Step 2: eslint.config.js — machine-enforce the layering constraints**
+
+Append two config objects (these are the lint twins of the fallow zones; they also catch what zones cannot, e.g. the UI importing `sim-ecs` directly):
+
+```js
+  {
+    files: ['src/app/**', 'src/view/**', 'src/main.ts'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        paths: [{ name: 'sim-ecs', message: 'UI and shell talk to the engine only through the GameEngine facade and shared types.' }],
+      }],
+    },
+  },
+  {
+    files: ['src/engine/**', 'src/shared/**'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        paths: [
+          { name: 'vue', message: 'The engine and shared contracts must stay UI-agnostic.' },
+          { name: 'pinia', message: 'The engine and shared contracts must stay UI-agnostic.' },
+          { name: 'vue-router', message: 'The engine and shared contracts must stay UI-agnostic.' },
+          { name: 'obsidian', message: 'The engine and shared contracts must stay Obsidian-agnostic.' },
+        ],
+      }],
+    },
+  },
+```
+
+Severity policy: everything ships at `error`. The `warn` tier is reserved for staging a future rule against a nonzero backlog and is currently empty — CI does not pass `--max-warnings`, so a `warn` rule would never fail the build.
+
+- [ ] **Step 3: vitest.config.ts — coverage floors**
+
+```ts
+import { defineConfig } from 'vitest/config';
+import vue from '@vitejs/plugin-vue';
+
+export default defineConfig({
+  plugins: [vue()],
+  test: {
+    environment: 'node',
+    coverage: {
+      provider: 'v8',
+      include: ['src/engine/**', 'src/shared/**', 'src/app/**'],
+      thresholds: {
+        // the sim is the product: gate it hard. Views are gated by the LOC guard
+        // and BuildingsView's interaction tests; their coverage floor comes later.
+        'src/engine/**': { statements: 90, branches: 85, functions: 90, lines: 90 },
+        'src/shared/**': { statements: 90, branches: 85, functions: 90, lines: 90 },
+        'src/app/stores/**': { statements: 90, branches: 85, functions: 90, lines: 90 },
+      },
+    },
+  },
+});
+```
+
+Add `coverage/` and `.fallow/` to `.gitignore`.
+
+- [ ] **Step 4: LOC guard**
+
+`scripts/loc-baseline.json` (starts empty — no grandfathered hotspots):
+
+```json
+{
+  "maxLoc": 500,
+  "files": {}
+}
+```
+
+`scripts/check-loc.mjs`:
+
+```js
+#!/usr/bin/env node
+// LOC ratchet over src/**/*.{ts,vue}: new files above the cap fail; baselined
+// hotspots may shrink but never grow; stale baseline entries fail (keeps the
+// baseline minimal and honest). Ported from specorator's check-loc gate.
+import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+const BASELINE_PATH = 'scripts/loc-baseline.json';
+const update = process.argv.includes('--update');
+
+function* walk(dir) {
+  for (const entry of readdirSync(dir)) {
+    const path = join(dir, entry);
+    if (statSync(path).isDirectory()) yield* walk(path);
+    else if (/\.(ts|vue)$/.test(entry)) yield path;
+  }
+}
+
+const baseline = JSON.parse(readFileSync(BASELINE_PATH, 'utf8'));
+const maxLoc = baseline.maxLoc;
+const counts = new Map();
+for (const file of walk('src')) {
+  const loc = readFileSync(file, 'utf8').split('\n').filter((line) => line.trim() !== '').length;
+  counts.set(file.replaceAll('\\', '/'), loc);
+}
+
+if (update) {
+  const files = {};
+  for (const [file, loc] of [...counts].sort()) {
+    if (loc > maxLoc) files[file] = { loc, reason: baseline.files[file]?.reason ?? 'TODO: justify or split' };
+  }
+  writeFileSync(BASELINE_PATH, `${JSON.stringify({ maxLoc, files }, null, 2)}\n`);
+  console.log(`loc baseline updated (${Object.keys(files).length} entries)`);
+  process.exit(0);
+}
+
+const failures = [];
+for (const [file, loc] of counts) {
+  const entry = baseline.files[file];
+  if (loc <= maxLoc) {
+    if (entry) failures.push(`${file}: baseline entry is stale (now ${loc} <= ${maxLoc}) — remove it`);
+  } else if (!entry) {
+    failures.push(`${file}: ${loc} nonblank lines exceeds the ${maxLoc} cap — split it, or baseline it with a reason`);
+  } else if (loc > entry.loc) {
+    failures.push(`${file}: grew ${entry.loc} -> ${loc}; grandfathered files may only shrink`);
+  }
+}
+for (const file of Object.keys(baseline.files)) {
+  if (!counts.has(file)) failures.push(`${file}: baseline entry is stale (file deleted) — remove it`);
+}
+
+if (failures.length) {
+  console.error(`LOC guard failed:\n${failures.map((f) => `  - ${f}`).join('\n')}`);
+  process.exit(1);
+}
+console.log(`LOC guard ok (${counts.size} files, cap ${maxLoc})`);
+```
+
+Run: `npm run check:loc`
+Expected: `LOC guard ok` — if any file written in Tasks 1-17 exceeds 500 nonblank lines, **split it now** rather than baselining it; the empty baseline is the point.
+
+- [ ] **Step 5: CSS !important guard**
+
+`scripts/css-important-baseline.json`:
+
+```json
+{
+  "files": {}
+}
+```
+
+`scripts/check-css-important.mjs`:
+
+```js
+#!/usr/bin/env node
+// !important ratchet over styles.css (comments excluded): any new use fails
+// unless baselined with a reason; baselined files may shrink but never grow.
+import { readFileSync, writeFileSync } from 'node:fs';
+
+const BASELINE_PATH = 'scripts/css-important-baseline.json';
+const FILES = ['styles.css'];
+const update = process.argv.includes('--update');
+
+const baseline = JSON.parse(readFileSync(BASELINE_PATH, 'utf8'));
+const counts = new Map();
+for (const file of FILES) {
+  const css = readFileSync(file, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  counts.set(file, (css.match(/!important/g) ?? []).length);
+}
+
+if (update) {
+  const files = {};
+  for (const [file, count] of counts) {
+    if (count > 0) files[file] = { count, reason: baseline.files[file]?.reason ?? 'TODO: justify or re-scope' };
+  }
+  writeFileSync(BASELINE_PATH, `${JSON.stringify({ files }, null, 2)}\n`);
+  console.log(`css baseline updated (${Object.keys(files).length} entries)`);
+  process.exit(0);
+}
+
+const failures = [];
+for (const [file, count] of counts) {
+  const allowed = baseline.files[file]?.count ?? 0;
+  if (count > allowed) {
+    failures.push(`${file}: ${count} !important (allowed ${allowed}) — re-scope by specificity or CSS variables`);
+  } else if (baseline.files[file] && count < allowed) {
+    failures.push(`${file}: baseline is stale (${allowed} -> ${count}) — re-lock with --update`);
+  }
+}
+
+if (failures.length) {
+  console.error(`CSS !important guard failed:\n${failures.map((f) => `  - ${f}`).join('\n')}`);
+  process.exit(1);
+}
+console.log('CSS !important guard ok');
+```
+
+Run: `npm run check:css`
+Expected: `CSS !important guard ok` (Task 17's stylesheet uses zero `!important`; keep it that way).
+
+- [ ] **Step 6: fallow config and quality ratchet**
+
+`.fallowrc.json` — declares the plan's layer architecture as machine-checked boundary zones (the spec's §2.1 one-way dependencies). Note the `engine` zone lists explicit subpaths so it does not swallow `engine-content`:
+
+```json
+{
+  "boundaries": {
+    "zones": [
+      { "name": "shared", "patterns": ["src/shared/**"] },
+      { "name": "engine-content", "patterns": ["src/engine/content/**"] },
+      { "name": "engine", "patterns": ["src/engine/systems/**", "src/engine/*.ts"] },
+      { "name": "app", "patterns": ["src/app/**"] },
+      { "name": "obsidian-shell", "patterns": ["src/main.ts", "src/view/**"] }
+    ],
+    "rules": [
+      { "from": "shared", "allow": [] },
+      { "from": "engine-content", "allow": ["shared"] },
+      { "from": "engine", "allow": ["shared", "engine-content"] },
+      { "from": "app", "allow": ["shared", "engine", "engine-content"] },
+      { "from": "obsidian-shell", "allow": ["shared", "engine", "engine-content", "app"] }
+    ]
+  }
+}
+```
+
+`scripts/quality-baseline.json` (placeholder; locked from the real report in Step 9):
+
+```json
+{}
+```
+
+`scripts/check-quality.mjs`:
+
+```js
+#!/usr/bin/env node
+// Fallow quality ratchet: counters may shrink but not grow; floors may rise but
+// not drop; structural counters and criticalComplexity are pinned at 0 — bumping
+// them is an architecture decision (ADR territory), not a metric trade-off.
+import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+
+const BASELINE_PATH = 'scripts/quality-baseline.json';
+const update = process.argv.includes('--update');
+
+if (existsSync('coverage')) {
+  console.error(
+    'check:quality must run without a coverage/ directory: fallow switches to istanbul coverage and CRAP-based counts skew. Delete coverage/ and re-run.',
+  );
+  process.exit(1);
+}
+
+const raw = execFileSync('npx', ['fallow', '--format', 'json'], {
+  encoding: 'utf8',
+  maxBuffer: 64 * 1024 * 1024,
+});
+const report = JSON.parse(raw);
+
+const current = {
+  deadCodeIssues: report.check.summary.total_issues,
+  circularDependencies: report.check.summary.circular_dependencies,
+  reExportCycles: report.check.summary.re_export_cycles,
+  boundaryViolations: report.check.summary.boundary_violations,
+  cloneGroups: report.dupes.stats.clone_groups,
+  duplicatedLines: report.dupes.stats.duplicated_lines,
+  complexFunctions: report.health.summary.functions_above_threshold,
+  criticalComplexity: report.health.summary.severity_critical_count,
+  maintainability: report.health.summary.average_maintainability,
+};
+
+if (update) {
+  writeFileSync(BASELINE_PATH, `${JSON.stringify(current, null, 2)}\n`);
+  console.log(`quality baseline locked: ${JSON.stringify(current)}`);
+  process.exit(0);
+}
+
+const PINNED_AT_ZERO = ['circularDependencies', 'reExportCycles', 'boundaryViolations', 'criticalComplexity'];
+const SHRINK_ONLY = ['deadCodeIssues', 'cloneGroups', 'duplicatedLines', 'complexFunctions'];
+const FLOORS = ['maintainability'];
+
+const baseline = JSON.parse(readFileSync(BASELINE_PATH, 'utf8'));
+const failures = [];
+const improvements = [];
+
+for (const key of PINNED_AT_ZERO) {
+  if (current[key] > 0) failures.push(`${key}: ${current[key]} (pinned at 0 — fix the finding, do not bump the baseline)`);
+}
+for (const key of SHRINK_ONLY) {
+  if (current[key] > baseline[key]) failures.push(`${key}: ${baseline[key]} -> ${current[key]} (counters may not grow)`);
+  else if (current[key] < baseline[key]) improvements.push(`${key}: ${baseline[key]} -> ${current[key]}`);
+}
+for (const key of FLOORS) {
+  if (current[key] < baseline[key]) failures.push(`${key}: ${baseline[key]} -> ${current[key]} (floors may not drop)`);
+  else if (current[key] > baseline[key]) improvements.push(`${key}: ${baseline[key]} -> ${current[key]}`);
+}
+
+if (failures.length) {
+  console.error(`Quality ratchet failed:\n${failures.map((f) => `  - ${f}`).join('\n')}`);
+  process.exit(1);
+}
+if (improvements.length) {
+  console.log(
+    `Unlocked improvements — lock them in with \`npm run check:quality -- --update\`:\n${improvements.map((f) => `  - ${f}`).join('\n')}`,
+  );
+}
+console.log('quality ratchet ok');
+```
+
+Before locking the baseline, tune out false positives the way specorator did: run `npx fallow` and inspect findings. Expected tuning for this repo: exports consumed only by tests (e.g. `buildSaveFromWorld`, spawn helpers) may show as unused — configure fallow's entry/ignore options (`npx fallow config-schema` documents them) so `tests/**` counts as consumption, rather than deleting the exports or baselining noise. The target before lock-in: **`deadCodeIssues`, `cloneGroups`, and `criticalComplexity` all 0; structural counters 0; `complexFunctions` 0** — a greenfield repo has no excuse for debt at adoption. Genuine findings get fixed, not baselined.
+
+- [ ] **Step 7: Artifact smoke**
+
+`scripts/check-artifacts.mjs`:
+
+```js
+#!/usr/bin/env node
+// Post-build gate (does not build): artifacts exist and are non-empty, versions
+// are in sync, minAppVersion present, bundles within byte budgets. Bump a budget
+// deliberately, with a reason in the PR, when a real dependency pushes it up.
+import { readFileSync, statSync } from 'node:fs';
+
+const DIR = 'demo-vault/.obsidian/plugins/obsisim';
+const BUDGETS = { 'main.js': 1_500_000, 'styles.css': 50_000, 'manifest.json': 10_000 };
+const failures = [];
+
+for (const [name, budget] of Object.entries(BUDGETS)) {
+  let size = null;
+  try {
+    size = statSync(`${DIR}/${name}`).size;
+  } catch {
+    failures.push(`${name} missing — run npm run build first`);
+  }
+  if (size === 0) failures.push(`${name} is empty`);
+  else if (size !== null && size > budget) failures.push(`${name} is ${size} bytes, over its ${budget}-byte budget`);
+}
+
+const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+const manifest = JSON.parse(readFileSync('manifest.json', 'utf8'));
+if (pkg.version !== manifest.version) failures.push(`version desync: package.json ${pkg.version} vs manifest.json ${manifest.version}`);
+if (!manifest.minAppVersion) failures.push('manifest.json missing minAppVersion');
+
+if (failures.length) {
+  console.error(`Artifact smoke failed:\n${failures.map((f) => `  - ${f}`).join('\n')}`);
+  process.exit(1);
+}
+console.log('artifact smoke ok');
+```
+
+Run: `npm run build && npm run check:artifacts`
+Expected: `artifact smoke ok`.
+
+- [ ] **Step 8: CI workflow**
+
+`.github/workflows/ci.yml` — every job on the same Node major as `engines`:
+
+```yaml
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run check:loc
+      - run: npm run check:css
+
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm run check:quality
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm run typecheck
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm test
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm run test:coverage
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm run build
+      - run: npm run check:artifacts
+```
+
+- [ ] **Step 9: Lock baselines and write the gate catalogue doc**
+
+Lock the ratchet baselines from the now-green state:
+
+```bash
+npm run check:quality -- --update   # all counters 0 per Step 6's target
+npm run check:loc                    # confirms the empty baseline holds
+npm run check:css                    # confirms zero !important holds
+```
+
+Write `docs/build-ci/quality-gates.md` — the catalogue for THIS repo, mirroring specorator's structure (a gates table with Gate / Command / CI job / What it catches rows for the eight gates above; the all-error lint severity policy; ratchet mechanics for LOC, CSS, and fallow with the update commands; the boundary-zone table from `.fallowrc.json`; the coverage/ gotcha; a "Next slices" section listing the deferred items: perf scaling guards once a hot path exists, a Windows test job, per-view coverage floors). Credit the origin: adapted from Luis85/specorator `docs/build-ci/quality-gates.md`, adopted greenfield with all baselines at zero.
+
+- [ ] **Step 10: Full gate run and commit**
+
+Run: `npm run check:all`
+Expected: every gate green in one pass. Then run `npm run test:coverage` (last, so `coverage/` never coexists with a quality run) and confirm the thresholds hold.
+
+```bash
+git add -A
+git commit -m "chore: quality gates and CI - lint policy, LOC/CSS/quality ratchets, coverage floors, artifact smoke"
 ```
 
 ---

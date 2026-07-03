@@ -269,6 +269,11 @@ function buildInitialSnapshot(save: SaveGameV1, buildingIds: number[], workerIds
  * which can push a step() past an exact-boundary `advanceTimersByTimeAsync`
  * window. Running the executor synchronously removes the extra hop with no
  * change to simulation order or results.
+ *
+ * CAUTION: never call `world.start()` (the library's continuous run loop) on a
+ * world created by createColonyWorld — without the macrotask yield that loop
+ * would never cede the event loop and would hang until an external `stop()`.
+ * The engine drives time exclusively through discrete `step()` calls.
  */
 const runSynchronously = (callback: () => void): void => callback();
 

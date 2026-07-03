@@ -329,7 +329,7 @@ git commit -m "chore: scaffold Obsidian plugin project (vite, vitest, eslint, de
   - `Command` union (commands)
   - `Snapshot`, `BuildingSnapshot`, `WorkerSnapshot`, `ResourceStats`, `BuildingState`, `EngineStatus` (snapshot)
   - `SaveGameV1`, `SavedBuilding`, `SavedWorker`, `isSaveGameV1(data: unknown): data is SaveGameV1` (save)
-  - `BALANCE`, `workerEfficiency(hunger: number): number`, `STARTING_STOCK`, `STARTING_WORKERS` (balance)
+  - `BALANCE`, `workerEfficiency(hunger: number): number`, `toolMultiplierFor(staffed: number, paidWorkers: number, buffActive: boolean): number`, `STARTING_STOCK`, `STARTING_WORKERS` (balance)
   - `RESOURCES: Record<ResourceId, ResourceDef>`, `RESOURCE_IDS: readonly ResourceId[]` (resources)
   - `BUILDINGS: Record<BuildingDefId, BuildingDef>`, `BUILDING_IDS: readonly BuildingDefId[]` (buildings)
   - `CHAINS: readonly Chain[]` (chains)
@@ -340,7 +340,7 @@ git commit -m "chore: scaffold Obsidian plugin project (vite, vitest, eslint, de
 
 ```ts
 import { describe, expect, it } from 'vitest';
-import { BALANCE, STARTING_STOCK, workerEfficiency } from '../../src/engine/content/balance';
+import { BALANCE, STARTING_STOCK, toolMultiplierFor, workerEfficiency } from '../../src/engine/content/balance';
 import { RESOURCES, RESOURCE_IDS } from '../../src/engine/content/resources';
 import { BUILDINGS, BUILDING_IDS } from '../../src/engine/content/buildings';
 import { CHAINS } from '../../src/engine/content/chains';
@@ -402,6 +402,14 @@ describe('content catalog', () => {
     expect(workerEfficiency(BALANCE.mealThreshold)).toBe(1);
     expect(workerEfficiency(75)).toBeCloseTo(0.6);
     expect(workerEfficiency(100)).toBeCloseTo(0.2);
+  });
+
+  it('toolMultiplierFor scales with paid coverage', () => {
+    expect(toolMultiplierFor(2, 2, true)).toBeCloseTo(1.5);
+    expect(toolMultiplierFor(2, 1, true)).toBeCloseTo(1.25);
+    expect(toolMultiplierFor(2, 0, true)).toBe(1);
+    expect(toolMultiplierFor(2, 5, false)).toBe(1); // inactive buff
+    expect(toolMultiplierFor(0, 3, true)).toBe(1); // unstaffed
   });
 });
 ```
@@ -616,6 +624,17 @@ export function workerEfficiency(hunger: number): number {
   return 1 - (1 - BALANCE.starvingEfficiency) * starvation;
 }
 
+/**
+ * Tool buffs only boost workers that tools were actually paid for: the +50%
+ * scales linearly with coverage (paidWorkers / staffed). Full coverage -> 1.5x,
+ * no paid workers -> 1x, half coverage -> 1.25x.
+ */
+export function toolMultiplierFor(staffed: number, paidWorkers: number, buffActive: boolean): number {
+  if (!buffActive || staffed === 0) return 1;
+  const coverage = Math.min(paidWorkers, staffed) / staffed;
+  return 1 + (BALANCE.toolMultiplier - 1) * coverage;
+}
+
 export const STARTING_STOCK: Partial<Record<ResourceId, number>> = {
   wood: 30,
   berries: 20,
@@ -710,7 +729,7 @@ export const CHAINS: readonly Chain[] = [
 - [ ] **Step 5: Run test to verify it passes**
 
 Run: `npx vitest run tests/engine/content.test.ts`
-Expected: PASS (7 tests).
+Expected: PASS (8 tests).
 
 - [ ] **Step 6: Lint and commit**
 
@@ -1522,7 +1541,7 @@ git commit -m "feat: efficiency system - hunger curve and tool buffs"
 
 **Interfaces:**
 - Consumes: `Building`, `Production`, `ToolBuff`, `JobAssignment`, `Efficiency` components; `Stockpile`; `BUILDINGS`; `BALANCE`.
-- Produces: `ProductionSystem`. Behavior contract per staffed building (workPower = Σ assigned `Efficiency.value`, × `BALANCE.toolMultiplier` when `ToolBuff.remainingTicks > 0`):
+- Produces: `ProductionSystem`. Behavior contract per staffed building (workPower = Σ assigned `Efficiency.value`, × `toolMultiplierFor(staffed, buff.paidWorkers, buff.remainingTicks > 0)` — the +50% covers only tool-paid workers, scaling linearly with coverage; Codex review P2):
   1. If no batch active, try `stockpile.pay(recipe.inputs)` → batch starts (empty inputs always start).
   2. If a batch is active, `progress += workPower`; at `progress >= ticksPerBatch` the outputs are added, then it immediately tries to start the next batch (so continuously supplied buildings stay in `producing` state).
   3. At most one batch completes per tick; leftover progress is discarded (documented determinism trade-off).
@@ -1547,7 +1566,7 @@ async function setup(defId: BuildingDefId, stock: Partial<Record<ResourceId, num
   save.stockpile = stock;
   const prep = buildColonyPrepWorld({ save, systems: [ProductionSystem] });
   const ids = prep.getResource(IdCounter);
-  const building: IEntity = spawnBuilding(prep, ids, { defId, progress: 0, batchActive: false, toolBuffTicks, toolBuffPaidWorkers: 0 });
+  const building: IEntity = spawnBuilding(prep, ids, { defId, progress: 0, batchActive: false, toolBuffTicks, toolBuffPaidWorkers: toolBuffTicks > 0 ? workerCount : 0 });
   const buildingId = building.getComponent(Building)!.id;
   for (let i = 0; i < workerCount; i++) spawnWorker(prep, ids, { buildingId });
   const world = await prep.prepareRun();
@@ -1595,6 +1614,23 @@ describe('ProductionSystem', () => {
     expect(stockpile.get('wood')).toBe(1);
   });
 
+  it('scales the multiplier down for unpaid workers (partial coverage)', async () => {
+    const save = initialSave();
+    save.workers = [];
+    const prep = buildColonyPrepWorld({ save, systems: [ProductionSystem] });
+    const ids = prep.getResource(IdCounter);
+    // buff paid for 1 worker, but 2 assigned: multiplier 1 + 0.5 x (1/2) = 1.25 -> 2.5 power/tick
+    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, toolBuffTicks: 1000, toolBuffPaidWorkers: 1 });
+    const buildingId = building.getComponent(Building)!.id;
+    spawnWorker(prep, ids, { buildingId });
+    spawnWorker(prep, ids, { buildingId });
+    const world = await prep.prepareRun();
+    await world.step(); // 2.5 < 3: batch not done
+    expect(world.getResource(Stockpile).get('wood')).toBe(0);
+    await world.step(); // 5.0 >= 3
+    expect(world.getResource(Stockpile).get('wood')).toBe(1);
+  });
+
   it('completes at most one batch per tick and discards overflow progress', async () => {
     // 4 workers on the farm (4 power/tick, needs 4): exactly 1 wheat per tick
     const { world, stockpile } = await setup('farm', {}, 4);
@@ -1615,7 +1651,7 @@ Expected: FAIL — module not found.
 ```ts
 import { createSystem, queryComponents, Read, Write, WriteResource } from 'sim-ecs';
 import type { ResourceId } from '../../shared/content-types';
-import { BALANCE } from '../content/balance';
+import { toolMultiplierFor } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
 import { Building, Efficiency, JobAssignment, Production, ToolBuff } from '../components';
 import { Stockpile } from '../resources';
@@ -1628,13 +1664,16 @@ export const ProductionSystem = createSystem({
   .withName('ProductionSystem')
   .withRunFunction(({ stockpile, buildings, workers }) => {
     const powerByBuilding = new Map<number, number>();
+    const staffByBuilding = new Map<number, number>();
     for (const { job, efficiency } of workers.iter()) {
       if (job.buildingId === null) continue;
       powerByBuilding.set(job.buildingId, (powerByBuilding.get(job.buildingId) ?? 0) + efficiency.value);
+      staffByBuilding.set(job.buildingId, (staffByBuilding.get(job.buildingId) ?? 0) + 1);
     }
 
     for (const { building, production, buff } of buildings.iter()) {
-      const toolMultiplier = buff.remainingTicks > 0 ? BALANCE.toolMultiplier : 1;
+      const staffed = staffByBuilding.get(building.id) ?? 0;
+      const toolMultiplier = toolMultiplierFor(staffed, buff.paidWorkers, buff.remainingTicks > 0);
       const workPower = (powerByBuilding.get(building.id) ?? 0) * toolMultiplier;
       if (workPower === 0) continue;
 
@@ -1662,7 +1701,7 @@ export const ProductionSystem = createSystem({
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run tests/engine/systems/production-system.test.ts`
-Expected: PASS (6 tests).
+Expected: PASS (7 tests).
 
 - [ ] **Step 5: Lint and commit**
 
@@ -1766,7 +1805,7 @@ Expected: FAIL — module not found.
 import { createSystem, queryComponents, Read, ReadResource, WriteResource } from 'sim-ecs';
 import type { BuildingSnapshot, ResourceStats, WorkerSnapshot } from '../../shared/snapshot';
 import type { ResourceId } from '../../shared/content-types';
-import { BALANCE } from '../content/balance';
+import { toolMultiplierFor } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
 import { RESOURCES, RESOURCE_IDS } from '../content/resources';
 import { Building, Efficiency, Hunger, JobAssignment, Production, ToolBuff, Worker, WorkerSlots } from '../components';
@@ -1803,7 +1842,7 @@ export const SnapshotSystem = createSystem({
     for (const { building, slots, production, buff } of buildings.iter()) {
       const def = BUILDINGS[building.defId];
       const staffed = staffCount.get(building.id) ?? 0;
-      const toolMultiplier = buff.remainingTicks > 0 ? BALANCE.toolMultiplier : 1;
+      const toolMultiplier = toolMultiplierFor(staffed, buff.paidWorkers, buff.remainingTicks > 0);
       buildingSnaps.push({
         id: building.id,
         defId: building.defId,
@@ -3369,7 +3408,7 @@ git commit -m "feat: dashboard, buildings, population, and economy table views"
 
 **Interfaces:**
 - Consumes: `GameEngine` (Task 12), `createGameApp` (Task 14), `SaveGameV1`/`isSaveGameV1` (Task 2), Obsidian API (`Plugin`, `ItemView`, `WorkspaceLeaf`, `Notice`).
-- Produces: `VIEW_TYPE_OBSISIM = 'obsisim-game'`, `class GameView extends ItemView`, `default class ObsiSimPlugin extends Plugin` with `loadSave(): Promise<SaveGameV1 | null>` and `saveSave(save: SaveGameV1): Promise<void>`.
+- Produces: `VIEW_TYPE_OBSISIM = 'obsisim-game'`, `class GameView extends ItemView`, `default class ObsiSimPlugin extends Plugin` with `loadSave(): Promise<SaveGameV1 | null>` and `saveSave(save: SaveGameV1): Promise<void>` — saveSave serializes all data.json writes through a single FIFO promise chain so a stale fire-and-forget autosave can never land after (and clobber) a newer close-save (Codex review P2).
 - No automated tests: Obsidian's API cannot run under vitest; this layer is deliberately thin and manually verified (spec 7.1 puts the test weight on the engine).
 
 - [ ] **Step 1: Write src/view/game-view.ts**
@@ -3476,9 +3515,20 @@ export default class ObsiSimPlugin extends Plugin {
     return null;
   }
 
-  async saveSave(save: SaveGameV1): Promise<void> {
-    const data = ((await this.loadData()) as PluginData | null) ?? {};
-    await this.saveData({ ...data, save } satisfies PluginData);
+  /**
+   * All data.json writes flow through one FIFO promise chain: autosaves are
+   * fire-and-forget, so without ordering a slow autosave could resolve AFTER
+   * the awaited close-save and clobber data.json with an older tick.
+   */
+  private saveQueue: Promise<void> = Promise.resolve();
+
+  saveSave(save: SaveGameV1): Promise<void> {
+    const write = this.saveQueue.then(async () => {
+      const data = ((await this.loadData()) as PluginData | null) ?? {};
+      await this.saveData({ ...data, save } satisfies PluginData);
+    });
+    this.saveQueue = write.catch(() => undefined); // keep the chain alive on failure
+    return write;
   }
 }
 ```

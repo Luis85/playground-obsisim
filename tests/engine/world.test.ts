@@ -58,6 +58,14 @@ describe('isLoadableSave', () => {
     expect(isLoadableSave(save)).toBe(false);
   });
 
+  it('rejects stockpiles with more keys than the resource catalog (count gate before entry walk)', () => {
+    const bloated = initialSave();
+    for (let i = 0; i < 20; i++) {
+      (bloated.stockpile as Record<string, unknown>)[`junk${i}`] = 1;
+    }
+    expect(isLoadableSave(bloated)).toBe(false);
+  });
+
   it('rejects negative or non-integer sim counters (hunger, toolTicks)', () => {
     const negativeHunger = initialSave();
     negativeHunger.workers[0].hunger = -1;

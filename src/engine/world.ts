@@ -89,6 +89,11 @@ export function initialSave(): SaveGameV1 {
 // production tick -> rejected save): Stockpile.add saturates at that same
 // ceiling, so the engine never banks an amount this guard would refuse.
 function isStockpileValid(stockpile: SaveGameV1['stockpile']): boolean {
+  // Key-count cap FIRST (same principle as MAX_SAVED_ENTITIES): a valid
+  // stockpile has at most one key per catalog resource, and Object.entries
+  // on an adversarially huge object would materialize every entry before
+  // the first per-entry check could reject.
+  if (Object.keys(stockpile).length > RESOURCE_IDS.length) return false;
   return Object.entries(stockpile).every(
     ([id, amount]) =>
       Object.hasOwn(RESOURCES, id) &&

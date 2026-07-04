@@ -1,0 +1,9 @@
+{
+  "id": "obsisim",
+  "name": "ObsiSim",
+  "version": "0.1.0",
+  "minAppVersion": "1.4.0",
+  "description": "A colony simulation game: grow a settlement into an economic powerhouse through simulated production chains.",
+  "author": "Luis85",
+  "isDesktopOnly": false
+}

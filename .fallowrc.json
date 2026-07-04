@@ -1,0 +1,31 @@
+{
+  "boundaries": {
+    "zones": [
+      { "name": "shared", "patterns": ["src/shared/**"] },
+      { "name": "engine-content", "patterns": ["src/engine/content/**"] },
+      { "name": "engine", "patterns": ["src/engine/systems/**", "src/engine/*.ts"] },
+      { "name": "app", "patterns": ["src/app/**"] },
+      { "name": "obsidian-shell", "patterns": ["src/main.ts", "src/view/**"] }
+    ],
+    "rules": [
+      { "from": "shared", "allow": [] },
+      { "from": "engine-content", "allow": ["shared"] },
+      { "from": "engine", "allow": ["shared", "engine-content"] },
+      { "from": "app", "allow": ["shared", "engine", "engine-content"] },
+      { "from": "obsidian-shell", "allow": ["shared", "engine", "engine-content", "app"] }
+    ]
+  },
+  "ignoreExports": [
+    {
+      "file": "src/engine/game-engine.ts",
+      "exports": ["buildSaveFromWorld"]
+    },
+    {
+      "file": "src/engine/world.ts",
+      "exports": ["ALL_SYSTEMS"]
+    }
+  ],
+  "usedClassMembers": [
+    "setSpeed"
+  ]
+}

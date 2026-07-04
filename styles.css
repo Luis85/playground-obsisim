@@ -1,0 +1,87 @@
+.obsisim {
+  padding: var(--size-4-3);
+  font-size: var(--font-ui-small);
+}
+
+.obsisim-topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-4);
+  flex-wrap: wrap;
+  padding-bottom: var(--size-4-2);
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.obsisim-controls,
+.obsisim-summary,
+.obsisim-headline {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  flex-wrap: wrap;
+}
+
+.obsisim-summary { margin-left: auto; }
+
+.obsisim-controls button.is-active {
+  background-color: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+.obsisim-nav {
+  display: flex;
+  gap: var(--size-4-1);
+  margin: var(--size-4-2) 0;
+}
+
+.obsisim-tab {
+  padding: var(--size-2-2) var(--size-4-2);
+  border-radius: var(--radius-s);
+  text-decoration: none;
+  color: var(--text-muted);
+}
+
+.obsisim-tab.is-active {
+  background-color: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.obsisim-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: var(--size-4-2) 0 var(--size-4-4);
+}
+
+.obsisim-table th,
+.obsisim-table td {
+  padding: var(--size-2-2) var(--size-4-2);
+  border-bottom: 1px solid var(--background-modifier-border);
+  text-align: left;
+}
+
+.obsisim-table th {
+  color: var(--text-muted);
+  font-weight: var(--font-semibold);
+  background-color: var(--background-secondary);
+}
+
+.obsisim-positive { color: var(--color-green); }
+.obsisim-negative { color: var(--color-red); }
+.obsisim-warning { color: var(--color-orange); font-weight: var(--font-semibold); }
+
+.obsisim-error {
+  padding: var(--size-4-2);
+  margin: var(--size-4-2) 0;
+  border: 1px solid var(--color-red);
+  border-radius: var(--radius-s);
+  color: var(--color-red);
+}
+
+.obsisim-notice { color: var(--text-muted); font-style: italic; }
+.obsisim-loading { color: var(--text-muted); padding: var(--size-4-4); }
+.obsisim-reset { margin-left: var(--size-4-4); }
+
+.obsisim-duplicate-view {
+  color: var(--text-muted);
+  padding: var(--size-4-4);
+}

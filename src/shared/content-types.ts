@@ -1,0 +1,47 @@
+export type ResourceId = 'berries' | 'wheat' | 'wood' | 'flour' | 'planks' | 'bread' | 'tools';
+
+export type BuildingDefId =
+  | 'gatherersHut'
+  | 'farm'
+  | 'mill'
+  | 'bakery'
+  | 'forester'
+  | 'sawmill'
+  | 'workshop';
+
+export type ResourceTier = 'raw' | 'processed' | 'finished';
+
+export type CostMap = Partial<Record<ResourceId, number>>;
+
+export interface ResourceDef {
+  id: ResourceId;
+  name: string;
+  tier: ResourceTier;
+  value: number;
+  edible: boolean;
+}
+
+export interface RecipeDef {
+  inputs: CostMap;
+  outputs: CostMap;
+  /** Worker-ticks of accumulated progress needed to finish one batch. */
+  ticksPerBatch: number;
+}
+
+export interface BuildingDef {
+  id: BuildingDefId;
+  name: string;
+  cost: CostMap;
+  workerSlots: number;
+  recipe: RecipeDef;
+}
+
+export interface ChainStep {
+  building: BuildingDefId;
+  output: ResourceId;
+}
+
+export interface Chain {
+  name: string;
+  steps: readonly ChainStep[];
+}

@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.obsidian/
+demo-vault/.obsidian/plugins/
+demo-vault/.obsidian/workspace.json
+.superpowers/
+coverage/
+.fallow/

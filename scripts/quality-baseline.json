@@ -1,0 +1,11 @@
+{
+  "deadCodeIssues": 0,
+  "circularDependencies": 0,
+  "reExportCycles": 0,
+  "boundaryViolations": 0,
+  "cloneGroups": 0,
+  "duplicatedLines": 0,
+  "complexFunctions": 0,
+  "criticalComplexity": 0,
+  "maintainability": 90.5
+}

@@ -37,22 +37,37 @@ export class GameView extends ItemView {
       return;
     }
     this.plugin.activeGameView = this;
-    const save = await this.plugin.loadSave();
-    this.engine = await GameEngine.create(save);
-    this.engine.onAutosave((save) => {
-      this.plugin.saveSave(save).catch((error: unknown) => {
-        console.error('ObsiSim: autosave failed', error);
-        new Notice('ObsiSim: autosave failed — your colony may not persist.');
+    try {
+      const save = await this.plugin.loadSave();
+      this.engine = await GameEngine.create(save);
+      this.engine.onAutosave((save) => {
+        this.plugin.saveSave(save).catch((error: unknown) => {
+          console.error('ObsiSim: autosave failed', error);
+          new Notice('ObsiSim: autosave failed — your colony may not persist.');
+        });
       });
-    });
-    this.engine.onUpdate((_snapshot, status) => {
-      if (status.error && status.error !== this.lastError) {
-        new Notice(`ObsiSim paused on error: ${status.error}`);
-      }
-      this.lastError = status.error;
-    });
-    this.vueApp = await createGameApp(this.engine, this.contentEl);
-    this.engine.start();
+      this.engine.onUpdate((_snapshot, status) => {
+        if (status.error && status.error !== this.lastError) {
+          new Notice(`ObsiSim paused on error: ${status.error}`);
+        }
+        this.lastError = status.error;
+      });
+      this.vueApp = await createGameApp(this.engine, this.contentEl);
+      this.engine.start();
+    } catch (error) {
+      // Release the single-view claim, or activateView would keep revealing
+      // this dead pane (and keep detaching healthy new ones) forever.
+      this.plugin.activeGameView = null;
+      this.engine?.destroy();
+      this.engine = null;
+      console.error('ObsiSim: failed to open', error);
+      new Notice('ObsiSim: failed to open — see the developer console.');
+      this.contentEl.empty();
+      this.contentEl.createEl('p', {
+        text: 'ObsiSim failed to open. Close this pane and try again.',
+        cls: 'obsisim-duplicate-view',
+      });
+    }
   }
 
   async onClose(): Promise<void> {

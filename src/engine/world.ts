@@ -85,6 +85,9 @@ export function initialSave(): SaveGameV1 {
 // then indexing the catalog throws inside the guard.
 // Safe-integer amounts only: organic stockpiles are integral, and an absurd
 // magnitude (e.g. 1e308) would turn stock-value/wealth arithmetic infinite.
+// The MAX_SAVED_COUNTER bound cannot ping-pong (accepted save -> one
+// production tick -> rejected save): Stockpile.add saturates at that same
+// ceiling, so the engine never banks an amount this guard would refuse.
 function isStockpileValid(stockpile: SaveGameV1['stockpile']): boolean {
   return Object.entries(stockpile).every(
     ([id, amount]) =>

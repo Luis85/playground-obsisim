@@ -9,6 +9,17 @@ describe('Stockpile', () => {
     expect(stock.producedThisTick.get('wood')).toBe(3);
   });
 
+  it('add saturates at the save-format counter ceiling, recording only what was banked', () => {
+    const ceiling = Number.MAX_SAFE_INTEGER - 2 ** 32; // == MAX_SAVED_COUNTER
+    const stock = new Stockpile({ wood: ceiling - 2 });
+    stock.add('wood', 5);
+    expect(stock.get('wood')).toBe(ceiling); // never past the load guard's bound
+    expect(stock.producedThisTick.get('wood')).toBe(2); // stats see the real delta
+    stock.add('wood', 1);
+    expect(stock.get('wood')).toBe(ceiling);
+    expect(stock.producedThisTick.get('wood')).toBe(2);
+  });
+
   it('take is all-or-nothing per resource and tracks consumption', () => {
     const stock = new Stockpile({ bread: 1 });
     expect(stock.take('bread', 1)).toBe(true);

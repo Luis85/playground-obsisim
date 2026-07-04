@@ -19,9 +19,16 @@ export class Stockpile {
     return this.amounts.get(id) ?? 0;
   }
 
+  /**
+   * Saturates at MAX_SAVED_COUNTER (like IdCounter): production onto a stock
+   * sitting at the save-format ceiling must not write an amount the load
+   * guard would reject on the next reopen. Organically unreachable (~9e15),
+   * and stats record only what was actually banked.
+   */
   add(id: ResourceId, amount: number): void {
-    this.amounts.set(id, this.get(id) + amount);
-    this.producedThisTick.set(id, (this.producedThisTick.get(id) ?? 0) + amount);
+    const banked = Math.min(amount, MAX_SAVED_COUNTER - this.get(id));
+    this.amounts.set(id, this.get(id) + banked);
+    this.producedThisTick.set(id, (this.producedThisTick.get(id) ?? 0) + banked);
   }
 
   canAfford(cost: CostMap): boolean {

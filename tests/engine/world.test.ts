@@ -171,6 +171,32 @@ describe('isLoadableSave', () => {
     expect(isLoadableSave(written)).toBe(true);
   });
 
+  it('a save producing onto a ceiling stockpile stays loadable (no boundary ping-pong)', async () => {
+    // Stockpile.add saturates at MAX_SAVED_COUNTER, so a staffed producer on a
+    // ceiling stock must not push the written amount past the accept-bound.
+    const staffedForester = (wood: number) => {
+      const save = initialSave();
+      save.stockpile.wood = wood;
+      save.buildings.push({ id: 4, defId: 'forester', progress: 0, batchActive: false });
+      save.workers[0].buildingId = 4;
+      save.nextEntityId = 5;
+      return save;
+    };
+    const { GameEngine } = await import('../../src/engine/game-engine');
+    const run = async (wood: number) => {
+      const engine = await GameEngine.create(staffedForester(wood));
+      for (let i = 0; i < 10; i++) await engine.stepOnce(); // plenty for at least one wood batch
+      return engine.serialize();
+    };
+    // control: this setup really produces wood within the window
+    expect((await run(10)).stockpile.wood!).toBeGreaterThan(10);
+    const ceiling = Number.MAX_SAFE_INTEGER - 2 ** 32; // == MAX_SAVED_COUNTER
+    expect(isLoadableSave(staffedForester(ceiling))).toBe(true);
+    const written = await run(ceiling);
+    expect(written.stockpile.wood).toBe(ceiling); // saturated, not overflowed
+    expect(isLoadableSave(written)).toBe(true);
+  });
+
   it('rejects array-shaped stockpiles (would silently restore empty)', () => {
     const arrayStockpile = initialSave();
     (arrayStockpile as { stockpile: unknown }).stockpile = [];

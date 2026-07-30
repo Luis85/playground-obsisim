@@ -311,19 +311,22 @@ export const createExcaliburWorldRenderer: WorldRendererFactory = (host) => {
   // fast tab switch or view close can never race a start() still in flight.
   let clock = engine.start().catch(fail);
 
+  // A NEW snapshot object at the same or an earlier tick means a new timeline
+  // (colony reset — including resetting a save still at tick 0): the fresh
+  // world reuses entity ids, so held slots and id-keyed actors from the old
+  // colony must not carry over (review rounds 9–10). The engine emits exactly
+  // one snapshot object per tick, so a running session never trips this.
+  const resetOnNewTimeline = (snapshot: Snapshot) => {
+    if (lastSnapshot !== null && snapshot.tick <= lastSnapshot.tick) {
+      scene.clear();
+      last = undefined;
+    }
+  };
+
   return {
     sync(snapshot) {
       if (disposed || snapshot === lastSnapshot) return;
-      // A NEW snapshot object at the same or an earlier tick means a new
-      // timeline (colony reset — including resetting a save still at tick 0):
-      // the fresh world reuses entity ids, so held slots and id-keyed actors
-      // from the old colony must not carry over (review rounds 9–10). The
-      // engine emits exactly one snapshot object per tick, so a running
-      // session never trips this.
-      if (lastSnapshot !== null && snapshot.tick <= lastSnapshot.tick) {
-        scene.clear();
-        last = undefined;
-      }
+      resetOnNewTimeline(snapshot);
       lastSnapshot = snapshot;
       last = layoutWorld(snapshot, last);
       scene.sync(last);

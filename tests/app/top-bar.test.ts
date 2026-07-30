@@ -58,6 +58,39 @@ describe('TopBar', () => {
     expect(engine.reset).toHaveBeenCalled();
   });
 
+  it('a double-click on confirm (detail: 2) does not reset and stays armed', async () => {
+    // The second click of a double-click carries detail: 2. If confirmReset
+    // acted on it anyway, a stray double-click on the arming button would
+    // wipe the colony the moment Confirm slides into place -- exactly the
+    // bug this guard exists to close.
+    const { engine, wrapper } = mountTopBar();
+    await wrapper.vm.$nextTick();
+    await wrapper.find('[data-test="reset"]').trigger('click');
+    await wrapper.get('[data-test="reset-confirm"]').trigger('click', { detail: 2 });
+    expect(engine.reset).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-test="reset-confirm"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="reset"]').exists()).toBe(false);
+  });
+
+  it('a deliberate single click on confirm (detail: 1) resets', async () => {
+    const { engine, wrapper } = mountTopBar();
+    await wrapper.vm.$nextTick();
+    await wrapper.find('[data-test="reset"]').trigger('click');
+    await wrapper.get('[data-test="reset-confirm"]').trigger('click', { detail: 1 });
+    expect(engine.reset).toHaveBeenCalled();
+  });
+
+  it('keyboard activation of confirm (detail: 0) still resets', async () => {
+    // Enter/Space on a focused button fires a click with detail: 0. A keyboard
+    // user never produces a double-click, so this must keep working -- the
+    // guard is detail > 1, not detail !== 1, specifically to allow this.
+    const { engine, wrapper } = mountTopBar();
+    await wrapper.vm.$nextTick();
+    await wrapper.find('[data-test="reset"]').trigger('click');
+    await wrapper.get('[data-test="reset-confirm"]').trigger('click', { detail: 0 });
+    expect(engine.reset).toHaveBeenCalled();
+  });
+
   it('arming reset puts Cancel in the original button slot, not Confirm reset', async () => {
     // A double-click's second event arrives in a later microtask, after Vue's
     // re-render has already swapped "Reset colony" for the confirm/cancel

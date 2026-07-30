@@ -1,6 +1,6 @@
 import { createSystem, queryComponents, Read, Write, WriteResource } from 'sim-ecs';
 import type { ResourceId } from '../../shared/content-types';
-import { BALANCE } from '../content/balance';
+import { workerWorkPower } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
 import { Building, Efficiency, JobAssignment, Production, ToolCoverage } from '../components';
 import { Stockpile } from '../resources';
@@ -15,7 +15,7 @@ export const ProductionSystem = () => createSystem({
     const powerByBuilding = new Map<number, number>();
     for (const { job, efficiency, coverage } of workers.iter()) {
       if (job.buildingId === null) continue;
-      const contribution = efficiency.value * (coverage.remainingTicks > 0 ? BALANCE.toolMultiplier : 1);
+      const contribution = workerWorkPower(efficiency.value, coverage.remainingTicks);
       powerByBuilding.set(job.buildingId, (powerByBuilding.get(job.buildingId) ?? 0) + contribution);
     }
 

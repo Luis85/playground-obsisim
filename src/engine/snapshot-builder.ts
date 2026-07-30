@@ -2,7 +2,7 @@ import type { IRuntimeWorld } from 'sim-ecs';
 import type { BuildingDefId } from '../shared/content-types';
 import type { SavedBuilding, SavedWorker } from '../shared/save';
 import type { BuildingSnapshot, BuildingState, WorkerSnapshot } from '../shared/snapshot';
-import { BALANCE } from './content/balance';
+import { workerWorkPower } from './content/balance';
 import { BUILDINGS } from './content/buildings';
 import {
   Building, Efficiency, Hunger, JobAssignment, Production, ToolCoverage, Worker, WorkerSlots,
@@ -50,7 +50,7 @@ export function buildEntitySections(workers: readonly WorkerFacts[], buildings: 
     staffCount.set(w.buildingId, (staffCount.get(w.buildingId) ?? 0) + 1);
     powerByBuilding.set(
       w.buildingId,
-      (powerByBuilding.get(w.buildingId) ?? 0) + w.efficiency * (tooled ? BALANCE.toolMultiplier : 1),
+      (powerByBuilding.get(w.buildingId) ?? 0) + workerWorkPower(w.efficiency, w.toolTicks),
     );
     if (tooled) tooledByBuilding.set(w.buildingId, (tooledByBuilding.get(w.buildingId) ?? 0) + 1);
   }

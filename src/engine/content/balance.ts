@@ -21,6 +21,18 @@ export function workerEfficiency(hunger: number): number {
   return 1 - (1 - BALANCE.starvingEfficiency) * starvation;
 }
 
+/**
+ * One worker's contribution to its building's work power: efficiency, multiplied
+ * while tool coverage lasts. Lives here beside workerEfficiency because two
+ * callers derive it from different sources — ProductionSystem from live
+ * components during a tick, buildEntitySections from WorkerFacts. While the
+ * expression existed in both places they could drift, and the drift is invisible
+ * on inspection: the UI would report a work power the simulation never used.
+ */
+export function workerWorkPower(efficiency: number, toolTicks: number): number {
+  return efficiency * (toolTicks > 0 ? BALANCE.toolMultiplier : 1);
+}
+
 export const STARTING_STOCK: Partial<Record<ResourceId, number>> = {
   wood: 30,
   berries: 20,

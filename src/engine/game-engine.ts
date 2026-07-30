@@ -2,6 +2,7 @@ import type { IRuntimeWorld } from 'sim-ecs';
 import type { Command } from '../shared/commands';
 import type { EngineStatus, Snapshot } from '../shared/snapshot';
 import type { SaveGameV1, SavedBuilding, SavedWorker } from '../shared/save';
+import { LATEST_SAVE_VERSION } from '../shared/save';
 import { BALANCE } from './content/balance';
 import { Building, Hunger, JobAssignment, Production, ToolCoverage, Worker } from './components';
 import { CommandQueue, IdCounter, SimClock, SnapshotStore, Stockpile } from './resources';
@@ -38,7 +39,7 @@ export function buildSaveFromWorld(world: IRuntimeWorld): SaveGameV1 {
   buildings.sort((a, b) => a.id - b.id);
   workers.sort((a, b) => a.id - b.id);
   return {
-    version: 1,
+    version: LATEST_SAVE_VERSION,
     tick: clock.tick,
     lastRecruitTick: clock.lastRecruitTick,
     stockpile: world.getResource(Stockpile).toJSON(),

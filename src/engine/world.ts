@@ -1,6 +1,6 @@
 import { buildWorld } from 'sim-ecs';
 import type { IEntity, IPreptimeWorld, IRuntimeWorld } from 'sim-ecs';
-import { isSaveGameV1, MAX_SAVED_COUNTER } from '../shared/save';
+import { isSaveGameV1, LATEST_SAVE_VERSION, MAX_SAVED_COUNTER } from '../shared/save';
 import { migrateSaveToLatest } from '../shared/save-migration';
 import type { SaveGameV1, SavedBuilding } from '../shared/save';
 import type { ResourceId } from '../shared/content-types';
@@ -67,7 +67,7 @@ const COMPONENT_TYPES = [Building, WorkerSlots, Production, Worker, Hunger, JobA
 
 export function initialSave(): SaveGameV1 {
   return {
-    version: 1,
+    version: LATEST_SAVE_VERSION,
     tick: 0,
     lastRecruitTick: -BALANCE.recruitCooldownTicks,
     stockpile: { ...STARTING_STOCK },

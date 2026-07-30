@@ -14,7 +14,7 @@ import type { BuildingDefId, CostMap, ResourceId } from '../../shared/content-ty
 const engine = inject(ENGINE_KEY)!;
 const store = useGameStore();
 
-// Used by the Construct table's Cost and Recipe columns (both call sites
+// Used by the Construct table's Cost and Recipe columns (both columns
 // below), so it lives at the view level rather than duplicated per cell.
 function costLabel(cost: CostMap): string {
   return Object.entries(cost)

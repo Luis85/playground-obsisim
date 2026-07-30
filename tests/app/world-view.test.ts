@@ -15,7 +15,9 @@ import { makeSnapshot } from './fixtures';
 // seconds to evaluate under happy-dom.
 
 function makeFake() {
-  const renderer: WorldRenderer = { sync: vi.fn(), start: vi.fn(), stop: vi.fn(), dispose: vi.fn() };
+  const renderer: WorldRenderer = {
+    sync: vi.fn(), pick: vi.fn(() => null), onFatal: vi.fn(), start: vi.fn(), stop: vi.fn(), dispose: vi.fn(),
+  };
   const factory = vi.fn((host: HTMLElement) => {
     void host;
     return renderer;
@@ -90,5 +92,62 @@ describe('WorldView', () => {
     const { wrapper } = mountHarness(undefined);
     await nextTick();
     expect(wrapper.find('[data-test="world-fallback"]').exists()).toBe(true);
+  });
+
+  it('shows a tooltip for the picked building and hides it on leave', async () => {
+    const { renderer, factory } = makeFake();
+    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'building', id: 7 });
+    const { wrapper } = mountHarness(factory);
+    useGameStore().ingest(makeSnapshot({
+      buildings: [{
+        id: 7, defId: 'bakery', workers: 1, workerSlots: 2, state: 'producing',
+        progress: 0, batchActive: true, progressPct: 55, tooledWorkers: 0, workPower: 1,
+      }],
+    }), { paused: false, speed: 1, error: null });
+    await nextTick();
+    await wrapper.find('[data-test="world-host"]').trigger('pointermove', { pageX: 40, pageY: 40 });
+    const tooltip = wrapper.find('[data-test="world-tooltip"]');
+    expect(tooltip.exists()).toBe(true);
+    expect(tooltip.text()).toContain('Bakery');
+    expect(tooltip.text()).toContain('batch 55%');
+    await wrapper.find('[data-test="world-host"]').trigger('pointerleave');
+    expect(wrapper.find('[data-test="world-tooltip"]').exists()).toBe(false);
+  });
+
+  it('shows a worker tooltip with efficiency and tool state', async () => {
+    const { renderer, factory } = makeFake();
+    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'worker', id: 3 });
+    const { wrapper } = mountHarness(factory);
+    useGameStore().ingest(makeSnapshot({
+      workers: [{ id: 3, hunger: 40, efficiency: 0.8, buildingId: null, toolTicks: 12 }],
+    }), { paused: false, speed: 1, error: null });
+    await nextTick();
+    await wrapper.find('[data-test="world-host"]').trigger('pointermove', { pageX: 10, pageY: 10 });
+    const tooltip = wrapper.find('[data-test="world-tooltip"]');
+    expect(tooltip.text()).toContain('Worker #3');
+    expect(tooltip.text()).toContain('efficiency 80%');
+    expect(tooltip.text()).toContain('tooled (12t left)');
+  });
+
+  it('renders the encoding legend', async () => {
+    const { factory } = makeFake();
+    const { wrapper } = mountHarness(factory);
+    await nextTick();
+    const legend = wrapper.find('[data-test="world-legend"]');
+    expect(legend.exists()).toBe(true);
+    expect(legend.text()).toContain('producing');
+    expect(legend.text()).toContain('idle camp');
+  });
+
+  it('falls back when the renderer reports an async fatal failure', async () => {
+    const { renderer, factory } = makeFake();
+    const { wrapper } = mountHarness(factory);
+    await nextTick();
+    const listener = (renderer.onFatal as ReturnType<typeof vi.fn>).mock.calls[0][0] as (message: string) => void;
+    listener('context lost');
+    await nextTick();
+    const fallback = wrapper.find('[data-test="world-fallback"]');
+    expect(fallback.exists()).toBe(true);
+    expect(fallback.text()).toContain('context lost');
   });
 });

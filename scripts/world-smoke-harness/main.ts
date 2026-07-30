@@ -1,6 +1,8 @@
 // Browser harness for the world-renderer smoke test (scripts/world-smoke.mjs).
 // Boots the REAL Excalibur adapter against scripted snapshots; the runner
 // drives phases via window.__step(n) and asserts on screenshots and errors.
+// This file is a declared fallow entry point (.fallowrc.json `entry`) — it is
+// loaded by the built harness page, never imported by app or test code.
 import type { BuildingSnapshot, Snapshot, WorkerSnapshot } from '../../src/shared/snapshot';
 import { createExcaliburWorldRenderer } from '../../src/app/world/renderer';
 
@@ -9,6 +11,7 @@ declare global {
     __ready: boolean;
     __errors: string[];
     __step: (index: number) => string;
+    __probe: () => { building: number; worker: number; empty: number };
   }
 }
 
@@ -59,5 +62,20 @@ const phases: Array<() => void> = [
 window.__step = (index: number) => {
   phases[index]();
   return `phase ${index} ok`;
+};
+
+// Sample a grid of page coordinates through renderer.pick — verifies the
+// page -> world -> tile transform against the live camera end to end.
+window.__probe = () => {
+  const rect = document.querySelector('#host canvas')!.getBoundingClientRect();
+  const found = { building: 0, worker: 0, empty: 0 };
+  for (let ix = 0; ix < 40; ix++) {
+    for (let iy = 0; iy < 26; iy++) {
+      const pick = renderer.pick(rect.left + (rect.width * (ix + 0.5)) / 40, rect.top + (rect.height * (iy + 0.5)) / 26);
+      if (pick === null) found.empty += 1;
+      else found[pick.kind] += 1;
+    }
+  }
+  return found;
 };
 window.__ready = true;

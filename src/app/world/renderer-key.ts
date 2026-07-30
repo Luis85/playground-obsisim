@@ -1,8 +1,14 @@
 import type { InjectionKey } from 'vue';
 import type { Snapshot } from '../../shared/snapshot';
+import type { WorldPick } from './layout';
 
 export interface WorldRenderer {
   sync(snapshot: Snapshot): void;
+  /** Hit-test the entity under a pointer position (page coordinates). */
+  pick(pageX: number, pageY: number): WorldPick | null;
+  /** Report an asynchronous fatal failure (e.g. the engine boot rejecting
+   * after construction succeeded); the renderer is already torn down. */
+  onFatal(listener: (message: string) => void): void;
   /** Resume the render clock (tab shown). */
   start(): void;
   /** Halt the render clock (tab hidden). */

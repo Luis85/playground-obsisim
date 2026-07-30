@@ -2,9 +2,7 @@
 import { computed, inject } from 'vue';
 import { ENGINE_KEY } from '../engine-key';
 import { useGameStore } from '../stores/game-store';
-import { BUILDINGS, BUILDING_IDS } from '../../engine/content/buildings';
-import { RESOURCES } from '../../engine/content/resources';
-import type { BuildingDefId, CostMap, ResourceId } from '../../shared/content-types';
+import { BUILDINGS, BUILDING_IDS, RESOURCES, type BuildingDefId, type CostMap, type ResourceId } from '../../engine/content';
 
 const engine = inject(ENGINE_KEY)!;
 const store = useGameStore();

@@ -46,6 +46,10 @@
   color: var(--text-normal);
 }
 
+.obsisim-world {
+  position: relative;
+}
+
 .obsisim-world-host {
   height: clamp(320px, 65vh, 720px);
   border: 1px solid var(--background-modifier-border);
@@ -56,6 +60,59 @@
 .obsisim-world-fallback {
   padding: var(--size-4-4);
   color: var(--text-muted);
+}
+
+.obsisim-world-tooltip {
+  position: absolute;
+  z-index: 10;
+  pointer-events: none;
+  padding: var(--size-2-2) var(--size-4-2);
+  background-color: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  box-shadow: var(--shadow-s);
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+}
+
+.obsisim-world-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-4-3);
+  margin-top: var(--size-4-2);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.obsisim-world-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--size-2-2);
+}
+
+.obsisim-chip {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid transparent;
+  border-radius: 2px;
+}
+
+.obsisim-chip.is-round {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.obsisim-chip.is-bar {
+  width: 16px;
+  height: 5px;
+  border: none;
+  border-radius: 1px;
+}
+
+.obsisim-starved td {
+  background-color: rgba(229, 166, 58, 0.08);
 }
 
 .obsisim-table {

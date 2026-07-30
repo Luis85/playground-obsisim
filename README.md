@@ -18,6 +18,10 @@ simulated production chains — in tables and, since Increment 2, a live
 - The colony rendered as a live 2D tile world (Excalibur) in a new **World** tab
 - Buildings with state rings and batch progress, workers colored by efficiency
   (tool coverage shown as a ring) walking between posts
+- Hover anything for details (staffing, state, batch, efficiency, tools); a
+  legend under the canvas explains every encoding
+- Economy readability: per-resource **Empties in** runway on the Dashboard and
+  per-stage bottleneck status (`⚠ starved`) on the Economy chains
 - Read-only: tables stay the interface for acting; positions are derived until
   Increment 3 makes placement player-driven
 

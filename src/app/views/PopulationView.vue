@@ -2,7 +2,7 @@
 import { computed, inject } from 'vue';
 import { ENGINE_KEY } from '../engine-key';
 import { useGameStore } from '../stores/game-store';
-import { BUILDINGS } from '../../engine/content/buildings';
+import { BUILDINGS } from '../../engine/content';
 
 const engine = inject(ENGINE_KEY)!;
 const store = useGameStore();

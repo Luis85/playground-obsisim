@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { layoutWorld, TILE } from '../../src/app/world/layout';
+import { layoutWorld, pickAt, TILE } from '../../src/app/world/layout';
 import { makeSnapshot } from './fixtures';
 import type { BuildingSnapshot, WorkerSnapshot } from '../../src/shared/snapshot';
 
@@ -127,10 +127,12 @@ describe('layoutWorld', () => {
 
   it('keeps grandfathered over-capacity rosters inside their cell, on distinct spots', () => {
     // a save from before a slot retuning may legally carry more workers than
-    // workerSlots — extra slots wrap into a second row inside the cell
+    // workerSlots — overflow slots take an in-cell shelf on unique positions,
+    // even for extreme rosters (review round 5: 11 workers at a 2-slot def)
+    const crew = Array.from({ length: 11 }, (_, i) => worker(10 + i, { buildingId: 1 }));
     const layout = layoutWorld(makeSnapshot({
-      buildings: [building(1, { workerSlots: 2, workers: 3 })],
-      workers: [worker(10, { buildingId: 1 }), worker(11, { buildingId: 1 }), worker(12, { buildingId: 1 })],
+      buildings: [building(1, { workerSlots: 2, workers: crew.length })],
+      workers: crew,
     }));
     const cell = layout.buildings[0];
     const spots = new Set<string>();
@@ -141,7 +143,7 @@ describe('layoutWorld', () => {
       expect(w.y).toBeLessThan(cell.row + 1);
       spots.add(`${w.x},${w.y}`);
     }
-    expect(spots.size).toBe(3);
+    expect(spots.size).toBe(crew.length);
   });
 
   it('shrinking an over-capacity roster leaves the remaining crew in place (review round 3)', () => {
@@ -209,6 +211,27 @@ describe('layoutWorld', () => {
     expect(at.get(10)).toBe(1);
     expect(at.get(11)).toBeNull(); // idle
     expect(at.get(12)).toBeNull(); // orphaned assignment falls back to camp
+  });
+
+  it('pickAt finds the building tile under the cursor and nothing in the gutter', () => {
+    const layout = layoutWorld(makeSnapshot({ buildings: [building(1), building(2)] }));
+    const cell = layout.buildings[0];
+    expect(pickAt(layout, cell.col + 0.5, cell.row + 0.5)).toEqual({ kind: 'building', id: 1 });
+    // the gutter midpoint sits between the two buildings' 1.5-tile visuals
+    expect(pickAt(layout, cell.col + 1.5, cell.row + 0.5)).toBeNull();
+    // and the empty grass south of the plots picks nothing
+    expect(pickAt(layout, cell.col + 0.5, layout.rows - 0.5)).toBeNull();
+  });
+
+  it('pickAt prefers the worker standing on a building over the building', () => {
+    const layout = layoutWorld(makeSnapshot({
+      buildings: [building(1, { workers: 1 })],
+      workers: [worker(10, { buildingId: 1 }), worker(11)],
+    }));
+    const onDuty = layout.workers.find((w) => w.id === 10)!;
+    expect(pickAt(layout, onDuty.x, onDuty.y)).toEqual({ kind: 'worker', id: 10 });
+    const camper = layout.workers.find((w) => w.id === 11)!;
+    expect(pickAt(layout, camper.x + 0.05, camper.y)).toEqual({ kind: 'worker', id: 11 });
   });
 
   it('keeps every placement inside the reported grid', () => {

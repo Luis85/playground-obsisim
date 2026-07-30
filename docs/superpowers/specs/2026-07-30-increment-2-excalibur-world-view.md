@@ -165,6 +165,8 @@ switch mid-session repaints on the next view open (documented limitation).
   ```ts
   interface WorldRenderer {
     sync(snapshot: Snapshot): void;
+    pick(pageX: number, pageY: number): WorldPick | null; // hover hit-test (§2.7)
+    onFatal(listener: (message: string) => void): void;   // async boot failure (§2.7)
     start(): void;   // resume the render clock (tab shown)
     stop(): void;    // halt the render clock (tab hidden)
     dispose(): void; // tear down engine + canvas (view closed)
@@ -185,6 +187,10 @@ switch mid-session repaints on the next view open (documented limitation).
 - No changes to `GameEngine`, systems, snapshot shape, save format, or the
   Obsidian shell — the increment is additive in `src/app/`, `package.json`,
   `eslint.config.js`, `scripts/check-artifacts.mjs`, `styles.css`, and docs.
+  One additive exception from the second polish pass: a re-export barrel at
+  `src/engine/content/index.ts` (engine-content zone, no logic) giving the
+  app layer a single import surface for the catalog; engine internals keep
+  their direct imports.
 
 ### 2.6 Testing
 
@@ -215,6 +221,35 @@ adapter stays thin.
   ratchet (no new dead exports, dupes, complexity; maintainability floor
   holds), css ratchet, typecheck, tests, build, artifacts (with the §2.1
   budget).
+
+### 2.7 Second polish pass — UX and economy readability
+
+Scoped by explicit product direction after the first pass; stays clear of
+the UX cheap-wins reserved for increment 1.5 (success notices, humanized
+labels, table hunger coloring, starter hint).
+
+- **World inspection (read-only).** Hovering the canvas identifies the
+  entity under the pointer — `pick(pageX, pageY)` on the renderer seam
+  converts through the live camera and hit-tests the *layout* (pure
+  `pickAt`, workers before buildings) — and a DOM tooltip shows building
+  name / staffing / state / batch, or worker efficiency / hunger / tool
+  coverage. A legend strip under the canvas explains every encoding (state
+  rings, worker colors, tool ring, progress bar, camp tent) using the same
+  resolved theme. Commands from the canvas remain out of scope (increment 3).
+- **Economy readability.** Two tested store getters — `runways` (ticks
+  until a draining resource empties: `ceil(stock / -netFlow)`) and
+  `staffingByDef` (total / staffed / starved per def) — feed an
+  **Empties in** column on Dashboard (warning-colored ≤ 30 ticks) and, on
+  the Economy chains, a per-stage **Status** (`not built` / `unstaffed` /
+  `⚠ starved` / `ok`) with starved rows highlighted, plus the output's
+  runway. Starvation is the engine's own `waitingForInput` truth — the
+  PRD's "the mill starves the bakery" made visible.
+- **Renderer hardening (review round 5).** Async engine-boot rejections
+  are caught behind the seam and surfaced via `onFatal` (same fallback UI
+  as construction failures); all engine-clock operations serialize behind
+  the boot promise so tab switches and closes cannot race it. Overflow
+  slots take unique low-discrepancy shelf positions (van der Corput), so
+  even extreme grandfathered rosters never stack actors.
 
 ---
 

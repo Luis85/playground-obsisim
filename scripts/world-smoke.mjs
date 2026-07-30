@@ -89,6 +89,12 @@ await wait(300);
 const settledB = await shot();
 check('scene is static once the walk settles', settledB.equals(settledA));
 
+const probe = await page.evaluate(() => window.__probe());
+check(
+  `pick() resolves buildings, workers, and empty ground through the live camera (${JSON.stringify(probe)})`,
+  probe.building > 0 && probe.worker > 0 && probe.empty > 0,
+);
+
 await step(2); // stop()
 await step(4); // sync more entities while stopped — must not render
 await wait(400);

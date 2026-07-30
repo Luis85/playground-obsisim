@@ -1,5 +1,6 @@
 import type { Snapshot, BuildingState, WorkerSnapshot } from '../../shared/snapshot';
 import type { BuildingDefId } from '../../shared/content-types';
+import { BUILDINGS } from '../../engine/content';
 
 export const TILE = 48;
 
@@ -7,6 +8,12 @@ export const TILE = 48;
 // right of it, one-tile gutters between plots. Placement depends only on ids
 // and remembered slots, so the world never reshuffles under the player
 // (spec §2.3).
+//
+//   col: 0    1    2    3    4    5    6    ...
+//   row 0     ⛺ (camp anchor)
+//   row 1     [camp][camp]     [plot]     [plot]  ...
+//   row 2     [camp][camp]
+//   ...                        [plot]     [plot]  ...
 const PLOTS_PER_ROW = 5;
 const PLOT_COL0 = 4;
 const PLOT_ROW0 = 1;
@@ -118,17 +125,71 @@ function allocateSlots(members: WorkerSnapshot[], base: number, held?: Map<numbe
   return slots;
 }
 
+/** Van der Corput base-2: unique in [0,1) per n, maximally spread. */
+function vanDerCorput(n: number): number {
+  let value = 0;
+  for (let digit = 0.5; n > 0; n = Math.floor(n / 2), digit /= 2) {
+    value += digit * (n % 2);
+  }
+  return value;
+}
+
 /**
- * Position is a pure function of (cell, capacity, slot): slots wrap into
- * additional rows inside the cell, so grandfathered over-capacity rosters
- * (legal after a slot retuning) stay contained without any roster-size
- * divisor that would move colleagues when staffing changes.
+ * Position is a pure function of (cell, capacity, slot) — never roster size,
+ * which would move colleagues when staffing changes. Regular slots line the
+ * cell's south edge; overflow slots (grandfathered over-capacity saves,
+ * legal after a slot retuning) take a shelf above it on a low-discrepancy
+ * sequence: unique x per slot, so no accepted roster ever stacks actors.
  */
 function buildingSpot(cell: PlacedBuilding, capacity: number, slot: number): Spot {
-  return {
-    x: cell.col + ((slot % capacity) + 1) / (capacity + 1),
-    y: cell.row + Math.max(0.15, 0.85 - 0.18 * Math.floor(slot / capacity)),
-  };
+  if (slot < capacity) {
+    return { x: cell.col + (slot + 1) / (capacity + 1), y: cell.row + 0.85 };
+  }
+  return { x: cell.col + 0.12 + 0.76 * vanDerCorput(slot - capacity + 1), y: cell.row + 0.35 };
+}
+
+export interface WorldPick {
+  kind: 'building' | 'worker';
+  id: number;
+}
+
+const PICK_WORKER_RADIUS = 0.22;
+
+/** Tooltip lines for a picked entity, from the current snapshot. */
+export function describePick(snapshot: Snapshot, pick: WorldPick): string[] {
+  if (pick.kind === 'building') {
+    const b = snapshot.buildings.find((candidate) => candidate.id === pick.id);
+    if (!b) return [];
+    return [
+      BUILDINGS[b.defId].name,
+      `${b.workers}/${b.workerSlots} workers — ${b.state}`,
+      b.batchActive ? `batch ${b.progressPct}%` : 'no active batch',
+    ];
+  }
+  const w = snapshot.workers.find((candidate) => candidate.id === pick.id);
+  if (!w) return [];
+  return [
+    `Worker #${w.id}`,
+    `efficiency ${Math.round(w.efficiency * 100)}% — hunger ${Math.round(w.hunger)}`,
+    w.toolTicks > 0 ? `tooled (${w.toolTicks}t left)` : 'no tool',
+  ];
+}
+
+/** Hit-test in tile space: workers first (drawn on top, nearest wins), then
+ * the building tile under the cursor. */
+export function pickAt(layout: WorldLayout, x: number, y: number): WorldPick | null {
+  let best: { id: number; d2: number } | null = null;
+  for (const w of layout.workers) {
+    const d2 = (w.x - x) ** 2 + (w.y - y) ** 2;
+    if (d2 <= PICK_WORKER_RADIUS ** 2 && (best === null || d2 < best.d2)) best = { id: w.id, d2 };
+  }
+  if (best) return { kind: 'worker', id: best.id };
+  for (const b of layout.buildings) {
+    if (Math.abs(x - (b.col + 0.5)) <= 0.75 && Math.abs(y - (b.row + 0.5)) <= 0.75) {
+      return { kind: 'building', id: b.id };
+    }
+  }
+  return null;
 }
 
 function campSpot(slot: number): Spot {

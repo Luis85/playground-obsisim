@@ -3,13 +3,16 @@ import {
   Rectangle, Text, TextAlign, TileMap, vec, type Vector,
 } from 'excalibur';
 import type { WorldRendererFactory } from './renderer-key';
-import { layoutWorld, TILE, type PlacedBuilding, type PlacedWorker, type WorldLayout } from './layout';
+import { layoutWorld, pickAt, TILE, type PlacedBuilding, type PlacedWorker, type WorldLayout } from './layout';
 import { efficiencyBucket, resolveWorldTheme, type WorldTheme } from './theme';
 
 // The Excalibur end of the renderer seam: the only module that imports
 // excalibur (spec §2.5), exempt from unit tests — it needs a real canvas
 // runtime; the logic lives in the tested pure modules. Everything visual is
 // derived per sync from the layout; between syncs Excalibur just renders.
+// Behavior is verified end to end by the browser smoke test
+// (`npm run smoke:world`): boot-and-draw, walking, clock stop/start,
+// pick() through the live camera, and clean dispose.
 
 const WORKER_RADIUS = 7;
 const WORKER_SPEED = 90; // px/s walk speed toward a new post
@@ -249,9 +252,31 @@ export const createExcaliburWorldRenderer: WorldRendererFactory = (host) => {
   observer.observe(host);
   let running = true;
   let disposed = false;
+  let fatalListener: ((message: string) => void) | null = null;
   // fed back into layoutWorld so slot allocation remembers who stands where
   let last: WorldLayout | undefined;
-  void engine.start();
+
+  const teardown = () => {
+    observer.disconnect();
+    try {
+      engine.stop();
+      engine.dispose();
+    } catch {
+      // a failed engine may throw again on teardown — nothing left to save
+    }
+  };
+  // An async boot rejection would otherwise escape WorldView's try/catch as
+  // an unhandled rejection with no fallback UI (spec §2.2).
+  const fail = (error: unknown) => {
+    if (disposed) return;
+    disposed = true;
+    teardown();
+    canvas.remove();
+    fatalListener?.(error instanceof Error ? error.message : String(error));
+  };
+  // All engine-clock operations are serialized behind the async boot, so a
+  // fast tab switch or view close can never race a start() still in flight.
+  let clock = engine.start().catch(fail);
 
   return {
     sync(snapshot) {
@@ -259,22 +284,32 @@ export const createExcaliburWorldRenderer: WorldRendererFactory = (host) => {
       last = layoutWorld(snapshot, last);
       scene.sync(last);
     },
+    pick(pageX, pageY) {
+      if (disposed || last === undefined) return null;
+      const world = engine.screen.pageToWorldCoordinates(vec(pageX, pageY));
+      return pickAt(last, world.x / TILE, world.y / TILE);
+    },
+    onFatal(listener) {
+      fatalListener = listener;
+    },
     start() {
       if (disposed || running) return;
       running = true;
-      void engine.start();
+      clock = clock.then(() => (running && !disposed ? engine.start() : undefined)).catch(fail);
     },
     stop() {
       if (disposed || !running) return;
       running = false;
-      engine.stop();
+      clock = clock
+        .then(() => {
+          if (!running && !disposed) engine.stop();
+        })
+        .catch(fail);
     },
     dispose() {
       if (disposed) return;
       disposed = true;
-      observer.disconnect();
-      engine.stop();
-      engine.dispose();
+      void clock.then(teardown, teardown);
     },
   };
 };

@@ -11,7 +11,10 @@ export default tseslint.config(
     files: ['**/*.vue'],
     languageOptions: {
       parserOptions: { parser: tseslint.parser },
-      globals: { window: 'readonly', document: 'readonly', HTMLElement: 'readonly' },
+      globals: {
+        window: 'readonly', document: 'readonly', HTMLElement: 'readonly',
+        MouseEvent: 'readonly', getComputedStyle: 'readonly',
+      },
     },
     rules: {
       // Purely-formatting rules that fight this project's verbatim SFC markup

@@ -6,7 +6,8 @@ import { BUILDING_IDS } from '../../src/engine/content/buildings';
 // ex.Color.fromHex must be a 6-digit hex, whatever the vault's CSS variables
 // contain (themes are free to use hsl()/rgb()/garbage — those must fall back,
 // never pass through). The reader function is injected, so these tests never
-// need a DOM.
+// need a DOM. The same resolved palette also feeds the WorldView legend, so
+// a fallback here is a legend chip color too — one source of truth.
 
 const HEX = /^#[0-9a-f]{6}$/i;
 const none = () => '';

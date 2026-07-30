@@ -82,6 +82,43 @@ describe('layoutWorld', () => {
     }
   });
 
+  it('a lower-id worker joining leaves the existing crew in place', () => {
+    // e.g. worker 9 unassigned elsewhere and reassigned here: slots are keyed
+    // to worker ids, not roster ranks, so 10 and 11 must not budge
+    const crew = makeSnapshot({
+      buildings: [building(1, { workerSlots: 4, workers: 2 })],
+      workers: [worker(10, { buildingId: 1 }), worker(11, { buildingId: 1 })],
+    });
+    const joined = makeSnapshot({
+      buildings: [building(1, { workerSlots: 4, workers: 3 })],
+      workers: [worker(9, { buildingId: 1 }), worker(10, { buildingId: 1 }), worker(11, { buildingId: 1 })],
+    });
+    const before = layoutWorld(crew).workers;
+    const after = layoutWorld(joined).workers;
+    for (const w of before) {
+      expect(after.find((a) => a.id === w.id)).toMatchObject({ x: w.x, y: w.y });
+    }
+  });
+
+  it('keeps grandfathered over-capacity rosters inside their building cell', () => {
+    // a save from before a slot retuning may legally carry more workers than
+    // workerSlots (see the save-guard grandfathering) — nobody may spill into
+    // the gutter or a neighboring plot
+    const snapshot = makeSnapshot({
+      buildings: [building(1, { workerSlots: 2, workers: 3 })],
+      workers: [worker(10, { buildingId: 1 }), worker(11, { buildingId: 1 }), worker(12, { buildingId: 1 })],
+    });
+    const layout = layoutWorld(snapshot);
+    const cell = layout.buildings[0];
+    const spots = new Set<number>();
+    for (const w of layout.workers) {
+      expect(w.x).toBeGreaterThan(cell.col);
+      expect(w.x).toBeLessThan(cell.col + 1);
+      spots.add(w.x);
+    }
+    expect(spots.size).toBe(3);
+  });
+
   it('parks idle workers at the camp, left of the plots', () => {
     const snapshot = makeSnapshot({
       buildings: [building(1)],

@@ -98,10 +98,14 @@ unit-testable. Rules:
    plots stable except ranks above the removed one — acceptable, and moot
    once increment 3 makes positions sim-state.)
 3. **Assigned workers** stand at deterministic per-slot offsets along the
-   south edge of their building's cell, ordered by worker id within the
-   building. Offsets divide the cell by the building's `workerSlots`
-   (capacity), not by headcount, so staffing an empty slot never shifts the
-   workers already standing there. Same snapshot → same layout, exactly.
+   south edge of their building's cell. A worker's slot is keyed to its own
+   id (id modulo the slot span, probing upward on collision in id order) —
+   never to its rank in the current roster, which would shift every
+   colleague whenever a lower-id worker joins. Joins and leaves disturb a
+   colleague only on a hash collision. The span is the building's
+   `workerSlots`, stretched to the roster size for grandfathered
+   over-capacity saves (legal after a slot retuning), so every spot stays
+   inside the cell. Same snapshot → same layout, exactly.
 4. **Idle workers** gather at a fixed camp area left of the plots, filling
    deterministic spots by idle rank (worker id order).
 5. The function also reports the grid's `cols`/`rows` and `tileSize`

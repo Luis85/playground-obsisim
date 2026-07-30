@@ -67,8 +67,13 @@ function placeBuildings(snapshot: Snapshot): Map<number, PlacedBuilding> {
 
 /**
  * One spot per assigned worker, along the south edge of the building's cell.
- * Offsets divide the cell by the building's slot capacity, not by headcount,
- * so filling an empty slot never shifts the workers already there (spec §2.3).
+ * A worker's slot is keyed to its own id (id modulo span, probing upward on
+ * collision in id order), NOT to its rank in the current roster — a rank
+ * would shift every colleague whenever a lower-id worker joins. With id-keyed
+ * slots, joins and leaves disturb a colleague only on a hash collision.
+ * The span divides the cell by slot capacity, but stretches for grandfathered
+ * over-capacity rosters (a save from before a slot retuning may legally carry
+ * more workers than workerSlots), so every spot stays inside the cell.
  */
 function assignedSpots(snapshot: Snapshot, cellById: Map<number, PlacedBuilding>): Map<number, Spot> {
   const rosters = new Map<number, WorkerSnapshot[]>();
@@ -82,8 +87,13 @@ function assignedSpots(snapshot: Snapshot, cellById: Map<number, PlacedBuilding>
   for (const b of snapshot.buildings) {
     const cell = cellById.get(b.id)!;
     const mates = rosters.get(b.id) ?? [];
-    for (const [slot, w] of mates.entries()) {
-      spots.set(w.id, { x: cell.col + (slot + 1) / (b.workerSlots + 1), y: cell.row + 0.85 });
+    const span = Math.max(b.workerSlots, mates.length);
+    const taken = new Set<number>();
+    for (const w of mates) {
+      let slot = w.id % span;
+      while (taken.has(slot)) slot = (slot + 1) % span; // roster <= span, so a free slot exists
+      taken.add(slot);
+      spots.set(w.id, { x: cell.col + (slot + 1) / (span + 1), y: cell.row + 0.85 });
     }
   }
   return spots;

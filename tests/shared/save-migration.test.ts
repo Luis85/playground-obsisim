@@ -97,6 +97,31 @@ describe('migrateSaveToLatest (runner)', () => {
     expect(migrateSaveToLatest(v1, guards, [boom], 2)).toBeNull();
   });
 
+  it('rejects a version that has no guard at all', () => {
+    // An unguarded version means UNKNOWN, not "nothing to check". Target 5 with
+    // zero hops reaches both guard lookups, and both find undefined: if absence
+    // were treated as a pass, this object would be RETURNED as a SaveGameV1 that
+    // nothing had validated. The SaveGuards doc states this; nothing pinned it.
+    expect(migrateSaveToLatest({ version: 5, payload: 'x' }, guards, [], 5)).toBeNull();
+  });
+
+  it('treats a throwing SOURCE guard as an unloadable save', () => {
+    // Same reasoning as the throwing step above, at the other extension point:
+    // a guard that blows up on malformed data must degrade to "start fresh",
+    // not escape as a rejection that stops the view from opening at all.
+    const boom: SaveGuards = { 1: () => { throw new TypeError('bad save shape'); } };
+    expect(() => migrateSaveToLatest(v1, boom, [], 1)).not.toThrow();
+    expect(migrateSaveToLatest(v1, boom, [], 1)).toBeNull();
+  });
+
+  it('treats a throwing PER-HOP guard as an unloadable save', () => {
+    // The v2 guard runs inside runSteps, after step 1->2 has already applied,
+    // so this covers a different call site from the source-guard case above.
+    const boom: SaveGuards = { ...guards, 2: () => { throw new TypeError('bad v2 shape'); } };
+    expect(() => migrateSaveToLatest(v1, boom, [stepped(1)], 2)).not.toThrow();
+    expect(migrateSaveToLatest(v1, boom, [stepped(1)], 2)).toBeNull();
+  });
+
   it('refuses a newer save even when the target guard would accept it', () => {
     // A version-agnostic v1 guard. Without the `version > target` check the v3
     // save is returned AS a v1 — a silent downgrade.

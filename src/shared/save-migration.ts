@@ -46,6 +46,26 @@ export function readSaveVersion(data: unknown): number | null {
   return Number.isSafeInteger(version) && (version as number) >= 1 ? (version as number) : null;
 }
 
+/**
+ * Run a version guard, treating a THROW exactly as a rejection. A guard is
+ * hand-written code inspecting old, real save data — the same risk class as a
+ * migration step, and so it gets the same protection for the same reason: an
+ * escaping exception travels migrateSaveToLatest -> prepareLoadedSave ->
+ * loadSave() into GameView.onOpen's catch, where the view fails to open AND the
+ * corrupt-backup/fresh-colony path (spec 7.2) never runs. Protecting the step
+ * but not the guards would leave that hole open at three call sites.
+ *
+ * A MISSING guard (unknown version) is a rejection too — `?? false` keeps that
+ * behaviour identical to the `!guards[v]?.(data)` checks this replaced.
+ */
+function passesGuard(guard: ((data: unknown) => boolean) | undefined, data: unknown): boolean {
+  try {
+    return guard?.(data) ?? false;
+  } catch {
+    return false;
+  }
+}
+
 function runSteps(
   data: unknown,
   from: number,
@@ -84,7 +104,7 @@ function runSteps(
     at = step.to;
     // Validate at EVERY hop, not only at the target: a buggy step is reported
     // where it happened instead of surviving to the end of the chain.
-    if (!guards[at]?.(current)) return null;
+    if (!passesGuard(guards[at], current)) return null;
   }
   return current;
 }
@@ -103,7 +123,7 @@ export function migrateSaveToLatest(
 ): SaveGameV1 | null {
   const version = readSaveVersion(data);
   if (version === null || version > target) return null; // a save from a NEWER build is not downgradable
-  if (!guards[version]?.(data)) return null;             // validate at the version it claims
+  if (!passesGuard(guards[version], data)) return null;  // validate at the version it claims
   const migrated = runSteps(data, version, target, steps, guards);
   // Defence-in-depth, not a live rejector: given the `version > target` early
   // return above, no input reaches this line able to fail it. Zero-hop
@@ -112,6 +132,6 @@ export function migrateSaveToLatest(
   // final hop with guards[at], which at the last hop IS guards[target] on the
   // same value. Kept so a future change to runSteps or to the early-return
   // above doesn't silently stop being caught here.
-  if (migrated === null || !guards[target]?.(migrated)) return null;
+  if (migrated === null || !passesGuard(guards[target], migrated)) return null;
   return migrated as SaveGameV1;
 }

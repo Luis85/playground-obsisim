@@ -123,7 +123,6 @@ Two rules follow:
   penalising the right change. Re-base the floor and note it here; do not pad
   comments to compensate.
 
-
 Getting `complexFunctions` and `criticalComplexity` to 0 required real
 refactoring, not tuning: `CommandSystem`'s run function (cognitive
 complexity 44), `ProductionSystem` and `SnapshotSystem`'s run functions,

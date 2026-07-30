@@ -80,11 +80,13 @@ describe('useGameStore', () => {
     expect(store.lowFood).toBe(false);
     store.ingest(makeSnapshot({ population: 3, stockpile: stockedWith({ wheat: 10 }) }), status);
     expect(store.lowFood).toBe(false); // 10 wheat covers 3 workers once wheat is edible
+    // Two edible resources stocked at once: neither alone covers population 3
+    // (4 < 6), but their sum does (8 >= 6), pinning the getter to a sum
+    // across every edible resource rather than the max of any single one.
+    store.ingest(makeSnapshot({ population: 3, stockpile: stockedWith({ bread: 4, berries: 4 }) }), status);
+    expect(store.lowFood).toBe(false);
   });
 
-  // recruitCooldownRemaining is unrelated to this task, but it shares the
-  // getters block with lowFood, so a quick regression check here is cheap
-  // insurance against an unintended edit to the surrounding code.
   it('computes recruit cooldown remaining', () => {
     const store = useGameStore();
     store.ingest(makeSnapshot({ tick: 10, lastRecruitTick: 0 }), status);

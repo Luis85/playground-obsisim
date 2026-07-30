@@ -18,9 +18,8 @@ interface NoticeEntry {
 // this list, so the cap is also the visible history depth in the UI.
 const MAX_NOTICES = 5;
 
-// Today's edible set (bread + berries), named rather than hardcoded: the
-// getter below sums whatever the catalog marks edible, not this pair. This
-// is today's inline `* 2` given a name — not a behavior change.
+// How many ticks of per-worker consumption the stockpile must cover before
+// lowFood clears; today's inline `* 2` given a name, not a behavior change.
 const LOW_FOOD_TICKS_OF_COVER = 2;
 
 // The single read-model store the whole app layer subscribes to: GameEngine
@@ -82,8 +81,9 @@ export const useGameStore = defineStore('game', {
         // paused), which would otherwise collide as a Vue :key downstream.
         this.recentNotices.unshift({ id: this.nextNoticeId++, tick: snapshot.tick, kind, message });
       }
-      // splice(MAX_NOTICES) trims from the front, keeping the newest 5
-      // regardless of how many notices this one tick's drain produced.
+      // splice(MAX_NOTICES) trims from the tail; the list is newest-first
+      // (unshift above), so this keeps the newest 5 regardless of how many
+      // notices this one tick's drain produced.
       this.recentNotices.splice(MAX_NOTICES);
     },
   },

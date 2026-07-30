@@ -8,10 +8,6 @@ import { useGameStore } from '../../src/app/stores/game-store';
 import { makeSnapshot } from './fixtures';
 import type { BuildingState } from '../../src/shared/snapshot';
 
-// Kept small on purpose: every test below mounts through mountView, so a
-// shared bug in the fixture setup fails every test at once rather than one
-// silently passing on a slightly different snapshot shape.
-
 // A single 1/2-staffed Forester, with the caller choosing the wood stock (to
 // drive the construct-button's affordable/disabled state) and the building's
 // reported state (to drive the humanized-label assertions below).
@@ -56,6 +52,13 @@ describe('BuildingsView', () => {
     const cell = waiting.wrapper.get('td[colspan="6"]');
     expect(cell.text()).toContain('Forester');
     expect(cell.text()).toMatch(/Gatherer.?s Hut/);
+    expect(cell.text()).toContain('10 wood each');
+    expect(cell.text()).toContain('then assign your idle workers with');
+
+    const unstaffed = mountView({}, 'unstaffed');
+    await unstaffed.wrapper.vm.$nextTick();
+    expect(unstaffed.wrapper.text()).toContain('Unstaffed');
+    expect(unstaffed.wrapper.text()).not.toContain('unstaffed');
   });
 
   // Assign/unassign dispatch a plain command object; the store's own success

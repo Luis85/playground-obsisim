@@ -5,8 +5,6 @@ import { useGameStore } from '../stores/game-store';
 
 const engine = inject(ENGINE_KEY)!;
 const store = useGameStore();
-// 1x/2x/4x sim speed; each renders as its own button below, highlighted via
-// is-active when it matches the engine's current speed.
 const speeds = [1, 2, 4] as const;
 
 // Two-step reset in place of window.confirm: a native confirm dialog was one

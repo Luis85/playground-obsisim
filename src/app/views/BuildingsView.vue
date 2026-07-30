@@ -14,10 +14,8 @@ import type { BuildingDefId, CostMap, ResourceId } from '../../shared/content-ty
 const engine = inject(ENGINE_KEY)!;
 const store = useGameStore();
 
-// Shared by both tables: the Buildings table's Batch cell doesn't use this
-// (progressPct is precomputed on the snapshot), but the Construct table's
-// Recipe column and every "Build" cost do, so it lives at the view level
-// rather than duplicated per call site.
+// Used by the Construct table's Cost and Recipe columns (both call sites
+// below), so it lives at the view level rather than duplicated per cell.
 function costLabel(cost: CostMap): string {
   return Object.entries(cost)
     .map(([id, amount]) => `${amount} ${RESOURCES[id as ResourceId].name}`)

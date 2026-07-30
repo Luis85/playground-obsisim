@@ -90,6 +90,40 @@ npm run check:quality -- --update  # scripts/quality-baseline.json
 both locked **empty** (`"files": {}`) — no file in the plan-mandated code
 exceeded 500 nonblank lines, and `styles.css` uses zero `!important`.
 
+### The `maintainability` floor is rounded — do not ratchet it on noise
+
+`fallow` reports `maintainability` to one decimal, and the gate compares the
+**rounded** value. During Increment 1.5 that turned a rounding artifact into a
+false regression, and the sequence is worth knowing before touching this number:
+
+1. Task 1 removed two unused exports, which nudged the true average from 90.545
+   to 90.551. Both render as "90.5" and "90.6", so the gate reported an
+   improvement and the baseline was locked at **90.6**.
+2. A later task deleted several comments that stated falsehoods about the code.
+   The true average moved 90.551 → 90.539 — about a hundredth of a point — and
+   the gate failed with `maintainability: 90.6 -> 90.5`.
+
+Nothing about the code got worse. `fallow`'s MI includes a comment-density
+term, so **deleting a bad comment costs maintainability points** while deleting
+the code it lied about costs none. The floor had also never really been 90.6; it
+was 90.55 rounded up.
+
+The floor was therefore re-based to the measured **90.5** rather than defending
+the artifact by keeping false comments or by reducing complexity in unrelated
+files to buy back a hundredth of a point. Both of those were considered and
+rejected as metric-gaming.
+
+Two rules follow:
+
+- **Do not `--update` this number on a sub-0.1 "improvement".** If the reported
+  value ticks up by one decimal place, check whether the true delta is real
+  before locking it — a lock on rounding noise leaves the next task with zero
+  headroom.
+- **A comment-accuracy pass will trip this gate again.** That is the formula
+  penalising the right change. Re-base the floor and note it here; do not pad
+  comments to compensate.
+
+
 Getting `complexFunctions` and `criticalComplexity` to 0 required real
 refactoring, not tuning: `CommandSystem`'s run function (cognitive
 complexity 44), `ProductionSystem` and `SnapshotSystem`'s run functions,

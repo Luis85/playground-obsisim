@@ -7,9 +7,6 @@ import { BALANCE } from '../../engine/content/balance';
 
 const engine = inject(ENGINE_KEY)!;
 const store = useGameStore();
-// Recruiting has its own 30-tick cooldown, separate from any building-level
-// state; the button disables and the "available in N ticks" hint appears
-// below purely off store.recruitCooldownRemaining.
 
 // A worker's own JobAssignment only carries a buildingId, not the building's
 // name, so this table needs a defId -> name lookup to render the Job column.
@@ -41,10 +38,11 @@ function toolLabel(toolTicks: number): string {
 // starving. Bound to the hunger <td> only (Step 3): efficiency already has
 // its own column, and coloring both would say the same thing twice.
 //
-// No new balance constants, no magic numbers: both thresholds already drive
-// workerEfficiency() in content/balance.ts, so a balance retune (a lower
-// mealThreshold, say) moves this coloring in lockstep with the actual
-// efficiency curve instead of drifting out of sync with it over time.
+// Reuses BALANCE.mealThreshold/hungerMax rather than new literals, so a
+// balance retune can't silently desync this coloring from workerEfficiency()
+// in content/balance.ts. The `>=` here (vs. workerEfficiency's `<=`) is
+// deliberate: the warning fires at hunger === mealThreshold itself, one tick
+// before efficiency actually starts to drop.
 function hungerClass(hunger: number): string {
   if (hunger >= BALANCE.hungerMax) return 'obsisim-negative';
   if (hunger >= BALANCE.mealThreshold) return 'obsisim-warning';

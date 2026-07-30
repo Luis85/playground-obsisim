@@ -3,6 +3,11 @@ import { layoutWorld, TILE } from '../../src/app/world/layout';
 import { makeSnapshot } from './fixtures';
 import type { BuildingSnapshot, WorkerSnapshot } from '../../src/shared/snapshot';
 
+// The layout invariants the world view stands on (spec §2.3): determinism
+// (same snapshot, same layout), stability (nothing already placed ever moves
+// when something new arrives), and containment (everything inside the grid
+// the renderer sizes its ground and camera by).
+
 function building(id: number, overrides: Partial<BuildingSnapshot> = {}): BuildingSnapshot {
   return {
     id, defId: 'farm', workers: 0, workerSlots: 4, state: 'unstaffed',

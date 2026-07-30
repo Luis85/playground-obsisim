@@ -97,9 +97,11 @@ unit-testable. Rules:
    moves nothing. (Demolition does not exist; if it arrives later, ids keep
    plots stable except ranks above the removed one — acceptable, and moot
    once increment 3 makes positions sim-state.)
-3. **Assigned workers** stand in a deterministic arc of per-slot offsets at
-   the south edge of their building's cell, ordered by worker id within the
-   building. Same snapshot → same pixel-identical layout.
+3. **Assigned workers** stand at deterministic per-slot offsets along the
+   south edge of their building's cell, ordered by worker id within the
+   building. Offsets divide the cell by the building's `workerSlots`
+   (capacity), not by headcount, so staffing an empty slot never shifts the
+   workers already standing there. Same snapshot → same layout, exactly.
 4. **Idle workers** gather at a fixed camp area left of the plots, filling
    deterministic spots by idle rank (worker id order).
 5. The function also reports the grid's `cols`/`rows` and `tileSize`

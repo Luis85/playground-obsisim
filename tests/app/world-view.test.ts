@@ -9,6 +9,11 @@ import type { WorldRenderer } from '../../src/app/world/renderer-key';
 import { useGameStore } from '../../src/app/stores/game-store';
 import { makeSnapshot } from './fixtures';
 
+// Everything here runs against a fake WorldRenderer injected through
+// WORLD_RENDERER_KEY — the real Excalibur factory must never be imported by
+// tests (spec §2.5): excalibur touches `window` at module scope and takes
+// seconds to evaluate under happy-dom.
+
 function makeFake() {
   const renderer: WorldRenderer = { sync: vi.fn(), start: vi.fn(), stop: vi.fn(), dispose: vi.fn() };
   const factory = vi.fn((host: HTMLElement) => {

@@ -34,9 +34,13 @@ const BUILDING_GLYPH: Record<BuildingDefId, string> = {
 };
 
 function mixHex(from: string, to: string, t: number): string {
-  const channel = (hex: string, i: number) => parseInt(hex.slice(1 + 2 * i, 3 + 2 * i), 16);
-  const lerp = (i: number) => Math.round(channel(from, i) + (channel(to, i) - channel(from, i)) * t);
-  return `#${[0, 1, 2].map((i) => lerp(i).toString(16).padStart(2, '0')).join('')}`;
+  let mixed = '#';
+  for (let i = 1; i < 7; i += 2) {
+    const a = parseInt(from.slice(i, i + 2), 16);
+    const b = parseInt(to.slice(i, i + 2), 16);
+    mixed += Math.round(a + (b - a) * t).toString(16).padStart(2, '0');
+  }
+  return mixed;
 }
 
 const WORKER_BUCKETS = 5;

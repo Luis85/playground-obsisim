@@ -2,6 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { efficiencyBucket, resolveWorldTheme } from '../../src/app/world/theme';
 import { BUILDING_IDS } from '../../src/engine/content/buildings';
 
+// The theme contract the renderer relies on: every color it forwards to
+// ex.Color.fromHex must be a 6-digit hex, whatever the vault's CSS variables
+// contain (themes are free to use hsl()/rgb()/garbage — those must fall back,
+// never pass through). The reader function is injected, so these tests never
+// need a DOM.
+
 const HEX = /^#[0-9a-f]{6}$/i;
 const none = () => '';
 
@@ -18,12 +24,10 @@ describe('resolveWorldTheme', () => {
     expect(garbage.stateRing.producing).toBe(missing.stateRing.producing);
   });
 
-  it('defines a fill and a glyph for every building def', () => {
+  it.each(BUILDING_IDS)('defines a fill and a glyph for %s', (id) => {
     const theme = resolveWorldTheme(none);
-    for (const id of BUILDING_IDS) {
-      expect(theme.buildingFill[id]).toMatch(HEX);
-      expect(theme.buildingGlyph[id].length).toBeGreaterThan(0);
-    }
+    expect(theme.buildingFill[id]).toMatch(HEX);
+    expect(theme.buildingGlyph[id].length).toBeGreaterThan(0);
   });
 
   it('defines a ring color for every building state and every worker bucket', () => {

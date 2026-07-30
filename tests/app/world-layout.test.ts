@@ -4,9 +4,10 @@ import { makeSnapshot } from './fixtures';
 import type { BuildingSnapshot, WorkerSnapshot } from '../../src/shared/snapshot';
 
 // The layout invariants the world view stands on (spec §2.3): determinism
-// (same snapshot, same layout), stability (nothing already placed ever moves
-// when something new arrives), and containment (everything inside the grid
-// the renderer sizes its ground and camera by).
+// (same snapshot, same layout), stability across snapshots (a worker whose
+// post is unchanged never moves — layoutWorld's `previous` carries the slot
+// memory), and containment (everything inside the grid the renderer sizes
+// its ground and camera by).
 
 function building(id: number, overrides: Partial<BuildingSnapshot> = {}): BuildingSnapshot {
   return {
@@ -20,6 +21,14 @@ function worker(id: number, overrides: Partial<WorkerSnapshot> = {}): WorkerSnap
   return { id, hunger: 0, efficiency: 1, buildingId: null, toolTicks: 0, ...overrides };
 }
 
+/** Every worker present in both layouts and unmoved — the stability check. */
+function unmoved(before: ReturnType<typeof layoutWorld>, after: ReturnType<typeof layoutWorld>, ids: number[]) {
+  for (const id of ids) {
+    const was = before.workers.find((w) => w.id === id)!;
+    expect(after.workers.find((w) => w.id === id)).toMatchObject({ x: was.x, y: was.y });
+  }
+}
+
 describe('layoutWorld', () => {
   it('is deterministic: same snapshot -> deep-equal layout', () => {
     const snapshot = makeSnapshot({
@@ -27,6 +36,15 @@ describe('layoutWorld', () => {
       workers: [worker(2, { buildingId: 1 }), worker(3)],
     });
     expect(layoutWorld(snapshot)).toEqual(layoutWorld(snapshot));
+  });
+
+  it('is a fixpoint: relayout with itself as previous changes nothing', () => {
+    const snapshot = makeSnapshot({
+      buildings: [building(1, { workers: 1 })],
+      workers: [worker(2, { buildingId: 1 }), worker(3)],
+    });
+    const fresh = layoutWorld(snapshot);
+    expect(layoutWorld(snapshot, fresh)).toEqual(fresh);
   });
 
   it('places buildings on distinct plots in id order, row-major', () => {
@@ -50,7 +68,7 @@ describe('layoutWorld', () => {
     }
   });
 
-  it('clusters assigned workers inside their building cell, by slot capacity', () => {
+  it('clusters assigned workers inside their building cell', () => {
     const snapshot = makeSnapshot({
       buildings: [building(1, { workerSlots: 4, workers: 2 })],
       workers: [worker(10, { buildingId: 1 }), worker(11, { buildingId: 1 })],
@@ -67,56 +85,75 @@ describe('layoutWorld', () => {
   });
 
   it('staffing another slot never moves the workers already there', () => {
-    const two = makeSnapshot({
+    const before = layoutWorld(makeSnapshot({
       buildings: [building(1, { workerSlots: 4, workers: 2 })],
       workers: [worker(10, { buildingId: 1 }), worker(11, { buildingId: 1 })],
-    });
-    const three = makeSnapshot({
+    }));
+    const after = layoutWorld(makeSnapshot({
       buildings: [building(1, { workerSlots: 4, workers: 3 })],
       workers: [worker(10, { buildingId: 1 }), worker(11, { buildingId: 1 }), worker(12, { buildingId: 1 })],
-    });
-    const before = layoutWorld(two).workers;
-    const after = layoutWorld(three).workers;
-    for (const w of before) {
-      expect(after.find((a) => a.id === w.id)).toMatchObject({ x: w.x, y: w.y });
-    }
+    }), before);
+    unmoved(before, after, [10, 11]);
+  });
+
+  it('an arrival colliding with a held slot takes a free one instead (review round 4)', () => {
+    // 5 and 9 both hash to slot 1 at a 4-slot building; 9 probes to 2. When 1
+    // arrives (hashing to 1 as well), the holders stand still and 1 must end
+    // up somewhere distinct — never stacked on a parked colleague.
+    const before = layoutWorld(makeSnapshot({
+      buildings: [building(2, { workerSlots: 4, workers: 2 })],
+      workers: [worker(5, { buildingId: 2 }), worker(9, { buildingId: 2 })],
+    }));
+    const after = layoutWorld(makeSnapshot({
+      buildings: [building(2, { workerSlots: 4, workers: 3 })],
+      workers: [worker(1, { buildingId: 2 }), worker(5, { buildingId: 2 }), worker(9, { buildingId: 2 })],
+    }), before);
+    unmoved(before, after, [5, 9]);
+    const spots = after.workers.map((w) => `${w.x},${w.y}`);
+    expect(new Set(spots).size).toBe(3);
   });
 
   it('a lower-id worker joining leaves the existing crew in place', () => {
-    // e.g. worker 9 unassigned elsewhere and reassigned here: slots are keyed
-    // to worker ids, not roster ranks, so 10 and 11 must not budge
-    const crew = makeSnapshot({
+    const before = layoutWorld(makeSnapshot({
       buildings: [building(1, { workerSlots: 4, workers: 2 })],
       workers: [worker(10, { buildingId: 1 }), worker(11, { buildingId: 1 })],
-    });
-    const joined = makeSnapshot({
+    }));
+    const after = layoutWorld(makeSnapshot({
       buildings: [building(1, { workerSlots: 4, workers: 3 })],
       workers: [worker(9, { buildingId: 1 }), worker(10, { buildingId: 1 }), worker(11, { buildingId: 1 })],
-    });
-    const before = layoutWorld(crew).workers;
-    const after = layoutWorld(joined).workers;
-    for (const w of before) {
-      expect(after.find((a) => a.id === w.id)).toMatchObject({ x: w.x, y: w.y });
-    }
+    }), before);
+    unmoved(before, after, [10, 11]);
   });
 
-  it('keeps grandfathered over-capacity rosters inside their building cell', () => {
+  it('keeps grandfathered over-capacity rosters inside their cell, on distinct spots', () => {
     // a save from before a slot retuning may legally carry more workers than
-    // workerSlots (see the save-guard grandfathering) — nobody may spill into
-    // the gutter or a neighboring plot
-    const snapshot = makeSnapshot({
+    // workerSlots — extra slots wrap into a second row inside the cell
+    const layout = layoutWorld(makeSnapshot({
       buildings: [building(1, { workerSlots: 2, workers: 3 })],
       workers: [worker(10, { buildingId: 1 }), worker(11, { buildingId: 1 }), worker(12, { buildingId: 1 })],
-    });
-    const layout = layoutWorld(snapshot);
+    }));
     const cell = layout.buildings[0];
-    const spots = new Set<number>();
+    const spots = new Set<string>();
     for (const w of layout.workers) {
       expect(w.x).toBeGreaterThan(cell.col);
       expect(w.x).toBeLessThan(cell.col + 1);
-      spots.add(w.x);
+      expect(w.y).toBeGreaterThan(cell.row);
+      expect(w.y).toBeLessThan(cell.row + 1);
+      spots.add(`${w.x},${w.y}`);
     }
     expect(spots.size).toBe(3);
+  });
+
+  it('shrinking an over-capacity roster leaves the remaining crew in place (review round 3)', () => {
+    const overCapacity = layoutWorld(makeSnapshot({
+      buildings: [building(1, { workerSlots: 2, workers: 3 })],
+      workers: [worker(1, { buildingId: 1 }), worker(2, { buildingId: 1 }), worker(3, { buildingId: 1 })],
+    }));
+    const shrunk = layoutWorld(makeSnapshot({
+      buildings: [building(1, { workerSlots: 2, workers: 2 })],
+      workers: [worker(1, { buildingId: 1 }), worker(2, { buildingId: 1 }), worker(3)],
+    }), overCapacity);
+    unmoved(overCapacity, shrunk, [1, 2]);
   });
 
   it('parks idle workers at the camp, left of the plots', () => {
@@ -137,12 +174,19 @@ describe('layoutWorld', () => {
     expect(layout.camp.y).toBeLessThan(layout.rows);
   });
 
+  it('crossing the camp baseline leaves existing campers in place (review round 3)', () => {
+    const six = [3, 7, 12, 15, 21, 26].map((id) => worker(id));
+    const before = layoutWorld(makeSnapshot({ workers: six }));
+    const after = layoutWorld(makeSnapshot({ workers: [...six, worker(30)] }), before);
+    unmoved(before, after, [3, 7, 12, 15, 21, 26]);
+    const spots = after.workers.map((w) => `${w.x},${w.y}`);
+    expect(new Set(spots).size).toBe(7);
+  });
+
   it('a worker going idle leaves the existing campers in place', () => {
-    const before = layoutWorld(makeSnapshot({ workers: [worker(10), worker(11)] })).workers;
-    const after = layoutWorld(makeSnapshot({ workers: [worker(9), worker(10), worker(11)] })).workers;
-    for (const w of before) {
-      expect(after.find((a) => a.id === w.id)).toMatchObject({ x: w.x, y: w.y });
-    }
+    const before = layoutWorld(makeSnapshot({ workers: [worker(10), worker(11)] }));
+    const after = layoutWorld(makeSnapshot({ workers: [worker(9), worker(10), worker(11)] }), before);
+    unmoved(before, after, [10, 11]);
   });
 
   it('carries state, progress, efficiency and tool coverage through', () => {
@@ -168,11 +212,10 @@ describe('layoutWorld', () => {
   });
 
   it('keeps every placement inside the reported grid', () => {
-    const snapshot = makeSnapshot({
+    const layout = layoutWorld(makeSnapshot({
       buildings: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((id) => building(id)),
       workers: [10, 11, 12, 13, 14, 15, 16, 17].map((id) => worker(id)),
-    });
-    const layout = layoutWorld(snapshot);
+    }));
     for (const b of layout.buildings) {
       expect(b.col).toBeGreaterThanOrEqual(0);
       expect(b.col).toBeLessThan(layout.cols);

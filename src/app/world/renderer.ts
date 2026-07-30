@@ -20,7 +20,7 @@ const BAR_HEIGHT = 5;
 // Draw order, back to front: ground tilemap (default z 0), building tiles and
 // the camp tent (z 1), progress bars (z 2), workers on top of everything (z 3).
 interface BuildingBundle { root: Actor; bar: Actor; track: Actor; }
-interface WorkerBundle { actor: Actor; at: number | null; }
+interface WorkerBundle { actor: Actor; target: Vector; }
 
 /**
  * Building and worker looks are shared, lazily-built graphics: seven defs x
@@ -188,29 +188,27 @@ class WorldScene {
 
   private upsertWorker(w: PlacedWorker): void {
     const target = vec(w.x * TILE, w.y * TILE);
-    const bundle = this.workers.get(w.id) ?? this.spawnWorker(w, target);
+    const bundle = this.workers.get(w.id) ?? this.spawnWorker(w.id, target);
     bundle.actor.graphics.use(this.cache.worker(efficiencyBucket(w.efficiency), w.tooled));
-    this.walkWorker(bundle, w, target);
+    this.walkWorker(bundle, target);
   }
 
   /** New workers appear in place — only reassignments walk (spec §2.4). */
-  private spawnWorker(w: PlacedWorker, target: Vector): WorkerBundle {
+  private spawnWorker(id: number, target: Vector): WorkerBundle {
     const actor = new Actor({ pos: target, z: 3 });
     this.engine.currentScene.add(actor);
-    const bundle = { actor, at: w.at };
-    this.workers.set(w.id, bundle);
+    const bundle = { actor, target };
+    this.workers.set(id, bundle);
     return bundle;
   }
 
   /**
-   * Posts are sticky: while a worker's `at` (building or camp) is unchanged
-   * it keeps the spot it stands on, even when the layout's slot math shifted
-   * under it (a span stretching or shrinking as colleagues come and go).
-   * Only a real reassignment walks the worker, to its newly computed spot.
+   * The layout allocates slots with memory (layoutWorld's `previous`), so a
+   * target only ever changes on a real reassignment — following it is safe.
    */
-  private walkWorker(bundle: WorkerBundle, w: PlacedWorker, target: Vector): void {
-    if (bundle.at === w.at) return;
-    bundle.at = w.at;
+  private walkWorker(bundle: WorkerBundle, target: Vector): void {
+    if (bundle.target.equals(target)) return;
+    bundle.target = target;
     bundle.actor.actions.clearActions();
     bundle.actor.actions.moveTo(target, WORKER_SPEED);
   }
@@ -251,12 +249,15 @@ export const createExcaliburWorldRenderer: WorldRendererFactory = (host) => {
   observer.observe(host);
   let running = true;
   let disposed = false;
+  // fed back into layoutWorld so slot allocation remembers who stands where
+  let last: WorldLayout | undefined;
   void engine.start();
 
   return {
     sync(snapshot) {
       if (disposed) return;
-      scene.sync(layoutWorld(snapshot));
+      last = layoutWorld(snapshot, last);
+      scene.sync(last);
     },
     start() {
       if (disposed || running) return;

@@ -35,21 +35,25 @@ applied the fixes below in the same PR.
 - The plan document is left as authored; as-built deviations are recorded in
   its Execution Notes.
 
-## Addendum (same pass, after Codex round 3)
+## Addendum (same pass, after Codex rounds 3 and 4)
 
 The span-stretch residual first listed as accepted (span changes reshuffling
 workers whose assignments did not change) was correctly re-flagged by review:
-crossing the camp's baseline capacity is an ordinary state, not an edge. It
-is now closed one level up, where state actually lives: the layout reports
-each worker's post (`PlacedWorker.at`), and the scene keeps a worker parked
-while its post is unchanged (`walkWorker` compares posts, not coordinates).
-Pure slot math cannot be transition-stable — a pure function of the current
-set has no memory of the previous one — so the id-keyed hash's job is
-reduced to deterministic, collision-poor *fresh* layouts, and live stability
-is a renderer guarantee. Accepted residual of the sticky scheme: after a
-span change, a *newly arriving* worker computes its spot under the new span
-and can land near a parked bystander (dots may briefly overlap); it
-self-heals on the next reassignment and misleads nobody.
+crossing the camp's baseline capacity is an ordinary state, not an edge. A
+first fix made the *scene* sticky (park while the post is unchanged), but
+round 4 found its flaw — a memoryless layout can hand an arrival a slot a
+parked bystander already occupies, stacking two actors permanently.
+
+Root cause, both rounds: allocation had no memory while the display did.
+Final design inverts that — the memory lives in the layout, explicitly:
+`layoutWorld(snapshot, previous?)` keeps every same-post worker on the exact
+slot it held and allocates newcomers only into free slots; positions are
+pure functions of (post, slot), never of roster size (over-capacity slots
+wrap into a second row inside the cell). The renderer is memoryless again
+and simply follows targets, feeding each layout back as the next
+`previous`. All three review scenarios are named regression tests
+(arrival-collision, over-capacity shrink, camp-baseline crossing), plus a
+fixpoint test (`layoutWorld(s, layoutWorld(s)) === layoutWorld(s)`).
 
 ## Verification
 

@@ -107,12 +107,15 @@ unit-testable. Rules:
 4. **Idle workers** gather at a fixed camp area left of the plots, marked by
    a tent, on the same id-keyed slot scheme (span stretches past the camp's
    baseline capacity when needed).
-5. **No-cause walking is ruled out by the renderer, not by slot math.** The
-   layout reports each worker's post (`at`: building id, or null for the
-   camp), and the scene keeps a worker parked while its post is unchanged —
-   so span changes and hash collisions never walk bystanders; only a real
-   reassignment moves a worker. The id-keyed slots exist to make fresh
-   layouts (view open, save load) deterministic and collision-poor.
+5. **Slot allocation has explicit memory.** `layoutWorld(snapshot,
+   previous?)` — a worker still at the same post keeps the exact slot it
+   held in the previous layout; only newcomers allocate, into *free* slots
+   (id-keyed hash, probing). Positions are pure functions of (post, slot) —
+   never of roster size — so bystanders stand still through any arrival,
+   departure, or span change, and an arrival can never stack onto a held
+   spot. The renderer feeds each layout back as the next call's `previous`;
+   without one (view open, save load) allocation is a deterministic fresh
+   hash.
 6. The function also reports the grid's `cols`/`rows` and `tileSize`
    (48 px) so the renderer can size the ground and fit the camera.
 

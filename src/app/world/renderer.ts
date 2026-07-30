@@ -94,18 +94,26 @@ class WorldScene {
   private buildings = new Map<number, BuildingBundle>();
   private workers = new Map<number, WorkerBundle>();
   private cache: GraphicCache;
+  private lastLayout: WorldLayout | null = null;
 
   constructor(private engine: Engine, private theme: WorldTheme) {
     this.cache = new GraphicCache(theme);
   }
 
   sync(layout: WorldLayout): void {
+    this.lastLayout = layout;
     this.syncGround(layout);
     for (const b of layout.buildings) this.upsertBuilding(b);
     for (const w of layout.workers) this.upsertWorker(w);
     this.prune(this.buildings, layout.buildings, (bundle) => bundle.root.kill());
     this.prune(this.workers, layout.workers, (bundle) => bundle.actor.kill());
     this.fitCamera(layout);
+  }
+
+  /** Re-frame after a pane resize — no snapshot arrives for that, and while
+   * the sim is paused none ever would (review finding on PR #4). */
+  refit(): void {
+    if (this.lastLayout) this.fitCamera(this.lastLayout);
   }
 
   /** Kill and forget every actor whose entity left the snapshot. */
@@ -213,6 +221,11 @@ export const createExcaliburWorldRenderer: WorldRendererFactory = (host) => {
     suppressPlayButton: true,
   });
   const scene = new WorldScene(engine, theme);
+  // FillContainer tracks the host's size, but only the camera fit knows the
+  // grid — refit on pane resizes, which emit no snapshots (none at all while
+  // the sim is paused).
+  const observer = new ResizeObserver(() => scene.refit());
+  observer.observe(host);
   let running = true;
   let disposed = false;
   void engine.start();
@@ -235,6 +248,7 @@ export const createExcaliburWorldRenderer: WorldRendererFactory = (host) => {
     dispose() {
       if (disposed) return;
       disposed = true;
+      observer.disconnect();
       engine.stop();
       engine.dispose();
     },

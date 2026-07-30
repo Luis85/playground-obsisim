@@ -1,0 +1,102 @@
+import type { SaveGameV1 } from './save';
+import { isSaveGameV1, LATEST_SAVE_VERSION } from './save';
+
+/**
+ * One structural upgrade between ADJACENT save versions. Migrations know
+ * shapes, never content: no catalog, no BALANCE, no clamping (load-time
+ * clamping stays in spawnWorker/spawnBuilding, per spec 4.5). That is what
+ * lets this file live in src/shared/, which may import nothing else.
+ */
+export interface MigrationStep {
+  from: number;
+  to: number;
+  migrate: (save: unknown) => unknown;
+}
+
+/** Structural guard per known version. A version with no guard is unknown. */
+export type SaveGuards = Record<number, (data: unknown) => boolean>;
+
+const SAVE_GUARDS: SaveGuards = { 1: isSaveGameV1 };
+
+/**
+ * Empty by design: v1 IS the latest version. The first entry lands with v2
+ * (increment 2 adds save fields), and the runner below already has tests.
+ *
+ * Deliberately NOT exported, along with SAVE_GUARDS: both are the registration
+ * tables this module owns, edited in place when a version lands. Tests inject
+ * their own fakes through migrateSaveToLatest's parameters instead of importing
+ * these, so exporting them would add public surface with no consumer — and a
+ * fallow ignoreExports entry to excuse it.
+ */
+const SAVE_MIGRATIONS: readonly MigrationStep[] = [];
+
+export function readSaveVersion(data: unknown): number | null {
+  if (typeof data !== 'object' || data === null) return null;
+  const { version } = data as { version?: unknown };
+  return Number.isSafeInteger(version) && (version as number) >= 1 ? (version as number) : null;
+}
+
+function runSteps(
+  data: unknown,
+  from: number,
+  target: number,
+  steps: readonly MigrationStep[],
+  guards: SaveGuards,
+): unknown | null {
+  let current = data;
+  let at = from;
+  while (at < target) {
+    // filter, not find: two steps sharing a `from` is a configuration mistake
+    // whose outcome would otherwise depend on array order, and both variants
+    // can emit guard-valid output with different defaults, so no guard can
+    // catch "the wrong migration ran". Ambiguity is refused, not resolved.
+    const candidates = steps.filter((candidate) => candidate.from === at);
+    if (candidates.length !== 1) return null;
+    const [step] = candidates;
+    // Adjacency is MACHINE-CHECKED, not just documented: a step declaring
+    // { from: 1, to: 3 } would otherwise be applied and land on a passing v3
+    // guard while v2's transformation never ran and v2's guard never checked.
+    // A combined multi-version step is a configuration mistake, so refuse it
+    // rather than silently skipping transformations.
+    if (step.to !== at + 1) return null;
+    // A THROWING step is an unloadable save, not a crash. Without this catch the
+    // exception escapes migrateSaveToLatest -> prepareLoadedSave -> loadSave(),
+    // whose rejection lands in GameView.onOpen's catch: the view fails to open
+    // AND the corrupt-backup/fresh-colony path (spec 7.2) never runs, so the
+    // player is left with a save that cannot load and a plugin that will not
+    // start. Migrations are hand-written code touching old, real save data — a
+    // faulty one must degrade to "start fresh", never to "cannot open".
+    try {
+      current = step.migrate(current);
+    } catch {
+      return null;
+    }
+    at = step.to;
+    // Validate at EVERY hop, not only at the target: a buggy step is reported
+    // where it happened instead of surviving to the end of the chain.
+    if (!guards[at]?.(current)) return null;
+  }
+  return current;
+}
+
+/**
+ * Migrate any known save version up to the latest, or return null so the
+ * caller takes the corrupt-backup path (spec 7.2). The guards/steps/target
+ * parameters are injectable so the runner itself is testable while the real
+ * chain is empty; production callers pass none.
+ */
+export function migrateSaveToLatest(
+  data: unknown,
+  guards: SaveGuards = SAVE_GUARDS,
+  steps: readonly MigrationStep[] = SAVE_MIGRATIONS,
+  target: number = LATEST_SAVE_VERSION,
+): SaveGameV1 | null {
+  const version = readSaveVersion(data);
+  if (version === null || version > target) return null; // a save from a NEWER build is not downgradable
+  if (!guards[version]?.(data)) return null;             // validate at the version it claims
+  const migrated = runSteps(data, version, target, steps, guards);
+  // runSteps already guarded every hop it took; this re-check is what covers
+  // the zero-hop case (version === target), where no hop guard ran.
+  if (migrated === null || !guards[target]?.(migrated)) return null;
+  return migrated as SaveGameV1;
+}

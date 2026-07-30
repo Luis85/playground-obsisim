@@ -22,6 +22,13 @@ export const MAX_SAVED_ENTITIES = 10_000;
  */
 export const MAX_SAVED_COUNTER = Number.MAX_SAFE_INTEGER - 2 ** 32;
 
+/**
+ * The version `serialize()` writes. Bump this together with adding a
+ * MigrationStep to SAVE_MIGRATIONS and a guard to SAVE_GUARDS — the migration
+ * runner refuses a chain that cannot reach this version from a save's own.
+ */
+export const LATEST_SAVE_VERSION = 1;
+
 export interface SavedBuilding {
   id: number;
   defId: BuildingDefId;

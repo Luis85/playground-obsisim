@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { BALANCE } from '../../src/engine/content/balance';
 import { Hunger, JobAssignment, ToolCoverage, Worker } from '../../src/engine/components';
 import { IdCounter, SimClock, SnapshotStore, Stockpile } from '../../src/engine/resources';
-import { buildColonyPrepWorld, createColonyWorld, getPrepResource, initialSave, isLoadableSave } from '../../src/engine/world';
+import { buildColonyPrepWorld, createColonyWorld, getPrepResource, initialSave, isLoadableSave, prepareLoadedSave } from '../../src/engine/world';
 import { MAX_SAVED_ENTITIES } from '../../src/shared/save';
 
 describe('initialSave', () => {
@@ -329,5 +329,29 @@ describe('createColonyWorld', () => {
     expect(snapshot.stockpile.wood.stock).toBe(30);
     expect(snapshot.colonyWealth).toBe(50); // 30 wood@1 + 20 berries@1
     expect(snapshot.notices).toEqual([]);
+  });
+});
+
+describe('prepareLoadedSave', () => {
+  it('accepts a v1 save and returns it unchanged', () => {
+    const save = initialSave();
+    expect(prepareLoadedSave(save)).toEqual(save);
+  });
+
+  it('still applies the catalog checks after migration', () => {
+    const save = initialSave();
+    save.buildings = [{ id: 99, defId: 'notABuilding' as never, progress: 0, batchActive: false }];
+    save.nextEntityId = 100;
+    expect(prepareLoadedSave(save)).toBeNull();
+  });
+
+  it('rejects a version this build does not know', () => {
+    expect(prepareLoadedSave({ ...initialSave(), version: 2 })).toBeNull();
+    expect(prepareLoadedSave({ ...initialSave(), version: 99 })).toBeNull();
+  });
+
+  it('rejects a missing or non-object save', () => {
+    expect(prepareLoadedSave(undefined)).toBeNull();
+    expect(prepareLoadedSave('nope')).toBeNull();
   });
 });

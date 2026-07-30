@@ -1,6 +1,6 @@
 import { Notice, Plugin } from 'obsidian';
 import type { SaveGameV1 } from './shared/save';
-import { isLoadableSave } from './engine/world';
+import { prepareLoadedSave } from './engine/world';
 import { GameView, VIEW_TYPE_OBSISIM } from './view/game-view';
 
 interface PluginData {
@@ -76,7 +76,11 @@ export default class ObsiSimPlugin extends Plugin {
     await this.saveQueue;
     const data = ((await this.loadData()) as PluginData | null) ?? {};
     if (isMissingSave(data)) return null;
-    if (isLoadableSave(data.save)) return data.save; // catalog-aware guard, not bare isSaveGameV1
+    // migrate-then-validate, not a bare guard: a save from an older schema is
+    // upgraded before the catalog checks run, so bumping the save version never
+    // routes live saves to the backup path
+    const save = prepareLoadedSave(data.save);
+    if (save !== null) return save;
     await this.backupCorruptSave();
     return null;
   }

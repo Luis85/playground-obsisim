@@ -1,6 +1,7 @@
 import { buildWorld } from 'sim-ecs';
 import type { IEntity, IPreptimeWorld, IRuntimeWorld } from 'sim-ecs';
 import { isSaveGameV1, MAX_SAVED_COUNTER } from '../shared/save';
+import { migrateSaveToLatest } from '../shared/save-migration';
 import type { SaveGameV1, SavedBuilding } from '../shared/save';
 import type { ResourceId } from '../shared/content-types';
 import type { ResourceStats, Snapshot } from '../shared/snapshot';
@@ -189,6 +190,18 @@ export function isLoadableSave(data: unknown): data is SaveGameV1 {
   if (!isBuildingsValid(data.buildings)) return false;
   if (!isIdsValid(data)) return false;
   return isWorkersValid(data);
+}
+
+/**
+ * The Obsidian shell's load entry point: migrate a save of any known version up
+ * to the latest, then apply the catalog-aware checks. Returns null for anything
+ * unloadable, which the shell turns into the corrupt-save backup path (spec
+ * 7.2). Kept here rather than in src/shared/ because isLoadableSave needs the
+ * content catalog, while the migration chain is pure structure.
+ */
+export function prepareLoadedSave(data: unknown): SaveGameV1 | null {
+  const migrated = migrateSaveToLatest(data);
+  return migrated !== null && isLoadableSave(migrated) ? migrated : null;
 }
 
 export function spawnBuilding(

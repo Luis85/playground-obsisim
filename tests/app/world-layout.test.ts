@@ -125,11 +125,34 @@ describe('layoutWorld', () => {
     unmoved(before, after, [10, 11]);
   });
 
-  it('keeps grandfathered over-capacity rosters inside their cell, on distinct spots', () => {
+  it('spaces grandfathered over-capacity rosters inside their cell by dot diameter', () => {
     // a save from before a slot retuning may legally carry more workers than
-    // workerSlots — overflow slots take an in-cell shelf on unique positions,
-    // even for extreme rosters (review round 5: 11 workers at a 2-slot def)
+    // workerSlots — overflow fills diameter-spaced shelf rows (review rounds
+    // 5 and 8: 11 workers at a 2-slot def must all be visible and hoverable)
     const crew = Array.from({ length: 11 }, (_, i) => worker(10 + i, { buildingId: 1 }));
+    const layout = layoutWorld(makeSnapshot({
+      buildings: [building(1, { workerSlots: 2, workers: crew.length })],
+      workers: crew,
+    }));
+    const cell = layout.buildings[0];
+    for (const w of layout.workers) {
+      expect(w.x).toBeGreaterThan(cell.col);
+      expect(w.x).toBeLessThan(cell.col + 1);
+      expect(w.y).toBeGreaterThan(cell.row);
+      expect(w.y).toBeLessThan(cell.row + 1);
+    }
+    // pairwise center distance >= 0.2 tiles (~10 px): individually pickable
+    for (const a of layout.workers) {
+      for (const b of layout.workers) {
+        if (a.id >= b.id) continue;
+        const distance = Math.hypot(a.x - b.x, a.y - b.y);
+        expect(distance, `workers ${a.id}/${b.id} too close`).toBeGreaterThanOrEqual(0.2);
+      }
+    }
+  });
+
+  it('contains even pathological rosters far past capacity, on distinct spots', () => {
+    const crew = Array.from({ length: 20 }, (_, i) => worker(10 + i, { buildingId: 1 }));
     const layout = layoutWorld(makeSnapshot({
       buildings: [building(1, { workerSlots: 2, workers: crew.length })],
       workers: crew,

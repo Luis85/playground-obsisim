@@ -137,15 +137,24 @@ function vanDerCorput(n: number): number {
 /**
  * Position is a pure function of (cell, capacity, slot) — never roster size,
  * which would move colleagues when staffing changes. Regular slots line the
- * cell's south edge; overflow slots (grandfathered over-capacity saves,
- * legal after a slot retuning) take a shelf above it on a low-discrepancy
- * sequence: unique x per slot, so no accepted roster ever stacks actors.
+ * cell's south edge. Overflow slots (grandfathered over-capacity saves,
+ * legal after a slot retuning) fill a 3-wide grid of shelf rows spaced for
+ * the rendered dot diameter, so up to nine extra workers stay individually
+ * visible and hoverable. Rosters even further past capacity fall back to
+ * unique low-discrepancy spots on their own band: still contained and
+ * distinct, though no longer diameter-spaced — a 48 px cell cannot hold a
+ * dozen 14 px dots without contact. Every band has its own y, so no two
+ * slots ever share a position.
  */
 function buildingSpot(cell: PlacedBuilding, capacity: number, slot: number): Spot {
   if (slot < capacity) {
     return { x: cell.col + (slot + 1) / (capacity + 1), y: cell.row + 0.85 };
   }
-  return { x: cell.col + 0.12 + 0.76 * vanDerCorput(slot - capacity + 1), y: cell.row + 0.35 };
+  const k = slot - capacity;
+  if (k < 9) {
+    return { x: cell.col + 0.25 + 0.25 * (k % 3), y: cell.row + 0.58 - 0.22 * Math.floor(k / 3) };
+  }
+  return { x: cell.col + 0.1 + 0.8 * vanDerCorput(k - 8), y: cell.row + 0.47 };
 }
 
 export interface WorldPick {

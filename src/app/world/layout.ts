@@ -153,8 +153,6 @@ export interface WorldPick {
   id: number;
 }
 
-const PICK_WORKER_RADIUS = 0.22;
-
 /** Tooltip lines for a picked entity, from the current snapshot. */
 export function describePick(snapshot: Snapshot, pick: WorldPick): string[] {
   if (pick.kind === 'building') {
@@ -175,15 +173,13 @@ export function describePick(snapshot: Snapshot, pick: WorldPick): string[] {
   ];
 }
 
-/** Hit-test in tile space: workers first (drawn on top, nearest wins), then
- * the building tile under the cursor. */
-export function pickAt(layout: WorldLayout, x: number, y: number): WorldPick | null {
-  let best: { id: number; d2: number } | null = null;
-  for (const w of layout.workers) {
-    const d2 = (w.x - x) ** 2 + (w.y - y) ** 2;
-    if (d2 <= PICK_WORKER_RADIUS ** 2 && (best === null || d2 < best.d2)) best = { id: w.id, d2 };
-  }
-  if (best) return { kind: 'worker', id: best.id };
+/**
+ * Hit-test the building visual (1.5-tile square on the cell center) under a
+ * tile-space point. Buildings never move, so the layout is their truth —
+ * workers walk, so the renderer hit-tests them against live actor positions
+ * before falling back to this.
+ */
+export function pickBuildingAt(layout: WorldLayout, x: number, y: number): WorldPick | null {
   for (const b of layout.buildings) {
     if (Math.abs(x - (b.col + 0.5)) <= 0.75 && Math.abs(y - (b.row + 0.5)) <= 0.75) {
       return { kind: 'building', id: b.id };

@@ -3,7 +3,10 @@ import {
   Rectangle, Text, TextAlign, TileMap, vec, type Vector,
 } from 'excalibur';
 import type { WorldRendererFactory } from './renderer-key';
-import { layoutWorld, pickAt, TILE, type PlacedBuilding, type PlacedWorker, type WorldLayout } from './layout';
+import {
+  layoutWorld, pickBuildingAt, TILE,
+  type PlacedBuilding, type PlacedWorker, type WorldLayout, type WorldPick,
+} from './layout';
 import { efficiencyBucket, resolveWorldTheme, type WorldTheme } from './theme';
 
 // The Excalibur end of the renderer seam: the only module that imports
@@ -15,6 +18,7 @@ import { efficiencyBucket, resolveWorldTheme, type WorldTheme } from './theme';
 // pick() through the live camera, and clean dispose.
 
 const WORKER_RADIUS = 7;
+const WORKER_PICK_RADIUS = WORKER_RADIUS + 4; // px of hover slack around a dot
 const WORKER_SPEED = 90; // px/s walk speed toward a new post
 const BUILDING_SIZE = TILE * 1.5;
 const BAR_WIDTH = TILE * 1.2;
@@ -119,6 +123,24 @@ class WorldScene {
    * the sim is paused none ever would (review finding on PR #4). */
   refit(): void {
     if (this.lastLayout) this.fitCamera(this.lastLayout);
+  }
+
+  /**
+   * The worker under a world-space point, tested against LIVE actor
+   * positions — a walking dot is picked where it is drawn, not at the
+   * layout target it has not reached yet (review round 7). Nearest wins.
+   */
+  workerAt(worldX: number, worldY: number): number | null {
+    let bestId: number | null = null;
+    let bestD2 = WORKER_PICK_RADIUS ** 2;
+    for (const [id, bundle] of this.workers) {
+      const d2 = (bundle.actor.pos.x - worldX) ** 2 + (bundle.actor.pos.y - worldY) ** 2;
+      if (d2 <= bestD2) {
+        bestD2 = d2;
+        bestId = id;
+      }
+    }
+    return bestId;
   }
 
   /** Kill and forget every actor whose entity left the snapshot. */
@@ -284,10 +306,12 @@ export const createExcaliburWorldRenderer: WorldRendererFactory = (host) => {
       last = layoutWorld(snapshot, last);
       scene.sync(last);
     },
-    pick(pageX, pageY) {
+    pick(pageX, pageY): WorldPick | null {
       if (disposed || last === undefined) return null;
       const world = engine.screen.pageToWorldCoordinates(vec(pageX, pageY));
-      return pickAt(last, world.x / TILE, world.y / TILE);
+      const workerId = scene.workerAt(world.x, world.y);
+      if (workerId !== null) return { kind: 'worker', id: workerId };
+      return pickBuildingAt(last, world.x / TILE, world.y / TILE);
     },
     onFatal(listener) {
       fatalListener = listener;

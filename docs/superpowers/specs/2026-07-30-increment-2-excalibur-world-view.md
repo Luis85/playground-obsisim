@@ -230,10 +230,12 @@ labels, table hunger coloring, starter hint).
 
 - **World inspection (read-only).** Hovering the canvas identifies the
   entity under the pointer — `pick(pageX, pageY)` on the renderer seam
-  converts through the live camera and hit-tests the *layout* (pure
-  `pickAt`, workers before buildings) — and a DOM tooltip shows building
-  name / staffing / state / batch, or worker efficiency / hunger / tool
-  coverage. A legend strip under the canvas explains every encoding (state
+  converts through the live camera, hit-tests workers against their LIVE
+  actor positions (a walking dot is picked where it is drawn), then falls
+  back to the pure `pickBuildingAt` on the layout (buildings never move) —
+  and a DOM tooltip, derived reactively from the current snapshot, shows
+  building name / staffing / state / batch, or worker efficiency / hunger /
+  tool coverage. A legend strip under the canvas explains every encoding (state
   rings, worker colors, tool ring, progress bar, camp tent) using the same
   resolved theme. Commands from the canvas remain out of scope (increment 3).
 - **Economy readability.** Two tested store getters — `runways` (ticks

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { layoutWorld, pickAt, TILE } from '../../src/app/world/layout';
+import { layoutWorld, pickBuildingAt, TILE } from '../../src/app/world/layout';
 import { makeSnapshot } from './fixtures';
 import type { BuildingSnapshot, WorkerSnapshot } from '../../src/shared/snapshot';
 
@@ -213,25 +213,16 @@ describe('layoutWorld', () => {
     expect(at.get(12)).toBeNull(); // orphaned assignment falls back to camp
   });
 
-  it('pickAt finds the building tile under the cursor and nothing in the gutter', () => {
+  it('pickBuildingAt finds the tile under the cursor and nothing in the gutter', () => {
+    // workers are hit-tested by the renderer against live actor positions
+    // (they walk); buildings never move, so the layout is their truth
     const layout = layoutWorld(makeSnapshot({ buildings: [building(1), building(2)] }));
     const cell = layout.buildings[0];
-    expect(pickAt(layout, cell.col + 0.5, cell.row + 0.5)).toEqual({ kind: 'building', id: 1 });
+    expect(pickBuildingAt(layout, cell.col + 0.5, cell.row + 0.5)).toEqual({ kind: 'building', id: 1 });
     // the gutter midpoint sits between the two buildings' 1.5-tile visuals
-    expect(pickAt(layout, cell.col + 1.5, cell.row + 0.5)).toBeNull();
+    expect(pickBuildingAt(layout, cell.col + 1.5, cell.row + 0.5)).toBeNull();
     // and the empty grass south of the plots picks nothing
-    expect(pickAt(layout, cell.col + 0.5, layout.rows - 0.5)).toBeNull();
-  });
-
-  it('pickAt prefers the worker standing on a building over the building', () => {
-    const layout = layoutWorld(makeSnapshot({
-      buildings: [building(1, { workers: 1 })],
-      workers: [worker(10, { buildingId: 1 }), worker(11)],
-    }));
-    const onDuty = layout.workers.find((w) => w.id === 10)!;
-    expect(pickAt(layout, onDuty.x, onDuty.y)).toEqual({ kind: 'worker', id: 10 });
-    const camper = layout.workers.find((w) => w.id === 11)!;
-    expect(pickAt(layout, camper.x + 0.05, camper.y)).toEqual({ kind: 'worker', id: 11 });
+    expect(pickBuildingAt(layout, cell.col + 0.5, layout.rows - 0.5)).toBeNull();
   });
 
   it('keeps every placement inside the reported grid', () => {

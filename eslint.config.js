@@ -24,11 +24,24 @@ export default tseslint.config(
   },
   // Lint twins of the fallow boundary zones (.fallowrc.json `boundaries`):
   // these also catch what zones cannot, e.g. the UI importing sim-ecs directly.
+  // no-restricted-imports does not merge across config entries (last match
+  // wins), so the shell block repeats the sim-ecs ban alongside its own.
   {
-    files: ['src/app/**', 'src/view/**', 'src/main.ts'],
+    files: ['src/app/**'],
     rules: {
       'no-restricted-imports': ['error', {
         paths: [{ name: 'sim-ecs', message: 'UI and shell talk to the engine only through the GameEngine facade and shared types.' }],
+      }],
+    },
+  },
+  {
+    files: ['src/view/**', 'src/main.ts'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        paths: [
+          { name: 'sim-ecs', message: 'UI and shell talk to the engine only through the GameEngine facade and shared types.' },
+          { name: 'excalibur', message: 'The Obsidian shell talks to rendering only through createGameApp.' },
+        ],
       }],
     },
   },
@@ -41,6 +54,7 @@ export default tseslint.config(
           { name: 'pinia', message: 'The engine and shared contracts must stay UI-agnostic.' },
           { name: 'vue-router', message: 'The engine and shared contracts must stay UI-agnostic.' },
           { name: 'obsidian', message: 'The engine and shared contracts must stay Obsidian-agnostic.' },
+          { name: 'excalibur', message: 'The engine and shared contracts must stay renderer-agnostic.' },
         ],
       }],
     },

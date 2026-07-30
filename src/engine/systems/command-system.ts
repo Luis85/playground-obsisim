@@ -1,5 +1,6 @@
 import { Actions, createSystem, queryComponents, Read, Write, WriteResource } from 'sim-ecs';
 import type { Command } from '../../shared/commands';
+import type { BuildingDefId } from '../../shared/content-types';
 import { BALANCE } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
 import { Building, Efficiency, Hunger, JobAssignment, Production, ToolCoverage, Worker, WorkerSlots } from '../components';
@@ -18,16 +19,47 @@ export const CommandSystem = () => createSystem({
   .withName('CommandSystem')
   // One small handler per command type keeps each unit's complexity low; the
   // run function itself is just a drain loop + dispatch.
+  //
+  // Every handler now emits exactly one notice per command: notices.reject()
+  // on every refused path (unchanged from before this task, just renamed
+  // from the old bare push()), and notices.succeed() once, at the end of the
+  // accepted path, after the state change it describes has already happened
+  // — so a notice never claims something that didn't actually occur.
   .withRunFunction(({ actions, queue, clock, stockpile, ids, notices, buildings, workers }) => {
+    const findBuilding = (buildingId: number): { maxSlots: number; defId: BuildingDefId } | null => {
+      for (const { building, slots } of buildings.iter()) {
+        if (building.id === buildingId) return { maxSlots: slots.max, defId: building.defId };
+      }
+      return null;
+    };
+
+    // Only unassign needs to go from a bare id to a name without already
+    // holding a findBuilding() result (construct/assign already have the def
+    // in hand from their own lookups).
+    //
+    // The 'building' fallback needs a JobAssignment pointing at a building that
+    // no longer exists. No PRODUCTION path builds one: isLoadableSave rejects a
+    // save whose worker names a missing building, and nothing removes buildings
+    // yet. It goes live with entity REMOVAL (increment 2) — an assignment can
+    // then outlive its building, between the removal and whatever clears the
+    // assignment. See game-engine.ts's runStep, the "INVARIANT for increment 2"
+    // comment above its refreshEntitySections call, for the sibling gap removal
+    // opens. command-system.test.ts reaches this branch through spawnWorker, so
+    // the wording is pinned before the change that makes it reachable for real.
+    const buildingName = (buildingId: number): string => {
+      const found = findBuilding(buildingId);
+      return found ? BUILDINGS[found.defId].name : 'building';
+    };
+
     const handleConstructBuilding = (command: Extract<Command, { type: 'constructBuilding' }>) => {
       // Checked BEFORE pay(): refusing after payment would swallow the cost.
       if (ids.exhausted()) {
-        notices.push('Cannot create more entities: id space exhausted.');
+        notices.reject('Cannot create more entities: id space exhausted.');
         return;
       }
       const def = BUILDINGS[command.buildingDefId];
       if (!stockpile.pay(def.cost)) {
-        notices.push(`Cannot afford ${def.name}.`);
+        notices.reject(`Cannot afford ${def.name}.`);
         return;
       }
       actions.commands
@@ -36,34 +68,30 @@ export const CommandSystem = () => createSystem({
         .with(new WorkerSlots(def.workerSlots))
         .with(new Production())
         .build();
+      notices.succeed(`Built a ${def.name}.`);
     };
 
     const handleRecruitWorker = () => {
       // Checked BEFORE the cooldown write: a refused recruit must not start it.
       if (ids.exhausted()) {
-        notices.push('Cannot create more entities: id space exhausted.');
+        notices.reject('Cannot create more entities: id space exhausted.');
         return;
       }
       if (clock.tick < clock.lastRecruitTick + BALANCE.recruitCooldownTicks) {
-        notices.push('Recruiting is still on cooldown.');
+        notices.reject('Recruiting is still on cooldown.');
         return;
       }
       clock.lastRecruitTick = clock.tick;
+      const id = ids.take();
       actions.commands
         .buildEntity()
-        .with(new Worker(ids.take()))
+        .with(new Worker(id))
         .with(new Hunger())
         .with(new JobAssignment())
         .with(new Efficiency())
         .with(new ToolCoverage())
         .build();
-    };
-
-    const findMaxSlots = (buildingId: number): number | null => {
-      for (const { building, slots } of buildings.iter()) {
-        if (building.id === buildingId) return slots.max;
-      }
-      return null;
+      notices.succeed(`Recruited worker #${id}.`);
     };
 
     const findAssignmentCandidates = (buildingId: number): { assigned: number; idle: JobAssignment | null } => {
@@ -77,21 +105,22 @@ export const CommandSystem = () => createSystem({
     };
 
     const handleAssignWorker = (command: Extract<Command, { type: 'assignWorker' }>) => {
-      const maxSlots = findMaxSlots(command.buildingId);
-      if (maxSlots === null) {
-        notices.push('Building not found.');
+      const found = findBuilding(command.buildingId);
+      if (found === null) {
+        notices.reject('Building not found.');
         return;
       }
       const { assigned, idle } = findAssignmentCandidates(command.buildingId);
-      if (assigned >= maxSlots) {
-        notices.push('No free worker slots at this building.');
+      if (assigned >= found.maxSlots) {
+        notices.reject('No free worker slots at this building.');
         return;
       }
       if (idle === null) {
-        notices.push('No idle workers available.');
+        notices.reject('No idle workers available.');
         return;
       }
       idle.buildingId = command.buildingId;
+      notices.succeed(`Assigned a worker to ${BUILDINGS[found.defId].name}.`);
     };
 
     const handleUnassignWorker = (command: Extract<Command, { type: 'unassignWorker' }>) => {
@@ -103,7 +132,11 @@ export const CommandSystem = () => createSystem({
           break;
         }
       }
-      if (!found) notices.push('No worker assigned to this building.');
+      if (!found) {
+        notices.reject('No worker assigned to this building.');
+        return;
+      }
+      notices.succeed(`Unassigned a worker from ${buildingName(command.buildingId)}.`);
     };
 
     for (const command of queue.drain()) {
@@ -114,5 +147,8 @@ export const CommandSystem = () => createSystem({
         case 'unassignWorker': handleUnassignWorker(command); break;
       }
     }
+
+    const dropped = queue.takeDropped();
+    if (dropped > 0) notices.reject(`${dropped} command(s) were dropped: the queue was full.`);
   })
   .build();

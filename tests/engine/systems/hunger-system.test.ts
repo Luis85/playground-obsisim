@@ -39,6 +39,24 @@ describe('HungerSystem', () => {
     expect(stockpile.get('berries')).toBe(1);
   });
 
+  // Killer tests for the meal-threshold gate (increment-1 review: this mutation
+  // survived). Every other test here either crosses the threshold or has an
+  // empty stockpile, so a worker that ate unconditionally passed all of them.
+  it('does not eat below the meal threshold, even with food in stock', async () => {
+    const { world, worker, stockpile } = await setup(0, { bread: 5, berries: 5 });
+    await world.step(); // 0 -> 1: nowhere near the threshold
+    expect(worker.getComponent(Hunger)!.value).toBe(1);
+    expect(stockpile.get('bread')).toBe(5);
+    expect(stockpile.get('berries')).toBe(5);
+  });
+
+  it('does not eat on the tick that lands one short of the threshold', async () => {
+    const { world, worker, stockpile } = await setup(48, { bread: 1 });
+    await world.step(); // 48 -> 49
+    expect(worker.getComponent(Hunger)!.value).toBe(49);
+    expect(stockpile.get('bread')).toBe(1); // the gate is `<`, exclusive
+  });
+
   it('starves without food (no crash, hunger capped)', async () => {
     const { world, worker } = await setup(98, {});
     await world.step();

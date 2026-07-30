@@ -15,7 +15,9 @@ const TARGET = process.argv[2] ?? '.obsidian/plugins/obsisim';
 
 await build(); // resolves vite.config.ts from the repo root
 mkdirSync(TARGET, { recursive: true });
-for (const name of ['main.js', 'manifest.json', 'styles.css']) {
+// main.js.map included: the sourcemap is external (see vite.config.ts), so an
+// installed build needs it alongside main.js to stay debuggable
+for (const name of ['main.js', 'main.js.map', 'manifest.json', 'styles.css']) {
   copyFileSync(join(SOURCE, name), join(TARGET, name));
 }
 console.log(`test build installed into ${TARGET}`);

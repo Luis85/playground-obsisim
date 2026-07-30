@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { BALANCE } from '../../src/engine/content/balance';
 import { Hunger, JobAssignment, ToolCoverage, Worker } from '../../src/engine/components';
 import { IdCounter, SimClock, SnapshotStore, Stockpile } from '../../src/engine/resources';
-import { buildColonyPrepWorld, createColonyWorld, getPrepResource, initialSave, isLoadableSave } from '../../src/engine/world';
+import type { IRuntimeWorld } from 'sim-ecs';
+import { GameEngine } from '../../src/engine/game-engine';
+import { buildColonyPrepWorld, createColonyWorld, getPrepResource, initialSave, isLoadableSave, prepareLoadedSave, refreshEntitySections } from '../../src/engine/world';
 import { MAX_SAVED_ENTITIES } from '../../src/shared/save';
 
 describe('initialSave', () => {
@@ -329,5 +331,93 @@ describe('createColonyWorld', () => {
     expect(snapshot.stockpile.wood.stock).toBe(30);
     expect(snapshot.colonyWealth).toBe(50); // 30 wood@1 + 20 berries@1
     expect(snapshot.notices).toEqual([]);
+  });
+});
+
+describe('prepareLoadedSave', () => {
+  it('accepts a v1 save and returns it unchanged', () => {
+    const save = initialSave();
+    expect(prepareLoadedSave(save)).toEqual(save);
+  });
+
+  it('still applies the catalog checks after migration', () => {
+    const save = initialSave();
+    save.buildings = [{ id: 99, defId: 'notABuilding' as never, progress: 0, batchActive: false }];
+    save.nextEntityId = 100;
+    expect(prepareLoadedSave(save)).toBeNull();
+  });
+
+  it('rejects a version this build does not know', () => {
+    expect(prepareLoadedSave({ ...initialSave(), version: 2 })).toBeNull();
+    expect(prepareLoadedSave({ ...initialSave(), version: 99 })).toBeNull();
+  });
+
+  it('rejects a missing or non-object save', () => {
+    expect(prepareLoadedSave(undefined)).toBeNull();
+    expect(prepareLoadedSave('nope')).toBeNull();
+  });
+});
+
+describe('live-world projections agree', () => {
+  // Facts DERIVED each tick and deliberately not persisted. Everything else must
+  // be persisted AND survive save -> restore, so a new fact is covered by
+  // default and opting out is a visible, deliberate edit to this list.
+  const DERIVED = ['efficiency'] as const;
+
+  function persisted(workers: readonly object[]): Record<string, unknown>[] {
+    return workers.map((w) => {
+      const copy: Record<string, unknown> = { ...w };
+      for (const key of DERIVED) delete copy[key];
+      return copy;
+    });
+  }
+
+  /** A colony with a staffed worker, live tool coverage, hunger history and batch progress. */
+  async function busyColony() {
+    const save = initialSave();
+    save.stockpile = { wood: 100, tools: 10, berries: 50 };
+    const engine = await GameEngine.create(save);
+    engine.dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
+    await engine.stepOnce();
+    engine.dispatch({ type: 'assignWorker', buildingId: engine.snapshot!.buildings[0].id });
+    for (let i = 0; i < 60; i++) await engine.stepOnce();
+    return engine;
+  }
+
+  it('the query path, the walk path and serialize() report the same facts', async () => {
+    const engine = await busyColony();
+    const fromQueryPath = engine.snapshot!.workers.map((w) => ({ ...w }));
+
+    // force the walk path over the same unchanged world
+    refreshEntitySections((engine as unknown as { world: IRuntimeWorld }).world);
+    expect(engine.snapshot!.workers.map((w) => ({ ...w }))).toEqual(fromQueryPath);
+
+    // and the save projection must agree on every field it shares
+    const saved = engine.serialize().workers;
+    expect(persisted(fromQueryPath)).toEqual(saved.map((w) => ({ ...w })));
+  });
+
+  it('every non-derived worker fact is represented in the save record', async () => {
+    const engine = await busyColony();
+    const factKeys = Object.keys(engine.snapshot!.workers[0])
+      .filter((key) => !DERIVED.includes(key as (typeof DERIVED)[number]));
+    const savedKeys = Object.keys(engine.serialize().workers[0]);
+    expect(factKeys.filter((key) => !savedKeys.includes(key))).toEqual([]);
+  });
+
+  it('every persisted worker fact survives save -> restore', async () => {
+    const engine = await busyColony();
+    const before = persisted(engine.snapshot!.workers);
+    const restored = await GameEngine.create(engine.serialize());
+    expect(persisted(restored.snapshot!.workers)).toEqual(before);
+  });
+
+  it('every non-derived building fact is represented in the save record', async () => {
+    const engine = await busyColony();
+    // workerSlots and progressPct/state/workPower/tooledWorkers are display-derived
+    const derivedBuilding = ['workers', 'workerSlots', 'state', 'progressPct', 'tooledWorkers', 'workPower'];
+    const factKeys = Object.keys(engine.snapshot!.buildings[0]).filter((k) => !derivedBuilding.includes(k));
+    const savedKeys = Object.keys(engine.serialize().buildings[0]);
+    expect(factKeys.filter((key) => !savedKeys.includes(key))).toEqual([]);
   });
 });

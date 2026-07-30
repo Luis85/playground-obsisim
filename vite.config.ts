@@ -29,6 +29,10 @@ export default defineConfig({
     },
     outDir,
     emptyOutDir: false,
-    sourcemap: 'inline',
+    // External, not inline: an inline base64 map made main.js ~1.5 MB when the
+    // real code is ~159 kB, so the artifact budget was measuring sourcemap bytes
+    // and sat at 99.4% with ~9 kB of headroom — any new source file tripped it.
+    // Debuggability is unchanged (the map ships beside main.js in the vault).
+    sourcemap: true,
   },
 });

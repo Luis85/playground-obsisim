@@ -75,3 +75,28 @@ The engineering layers (architecture, security, performance, tests) are in good-
 8. Table virtualization (before any entity-cap increase); command-registry pattern (when the Command union grows); `BALANCE` as injected world resource (increment 5 difficulty); onboarding flow (when there's a tutorial to point at).
 
 *Full per-perspective reports (with methodology, measurements, and file:line evidence) were produced as working artifacts in the session's scratch space; this document preserves the durable findings.*
+
+## Resolved in Increment 1.5
+
+All five "before or at the start of increment 2" actions above are closed, plus
+the security L1 finding. See
+`docs/superpowers/plans/2026-07-30-increment-1.5-hardening-and-polish.md` for
+the full task-by-task record.
+
+1. **Save-migration seam** — `77afdb4`, with a follow-up in `50673af` so both
+   save producers write `LATEST_SAVE_VERSION` instead of a hardcoded literal.
+2. **Array-length caps in the save guard (security M1)** — already closed
+   before this increment (`MAX_SAVED_ENTITIES` in `src/shared/save.ts`), not
+   by this branch.
+3. **The three killer tests for the surviving mutations** — `2459798`.
+4. **Consolidate entity-fact gathering, gate the post-step refresh** —
+   `8902777`.
+5. **UX cheap-wins batch** (success notices, humanized state labels, hunger
+   coloring, starter hint) — `941e44b`, with review fixes (false-comment
+   corrections, three closed test holes, and the `maintainability` re-base) in
+   `b22444d`.
+
+Security L1 (unbounded `CommandQueue.pending`) is also closed — `cbd532d`.
+
+Actions 6–8 remain open by design: 6 and 7 are increment-2 design decisions,
+not code fixes, and 8's items are deferred until their stated trigger arrives.

@@ -5,7 +5,7 @@ import { RESOURCES, RESOURCE_IDS } from '../content/resources';
 import { Building, Efficiency, Hunger, JobAssignment, Production, ToolCoverage, Worker, WorkerSlots } from '../components';
 import { NoticeBoard, SimClock, SnapshotStore, StatsHistory, Stockpile } from '../resources';
 import type { BuildingFacts, WorkerFacts } from '../snapshot-builder';
-import { buildEntitySections } from '../snapshot-builder';
+import { buildEntitySections, buildingFactsOf, workerFactsOf } from '../snapshot-builder';
 
 export const SnapshotSystem = () => createSystem({
   clock: ReadResource(SimClock),
@@ -25,26 +25,16 @@ export const SnapshotSystem = () => createSystem({
   // shared buildEntitySections builder; this system only gathers facts from its
   // queries and assembles the remaining stockpile/notices sections.
   .withRunFunction(({ clock, stockpile, stats, notices, store, buildings, workers }) => {
+    // Fact shape lives in the shared mappers, never here: this system only
+    // supplies component instances from its queries (see snapshot-builder).
     const workerFacts: WorkerFacts[] = [];
     for (const { worker, hunger, job, efficiency, coverage } of workers.iter()) {
-      workerFacts.push({
-        id: worker.id,
-        hunger: hunger.value,
-        efficiency: efficiency.value,
-        buildingId: job.buildingId,
-        toolTicks: coverage.remainingTicks,
-      });
+      workerFacts.push(workerFactsOf(worker, hunger, job, efficiency, coverage));
     }
 
     const buildingFacts: BuildingFacts[] = [];
     for (const { building, slots, production } of buildings.iter()) {
-      buildingFacts.push({
-        id: building.id,
-        defId: building.defId,
-        workerSlots: slots.max,
-        progress: production.progress,
-        batchActive: production.batchActive,
-      });
+      buildingFacts.push(buildingFactsOf(building, slots, production));
     }
 
     const { workers: workerSnaps, buildings: buildingSnaps, population, idleWorkers } = buildEntitySections(workerFacts, buildingFacts);

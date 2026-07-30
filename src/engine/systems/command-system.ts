@@ -114,5 +114,8 @@ export const CommandSystem = () => createSystem({
         case 'unassignWorker': handleUnassignWorker(command); break;
       }
     }
+
+    const dropped = queue.takeDropped();
+    if (dropped > 0) notices.push(`${dropped} command(s) were dropped: the queue was full.`);
   })
   .build();

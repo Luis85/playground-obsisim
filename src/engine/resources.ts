@@ -69,13 +69,47 @@ export class SimClock {
   lastRecruitTick = -BALANCE.recruitCooldownTicks; // first recruit available immediately
 }
 
+/**
+ * Dispatches are accepted between ticks, and while paused nothing drains
+ * them: a stuck-enabled button (or a held key) would otherwise grow this
+ * array without limit. Far above any human click rate for one pause.
+ */
+export const MAX_PENDING_COMMANDS = 256;
+
 export class CommandQueue {
-  pending: Command[] = [];
+  // PRIVATE, deliberately: while this array was public, every producer used
+  // `queue.pending.push(...)` (GameEngine.dispatch plus three test helpers)
+  // and the cap below would have been decorative — new call sites naturally
+  // copy the pattern they see (PR #3 review, Codex P2). Enqueue only through
+  // push(); read the depth through `size`.
+  private pending: Command[] = [];
+  private dropped = 0;
+
+  /** Enqueue unless full; overflow is counted, not thrown, so the UI never crashes. */
+  push(command: Command): void {
+    if (this.pending.length >= MAX_PENDING_COMMANDS) {
+      this.dropped++;
+      return;
+    }
+    this.pending.push(command);
+  }
+
+  /** Queue depth — what flush() needs, without handing out the array. */
+  get size(): number {
+    return this.pending.length;
+  }
 
   drain(): Command[] {
     const commands = this.pending;
     this.pending = [];
     return commands;
+  }
+
+  /** Number of commands refused since the last call (reset on read). */
+  takeDropped(): number {
+    const dropped = this.dropped;
+    this.dropped = 0;
+    return dropped;
   }
 }
 

@@ -59,7 +59,7 @@ export class GameEngine {
   }
 
   dispatch(command: Command): void {
-    this.world.getResource(CommandQueue).pending.push(command);
+    this.world.getResource(CommandQueue).push(command);
   }
 
   async stepOnce(): Promise<void> {
@@ -93,7 +93,7 @@ export class GameEngine {
    */
   async flush(): Promise<void> {
     await this.settle();
-    if (this.world.getResource(CommandQueue).pending.length > 0) {
+    if (this.world.getResource(CommandQueue).size > 0) {
       await this.stepOnce();
     }
   }

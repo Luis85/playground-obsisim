@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { IRuntimeWorld } from 'sim-ecs';
-import { CommandQueue, SimClock, SnapshotStore, Stockpile } from '../../../src/engine/resources';
+import { CommandQueue, MAX_PENDING_COMMANDS, SimClock, SnapshotStore, Stockpile } from '../../../src/engine/resources';
 import { CommandSystem } from '../../../src/engine/systems/command-system';
 import { SnapshotSystem } from '../../../src/engine/systems/snapshot-system';
 import { buildColonyPrepWorld, initialSave } from '../../../src/engine/world';
@@ -17,7 +17,8 @@ async function setup(save: SaveGameV1 = initialSave()) {
     await world.step();
   };
   const dispatch = async (...commands: Command[]) => {
-    world.getResource(CommandQueue).pending.push(...commands);
+    const queue = world.getResource(CommandQueue);
+    for (const command of commands) queue.push(command);
     await tick();
   };
   const snapshot = (w: IRuntimeWorld = world) => w.getResource(SnapshotStore).latest!;
@@ -89,5 +90,14 @@ describe('CommandSystem', () => {
     const { dispatch, snapshot } = await setup();
     await dispatch({ type: 'assignWorker', buildingId: 999 });
     expect(snapshot().notices).toEqual(['Building not found.']);
+  });
+
+  it('emits exactly one notice naming the drop count after a queue overflow', async () => {
+    const { world, tick, snapshot } = await setup();
+    const queue = world.getResource(CommandQueue);
+    for (let i = 0; i < MAX_PENDING_COMMANDS + 5; i++) queue.push({ type: 'recruitWorker' });
+    await tick();
+    const dropNotices = snapshot().notices.filter((n) => n.includes('dropped'));
+    expect(dropNotices).toEqual(['5 command(s) were dropped: the queue was full.']);
   });
 });

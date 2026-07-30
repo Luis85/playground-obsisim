@@ -13,7 +13,8 @@ async function run(world: Awaited<ReturnType<typeof createColonyWorld>>, ticks: 
 }
 
 function dispatch(world: Awaited<ReturnType<typeof createColonyWorld>>, ...commands: Command[]) {
-  world.getResource(CommandQueue).pending.push(...commands);
+  const queue = world.getResource(CommandQueue);
+  for (const command of commands) queue.push(command);
 }
 
 /** Rich fixture: enough stock + idle workers to build the full economy at once. */

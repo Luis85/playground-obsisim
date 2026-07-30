@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CommandQueue, IdCounter, NoticeBoard, StatsHistory, Stockpile } from '../../src/engine/resources';
+import { CommandQueue, IdCounter, MAX_PENDING_COMMANDS, NoticeBoard, StatsHistory, Stockpile } from '../../src/engine/resources';
 
 describe('Stockpile', () => {
   it('adds and reads amounts, tracking per-tick production', () => {
@@ -93,9 +93,17 @@ describe('small resources', () => {
 
   it('CommandQueue drain empties the queue', () => {
     const queue = new CommandQueue();
-    queue.pending.push({ type: 'recruitWorker' });
+    queue.push({ type: 'recruitWorker' });
     expect(queue.drain()).toHaveLength(1);
-    expect(queue.pending).toHaveLength(0);
+    expect(queue.size).toBe(0);
+  });
+
+  it('CommandQueue caps pending at MAX_PENDING_COMMANDS, counting overflow via takeDropped', () => {
+    const queue = new CommandQueue();
+    for (let i = 0; i < MAX_PENDING_COMMANDS + 5; i++) queue.push({ type: 'recruitWorker' });
+    expect(queue.size).toBe(MAX_PENDING_COMMANDS);
+    expect(queue.takeDropped()).toBe(5);
+    expect(queue.takeDropped()).toBe(0); // reset on read
   });
 
   it('NoticeBoard takeAll returns and clears', () => {

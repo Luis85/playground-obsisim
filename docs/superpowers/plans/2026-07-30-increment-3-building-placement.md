@@ -276,18 +276,24 @@ export function isTileBuildable(map: WorldMapSize, occupied: readonly TileRef[],
  * Where a construction with no player-chosen tile lands: the first free tile
  * in the legacy plot sequence (so migrated and table-built colonies keep the
  * geometry increment 2 drew), then the first free buildable tile row-major,
- * then null (map full).
+ * then null (map full). Occupancy is a prebuilt Set, not per-candidate
+ * `occupied.some()` — a table-build in a migrated colony near the guard's
+ * 10,000-record cap would otherwise pay ~50M comparisons inside one tick.
+ * O(occupied + tiles scanned).
  */
 export function autoPlacePosition(map: WorldMapSize, occupied: readonly TileRef[]): TileRef | null {
+  const taken = new Set(occupied.map((tile) => `${tile.col},${tile.row}`));
+  const free = (col: number, row: number) =>
+    isInsideMap(map, col, row) && col >= CAMP_COLS && !taken.has(`${col},${row}`);
   for (let row = PLOT_ROW0; row < map.rows; row += 2) {
     for (let plot = 0; plot < PLOTS_PER_ROW; plot++) {
       const col = PLOT_COL0 + 2 * plot;
-      if (col < map.cols && isTileBuildable(map, occupied, col, row)) return { col, row };
+      if (col < map.cols && free(col, row)) return { col, row };
     }
   }
   for (let row = 0; row < map.rows; row++) {
     for (let col = CAMP_COLS; col < map.cols; col++) {
-      if (isTileBuildable(map, occupied, col, row)) return { col, row };
+      if (free(col, row)) return { col, row };
     }
   }
   return null;
@@ -1585,22 +1591,25 @@ import type { ResourceId } from '../../shared/content-types';
   if (ctx.demolishedIds.has(buildingId)) return null;
 ```
 
-4. `handleUnassignWorker` starts by consulting `findBuilding` too. Demolition
-   clears its workers' assignments, so without this a same-tick
-   `unassignWorker` against the demolished id reports
-   `No worker assigned to this building.` instead of the uniform
-   `Building not found.` (and unassign against a never-existing id gains the
-   same consistency for free — update any test pinning the old message for
-   unknown ids). Its opening becomes:
+4. `handleUnassignWorker` gains ONLY the demolished-this-tick guard — not a
+   full existence check. Demolition clears its workers' assignments, so
+   without the guard a same-tick `unassignWorker` against the demolished id
+   reports `No worker assigned to this building.` instead of the uniform
+   `Building not found.`. But a worker whose assignment points at a
+   long-gone building — the orphan the generic-name fallback exists for —
+   must stay unassignable, so the handler must NOT consult `findBuilding`:
+   the existing test `falls back to a generic name when the building an
+   assignment points at is gone` keeps passing untouched. Its opening
+   becomes:
 
 ```ts
 export function handleUnassignWorker(ctx: CommandContext, command: Extract<Command, { type: 'unassignWorker' }>): void {
-  if (findBuilding(ctx, command.buildingId) === null) {
+  if (ctx.demolishedIds.has(command.buildingId)) {
     ctx.notices.reject('Building not found.');
     return;
   }
   let found = false;
-  // ... rest unchanged
+  // ... rest unchanged (orphaned assignments still clean up via the scan)
 ```
 
 5. Append the handler:
@@ -2555,6 +2564,7 @@ Create `src/app/components/BuildPalette.vue`:
 import { useGameStore } from '../stores/game-store';
 import { BUILDINGS, BUILDING_IDS, type BuildingDefId } from '../../engine/content';
 import { costLabel } from '../labels';
+import { BUILDING_GLYPHS } from '../world/theme';
 
 // The construct catalog as canvas-side buttons: click arms placement mode
 // (the parent owns the mode), click again disarms. Arming is gated on
@@ -2578,14 +2588,20 @@ function toggle(id: BuildingDefId) {
       :data-test="`palette-${id}`"
       :class="{ 'is-armed': armedDefId === id }"
       :disabled="armedDefId !== id && !store.affordableDefs[id]"
-      :title="`${BUILDINGS[id].name} — ${costLabel(BUILDINGS[id].cost)}`"
       @click="toggle(id)"
     >
-      {{ BUILDINGS[id].name }}
+      <span>{{ BUILDING_GLYPHS[id] }} {{ BUILDINGS[id].name }}</span>
+      <span class="obsisim-palette-cost">{{ costLabel(BUILDINGS[id].cost) }}</span>
     </button>
   </div>
 </template>
 ```
+
+(The spec requires name, **glyph, and cost visible on the button** — a
+hover-only `title` fails touch-oriented Obsidian, so the cost is a second
+line and the `title` is dropped. `theme.ts` renames its private
+`BUILDING_GLYPH` map to an exported `BUILDING_GLYPHS`, consumed by
+`resolveWorldTheme` and the palette — one glyph source for canvas and DOM.)
 
 `styles.css` — append:
 
@@ -2597,9 +2613,25 @@ function toggle(id: BuildingDefId) {
   margin-bottom: 6px;
 }
 
+.obsisim-build-palette button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.obsisim-palette-cost {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
 .obsisim-build-palette .is-armed,
 .obsisim-selection-panel .is-armed {
   background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+/* the armed/accent state must also recolor the cost line for contrast */
+.obsisim-build-palette .is-armed .obsisim-palette-cost {
   color: var(--text-on-accent);
 }
 ```

@@ -11,7 +11,7 @@ export default tseslint.config(
     files: ['**/*.vue'],
     languageOptions: {
       parserOptions: { parser: tseslint.parser },
-      globals: { window: 'readonly', document: 'readonly' },
+      globals: { window: 'readonly', document: 'readonly', HTMLElement: 'readonly' },
     },
     rules: {
       // Purely-formatting rules that fight this project's verbatim SFC markup

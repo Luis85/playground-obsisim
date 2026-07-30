@@ -119,6 +119,15 @@ class WorldScene {
     this.fitCamera(layout);
   }
 
+  /** Forget every entity actor — a colony reset reuses entity ids, so the
+   * replacement colony must not inherit this scene's identity state. */
+  clear(): void {
+    for (const bundle of this.buildings.values()) bundle.root.kill();
+    for (const bundle of this.workers.values()) bundle.actor.kill();
+    this.buildings.clear();
+    this.workers.clear();
+  }
+
   /** Re-frame after a pane resize — no snapshot arrives for that, and while
    * the sim is paused none ever would (review finding on PR #4). */
   refit(): void {
@@ -277,6 +286,7 @@ export const createExcaliburWorldRenderer: WorldRendererFactory = (host) => {
   let fatalListener: ((message: string) => void) | null = null;
   // fed back into layoutWorld so slot allocation remembers who stands where
   let last: WorldLayout | undefined;
+  let lastTick: number | null = null;
 
   const teardown = () => {
     observer.disconnect();
@@ -303,6 +313,14 @@ export const createExcaliburWorldRenderer: WorldRendererFactory = (host) => {
   return {
     sync(snapshot) {
       if (disposed) return;
+      // A tick regression means a new timeline (colony reset): the fresh
+      // world reuses entity ids, so held slots and id-keyed actors from the
+      // old colony must not carry over (review round 9).
+      if (lastTick !== null && snapshot.tick < lastTick) {
+        scene.clear();
+        last = undefined;
+      }
+      lastTick = snapshot.tick;
       last = layoutWorld(snapshot, last);
       scene.sync(last);
     },

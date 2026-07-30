@@ -14,6 +14,7 @@ export default tseslint.config(
       globals: {
         window: 'readonly', document: 'readonly', HTMLElement: 'readonly',
         MouseEvent: 'readonly', getComputedStyle: 'readonly',
+        setTimeout: 'readonly', clearTimeout: 'readonly',
       },
     },
     rules: {

@@ -56,6 +56,9 @@ const phases: Array<() => void> = [
   () => renderer.sync(snap(3,
     [building(1, 'forester', { workers: 2, state: 'producing', batchActive: true, progressPct: 90 }), building(2, 'farm', { workers: 1, state: 'producing', batchActive: true, progressPct: 10 }), building(3, 'sawmill')],
     [worker(10, { buildingId: 1, toolTicks: 100 }), worker(11, { buildingId: 1, efficiency: 0.3 }), worker(12, { buildingId: 2 }), worker(13)])),
+  // colony reset: tick regresses, entity ids restart — the scene must forget
+  // the old colony instead of gliding recycled ids from their former posts
+  () => renderer.sync(snap(1, [], [worker(1), worker(2), worker(3)])),
   () => renderer.dispose(),
 ];
 

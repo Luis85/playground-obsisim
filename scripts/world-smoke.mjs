@@ -108,7 +108,15 @@ await wait(600);
 const resumed = await shot();
 check('start() resumes and draws the grown colony', !resumed.equals(stoppedA));
 
-await step(5); // dispose()
+await step(5); // colony reset: tick regresses, ids recycle
+await wait(400);
+const afterReset = await page.evaluate(() => window.__probe());
+check(
+  `reset clears the old colony (buildings gone, fresh workers at camp) (${JSON.stringify(afterReset)})`,
+  afterReset.building === 0 && afterReset.worker > 0,
+);
+
+await step(6); // dispose()
 await wait(300);
 check('dispose() raises no errors', pageErrors.length === 0);
 

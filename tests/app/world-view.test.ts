@@ -149,6 +149,47 @@ describe('WorldView', () => {
     expect(tooltip.text()).toContain('tooled (12t left)');
   });
 
+  it('hides a stationary tooltip once the hovered worker is no longer under the pointer', async () => {
+    const { renderer, factory } = makeFake();
+    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'worker', id: 3 });
+    const { wrapper } = mountHarness(factory);
+    useGameStore().ingest(makeSnapshot({
+      workers: [{ id: 3, hunger: 0, efficiency: 1, buildingId: null, toolTicks: 0 }],
+    }), { paused: false, speed: 1, error: null });
+    await nextTick();
+    await wrapper.find('[data-test="world-host"]').trigger('pointermove', { pageX: 10, pageY: 10 });
+    expect(wrapper.find('[data-test="world-tooltip"]').exists()).toBe(true);
+    // the worker walks away; the next snapshot re-runs the live hit-test
+    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    useGameStore().ingest(makeSnapshot({
+      workers: [{ id: 3, hunger: 0, efficiency: 1, buildingId: 1, toolTicks: 0 }],
+    }), { paused: false, speed: 1, error: null });
+    await nextTick();
+    expect(wrapper.find('[data-test="world-tooltip"]').exists()).toBe(false);
+  });
+
+  it('clears a stale hover after the animation tail even with no further snapshots', async () => {
+    vi.useFakeTimers();
+    try {
+      const { renderer, factory } = makeFake();
+      (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'worker', id: 3 });
+      const { wrapper } = mountHarness(factory);
+      useGameStore().ingest(makeSnapshot({
+        workers: [{ id: 3, hunger: 0, efficiency: 1, buildingId: null, toolTicks: 0 }],
+      }), { paused: true, speed: 1, error: null });
+      await nextTick();
+      await wrapper.find('[data-test="world-host"]').trigger('pointermove', { pageX: 10, pageY: 10 });
+      expect(wrapper.find('[data-test="world-tooltip"]').exists()).toBe(true);
+      // paused: the walk finishes without any snapshot; the trailing recheck fires
+      (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue(null);
+      vi.advanceTimersByTime(2100);
+      await nextTick();
+      expect(wrapper.find('[data-test="world-tooltip"]').exists()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('renders the encoding legend', async () => {
     const { factory } = makeFake();
     const { wrapper } = mountHarness(factory);

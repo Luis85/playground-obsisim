@@ -17,8 +17,9 @@ const store = useGameStore();
 const factory = inject(WORLD_RENDERER_KEY, null);
 const host = ref<HTMLElement | null>(null);
 const failure = ref<string | null>(null);
-const hover = ref<{ x: number; y: number; pick: WorldPick } | null>(null);
+const hover = ref<{ x: number; y: number; pageX: number; pageY: number; pick: WorldPick } | null>(null);
 let renderer: WorldRenderer | null = null;
+let hoverRecheck: ReturnType<typeof setTimeout> | null = null;
 
 // Derived reactively so a stationary pointer keeps live details (batch
 // progress, hunger, tool ticks) as snapshots tick underneath it; an entity
@@ -28,6 +29,26 @@ const hoverLines = computed(() => {
   return describePick(store.snapshot, hover.value.pick);
 });
 
+// A stationary pointer must not keep describing a worker that walked away:
+// re-run the live hit-test at the stored pointer position on every snapshot,
+// and once more after the walk animation has settled (no snapshots arrive
+// for the animation tail, none at all while paused — review round 9).
+function armHoverRecheck() {
+  if (hoverRecheck !== null) clearTimeout(hoverRecheck);
+  hoverRecheck = setTimeout(() => revalidateHover(false), 2000);
+}
+
+function revalidateHover(scheduleTail: boolean) {
+  if (!hover.value || !renderer) return;
+  const fresh = renderer.pick(hover.value.pageX, hover.value.pageY);
+  if (!fresh) {
+    hover.value = null;
+    return;
+  }
+  hover.value = { ...hover.value, pick: fresh };
+  if (scheduleTail) armHoverRecheck();
+}
+
 function onPointerMove(event: MouseEvent) {
   const pick = renderer?.pick(event.pageX, event.pageY) ?? null;
   if (!pick || !host.value) {
@@ -35,7 +56,14 @@ function onPointerMove(event: MouseEvent) {
     return;
   }
   const rect = host.value.getBoundingClientRect();
-  hover.value = { x: event.clientX - rect.left + 14, y: event.clientY - rect.top + 14, pick };
+  hover.value = {
+    x: event.clientX - rect.left + 14,
+    y: event.clientY - rect.top + 14,
+    pageX: event.pageX,
+    pageY: event.pageY,
+    pick,
+  };
+  armHoverRecheck();
 }
 
 onMounted(() => {
@@ -57,6 +85,7 @@ onMounted(() => {
       () => store.snapshot,
       (snapshot) => {
         if (snapshot) created.sync(snapshot);
+        revalidateHover(true);
       },
       { immediate: true },
     );
@@ -69,6 +98,7 @@ onMounted(() => {
 onActivated(() => renderer?.start());
 onDeactivated(() => renderer?.stop());
 onBeforeUnmount(() => {
+  if (hoverRecheck !== null) clearTimeout(hoverRecheck);
   renderer?.dispose();
   renderer = null;
 });

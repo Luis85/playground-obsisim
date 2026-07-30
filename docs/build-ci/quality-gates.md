@@ -86,6 +86,11 @@ npm run check:quality -- --update  # scripts/quality-baseline.json
 }
 ```
 
+That block is a snapshot of what was locked **at Task 18 adoption**, kept as
+history — it is not the current baseline. `maintainability` has moved since (to
+90.6 and then back to 90.5; see the next section for why). `scripts/quality-baseline.json`
+is always the authority for today's values.
+
 `scripts/loc-baseline.json` and `scripts/css-important-baseline.json` are
 both locked **empty** (`"files": {}`) — no file in the plan-mandated code
 exceeded 500 nonblank lines, and `styles.css` uses zero `!important`.

@@ -2,14 +2,12 @@
 import { computed, inject } from 'vue';
 import { ENGINE_KEY } from '../engine-key';
 import { useGameStore } from '../stores/game-store';
-import { BUILDINGS, BUILDING_IDS } from '../../engine/content/buildings';
-import { RESOURCES } from '../../engine/content/resources';
+import { BUILDINGS, BUILDING_IDS, RESOURCES, type BuildingDefId, type CostMap, type ResourceId } from '../../engine/content';
 // Presentation lives in labels.ts, not the shared contract: BUILDING_STATE_LABELS
 // (used in the State cell below) is a Record keyed by the BuildingState union,
 // so a state added to the union without a matching label is a type error here,
 // not a silently-raw string in the rendered table.
 import { BUILDING_STATE_LABELS } from '../labels';
-import type { BuildingDefId, CostMap, ResourceId } from '../../shared/content-types';
 
 const engine = inject(ENGINE_KEY)!;
 const store = useGameStore();

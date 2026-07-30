@@ -8,6 +8,7 @@ const store = useGameStore();
 const route = useRoute();
 const tabs = [
   { to: '/', label: 'Dashboard' },
+  { to: '/world', label: 'World' },
   { to: '/buildings', label: 'Buildings' },
   { to: '/population', label: 'Population' },
   { to: '/economy', label: 'Economy' },
@@ -33,7 +34,13 @@ const tabs = [
       </router-link>
     </nav>
     <main v-if="store.snapshot">
-      <router-view />
+      <!-- WorldView stays alive across tab switches: its Excalibur engine
+           (and WebGL context) must boot once per view open, not per visit -->
+      <router-view v-slot="{ Component }">
+        <keep-alive include="WorldView">
+          <component :is="Component" />
+        </keep-alive>
+      </router-view>
     </main>
     <main v-else class="obsisim-loading">Starting simulation…</main>
   </div>

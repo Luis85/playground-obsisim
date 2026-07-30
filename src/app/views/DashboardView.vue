@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useGameStore } from '../stores/game-store';
-import { RESOURCES, RESOURCE_IDS } from '../../engine/content/resources';
+import { RESOURCES, RESOURCE_IDS } from '../../engine/content';
 
 const store = useGameStore();
 const fmt = (n: number) => n.toFixed(2);
@@ -15,7 +15,7 @@ const fmt = (n: number) => n.toFixed(2);
     </div>
     <table class="obsisim-table">
       <thead>
-        <tr><th>Resource</th><th>Tier</th><th>Stock</th><th>Prod/t</th><th>Cons/t</th><th>Net</th><th>Value</th></tr>
+        <tr><th>Resource</th><th>Tier</th><th>Stock</th><th>Prod/t</th><th>Cons/t</th><th>Net</th><th>Empties in</th><th>Value</th></tr>
       </thead>
       <tbody>
         <tr v-for="id in RESOURCE_IDS" :key="id">
@@ -26,6 +26,9 @@ const fmt = (n: number) => n.toFixed(2);
           <td>{{ fmt(store.snapshot.stockpile[id].consumptionRate) }}</td>
           <td :class="store.snapshot.stockpile[id].netFlow >= 0 ? 'obsisim-positive' : 'obsisim-negative'">
             {{ fmt(store.snapshot.stockpile[id].netFlow) }}
+          </td>
+          <td :data-test="`runway-${id}`" :class="{ 'obsisim-negative': (store.runways[id] ?? Infinity) <= 30 }">
+            {{ store.runways[id] !== undefined ? `~${store.runways[id]}t` : '—' }}
           </td>
           <td>{{ store.snapshot.stockpile[id].stockValue.toFixed(0) }}</td>
         </tr>

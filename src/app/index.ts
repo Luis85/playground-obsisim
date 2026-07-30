@@ -5,6 +5,8 @@ import AppRoot from './App.vue';
 import { ENGINE_KEY } from './engine-key';
 import { createGameRouter } from './router';
 import { useGameStore } from './stores/game-store';
+import { WORLD_RENDERER_KEY } from './world/renderer-key';
+import { createExcaliburWorldRenderer } from './world/renderer';
 
 export async function createGameApp(engine: GameEngine, container: HTMLElement): Promise<App<Element>> {
   const pinia = createPinia();
@@ -13,6 +15,7 @@ export async function createGameApp(engine: GameEngine, container: HTMLElement):
   const router = createGameRouter();
   app.use(router);
   app.provide(ENGINE_KEY, engine);
+  app.provide(WORLD_RENDERER_KEY, createExcaliburWorldRenderer);
 
   const store = useGameStore(pinia);
   engine.onUpdate((snapshot, status) => store.ingest(snapshot, status));

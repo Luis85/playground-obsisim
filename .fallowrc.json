@@ -1,4 +1,6 @@
 {
+  "entry": ["scripts/world-smoke-harness/main.ts"],
+  "ignoreDependencies": ["playwright-core"],
   "boundaries": {
     "zones": [
       { "name": "shared", "patterns": ["src/shared/**"] },

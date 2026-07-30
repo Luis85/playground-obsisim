@@ -1,7 +1,4 @@
 <script setup lang="ts">
-/* global MouseEvent -- this file's eslint config only declares window/document as
-   globals for .vue script blocks; MouseEvent is still a real DOM type from
-   tsconfig's "DOM" lib, just one no-undef doesn't know about here. */
 import { inject, ref } from 'vue';
 import { ENGINE_KEY } from '../engine-key';
 import { useGameStore } from '../stores/game-store';

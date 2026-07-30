@@ -5,7 +5,9 @@
 import { readFileSync, statSync } from 'node:fs';
 
 const DIR = 'demo-vault/.obsidian/plugins/obsisim';
-const BUDGETS = { 'main.js': 1_500_000, 'styles.css': 50_000, 'manifest.json': 10_000 };
+// main.js: 5 MB — excalibur@0.32 adds ~2.8 MB (code + inline sourcemap) to a
+// 1.5 MB bundle; measured in spec 2026-07-30-increment-2 §2.1.
+const BUDGETS = { 'main.js': 5_000_000, 'styles.css': 50_000, 'manifest.json': 10_000 };
 const failures = [];
 
 for (const [name, budget] of Object.entries(BUDGETS)) {

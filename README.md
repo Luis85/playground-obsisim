@@ -31,6 +31,9 @@ simulated production chains — in tables and, since Increment 2, a live
 - `npm run test-build` — build and install into this repo's own
   `.obsidian/plugins/obsisim/` (open the repository itself as a vault to test);
   pass a path to target another vault's plugin folder
+- `npm run smoke:world` — drive the real Excalibur world renderer in a
+  Chromium and assert on its rendering behavior (optional; needs
+  `npm i --no-save playwright-core` and a Chromium — see `scripts/world-smoke.mjs`)
 
 ## Documentation
 

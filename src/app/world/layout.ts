@@ -37,14 +37,37 @@ export interface WorldLayout {
   tile: number;
   cols: number;
   rows: number;
+  /** Tile-space anchor of the idle camp, for the renderer's camp marker. */
+  camp: { x: number; y: number };
   buildings: PlacedBuilding[];
   workers: PlacedWorker[];
 }
 
 interface Spot { x: number; y: number; }
 
+const CAMP_ANCHOR: Spot = { x: CAMP_COL0 + 1, y: 0.75 };
+const CAMP_MIN_SPOTS = 6;
+
 function byId(a: { id: number }, b: { id: number }): number {
   return a.id - b.id;
+}
+
+/**
+ * Deterministic id-keyed slots: preferred slot = id modulo span, probing
+ * upward on collision in id order (members must arrive id-sorted). Keying to
+ * the worker's own id — never its rank in the current set — means arrivals
+ * and departures disturb a neighbor only on a hash collision, not always.
+ */
+function stableSlots(members: { id: number }[], span: number): Map<number, number> {
+  const slots = new Map<number, number>();
+  const taken = new Set<number>();
+  for (const m of members) {
+    let slot = m.id % span;
+    while (taken.has(slot)) slot = (slot + 1) % span; // members <= span, so a free slot exists
+    taken.add(slot);
+    slots.set(m.id, slot);
+  }
+  return slots;
 }
 
 /** Plot index = rank in id order, row-major — construction appends, never moves. */
@@ -66,14 +89,11 @@ function placeBuildings(snapshot: Snapshot): Map<number, PlacedBuilding> {
 }
 
 /**
- * One spot per assigned worker, along the south edge of the building's cell.
- * A worker's slot is keyed to its own id (id modulo span, probing upward on
- * collision in id order), NOT to its rank in the current roster — a rank
- * would shift every colleague whenever a lower-id worker joins. With id-keyed
- * slots, joins and leaves disturb a colleague only on a hash collision.
- * The span divides the cell by slot capacity, but stretches for grandfathered
- * over-capacity rosters (a save from before a slot retuning may legally carry
- * more workers than workerSlots), so every spot stays inside the cell.
+ * One spot per assigned worker, along the south edge of the building's cell,
+ * on id-keyed slots (see stableSlots). The span divides the cell by slot
+ * capacity, but stretches for grandfathered over-capacity rosters (a save
+ * from before a slot retuning may legally carry more workers than
+ * workerSlots), so every spot stays inside the cell.
  */
 function assignedSpots(snapshot: Snapshot, cellById: Map<number, PlacedBuilding>): Map<number, Spot> {
   const rosters = new Map<number, WorkerSnapshot[]>();
@@ -88,12 +108,8 @@ function assignedSpots(snapshot: Snapshot, cellById: Map<number, PlacedBuilding>
     const cell = cellById.get(b.id)!;
     const mates = rosters.get(b.id) ?? [];
     const span = Math.max(b.workerSlots, mates.length);
-    const taken = new Set<number>();
-    for (const w of mates) {
-      let slot = w.id % span;
-      while (taken.has(slot)) slot = (slot + 1) % span; // roster <= span, so a free slot exists
-      taken.add(slot);
-      spots.set(w.id, { x: cell.col + (slot + 1) / (span + 1), y: cell.row + 0.85 });
+    for (const [id, slot] of stableSlots(mates, span)) {
+      spots.set(id, { x: cell.col + (slot + 1) / (span + 1), y: cell.row + 0.85 });
     }
   }
   return spots;
@@ -102,19 +118,23 @@ function assignedSpots(snapshot: Snapshot, cellById: Map<number, PlacedBuilding>
 export function layoutWorld(snapshot: Snapshot): WorldLayout {
   const cellById = placeBuildings(snapshot);
   const assigned = assignedSpots(snapshot, cellById);
+  const sorted = [...snapshot.workers].sort(byId);
+  // Campers get id-keyed slots too — a colleague heading to work or a fresh
+  // recruit must not reshuffle the whole camp. The span stretches only when
+  // the camp outgrows its baseline capacity.
+  const idle = sorted.filter((w) => !assigned.has(w.id));
+  const campSpan = Math.max(CAMP_MIN_SPOTS, idle.length);
+  const campSlots = stableSlots(idle, campSpan);
   const workers: PlacedWorker[] = [];
-  let idleRank = 0;
-  for (const w of [...snapshot.workers].sort(byId)) {
-    let spot = assigned.get(w.id);
-    if (spot === undefined) {
-      // unassigned (or orphaned assignment): next free camp spot, id order
-      spot = { x: CAMP_COL0 + (idleRank % CAMP_PER_ROW) + 0.5, y: 1.5 + Math.floor(idleRank / CAMP_PER_ROW) };
-      idleRank += 1;
-    }
+  for (const w of sorted) {
+    const slot = campSlots.get(w.id);
+    const spot = slot === undefined
+      ? assigned.get(w.id)!
+      : { x: CAMP_COL0 + (slot % CAMP_PER_ROW) + 0.5, y: 1.5 + Math.floor(slot / CAMP_PER_ROW) };
     workers.push({ id: w.id, x: spot.x, y: spot.y, efficiency: w.efficiency, tooled: w.toolTicks > 0 });
   }
   const plotRows = Math.ceil(cellById.size / PLOTS_PER_ROW);
-  const campRows = Math.ceil(idleRank / CAMP_PER_ROW);
+  const campRows = Math.ceil(campSpan / CAMP_PER_ROW);
   const rows = Math.max(MIN_ROWS, PLOT_ROW0 + 2 * plotRows + 1, campRows + 3);
-  return { tile: TILE, cols: COLS, rows, buildings: [...cellById.values()], workers };
+  return { tile: TILE, cols: COLS, rows, camp: CAMP_ANCHOR, buildings: [...cellById.values()], workers };
 }

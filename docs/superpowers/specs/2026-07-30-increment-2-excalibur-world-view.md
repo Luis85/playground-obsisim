@@ -106,8 +106,10 @@ unit-testable. Rules:
    `workerSlots`, stretched to the roster size for grandfathered
    over-capacity saves (legal after a slot retuning), so every spot stays
    inside the cell. Same snapshot → same layout, exactly.
-4. **Idle workers** gather at a fixed camp area left of the plots, filling
-   deterministic spots by idle rank (worker id order).
+4. **Idle workers** gather at a fixed camp area left of the plots, marked by
+   a tent, on the same id-keyed slot scheme as buildings (span stretches
+   past the camp's baseline capacity when needed) — so a colleague heading
+   to work or a fresh recruit never reshuffles the whole camp.
 5. The function also reports the grid's `cols`/`rows` and `tileSize`
    (48 px) so the renderer can size the ground and fit the camera.
 
@@ -197,8 +199,12 @@ adapter stays thin.
   unmount; throwing factory renders the fallback and touches nothing else.
 - **`renderer.ts` is exempt from unit tests** — it needs a real WebGL/canvas
   runtime that happy-dom cannot provide; its correctness burden is pushed
-  into the tested pure modules, and it is verified manually in Obsidian
-  (`npm run dev` / `npm run test-build`). No coverage thresholds change.
+  into the tested pure modules. It is covered instead by a **browser smoke
+  test** (`npm run smoke:world`, optional dev tool outside `check:all`):
+  the real adapter in a Chromium, asserting boot-and-draw, walk animation,
+  stop/start clock behavior, and clean dispose via screenshots — plus the
+  manual pass in Obsidian (`npm run dev` / `npm run test-build`). No
+  coverage thresholds change.
 - All gates stay green: lint, LOC cap (every new file < 500), quality
   ratchet (no new dead exports, dupes, complexity; maintainability floor
   holds), css ratchet, typecheck, tests, build, artifacts (with the §2.1

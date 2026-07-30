@@ -131,6 +131,18 @@ describe('layoutWorld', () => {
     for (const w of layout.workers) {
       expect(w.x).toBeLessThan(minPlotCol);
     }
+    // the camp anchor sits with its campers, inside the grid
+    expect(layout.camp.x).toBeLessThan(minPlotCol);
+    expect(layout.camp.y).toBeGreaterThan(0);
+    expect(layout.camp.y).toBeLessThan(layout.rows);
+  });
+
+  it('a worker going idle leaves the existing campers in place', () => {
+    const before = layoutWorld(makeSnapshot({ workers: [worker(10), worker(11)] })).workers;
+    const after = layoutWorld(makeSnapshot({ workers: [worker(9), worker(10), worker(11)] })).workers;
+    for (const w of before) {
+      expect(after.find((a) => a.id === w.id)).toMatchObject({ x: w.x, y: w.y });
+    }
   });
 
   it('carries state, progress, efficiency and tool coverage through', () => {

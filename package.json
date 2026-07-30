@@ -19,6 +19,7 @@
     "check:quality": "node scripts/check-quality.mjs",
     "check:artifacts": "node scripts/check-artifacts.mjs",
     "check:all": "npm run lint && npm run check:loc && npm run check:css && npm run check:quality && npm run typecheck && npm run test && npm run build && npm run check:artifacts",
+    "smoke:world": "node scripts/world-smoke.mjs",
     "test-build": "node scripts/test-build.mjs"
   },
   "dependencies": {

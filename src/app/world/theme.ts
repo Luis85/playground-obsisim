@@ -11,6 +11,8 @@ export interface WorldTheme {
   stateRing: Record<BuildingState, string>;
   workerColors: string[];
   workerToolRing: string;
+  /** Batch progress fill — bright cream so it reads on green tiles. */
+  progressFill: string;
 }
 
 const HEX = /^#[0-9a-f]{6}$/i;
@@ -66,5 +68,6 @@ export function resolveWorldTheme(read: VarReader): WorldTheme {
     },
     workerColors: Array.from({ length: WORKER_BUCKETS }, (_, i) => mixHex(red, green, i / (WORKER_BUCKETS - 1))),
     workerToolRing: '#f2ecdd',
+    progressFill: '#f5efdc',
   };
 }

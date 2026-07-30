@@ -37,6 +37,7 @@ describe('resolveWorldTheme', () => {
     expect(theme.stateRing.unstaffed).toMatch(HEX);
     for (const color of theme.workerColors) expect(color).toMatch(HEX);
     expect(theme.workerToolRing).toMatch(HEX);
+    expect(theme.progressFill).toMatch(HEX);
     expect(theme.ground[0]).toMatch(HEX);
     expect(theme.ground[1]).toMatch(HEX);
     expect(theme.background).toMatch(HEX);

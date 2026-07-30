@@ -17,9 +17,9 @@ const BUILDING_SIZE = TILE * 1.5;
 const BAR_WIDTH = TILE * 1.2;
 const BAR_HEIGHT = 5;
 
-// Draw order, back to front: ground tilemap (default z 0), building tiles
-// (z 1), their progress bars (z 2), workers walking on top of everything (z 3).
-interface BuildingBundle { root: Actor; bar: Actor; }
+// Draw order, back to front: ground tilemap (default z 0), building tiles and
+// the camp tent (z 1), progress bars (z 2), workers on top of everything (z 3).
+interface BuildingBundle { root: Actor; bar: Actor; track: Actor; }
 interface WorkerBundle { actor: Actor; target: Vector; }
 
 /**
@@ -91,6 +91,7 @@ class GraphicCache {
 class WorldScene {
   private ground: TileMap | null = null;
   private groundKey = '';
+  private camp: Actor | null = null;
   private buildings = new Map<number, BuildingBundle>();
   private workers = new Map<number, WorkerBundle>();
   private cache: GraphicCache;
@@ -103,6 +104,7 @@ class WorldScene {
   sync(layout: WorldLayout): void {
     this.lastLayout = layout;
     this.syncGround(layout);
+    this.syncCamp(layout);
     for (const b of layout.buildings) this.upsertBuilding(b);
     for (const w of layout.workers) this.upsertWorker(w);
     this.prune(this.buildings, layout.buildings, (bundle) => bundle.root.kill());
@@ -145,10 +147,22 @@ class WorldScene {
     this.engine.currentScene.add(this.ground);
   }
 
+  /** A tent marks the idle camp as a place; it never moves. */
+  private syncCamp(layout: WorldLayout): void {
+    if (this.camp) return;
+    this.camp = new Actor({ pos: vec(layout.camp.x * TILE, layout.camp.y * TILE), z: 1 });
+    this.camp.graphics.use(new Text({
+      text: '⛺',
+      font: new Font({ family: 'sans-serif', size: 30, textAlign: TextAlign.Center, baseAlign: BaseAlign.Middle }),
+    }));
+    this.engine.currentScene.add(this.camp);
+  }
+
   private upsertBuilding(b: PlacedBuilding): void {
     const bundle = this.buildings.get(b.id) ?? this.spawnBuilding(b);
     // graphics are cached per (def, state): re-using the current one is trivial
     bundle.root.graphics.use(this.cache.building(b));
+    bundle.track.graphics.isVisible = b.batchActive;
     bundle.bar.graphics.isVisible = b.batchActive;
     bundle.bar.scale = vec(Math.max(b.progressPct / 100, 0.001), 1);
   }
@@ -156,15 +170,18 @@ class WorldScene {
   private spawnBuilding(b: PlacedBuilding): BuildingBundle {
     const root = new Actor({ pos: vec((b.col + 0.5) * TILE, (b.row + 0.5) * TILE), z: 1 });
     root.graphics.use(this.cache.building(b));
-    // batch progress: a left-anchored child bar whose x-scale is the percent
-    const bar = new Actor({
+    // batch progress: a dark track with a left-anchored fill bar on top,
+    // the fill's x-scale being the percent (same z — insertion order wins)
+    const barShape = {
       pos: vec(-BAR_WIDTH / 2, BUILDING_SIZE / 2 - BAR_HEIGHT),
-      anchor: vec(0, 0.5), width: BAR_WIDTH, height: BAR_HEIGHT,
-      color: Color.fromHex(this.theme.stateRing.producing), z: 2,
-    });
+      anchor: vec(0, 0.5), width: BAR_WIDTH, height: BAR_HEIGHT, z: 2,
+    };
+    const track = new Actor({ ...barShape, color: new Color(15, 18, 15, 0.55) });
+    const bar = new Actor({ ...barShape, color: Color.fromHex(this.theme.progressFill) });
+    root.addChild(track);
     root.addChild(bar);
     this.engine.currentScene.add(root);
-    const bundle = { root, bar };
+    const bundle = { root, bar, track };
     this.buildings.set(b.id, bundle);
     return bundle;
   }

@@ -1095,3 +1095,19 @@ git commit -m "docs: README section for increment 2 (Excalibur world view)"
 - **Task order is load-bearing:** the pure modules (1–2) land with their tests before anything imports excalibur; the seam (3) proves the view against fakes; only then does excalibur enter the dependency graph (4). Never import `renderer.ts` from a test or from `renderer-key.ts`.
 - **fallow dead-export ratchet:** exports of Tasks 1–2 are consumed in Task 4; `check:quality` is expected green from Task 4 on (and at the PR head), not necessarily between.
 - **If the excalibur typecheck fights back** in Task 4 (API drift vs the d.ts): adjust the adapter, not the contract — `WorldRenderer` is what the tested code depends on.
+
+## As built (deviations from the task code above)
+
+- The adapter's internals evolved past Task 4's listing while holding the
+  fallow ratchets: one consolidated `renderer.ts` (GraphicCache + WorldScene
+  + closure factory), simpler idempotent upserts against cached graphics.
+- Review rounds on PR #4 hardened the layout: worker slots are id-keyed
+  (`stableSlots`) instead of roster-ranked, spans stretch for grandfathered
+  over-capacity rosters, and the same scheme covers the idle camp; excalibur
+  is pinned exactly (`0.32.0`) and the camera refits via ResizeObserver.
+- Visual polish: progress bars gained a dark track and a high-contrast
+  cream fill (`theme.progressFill`); the camp is marked by a tent at
+  `WorldLayout.camp`.
+- Added `npm run smoke:world` (Task-5-adjacent, not in the plan): an
+  optional browser smoke test driving the real renderer in Chromium —
+  see `docs/superpowers/reviews/2026-07-30-increment-2-polish-pass.md`.

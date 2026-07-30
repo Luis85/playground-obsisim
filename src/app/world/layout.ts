@@ -29,6 +29,12 @@ export interface PlacedWorker {
   /** Tile-space coordinates (fractional): px = x * TILE. */
   x: number;
   y: number;
+  /**
+   * The worker's post: a building id, or null for the idle camp. The
+   * renderer keeps a worker parked while `at` is unchanged, so slot-math
+   * shifts (a span stretching or shrinking) never make bystanders walk.
+   */
+  at: number | null;
   efficiency: number;
   tooled: boolean;
 }
@@ -131,7 +137,8 @@ export function layoutWorld(snapshot: Snapshot): WorldLayout {
     const spot = slot === undefined
       ? assigned.get(w.id)!
       : { x: CAMP_COL0 + (slot % CAMP_PER_ROW) + 0.5, y: 1.5 + Math.floor(slot / CAMP_PER_ROW) };
-    workers.push({ id: w.id, x: spot.x, y: spot.y, efficiency: w.efficiency, tooled: w.toolTicks > 0 });
+    const at = slot === undefined ? w.buildingId : null;
+    workers.push({ id: w.id, x: spot.x, y: spot.y, at, efficiency: w.efficiency, tooled: w.toolTicks > 0 });
   }
   const plotRows = Math.ceil(cellById.size / PLOTS_PER_ROW);
   const campRows = Math.ceil(campSpan / CAMP_PER_ROW);

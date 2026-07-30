@@ -152,8 +152,19 @@ describe('layoutWorld', () => {
     });
     const layout = layoutWorld(snapshot);
     expect(layout.buildings[0]).toMatchObject({ state: 'producing', progressPct: 40, batchActive: true });
-    expect(layout.workers[0]).toMatchObject({ efficiency: 0.5, tooled: true });
+    expect(layout.workers[0]).toMatchObject({ efficiency: 0.5, tooled: true, at: 1 });
     expect(layout.tile).toBe(TILE);
+  });
+
+  it('reports each worker\'s post: the building id, or null at the camp', () => {
+    const layout = layoutWorld(makeSnapshot({
+      buildings: [building(1)],
+      workers: [worker(10, { buildingId: 1 }), worker(11), worker(12, { buildingId: 99 })],
+    }));
+    const at = new Map(layout.workers.map((w) => [w.id, w.at]));
+    expect(at.get(10)).toBe(1);
+    expect(at.get(11)).toBeNull(); // idle
+    expect(at.get(12)).toBeNull(); // orphaned assignment falls back to camp
   });
 
   it('keeps every placement inside the reported grid', () => {

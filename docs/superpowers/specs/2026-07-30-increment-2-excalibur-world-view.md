@@ -100,17 +100,20 @@ unit-testable. Rules:
 3. **Assigned workers** stand at deterministic per-slot offsets along the
    south edge of their building's cell. A worker's slot is keyed to its own
    id (id modulo the slot span, probing upward on collision in id order) —
-   never to its rank in the current roster, which would shift every
-   colleague whenever a lower-id worker joins. Joins and leaves disturb a
-   colleague only on a hash collision. The span is the building's
+   never to its rank in the current roster. The span is the building's
    `workerSlots`, stretched to the roster size for grandfathered
    over-capacity saves (legal after a slot retuning), so every spot stays
    inside the cell. Same snapshot → same layout, exactly.
 4. **Idle workers** gather at a fixed camp area left of the plots, marked by
-   a tent, on the same id-keyed slot scheme as buildings (span stretches
-   past the camp's baseline capacity when needed) — so a colleague heading
-   to work or a fresh recruit never reshuffles the whole camp.
-5. The function also reports the grid's `cols`/`rows` and `tileSize`
+   a tent, on the same id-keyed slot scheme (span stretches past the camp's
+   baseline capacity when needed).
+5. **No-cause walking is ruled out by the renderer, not by slot math.** The
+   layout reports each worker's post (`at`: building id, or null for the
+   camp), and the scene keeps a worker parked while its post is unchanged —
+   so span changes and hash collisions never walk bystanders; only a real
+   reassignment moves a worker. The id-keyed slots exist to make fresh
+   layouts (view open, save load) deterministic and collision-poor.
+6. The function also reports the grid's `cols`/`rows` and `tileSize`
    (48 px) so the renderer can size the ground and fit the camera.
 
 ### 2.4 Rendering

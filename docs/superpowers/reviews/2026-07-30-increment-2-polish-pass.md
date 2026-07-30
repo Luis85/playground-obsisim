@@ -32,11 +32,24 @@ applied the fixes below in the same PR.
   is deactivated): ~30 entities at ≤ 8/s of pure JS with the render clock
   stopped — measurable cost only in theory; revisit if colonies grow orders
   of magnitude.
-- Camp/slot spans still reshuffle when a span stretches (over-capacity
-  roster, camp beyond baseline) — accepted residual of a pure, stateless
-  layout; increment 3 makes positions sim-state and retires the question.
 - The plan document is left as authored; as-built deviations are recorded in
   its Execution Notes.
+
+## Addendum (same pass, after Codex round 3)
+
+The span-stretch residual first listed as accepted (span changes reshuffling
+workers whose assignments did not change) was correctly re-flagged by review:
+crossing the camp's baseline capacity is an ordinary state, not an edge. It
+is now closed one level up, where state actually lives: the layout reports
+each worker's post (`PlacedWorker.at`), and the scene keeps a worker parked
+while its post is unchanged (`walkWorker` compares posts, not coordinates).
+Pure slot math cannot be transition-stable — a pure function of the current
+set has no memory of the previous one — so the id-keyed hash's job is
+reduced to deterministic, collision-poor *fresh* layouts, and live stability
+is a renderer guarantee. Accepted residual of the sticky scheme: after a
+span change, a *newly arriving* worker computes its spot under the new span
+and can land near a parked bystander (dots may briefly overlap); it
+self-heals on the next reassignment and misleads nobody.
 
 ## Verification
 

@@ -20,7 +20,7 @@ const BAR_HEIGHT = 5;
 // Draw order, back to front: ground tilemap (default z 0), building tiles and
 // the camp tent (z 1), progress bars (z 2), workers on top of everything (z 3).
 interface BuildingBundle { root: Actor; bar: Actor; track: Actor; }
-interface WorkerBundle { actor: Actor; target: Vector; }
+interface WorkerBundle { actor: Actor; at: number | null; }
 
 /**
  * Building and worker looks are shared, lazily-built graphics: seven defs x
@@ -190,21 +190,27 @@ class WorldScene {
     const target = vec(w.x * TILE, w.y * TILE);
     const bundle = this.workers.get(w.id) ?? this.spawnWorker(w, target);
     bundle.actor.graphics.use(this.cache.worker(efficiencyBucket(w.efficiency), w.tooled));
-    this.walkWorker(bundle, target);
+    this.walkWorker(bundle, w, target);
   }
 
   /** New workers appear in place — only reassignments walk (spec §2.4). */
   private spawnWorker(w: PlacedWorker, target: Vector): WorkerBundle {
     const actor = new Actor({ pos: target, z: 3 });
     this.engine.currentScene.add(actor);
-    const bundle = { actor, target };
+    const bundle = { actor, at: w.at };
     this.workers.set(w.id, bundle);
     return bundle;
   }
 
-  private walkWorker(bundle: WorkerBundle, target: Vector): void {
-    if (bundle.target.equals(target)) return;
-    bundle.target = target;
+  /**
+   * Posts are sticky: while a worker's `at` (building or camp) is unchanged
+   * it keeps the spot it stands on, even when the layout's slot math shifted
+   * under it (a span stretching or shrinking as colleagues come and go).
+   * Only a real reassignment walks the worker, to its newly computed spot.
+   */
+  private walkWorker(bundle: WorkerBundle, w: PlacedWorker, target: Vector): void {
+    if (bundle.at === w.at) return;
+    bundle.at = w.at;
     bundle.actor.actions.clearActions();
     bundle.actor.actions.moveTo(target, WORKER_SPEED);
   }

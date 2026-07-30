@@ -116,7 +116,15 @@ check(
   afterReset.building === 0 && afterReset.worker > 0,
 );
 
-await step(6); // dispose()
+await step(6); // same-tick reset: a new snapshot at the same tick is a new timeline
+await wait(400);
+const afterSameTickReset = await page.evaluate(() => window.__probe());
+check(
+  `same-tick reset also clears the previous colony (${JSON.stringify(afterSameTickReset)})`,
+  afterSameTickReset.building === 0 && afterSameTickReset.worker === 2,
+);
+
+await step(7); // dispose()
 await wait(300);
 check('dispose() raises no errors', pageErrors.length === 0);
 

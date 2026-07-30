@@ -59,6 +59,9 @@ const phases: Array<() => void> = [
   // colony reset: tick regresses, entity ids restart — the scene must forget
   // the old colony instead of gliding recycled ids from their former posts
   () => renderer.sync(snap(1, [], [worker(1), worker(2), worker(3)])),
+  // reset of a tick-1 colony: a NEW snapshot at the SAME tick is also a new
+  // timeline (round 10 — e.g. resetting a freshly-loaded save)
+  () => renderer.sync(snap(1, [], [worker(4), worker(5)])),
   () => renderer.dispose(),
 ];
 

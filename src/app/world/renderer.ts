@@ -2,6 +2,7 @@ import {
   Actor, BaseAlign, Circle, Color, DisplayMode, Engine, Font, GraphicsGroup,
   Rectangle, Text, TextAlign, TileMap, vec, type Vector,
 } from 'excalibur';
+import type { Snapshot } from '../../shared/snapshot';
 import type { WorldRendererFactory } from './renderer-key';
 import {
   layoutWorld, pickBuildingAt, TILE,
@@ -286,7 +287,7 @@ export const createExcaliburWorldRenderer: WorldRendererFactory = (host) => {
   let fatalListener: ((message: string) => void) | null = null;
   // fed back into layoutWorld so slot allocation remembers who stands where
   let last: WorldLayout | undefined;
-  let lastTick: number | null = null;
+  let lastSnapshot: Snapshot | null = null;
 
   const teardown = () => {
     observer.disconnect();
@@ -312,15 +313,18 @@ export const createExcaliburWorldRenderer: WorldRendererFactory = (host) => {
 
   return {
     sync(snapshot) {
-      if (disposed) return;
-      // A tick regression means a new timeline (colony reset): the fresh
-      // world reuses entity ids, so held slots and id-keyed actors from the
-      // old colony must not carry over (review round 9).
-      if (lastTick !== null && snapshot.tick < lastTick) {
+      if (disposed || snapshot === lastSnapshot) return;
+      // A NEW snapshot object at the same or an earlier tick means a new
+      // timeline (colony reset — including resetting a save still at tick 0):
+      // the fresh world reuses entity ids, so held slots and id-keyed actors
+      // from the old colony must not carry over (review rounds 9–10). The
+      // engine emits exactly one snapshot object per tick, so a running
+      // session never trips this.
+      if (lastSnapshot !== null && snapshot.tick <= lastSnapshot.tick) {
         scene.clear();
         last = undefined;
       }
-      lastTick = snapshot.tick;
+      lastSnapshot = snapshot;
       last = layoutWorld(snapshot, last);
       scene.sync(last);
     },

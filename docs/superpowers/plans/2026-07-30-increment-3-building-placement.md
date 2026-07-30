@@ -94,6 +94,7 @@ export const CAMP_COLS = 3;
 export function isInsideMap(map: WorldMapSize, col: number, row: number): boolean;
 export function isTileBuildable(map: WorldMapSize, occupied: readonly TileRef[], col: number, row: number): boolean;
 export function autoPlacePosition(map: WorldMapSize, occupied: readonly TileRef[]): TileRef | null;
+export function mapThatFits(buildingCount: number): WorldMapSize; // DEFAULT_MAP grown until the count fits
 ```
 
 - [ ] **Step 1: Write the failing test**
@@ -172,7 +173,24 @@ describe('autoPlacePosition', () => {
     expect(autoPlacePosition(DEFAULT_MAP, occupied)).toEqual(autoPlacePosition(DEFAULT_MAP, occupied));
   });
 });
+
+describe('mapThatFits', () => {
+  it('returns the default map whenever the colony fits it', () => {
+    expect(mapThatFits(0)).toEqual(DEFAULT_MAP);
+    expect(mapThatFits(336)).toEqual(DEFAULT_MAP); // exactly full
+  });
+
+  it('grows rows first, then columns, and covers the structural record cap', () => {
+    expect(mapThatFits(337)).toEqual({ cols: DEFAULT_MAP.cols, rows: 17 }); // 21 x 17 = 357
+    const forTenThousand = mapThatFits(10_000);
+    expect((forTenThousand.cols - CAMP_COLS) * forTenThousand.rows).toBeGreaterThanOrEqual(10_000);
+    expect(forTenThousand.cols).toBeLessThanOrEqual(MAX_MAP.cols);
+    expect(forTenThousand.rows).toBeLessThanOrEqual(MAX_MAP.rows);
+  });
+});
 ```
+
+(`MAX_MAP` and `mapThatFits` join the test file's placement import.)
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -262,12 +280,29 @@ export function autoPlacePosition(map: WorldMapSize, occupied: readonly TileRef[
   }
   return null;
 }
+
+/**
+ * The map a colony of this size needs: DEFAULT_MAP unless the building count
+ * outgrows its buildable tiles, in which case rows extend (then, only past
+ * 256 rows, columns), capped at MAX_MAP. Exists for the v1→v2 migration: a
+ * v1 save can legally hold far more buildings than the default map (v1 had
+ * no spatial or count cap; the structural guard admits 10,000 records, and
+ * MAX_MAP's 64,768 buildable tiles cover that), and migration must never
+ * classify a valid oversized colony as corrupt.
+ */
+export function mapThatFits(buildingCount: number): WorldMapSize {
+  const fits = (map: WorldMapSize) => (map.cols - CAMP_COLS) * map.rows >= buildingCount;
+  const map = { ...DEFAULT_MAP };
+  while (!fits(map) && map.rows < MAX_MAP.rows) map.rows += 1;
+  while (!fits(map) && map.cols < MAX_MAP.cols) map.cols += 1;
+  return map;
+}
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run tests/shared/placement.test.ts`
-Expected: PASS (11 tests)
+Expected: PASS (13 tests)
 
 - [ ] **Step 5: Lint, typecheck, full test run**
 
@@ -605,8 +640,15 @@ describe('migrateSaveToLatest (v1 -> v2)', () => {
     expect(out.buildings.find((b) => b.id === 11)).toMatchObject({ col: 6, row: 1 });
   });
 
-  it('treats a v1 save with more buildings than tiles as unloadable', () => {
-    expect(migrateSaveToLatest(v1Fixture(337))).toBeNull(); // 336 buildable tiles
+  it('preserves a valid colony bigger than the default map by growing the map', () => {
+    // v1 had no building cap: 337 buildings is a legal save, never a corrupt
+    // one — the migration must not route it to the backup-and-start-fresh path
+    const out = migrateSaveToLatest(v1Fixture(337)) as SaveGameV2;
+    expect(out.version).toBe(2);
+    expect(out.buildings).toHaveLength(337);
+    expect(out.map.rows).toBeGreaterThan(16); // grown past the 336-tile default
+    const tiles = new Set(out.buildings.map((b) => `${b.col},${b.row}`));
+    expect(tiles.size).toBe(337); // every position distinct and on the map
   });
 
   it('does not mutate its input', () => {
@@ -764,7 +806,7 @@ In `src/shared/save-migration.ts`:
 ```ts
 import type { SaveGameV1, SaveGameV2 } from './save';
 import { isSaveGameV1, isSaveGameV2, LATEST_SAVE_VERSION } from './save';
-import { autoPlacePosition, DEFAULT_MAP } from './placement';
+import { autoPlacePosition, mapThatFits } from './placement';
 ```
 
 2. `SAVE_GUARDS` becomes:
@@ -780,24 +822,28 @@ const SAVE_GUARDS: SaveGuards = { 1: isSaveGameV1, 2: isSaveGameV2 };
  * v1 -> v2: space arrives. Every building gets the position increment 2's
  * derived layout drew it at — autoPlacePosition replays exactly that plot
  * sequence for an ascending-id walk over an empty map — and the save gains
- * the default map. Placement geometry is structure, not content (no catalog,
- * no BALANCE), so this file's import discipline holds. Throws when a
- * (hand-edited) v1 save holds more buildings than the map has buildable
- * tiles; the runner's catch turns that into the corrupt-backup path.
+ * a map that FITS: the default one, grown by mapThatFits when a valid v1
+ * colony outgrew it (v1 had no building cap, so oversized colonies are
+ * legal saves, never corrupt ones). Placement geometry is structure, not
+ * content (no catalog, no BALANCE), so this file's import discipline holds.
+ * The null-check is an unreachable invariant guard — mapThatFits covers
+ * every guard-admissible building count — kept so a future geometry bug
+ * fails loudly into the corrupt-backup path instead of writing garbage.
  */
 const migrateV1toV2: MigrationStep = {
   from: 1,
   to: 2,
   migrate: (save) => {
     const v1 = save as SaveGameV1; // the runner guard-validated this shape
+    const map = mapThatFits(v1.buildings.length);
     const occupied: { col: number; row: number }[] = [];
     const buildings = [...v1.buildings].sort((a, b) => a.id - b.id).map((b) => {
-      const at = autoPlacePosition(DEFAULT_MAP, occupied);
+      const at = autoPlacePosition(map, occupied);
       if (at === null) throw new Error('more buildings than the world has tiles');
       occupied.push(at);
       return { ...b, col: at.col, row: at.row };
     });
-    return { ...v1, version: 2, map: { ...DEFAULT_MAP }, buildings };
+    return { ...v1, version: 2, map, buildings };
   },
 };
 
@@ -1385,10 +1431,12 @@ Append to `tests/engine/systems/command-system.test.ts`:
     await dispatch(
       { type: 'demolishBuilding', buildingId },
       { type: 'assignWorker', buildingId },
+      { type: 'unassignWorker', buildingId },
       { type: 'demolishBuilding', buildingId },
     );
     expect(snapshot().notices).toEqual([
       { kind: 'success', message: 'Demolished the Forester — cost refunded.' },
+      { kind: 'rejection', message: 'Building not found.' },
       { kind: 'rejection', message: 'Building not found.' },
       { kind: 'rejection', message: 'Building not found.' },
     ]);
@@ -1485,7 +1533,25 @@ import type { ResourceId } from '../../shared/content-types';
   if (ctx.demolishedIds.has(buildingId)) return null;
 ```
 
-4. Append the handler:
+4. `handleUnassignWorker` starts by consulting `findBuilding` too. Demolition
+   clears its workers' assignments, so without this a same-tick
+   `unassignWorker` against the demolished id reports
+   `No worker assigned to this building.` instead of the uniform
+   `Building not found.` (and unassign against a never-existing id gains the
+   same consistency for free — update any test pinning the old message for
+   unknown ids). Its opening becomes:
+
+```ts
+export function handleUnassignWorker(ctx: CommandContext, command: Extract<Command, { type: 'unassignWorker' }>): void {
+  if (findBuilding(ctx, command.buildingId) === null) {
+    ctx.notices.reject('Building not found.');
+    return;
+  }
+  let found = false;
+  // ... rest unchanged
+```
+
+5. Append the handler:
 
 ```ts
 export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Command, { type: 'demolishBuilding' }>): void {
@@ -2114,8 +2180,20 @@ const BAR_WIDTH = TILE * 0.8;
   }
 ```
 
-4. `sync()` gains `this.applySelection();` as its last line; `clear()` additionally kills ghost and ring (`this.setGhost(null); this.selectionRing?.kill(); this.selectionRing = null;` — selectedId survives; the view decides).
-5. The factory's returned object gains:
+4. `upsertBuilding` gains a position update as its second line — buildings can
+   MOVE now, and today's renderer assigns `root.pos` only in `spawnBuilding`,
+   which would leave the actor drawn at the old tile while the snapshot,
+   hit-testing, selection ring, and workers all move to the new one:
+
+```ts
+  private upsertBuilding(b: PlacedBuilding): void {
+    const bundle = this.buildings.get(b.id) ?? this.spawnBuilding(b);
+    bundle.root.pos = vec((b.col + 0.5) * TILE, (b.row + 0.5) * TILE); // moves snap to the new tile
+    // ... rest unchanged
+```
+
+5. `sync()` gains `this.applySelection();` as its last line; `clear()` additionally kills ghost and ring (`this.setGhost(null); this.selectionRing?.kill(); this.selectionRing = null;` — selectedId survives; the view decides).
+6. The factory's returned object gains:
 
 ```ts
     tileAt(pageX, pageY) {
@@ -2135,9 +2213,21 @@ const BAR_WIDTH = TILE * 0.8;
 
 - [ ] **Step 4: Extend the smoke test**
 
-`scripts/world-smoke-harness/main.ts` — the phase array gains three entries before the reset phases (final order: 0 first colony, 1 walk, 2 stop, 3 start, 4 grow, **5 ghost+selection on, 6 ghost invalid, 7 ghost+selection off**, 8 reset, 9 same-tick reset, 10 dispose):
+`scripts/world-smoke-harness/main.ts` — first, the harness's `building()`
+helper gains `col`/`row` defaults (id-keyed tiles, mirroring the test
+fixture's `makeBuilding`): `BuildingSnapshot` now requires positions, and
+the harness is not typechecked, so missing fields would surface as NaN
+actor positions at runtime. Then the phase array gains four entries before
+the reset phases (final order: 0 first colony, 1 walk, 2 stop, 3 start,
+4 grow, **5 building moved, 6 ghost+selection on, 7 ghost invalid,
+8 ghost+selection off**, 9 reset, 10 same-tick reset, 11 dispose):
 
 ```ts
+  // building 2 moved to a fresh tile: the ACTOR must follow (its position is
+  // re-applied on every sync, not only at spawn)
+  () => renderer.sync(snap(4,
+    [building(1, 'forester', { workers: 2, state: 'producing', batchActive: true, progressPct: 90 }), building(2, 'farm', { col: 14, row: 7, workers: 1, state: 'producing', batchActive: true, progressPct: 10 }), building(3, 'sawmill')],
+    [worker(10, { buildingId: 1, toolTicks: 100 }), worker(11, { buildingId: 1, efficiency: 0.3 }), worker(12, { buildingId: 2 }), worker(13)])),
   () => {
     renderer.setGhost({ defId: 'bakery', col: 10, row: 5, valid: true });
     renderer.setSelection(1);
@@ -2149,25 +2239,36 @@ const BAR_WIDTH = TILE * 0.8;
   },
 ```
 
-`scripts/world-smoke.mjs` — after the `start() resumes` check, insert (and renumber the later `step(5)`/`step(6)`/`step(7)` calls to `step(8)`/`step(9)`/`step(10)`):
+`scripts/world-smoke.mjs` — after the `start() resumes` check, insert (and renumber the later `step(5)`/`step(6)`/`step(7)` calls to `step(9)`/`step(10)`/`step(11)`):
 
 ```js
+const preMove = await shot();
+await step(5); // building 2 moves to a fresh tile
+await wait(2500); // its worker walks after it
+const moved = await shot();
+check('a moved building is drawn at its new tile', !moved.equals(preMove));
+
 const preGhost = await shot();
-await step(5); // ghost + selection on
+await step(6); // ghost + selection on
 await wait(300);
 const ghostOn = await shot();
 check('setGhost + setSelection draw over the scene', !ghostOn.equals(preGhost));
 
-await step(6); // same tile, invalid tint
+await step(7); // same tile, invalid tint
 await wait(300);
 const ghostInvalid = await shot();
 check('an invalid ghost reads differently from a valid one', !ghostInvalid.equals(ghostOn));
 
-await step(7); // both cleared
+await step(8); // both cleared
 await wait(300);
 const ghostOff = await shot();
 check('clearing ghost and selection restores the scene', ghostOff.equals(preGhost));
 ```
+
+(The moved-building check is screenshot-based like its neighbors: the frame
+must change when the building snaps to its new tile and its worker walks
+after it. The phase's `snap(4, …)` follows the grow phase's `snap(3, …)` —
+a normal next tick, safely clear of the same-or-earlier-tick reset signal.)
 
 - [ ] **Step 5: Run suite + optional smoke**
 

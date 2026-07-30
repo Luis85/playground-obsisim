@@ -137,10 +137,14 @@ they always have.
   save-migration.ts's import discipline (shared-sibling imports only). An
   old colony loads with every building exactly where Increment 2 drew it.
   The first 40 ids land on the legacy pattern (24×16 holds 8 plot rows × 5);
-  buildings beyond that continue in the row-major scan. If positions run
-  out (more buildings than buildable tiles — impossible organically), the
-  step throws → the runner's existing catch yields `null` → the corrupt-save
-  backup path.
+  buildings beyond that continue in the row-major scan. A colony that
+  outgrew the default map is a **valid save, not a corrupt one** — v1 never
+  capped construction, and the structural guard admits up to 10,000 building
+  records — so the migration sizes the map to fit (`mapThatFits`: rows grow
+  first, then columns, within `MAX_MAP`, whose 64,768 buildable tiles cover
+  the guard's cap). The step's throw-on-null remains only as an unreachable
+  invariant guard routing genuine geometry bugs to the corrupt-save backup
+  path.
 - `isLoadableSave` (v2, catalog-aware): every position on a buildable-class
   tile (in bounds, off the camp band) and **no two buildings on one tile**.
   Structural shape stays in `isSaveGameV2`; cross-field truths live here,
@@ -269,9 +273,10 @@ A three-state machine in the World view: `idle` / `place(defId)` /
    fresh colony starts as v2; saves round-trip positions and map byte-
    stably; unloadable v2 shapes (duplicate tiles, out-of-bounds) take the
    backup path.
-6. The world is a fixed 24×16 grid with the camp band on the left; nothing
-   can be placed out of bounds, on the camp, or on another building — each
-   rejection surfaces as a notice.
+6. The world is a fixed 24×16 grid with the camp band on the left (a
+   migrated colony that outgrew it carries the larger persisted map
+   `mapThatFits` chose — §2.4); nothing can be placed out of bounds, on the
+   camp, or on another building — each rejection surfaces as a notice.
 
 ---
 

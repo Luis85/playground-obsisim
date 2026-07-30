@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { GameEngine } from '../../src/engine/game-engine';
+import { initialSave } from '../../src/engine/world';
 import type { SaveGameV1 } from '../../src/shared/save';
 
 async function steps(engine: GameEngine, n: number) {
@@ -127,6 +128,58 @@ describe('GameEngine', () => {
     expect(save.stockpile.wood).toBe(20); // cost paid AND building present
     await engine.flush(); // empty queue: no extra tick
     expect(engine.serialize().tick).toBe(1);
+  });
+
+  // Killer test for buildSaveFromWorld's sorts (increment-1 review: survived).
+  // Entity iteration order equals id order in every other test, so the sorts are
+  // otherwise unobservable. Listing save records out of id order makes spawn
+  // order — and therefore iteration order — differ from id order.
+  it('serializes entities in ascending id order regardless of spawn order', async () => {
+    const save = initialSave();
+    save.buildings = [
+      { id: 5, defId: 'sawmill', progress: 0, batchActive: false },
+      { id: 4, defId: 'forester', progress: 0, batchActive: false },
+    ];
+    save.workers = [3, 1, 2].map((id) => ({ id, hunger: 0, buildingId: null, toolTicks: 0 }));
+    save.nextEntityId = 6;
+    const engine = await GameEngine.create(save);
+    const out = engine.serialize();
+    expect(out.buildings.map((b) => b.id)).toEqual([4, 5]);
+    expect(out.workers.map((w) => w.id)).toEqual([1, 2, 3]);
+  });
+
+  // Killer test for flush()'s `await this.settle()` (increment-1 review:
+  // survived). The mutation is only observable when a tick is in flight AND the
+  // queue is non-empty, which needs a command that MISSED that tick's drain.
+  // Dispatching right after stepOnce() does not achieve that — measured: the
+  // command still lands in the in-flight tick, flush() no-ops, and the mutation
+  // survives. So the window is entered by state, not by counting microtasks.
+  it('flush() waits out an in-flight tick before running a command that missed it', async () => {
+    const save = initialSave();
+    save.stockpile = { wood: 60 };
+    const engine = await GameEngine.create(save);
+
+    // A is queued BEFORE the tick, so tick 1's CommandSystem pays for it.
+    engine.dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
+    const inFlight = engine.stepOnce(); // deliberately not awaited
+
+    // Spin until A's cost is paid: that proves tick 1 has drained its queue,
+    // while the tick itself is still in flight (inFlight is not awaited yet).
+    let spins = 0;
+    while (engine.serialize().stockpile.wood === 60) {
+      await Promise.resolve();
+      if (++spins > 1000) throw new Error('in-flight tick never drained its queue');
+    }
+    expect(engine.snapshot!.tick).toBe(0); // still in flight: nothing published
+
+    // B therefore cannot be seen by tick 1 — only flush()'s extra tick runs it.
+    engine.dispatch({ type: 'constructBuilding', buildingDefId: 'gatherersHut' });
+    await engine.flush();
+    await inFlight;
+
+    const out = engine.serialize();
+    expect(out.buildings.map((b) => b.defId)).toEqual(['forester', 'gatherersHut']);
+    expect(out.tick).toBe(2); // the in-flight tick plus flush's own
   });
 
   it('a manual step publishes a snapshot including entities its commands created', async () => {

@@ -15,7 +15,7 @@ import {
   CommandQueue, IdCounter, NoticeBoard, SimClock, SnapshotStore, StatsHistory, Stockpile,
 } from './resources';
 import type { BuildingFacts, WorkerFacts } from './snapshot-builder';
-import { buildEntitySections } from './snapshot-builder';
+import { buildEntitySections, gatherEntityFacts } from './snapshot-builder';
 import { CommandSystem } from './systems/command-system';
 import { HungerSystem } from './systems/hunger-system';
 import { EfficiencySystem } from './systems/efficiency-system';
@@ -359,34 +359,8 @@ function buildInitialSnapshot(save: SaveGameV1): Snapshot {
 export function refreshEntitySections(world: IRuntimeWorld): void {
   const store = world.getResource(SnapshotStore);
   if (store.latest === null) return;
-
-  const workerFacts: WorkerFacts[] = [];
-  const buildingFacts: BuildingFacts[] = [];
-  for (const entity of world.getEntities()) {
-    const building = entity.getComponent(Building);
-    if (building) {
-      buildingFacts.push({
-        id: building.id,
-        defId: building.defId,
-        workerSlots: entity.getComponent(WorkerSlots)!.max,
-        progress: entity.getComponent(Production)!.progress,
-        batchActive: entity.getComponent(Production)!.batchActive,
-      });
-      continue;
-    }
-    const worker = entity.getComponent(Worker);
-    if (worker) {
-      workerFacts.push({
-        id: worker.id,
-        hunger: entity.getComponent(Hunger)!.value,
-        efficiency: entity.getComponent(Efficiency)!.value,
-        buildingId: entity.getComponent(JobAssignment)!.buildingId,
-        toolTicks: entity.getComponent(ToolCoverage)!.remainingTicks,
-      });
-    }
-  }
-
-  store.latest = { ...store.latest, ...buildEntitySections(workerFacts, buildingFacts) };
+  const { workers, buildings } = gatherEntityFacts(world);
+  store.latest = { ...store.latest, ...buildEntitySections(workers, buildings) };
 }
 
 /**

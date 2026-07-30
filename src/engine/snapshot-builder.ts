@@ -1,7 +1,12 @@
+import type { IRuntimeWorld } from 'sim-ecs';
 import type { BuildingDefId } from '../shared/content-types';
+import type { SavedBuilding, SavedWorker } from '../shared/save';
 import type { BuildingSnapshot, BuildingState, WorkerSnapshot } from '../shared/snapshot';
 import { BALANCE } from './content/balance';
 import { BUILDINGS } from './content/buildings';
+import {
+  Building, Efficiency, Hunger, JobAssignment, Production, ToolCoverage, Worker, WorkerSlots,
+} from './components';
 
 /**
  * Plain per-entity facts, decoupled from sim-ecs and from where they came
@@ -80,4 +85,86 @@ export function buildEntitySections(workers: readonly WorkerFacts[], buildings: 
     population: workerSnaps.length,
     idleWorkers: workerSnaps.filter((w) => w.buildingId === null).length,
   };
+}
+
+/**
+ * THE component -> facts conversion for a live world, one function per entity
+ * kind. Both live-world readers go through these: SnapshotSystem's ECS queries
+ * (component instances destructured from the query) and gatherEntityFacts's
+ * getEntities() walk (the same instances via getComponent). A new worker or
+ * building field is therefore ONE edit here plus its Facts interface, instead of
+ * drifting between access paths (increment-1 review: 3-site edit risk).
+ *
+ * Save records are NOT convertible here — buildInitialSnapshot runs before any
+ * entity exists and maps SavedWorker/SavedBuilding instead.
+ */
+export function workerFactsOf(
+  worker: Worker, hunger: Hunger, job: JobAssignment, efficiency: Efficiency, coverage: ToolCoverage,
+): WorkerFacts {
+  return {
+    id: worker.id,
+    hunger: hunger.value,
+    efficiency: efficiency.value,
+    buildingId: job.buildingId,
+    toolTicks: coverage.remainingTicks,
+  };
+}
+
+export function buildingFactsOf(building: Building, slots: WorkerSlots, production: Production): BuildingFacts {
+  return {
+    id: building.id,
+    defId: building.defId,
+    workerSlots: slots.max,
+    progress: production.progress,
+    batchActive: production.batchActive,
+  };
+}
+
+/**
+ * Facts -> save records. SavedWorker is deliberately a SUBSET of WorkerFacts:
+ * `efficiency` is recomputed from hunger every tick by EfficiencySystem, so
+ * storing it would be a second source of truth. That subsetting is why this
+ * cannot be derived automatically — but keeping it here, beside workerFactsOf,
+ * means the persist decision for a new fact is one obvious edit rather than a
+ * whitelist buried inside the serializer.
+ */
+export function savedWorkerOf(facts: WorkerFacts): SavedWorker {
+  return { id: facts.id, hunger: facts.hunger, buildingId: facts.buildingId, toolTicks: facts.toolTicks };
+}
+
+export function savedBuildingOf(facts: BuildingFacts): SavedBuilding {
+  return { id: facts.id, defId: facts.defId, progress: facts.progress, batchActive: facts.batchActive };
+}
+
+export interface EntityFacts {
+  workers: WorkerFacts[];
+  buildings: BuildingFacts[];
+}
+
+/**
+ * The getEntities() walk, shared by the post-step snapshot refresh and save
+ * serialization. Built on the mappers above, so it can never disagree with
+ * SnapshotSystem about what a worker or building is.
+ */
+export function gatherEntityFacts(world: IRuntimeWorld): EntityFacts {
+  const workers: WorkerFacts[] = [];
+  const buildings: BuildingFacts[] = [];
+  for (const entity of world.getEntities()) {
+    const building = entity.getComponent(Building);
+    if (building) {
+      buildings.push(buildingFactsOf(building, entity.getComponent(WorkerSlots)!, entity.getComponent(Production)!));
+      continue;
+    }
+    const worker = entity.getComponent(Worker);
+    if (worker) {
+      workers.push(workerFactsOf(
+        worker,
+        entity.getComponent(Hunger)!,
+        entity.getComponent(JobAssignment)!,
+        entity.getComponent(Efficiency)!,
+        entity.getComponent(ToolCoverage)!,
+      ));
+    }
+  }
+  return { workers, buildings };
 }

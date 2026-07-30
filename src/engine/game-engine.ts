@@ -1,50 +1,26 @@
 import type { IRuntimeWorld } from 'sim-ecs';
 import type { Command } from '../shared/commands';
 import type { EngineStatus, Snapshot } from '../shared/snapshot';
-import type { SaveGameV1, SavedBuilding, SavedWorker } from '../shared/save';
+import type { SaveGameV1 } from '../shared/save';
 import { LATEST_SAVE_VERSION } from '../shared/save';
 import { BALANCE } from './content/balance';
-import { Building, Hunger, JobAssignment, Production, ToolCoverage, Worker } from './components';
 import { CommandQueue, IdCounter, SimClock, SnapshotStore, Stockpile } from './resources';
+import { gatherEntityFacts, savedBuildingOf, savedWorkerOf } from './snapshot-builder';
 import { createColonyWorld, initialSave, refreshEntitySections } from './world';
 
 export type UpdateListener = (snapshot: Snapshot | null, status: EngineStatus) => void;
 
 export function buildSaveFromWorld(world: IRuntimeWorld): SaveGameV1 {
   const clock = world.getResource(SimClock);
-  const buildings: SavedBuilding[] = [];
-  const workers: SavedWorker[] = [];
-  for (const entity of world.getEntities()) {
-    const building = entity.getComponent(Building);
-    if (building) {
-      const production = entity.getComponent(Production)!;
-      buildings.push({
-        id: building.id,
-        defId: building.defId,
-        progress: production.progress,
-        batchActive: production.batchActive,
-      });
-      continue;
-    }
-    const worker = entity.getComponent(Worker);
-    if (worker) {
-      workers.push({
-        id: worker.id,
-        hunger: entity.getComponent(Hunger)!.value,
-        buildingId: entity.getComponent(JobAssignment)!.buildingId,
-        toolTicks: entity.getComponent(ToolCoverage)!.remainingTicks,
-      });
-    }
-  }
-  buildings.sort((a, b) => a.id - b.id);
-  workers.sort((a, b) => a.id - b.id);
+  const facts = gatherEntityFacts(world);
   return {
     version: LATEST_SAVE_VERSION,
     tick: clock.tick,
     lastRecruitTick: clock.lastRecruitTick,
     stockpile: world.getResource(Stockpile).toJSON(),
-    buildings,
-    workers,
+    // sorted so a save is byte-stable regardless of entity iteration order
+    buildings: facts.buildings.map(savedBuildingOf).sort((a, b) => a.id - b.id),
+    workers: facts.workers.map(savedWorkerOf).sort((a, b) => a.id - b.id),
     nextEntityId: world.getResource(IdCounter).peek(),
   };
 }
@@ -125,13 +101,25 @@ export class GameEngine {
   private async runStep(): Promise<void> {
     try {
       const clock = this.world.getResource(SimClock);
+      const idsBefore = this.world.getResource(IdCounter).peek();
       clock.tick++;
       await this.world.step();
       // sim-ecs syncs this tick's newly-created entities only after step() resolves,
       // so SnapshotSystem's snapshot (written mid-tick) can miss them. Patch the
       // entity-derived sections now, before publishing, so a paused manual step
       // shows its own commands' effects without waiting on a follow-up tick.
-      refreshEntitySections(this.world);
+      //
+      // GATED: only a tick that created something can be affected, and creation
+      // is the only thing that consumes ids -> an id-counter delta is an exact
+      // signal, so the common case skips a full entity walk.
+      //
+      // INVARIANT for increment 2: entity REMOVAL (aging/death) consumes no id.
+      // The first system that removes an entity MUST extend this signal (e.g. a
+      // dirty flag it sets), or removed entities linger in the published
+      // snapshot until the next creating tick.
+      if (this.world.getResource(IdCounter).peek() !== idsBefore) {
+        refreshEntitySections(this.world);
+      }
       if (clock.tick % BALANCE.autosaveEveryTicks === 0) {
         this.autosaveListener?.(this.serialize());
       }

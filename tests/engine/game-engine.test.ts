@@ -1,6 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
+
+// Spy on refreshEntitySections so the post-step gate is directly observable:
+// "zero calls on a plain tick" is the only assertion that covers the skip, since
+// a gated and an ungated refresh are indistinguishable from world state alone.
+vi.mock('../../src/engine/world', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/world')>();
+  return { ...actual, refreshEntitySections: vi.fn(actual.refreshEntitySections) };
+});
+
 import { GameEngine } from '../../src/engine/game-engine';
+import * as worldModule from '../../src/engine/world';
 import { initialSave } from '../../src/engine/world';
+
+const refreshMock = vi.mocked(worldModule.refreshEntitySections);
 import type { SaveGameV1 } from '../../src/shared/save';
 
 async function steps(engine: GameEngine, n: number) {
@@ -222,5 +234,21 @@ describe('GameEngine', () => {
     engine.start();
     expect(engine.status.error).toBeNull();
     engine.pause(); // clean up the interval timer started by start()
+  });
+
+  it('refreshes entity sections only on ticks that create entities', async () => {
+    const save = initialSave();
+    save.stockpile = { wood: 30 };
+    const engine = await GameEngine.create(save);
+    refreshMock.mockClear();
+
+    await engine.stepOnce(); // plain tick: nothing created
+    expect(refreshMock).not.toHaveBeenCalled();
+
+    engine.dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
+    await engine.stepOnce();
+    expect(refreshMock).toHaveBeenCalledTimes(1); // creating tick: refreshed
+    // and the building must be visible on ITS OWN tick, not one later
+    expect(engine.snapshot!.buildings).toHaveLength(1);
   });
 });

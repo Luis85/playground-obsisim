@@ -46,8 +46,17 @@ function confirmReset() { resetArmed.value = false; void engine.reset(); }
     </div>
     <button v-if="!resetArmed" class="obsisim-reset" data-test="reset" @click="setResetArmed(true)">Reset colony</button>
     <template v-else>
-      <button class="obsisim-reset" data-test="reset-confirm" @click="confirmReset">Confirm reset</button>
+      <!--
+        Cancel MUST render first, in the exact slot "Reset colony" vacated: Vue
+        re-renders in a microtask, so a double-click's second event can land
+        100-300ms later on whatever now occupies that position. Putting
+        Confirm there instead would turn a stray double-click into an
+        unrecoverable colony wipe -- worse than the window.confirm this
+        replaced. Confirm is offset second instead, so a stray click hits
+        Cancel (which only disarms) rather than Confirm.
+      -->
       <button data-test="reset-cancel" @click="setResetArmed(false)">Cancel</button>
+      <button class="obsisim-reset" data-test="reset-confirm" @click="confirmReset">Confirm reset</button>
     </template>
   </header>
 </template>

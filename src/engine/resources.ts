@@ -80,8 +80,8 @@ export class CommandQueue {
   // PRIVATE, deliberately: while this array was public, every producer used
   // `queue.pending.push(...)` (GameEngine.dispatch plus three test helpers)
   // and the cap below would have been decorative — new call sites naturally
-  // copy the pattern they see (PR #3 review, Codex P2). Enqueue only through
-  // push(); read the depth through `size`.
+  // copy the pattern they see. Enqueue only through push(); read the depth
+  // through `size`.
   private pending: Command[] = [];
   private dropped = 0;
 

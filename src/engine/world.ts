@@ -155,9 +155,13 @@ function isIdsValid(data: SaveGameV1): boolean {
 
 /**
  * Structural validity (isSaveGameV1) plus referential integrity against the content
- * catalog. The Obsidian shell must use THIS before restoring: a stale or hand-edited
- * save with an unknown building id would otherwise crash createColonyWorld instead of
- * taking the corrupt-save backup path (spec 7.2).
+ * catalog, for a save that is ALREADY at the current version. This is the internal
+ * current-version validator, not the shell's entry point: it has no idea how to
+ * migrate an older save, so calling it directly on unmigrated data would crash
+ * createColonyWorld (or wrongly reject a valid old save) instead of taking the
+ * corrupt-save backup path (spec 7.2). prepareLoadedSave (below) is the shell's
+ * entry point — and any future load path (import-save, a devtools command) must
+ * go through it too, not through this function directly.
  *
  * Principle (spec 4.5 — saves survive balancing changes): reject only what NO
  * version of the engine could have written (structural/identity invariants —
@@ -202,6 +206,27 @@ export function isLoadableSave(data: unknown): data is SaveGameV1 {
 export function prepareLoadedSave(data: unknown): SaveGameV1 | null {
   const migrated = migrateSaveToLatest(data);
   return migrated !== null && isLoadableSave(migrated) ? migrated : null;
+}
+
+/** The three things the shell can do after reading data.json's `save` field. */
+export type LoadDecision =
+  | { kind: 'restore'; save: SaveGameV1 }
+  | { kind: 'backup' }
+  | { kind: 'fresh' };
+
+/**
+ * Pure decision for the Obsidian shell's load path (spec 7.2), given the raw
+ * `save` field read from data.json (undefined/null on a first-ever install,
+ * or whatever shape a prior version wrote). This is the ONLY production call
+ * site of prepareLoadedSave, and extracting the decision out of main.ts's
+ * loadSave() (which the Obsidian Plugin API makes hard to unit-test directly)
+ * is what makes that call site testable at all — main.ts's loadSave() is
+ * reduced to calling this and performing the I/O each branch implies.
+ */
+export function decideLoad(data: unknown): LoadDecision {
+  if (data === undefined || data === null) return { kind: 'fresh' };
+  const save = prepareLoadedSave(data);
+  return save !== null ? { kind: 'restore', save } : { kind: 'backup' };
 }
 
 export function spawnBuilding(

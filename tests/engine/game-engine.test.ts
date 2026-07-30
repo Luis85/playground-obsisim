@@ -101,7 +101,7 @@ describe('GameEngine', () => {
     await engine.reset();
     expect(engine.serialize()).toEqual((await GameEngine.create()).serialize());
     // seeded snapshot: the UI must show the fresh colony while still paused,
-    // not fall back to a loading screen (Codex P2)
+    // not fall back to a loading screen
     expect(engine.snapshot).not.toBeNull();
     expect(engine.snapshot!.tick).toBe(0);
     expect(engine.snapshot!.stockpile.wood.stock).toBe(30);

@@ -87,6 +87,17 @@ describe('useGameStore', () => {
     expect(store.lowFood).toBe(false);
   });
 
+  // Pins the `edible` filter itself: a reducer that summed every resource
+  // regardless of ResourceDef.edible would also pass every case above (none
+  // of them stock a non-edible resource), so this is the one case that
+  // distinguishes "sum of edible stock" from "sum of all stock". wood is not
+  // edible in the real catalog (unaffected by this file's wheat mock above).
+  it('lowFood ignores non-edible resources no matter how much is stocked', () => {
+    const store = useGameStore();
+    store.ingest(makeSnapshot({ population: 3, stockpile: stockedWith({ wood: 100 }) }), status);
+    expect(store.lowFood).toBe(true); // 0 edible < 6
+  });
+
   it('computes recruit cooldown remaining', () => {
     const store = useGameStore();
     store.ingest(makeSnapshot({ tick: 10, lastRecruitTick: 0 }), status);

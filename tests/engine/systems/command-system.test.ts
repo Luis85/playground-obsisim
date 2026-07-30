@@ -91,10 +91,32 @@ describe('CommandSystem', () => {
     expect(snapshot().population).toBe(3);
   });
 
-  it('notices when assigning to a missing building or with no idle workers', async () => {
-    const { dispatch, snapshot } = await setup();
+  it('notices when assigning to a missing building or with no idle workers, or unassigning from an unstaffed one', async () => {
+    const { tick, dispatch, snapshot } = await setup();
     await dispatch({ type: 'assignWorker', buildingId: 999 });
     expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'Building not found.' }]);
+
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
+    await tick();
+    const buildingId = snapshot().buildings[0].id;
+
+    // a real building nobody has been assigned to yet
+    await dispatch({ type: 'unassignWorker', buildingId });
+    expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'No worker assigned to this building.' }]);
+
+    // a second forester so a slot stays open even once every worker is busy
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
+    await tick();
+    const secondBuildingId = snapshot().buildings.find((b) => b.id !== buildingId)!.id;
+
+    // 3 starting workers, 2 slots per forester: fill building 1 (2 workers),
+    // send the last idle worker to building 2 (1/2 slots) -- one open slot
+    // remains there, but every worker is now busy.
+    await dispatch({ type: 'assignWorker', buildingId });
+    await dispatch({ type: 'assignWorker', buildingId });
+    await dispatch({ type: 'assignWorker', buildingId: secondBuildingId });
+    await dispatch({ type: 'assignWorker', buildingId: secondBuildingId });
+    expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'No idle workers available.' }]);
   });
 
   it('emits exactly one notice naming the drop count after a queue overflow', async () => {

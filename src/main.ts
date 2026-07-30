@@ -1,15 +1,11 @@
 import { Notice, Plugin } from 'obsidian';
 import type { SaveGameV1 } from './shared/save';
-import { prepareLoadedSave } from './engine/world';
+import { decideLoad } from './engine/world';
 import { GameView, VIEW_TYPE_OBSISIM } from './view/game-view';
 
 interface PluginData {
   save?: unknown;
   corruptBackup?: unknown;
-}
-
-function isMissingSave(data: PluginData): boolean {
-  return data.save === undefined || data.save === null;
 }
 
 export default class ObsiSimPlugin extends Plugin {
@@ -75,13 +71,13 @@ export default class ObsiSimPlugin extends Plugin {
     // wait out any in-flight write (e.g. a closing view's save) before reading
     await this.saveQueue;
     const data = ((await this.loadData()) as PluginData | null) ?? {};
-    if (isMissingSave(data)) return null;
-    // migrate-then-validate, not a bare guard: a save from an older schema is
-    // upgraded before the catalog checks run, so bumping the save version never
-    // routes live saves to the backup path
-    const save = prepareLoadedSave(data.save);
-    if (save !== null) return save;
-    await this.backupCorruptSave();
+    // decideLoad does the actual work (migrate-then-validate, not a bare guard:
+    // a save from an older schema is upgraded before the catalog checks run, so
+    // bumping the save version never routes live saves to the backup path);
+    // this method just performs the I/O each decision implies.
+    const decision = decideLoad(data.save);
+    if (decision.kind === 'restore') return decision.save;
+    if (decision.kind === 'backup') await this.backupCorruptSave();
     return null;
   }
 

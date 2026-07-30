@@ -57,4 +57,19 @@ describe('TopBar', () => {
     await wrapper.find('[data-test="reset-confirm"]').trigger('click');
     expect(engine.reset).toHaveBeenCalled();
   });
+
+  it('arming reset puts Cancel in the original button slot, not Confirm reset', async () => {
+    // A double-click's second event arrives in a later microtask, after Vue's
+    // re-render has already swapped "Reset colony" for the confirm/cancel
+    // pair, and lands on whatever now occupies that same position. Asserting
+    // element order (not CSS, not text) pins that the control sitting at the
+    // original slot is the harmless Cancel button, not the destructive
+    // Confirm one -- reverting the template's button order makes this fail
+    // while every other reset test above still passes.
+    const { wrapper } = mountTopBar();
+    await wrapper.vm.$nextTick();
+    await wrapper.find('[data-test="reset"]').trigger('click');
+    const armedButtons = wrapper.findAll('button[data-test^="reset"]');
+    expect(armedButtons.map((b) => b.attributes('data-test'))).toEqual(['reset-cancel', 'reset-confirm']);
+  });
 });

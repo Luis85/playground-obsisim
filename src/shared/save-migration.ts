@@ -6,6 +6,11 @@ import { isSaveGameV1, LATEST_SAVE_VERSION } from './save';
  * shapes, never content: no catalog, no BALANCE, no clamping (load-time
  * clamping stays in spawnWorker/spawnBuilding, per spec 4.5). That is what
  * lets this file live in src/shared/, which may import nothing else.
+ *
+ * `migrate` MUST return a new object and never mutate its input: callers may
+ * still hold a reference to the pre-migration value (e.g. backupCorruptSave()
+ * re-reads data.json rather than reusing the in-memory object, but that only
+ * stays safe as long as nothing upstream of it has mutated the original).
  */
 export interface MigrationStep {
   from: number;
@@ -13,8 +18,13 @@ export interface MigrationStep {
   migrate: (save: unknown) => unknown;
 }
 
-/** Structural guard per known version. A version with no guard is unknown. */
-export type SaveGuards = Record<number, (data: unknown) => boolean>;
+/**
+ * Structural guard per known version. A version with no guard is unknown —
+ * `Partial` so that absence types as `undefined` and every lookup (`guards[v]`)
+ * is forced through `?.` rather than typing as a present function that just
+ * happens to be missing at runtime.
+ */
+export type SaveGuards = Partial<Record<number, (data: unknown) => boolean>>;
 
 const SAVE_GUARDS: SaveGuards = { 1: isSaveGameV1 };
 
@@ -95,8 +105,13 @@ export function migrateSaveToLatest(
   if (version === null || version > target) return null; // a save from a NEWER build is not downgradable
   if (!guards[version]?.(data)) return null;             // validate at the version it claims
   const migrated = runSteps(data, version, target, steps, guards);
-  // runSteps already guarded every hop it took; this re-check is what covers
-  // the zero-hop case (version === target), where no hop guard ran.
+  // Defence-in-depth, not a live rejector: given the `version > target` early
+  // return above, no input reaches this line able to fail it. Zero-hop
+  // (version === target): the source-guard line above already validated this
+  // same object with this same guard. N-hop: runSteps already validated the
+  // final hop with guards[at], which at the last hop IS guards[target] on the
+  // same value. Kept so a future change to runSteps or to the early-return
+  // above doesn't silently stop being caught here.
   if (migrated === null || !guards[target]?.(migrated)) return null;
   return migrated as SaveGameV1;
 }

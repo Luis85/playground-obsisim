@@ -70,7 +70,7 @@ function hungerClass(hunger: number): string {
         <tr v-for="w in store.snapshot.workers" :key="w.id">
           <td>#{{ w.id }}</td>
           <td>{{ jobLabel(w.buildingId) }}</td>
-          <td :data-test="`hunger-${w.id}`" :class="hungerClass(w.hunger)">{{ w.hunger }} / 100</td>
+          <td :data-test="`hunger-${w.id}`" :class="hungerClass(w.hunger)">{{ w.hunger }} / {{ BALANCE.hungerMax }}</td>
           <td>{{ (w.efficiency * 100).toFixed(0) }}%</td>
           <td>{{ toolLabel(w.toolTicks) }}</td>
         </tr>

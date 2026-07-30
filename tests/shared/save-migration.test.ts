@@ -114,6 +114,17 @@ describe('migrateSaveToLatest (real chain)', () => {
     expect(migrateSaveToLatest(save)).toEqual(save);
   });
 
+  // SAVE_GUARDS is deliberately not exported, so this can only be probed
+  // behaviorally. Guards against the one failure mode this whole increment
+  // exists to prevent: forgetting a guard entry for LATEST_SAVE_VERSION would
+  // make the real chain's own zero-hop guard check (`guards[target]?.()`)
+  // always fail, silently routing every existing save — not just malformed
+  // ones — down the corrupt-backup path. initialSave() writes exactly
+  // LATEST_SAVE_VERSION, so a non-null result here is that guard existing.
+  it('has a guard registered for LATEST_SAVE_VERSION, so a fresh save is loadable at all', () => {
+    expect(migrateSaveToLatest(initialSave())).not.toBeNull();
+  });
+
   it('rejects unknown versions and non-objects', () => {
     expect(migrateSaveToLatest({ ...initialSave(), version: 99 })).toBeNull();
     expect(migrateSaveToLatest({ ...initialSave(), version: undefined })).toBeNull();

@@ -36,6 +36,15 @@ export const CommandSystem = () => createSystem({
     // Only unassign needs to go from a bare id to a name without already
     // holding a findBuilding() result (construct/assign already have the def
     // in hand from their own lookups).
+    //
+    // The 'building' fallback is unreachable today: handleUnassignWorker only
+    // reaches this call after already finding a live worker whose job.buildingId
+    // equals this id, so findBuilding() cannot fail here. It becomes reachable
+    // once entity REMOVAL lands (increment 2) — a worker's JobAssignment can
+    // then outlive the building it points at, between the removal and whatever
+    // clears the assignment. See game-engine.ts's runStep, the "INVARIANT for
+    // increment 2" comment above its refreshEntitySections call, for the
+    // sibling gap entity removal opens.
     const buildingName = (buildingId: number): string => {
       const found = findBuilding(buildingId);
       return found ? BUILDINGS[found.defId].name : 'building';

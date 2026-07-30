@@ -1,6 +1,6 @@
 import type { CostMap, ResourceId } from '../shared/content-types';
 import type { Command } from '../shared/commands';
-import type { Snapshot } from '../shared/snapshot';
+import type { NoticeMessage, Snapshot } from '../shared/snapshot';
 import { MAX_SAVED_COUNTER } from '../shared/save';
 import { BALANCE } from './content/balance';
 
@@ -114,13 +114,17 @@ export class CommandQueue {
 }
 
 export class NoticeBoard {
-  private notices: string[] = [];
+  private notices: NoticeMessage[] = [];
 
-  push(message: string): void {
-    this.notices.push(message);
+  succeed(message: string): void {
+    this.notices.push({ kind: 'success', message });
   }
 
-  takeAll(): string[] {
+  reject(message: string): void {
+    this.notices.push({ kind: 'rejection', message });
+  }
+
+  takeAll(): NoticeMessage[] {
     const notices = this.notices;
     this.notices = [];
     return notices;

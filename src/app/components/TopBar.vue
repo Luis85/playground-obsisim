@@ -1,15 +1,27 @@
 <script setup lang="ts">
-import { inject } from 'vue';
+import { inject, ref } from 'vue';
 import { ENGINE_KEY } from '../engine-key';
 import { useGameStore } from '../stores/game-store';
 
 const engine = inject(ENGINE_KEY)!;
 const store = useGameStore();
+// 1x/2x/4x sim speed; each renders as its own button below, highlighted via
+// is-active when it matches the engine's current speed.
 const speeds = [1, 2, 4] as const;
 
-function onReset() {
-  if (window.confirm('Reset the colony? This cannot be undone.')) void engine.reset();
-}
+// Two-step reset in place of window.confirm: a native confirm dialog was one
+// accidental Enter press away from wiping a colony with no way back. Arming
+// just flips a flag and swaps in the confirm/cancel pair below; nothing
+// destructive happens until confirmReset() itself is clicked.
+//
+// setResetArmed(bool) rather than two separate arm/cancel functions: both
+// idle->armed and armed->idle are the exact same state write, just with the
+// opposite boolean, so one small function covers both template call sites
+// (data-test="reset" and data-test="reset-cancel") instead of two near-
+// duplicates that would only differ in the literal they assign.
+const resetArmed = ref(false);
+function setResetArmed(armed: boolean) { resetArmed.value = armed; }
+function confirmReset() { resetArmed.value = false; void engine.reset(); }
 </script>
 
 <template>
@@ -34,6 +46,10 @@ function onReset() {
       <span>💰 {{ store.snapshot.colonyWealth.toFixed(0) }}</span>
       <span v-if="store.lowFood" class="obsisim-warning" data-test="low-food">⚠ Low food</span>
     </div>
-    <button class="obsisim-reset" data-test="reset" @click="onReset">Reset colony</button>
+    <button v-if="!resetArmed" class="obsisim-reset" data-test="reset" @click="setResetArmed(true)">Reset colony</button>
+    <template v-else>
+      <button class="obsisim-reset" data-test="reset-confirm" @click="confirmReset">Confirm reset</button>
+      <button data-test="reset-cancel" @click="setResetArmed(false)">Cancel</button>
+    </template>
   </header>
 </template>

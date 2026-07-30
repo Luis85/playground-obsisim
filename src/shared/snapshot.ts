@@ -2,6 +2,14 @@ import type { BuildingDefId, ResourceId } from './content-types';
 
 export type BuildingState = 'producing' | 'waitingForInput' | 'unstaffed';
 
+export type NoticeKind = 'success' | 'rejection';
+
+/** One line of per-tick feedback. Kind drives styling, never behavior. */
+export interface NoticeMessage {
+  kind: NoticeKind;
+  message: string;
+}
+
 export interface BuildingSnapshot {
   id: number;
   defId: BuildingDefId;
@@ -45,8 +53,8 @@ export interface Snapshot {
   idleWorkers: number;
   buildings: BuildingSnapshot[];
   workers: WorkerSnapshot[];
-  /** Command rejections etc. from this tick; cleared after each snapshot. */
-  notices: string[];
+  /** Per-tick feedback (success and rejection alike); cleared after each snapshot. */
+  notices: NoticeMessage[];
 }
 
 export interface EngineStatus {

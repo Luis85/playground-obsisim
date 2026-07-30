@@ -31,6 +31,7 @@ describe('CommandSystem', () => {
     await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
     expect(world.getResource(Stockpile).get('wood')).toBe(20); // 30 - 10
     expect(snapshot().buildings).toHaveLength(0); // command applied at end of step
+    expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Built a Forester.' }]);
     await tick();
     expect(snapshot().buildings).toHaveLength(1);
     expect(snapshot().buildings[0].defId).toBe('forester');
@@ -39,7 +40,7 @@ describe('CommandSystem', () => {
   it('rejects unaffordable construction with a notice', async () => {
     const { world, tick, dispatch, snapshot } = await setup();
     await dispatch({ type: 'constructBuilding', buildingDefId: 'workshop' }); // needs 20 planks
-    expect(snapshot().notices).toEqual(['Cannot afford Workshop.']);
+    expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'Cannot afford Workshop.' }]);
     expect(world.getResource(Stockpile).get('wood')).toBe(30);
     await tick();
     expect(snapshot().buildings).toHaveLength(0);
@@ -48,10 +49,11 @@ describe('CommandSystem', () => {
   it('recruits a worker and enforces the 30-tick cooldown', async () => {
     const { tick, dispatch, snapshot } = await setup();
     await dispatch({ type: 'recruitWorker' });
+    expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Recruited worker #4.' }]);
     await tick();
     expect(snapshot().population).toBe(4);
     await dispatch({ type: 'recruitWorker' }); // still on cooldown
-    expect(snapshot().notices).toEqual(['Recruiting is still on cooldown.']);
+    expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'Recruiting is still on cooldown.' }]);
     for (let i = 0; i < 30; i++) await tick();
     await dispatch({ type: 'recruitWorker' });
     await tick();
@@ -63,11 +65,14 @@ describe('CommandSystem', () => {
     await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
     await tick();
     const buildingId = snapshot().buildings[0].id;
-    await dispatch({ type: 'assignWorker', buildingId }, { type: 'assignWorker', buildingId });
+    await dispatch({ type: 'assignWorker', buildingId });
+    expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Assigned a worker to Forester.' }]);
+    await dispatch({ type: 'assignWorker', buildingId });
     expect(snapshot().buildings[0].workers).toBe(2);
     await dispatch({ type: 'assignWorker', buildingId }); // forester has 2 slots
-    expect(snapshot().notices).toEqual(['No free worker slots at this building.']);
+    expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'No free worker slots at this building.' }]);
     await dispatch({ type: 'unassignWorker', buildingId });
+    expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Unassigned a worker from Forester.' }]);
     expect(snapshot().buildings[0].workers).toBe(1);
     expect(snapshot().idleWorkers).toBe(2);
   });
@@ -77,10 +82,10 @@ describe('CommandSystem', () => {
     save.nextEntityId = Number.MAX_SAFE_INTEGER - 2 ** 32; // == MAX_SAVED_COUNTER: nothing left to hand out
     const { world, tick, dispatch, snapshot } = await setup(save);
     await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
-    expect(snapshot().notices).toEqual(['Cannot create more entities: id space exhausted.']);
+    expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'Cannot create more entities: id space exhausted.' }]);
     expect(world.getResource(Stockpile).get('wood')).toBe(30); // cost not paid
     await dispatch({ type: 'recruitWorker' });
-    expect(snapshot().notices).toEqual(['Cannot create more entities: id space exhausted.']);
+    expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'Cannot create more entities: id space exhausted.' }]);
     await tick();
     expect(snapshot().buildings).toHaveLength(0);
     expect(snapshot().population).toBe(3);
@@ -89,7 +94,7 @@ describe('CommandSystem', () => {
   it('notices when assigning to a missing building or with no idle workers', async () => {
     const { dispatch, snapshot } = await setup();
     await dispatch({ type: 'assignWorker', buildingId: 999 });
-    expect(snapshot().notices).toEqual(['Building not found.']);
+    expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'Building not found.' }]);
   });
 
   it('emits exactly one notice naming the drop count after a queue overflow', async () => {
@@ -97,7 +102,7 @@ describe('CommandSystem', () => {
     const queue = world.getResource(CommandQueue);
     for (let i = 0; i < MAX_PENDING_COMMANDS + 5; i++) queue.push({ type: 'recruitWorker' });
     await tick();
-    const dropNotices = snapshot().notices.filter((n) => n.includes('dropped'));
-    expect(dropNotices).toEqual(['5 command(s) were dropped: the queue was full.']);
+    const dropNotices = snapshot().notices.filter((n) => n.message.includes('dropped'));
+    expect(dropNotices).toEqual([{ kind: 'rejection', message: '5 command(s) were dropped: the queue was full.' }]);
   });
 });

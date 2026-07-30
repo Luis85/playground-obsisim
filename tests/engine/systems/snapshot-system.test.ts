@@ -15,7 +15,7 @@ describe('SnapshotSystem', () => {
     const buildingId = building.getComponent(Building)!.id;
     spawnWorker(prep, ids, { buildingId, hunger: 20, toolTicks: 10 });
     spawnWorker(prep, ids); // idle
-    getPrepResource(prep, NoticeBoard).push('test notice');
+    getPrepResource(prep, NoticeBoard).reject('test notice');
 
     const world = await prep.prepareRun();
     await world.step();
@@ -25,7 +25,7 @@ describe('SnapshotSystem', () => {
     expect(snapshot.idleWorkers).toBe(1);
     expect(snapshot.stockpile.wood.stock).toBe(10);
     expect(snapshot.colonyWealth).toBe(10 * 1 + 2 * 8); // wood@1 + bread@8
-    expect(snapshot.notices).toEqual(['test notice']);
+    expect(snapshot.notices).toEqual([{ kind: 'rejection', message: 'test notice' }]);
 
     const b = snapshot.buildings[0];
     expect(b.defId).toBe('forester');
@@ -55,10 +55,10 @@ describe('SnapshotSystem', () => {
 
   it('clears notices after snapshotting them', async () => {
     const prep = buildColonyPrepWorld({ save: initialSave(), systems: [SnapshotSystem] });
-    getPrepResource(prep, NoticeBoard).push('once');
+    getPrepResource(prep, NoticeBoard).reject('once');
     const world = await prep.prepareRun();
     await world.step();
-    expect(world.getResource(SnapshotStore).latest!.notices).toEqual(['once']);
+    expect(world.getResource(SnapshotStore).latest!.notices).toEqual([{ kind: 'rejection', message: 'once' }]);
     await world.step();
     expect(world.getResource(SnapshotStore).latest!.notices).toEqual([]);
   });

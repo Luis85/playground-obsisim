@@ -106,10 +106,14 @@ describe('small resources', () => {
     expect(queue.takeDropped()).toBe(0); // reset on read
   });
 
-  it('NoticeBoard takeAll returns and clears', () => {
+  it('NoticeBoard takeAll returns and clears, tagged by kind', () => {
     const board = new NoticeBoard();
-    board.push('nope');
-    expect(board.takeAll()).toEqual(['nope']);
+    board.reject('nope');
+    board.succeed('yep');
+    expect(board.takeAll()).toEqual([
+      { kind: 'rejection', message: 'nope' },
+      { kind: 'success', message: 'yep' },
+    ]);
     expect(board.takeAll()).toEqual([]);
   });
 });

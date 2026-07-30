@@ -7,6 +7,9 @@ import { ENGINE_KEY } from '../../src/app/engine-key';
 import { useGameStore } from '../../src/app/stores/game-store';
 import { makeSnapshot } from './fixtures';
 
+// A paused colony at tick 42, mirroring what App.vue passes to store.ingest
+// on every engine update — every test below mounts through this, not a
+// bespoke snapshot, so an assertion here reflects the real ingest path.
 function mountTopBar() {
   const engine = { start: vi.fn(), pause: vi.fn(), setSpeed: vi.fn(), stepOnce: vi.fn(), reset: vi.fn() };
   const wrapper = mount(TopBar, {
@@ -37,5 +40,21 @@ describe('TopBar', () => {
     expect(engine.stepOnce).toHaveBeenCalled();
     await wrapper.find('[data-test="speed-4"]').trigger('click');
     expect(engine.setSpeed).toHaveBeenCalledWith(4);
+  });
+
+  it('two-step reset: alone it never resets, cancel returns to idle, confirm resets', async () => {
+    const { engine, wrapper } = mountTopBar();
+    await wrapper.vm.$nextTick();
+    await wrapper.find('[data-test="reset"]').trigger('click');
+    expect(engine.reset).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-test="reset-confirm"]').exists()).toBe(true);
+
+    await wrapper.find('[data-test="reset-cancel"]').trigger('click');
+    expect(wrapper.find('[data-test="reset"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="reset-confirm"]').exists()).toBe(false);
+
+    await wrapper.find('[data-test="reset"]').trigger('click');
+    await wrapper.find('[data-test="reset-confirm"]').trigger('click');
+    expect(engine.reset).toHaveBeenCalled();
   });
 });

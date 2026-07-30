@@ -78,6 +78,8 @@
 }
 
 .obsisim-notice { color: var(--text-muted); font-style: italic; }
+.obsisim-notice.is-success { color: var(--color-green); font-style: normal; }
+.obsisim-notice.is-rejection { color: var(--color-orange); }
 .obsisim-loading { color: var(--text-muted); padding: var(--size-4-4); }
 .obsisim-reset { margin-left: var(--size-4-4); }
 

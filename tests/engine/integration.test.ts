@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { CommandQueue, SimClock, SnapshotStore } from '../../src/engine/resources';
+import { SimClock, SnapshotStore } from '../../src/engine/resources';
 import { createColonyWorld, initialSave } from '../../src/engine/world';
-import type { Command } from '../../src/shared/commands';
+import { enqueue as dispatch } from './fixtures';
 import type { SaveGameV1 } from '../../src/shared/save';
 
 async function run(world: Awaited<ReturnType<typeof createColonyWorld>>, ticks: number) {
@@ -10,11 +10,6 @@ async function run(world: Awaited<ReturnType<typeof createColonyWorld>>, ticks: 
     clock.tick++;
     await world.step();
   }
-}
-
-function dispatch(world: Awaited<ReturnType<typeof createColonyWorld>>, ...commands: Command[]) {
-  const queue = world.getResource(CommandQueue);
-  for (const command of commands) queue.push(command);
 }
 
 /** Rich fixture: enough stock + idle workers to build the full economy at once. */

@@ -7,7 +7,7 @@ import { RESOURCE_IDS, RESOURCES } from '../../engine/content/resources';
 // The store-side shape of a rendered notice: a NoticeMessage (kind, message)
 // plus the tick it arrived on and a locally-assigned id, neither of which
 // exist on the wire — NoticeBanner renders this, not Snapshot['notices'].
-interface NoticeEntry {
+export interface NoticeEntry {
   id: number;
   tick: number;
   kind: NoticeKind;

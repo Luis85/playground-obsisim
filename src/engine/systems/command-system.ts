@@ -37,14 +37,15 @@ export const CommandSystem = () => createSystem({
     // holding a findBuilding() result (construct/assign already have the def
     // in hand from their own lookups).
     //
-    // The 'building' fallback is unreachable today: handleUnassignWorker only
-    // reaches this call after already finding a live worker whose job.buildingId
-    // equals this id, so findBuilding() cannot fail here. It becomes reachable
-    // once entity REMOVAL lands (increment 2) — a worker's JobAssignment can
-    // then outlive the building it points at, between the removal and whatever
-    // clears the assignment. See game-engine.ts's runStep, the "INVARIANT for
-    // increment 2" comment above its refreshEntitySections call, for the
-    // sibling gap entity removal opens.
+    // The 'building' fallback needs a JobAssignment pointing at a building that
+    // no longer exists. No PRODUCTION path builds one: isLoadableSave rejects a
+    // save whose worker names a missing building, and nothing removes buildings
+    // yet. It goes live with entity REMOVAL (increment 2) — an assignment can
+    // then outlive its building, between the removal and whatever clears the
+    // assignment. See game-engine.ts's runStep, the "INVARIANT for increment 2"
+    // comment above its refreshEntitySections call, for the sibling gap removal
+    // opens. command-system.test.ts reaches this branch through spawnWorker, so
+    // the wording is pinned before the change that makes it reachable for real.
     const buildingName = (buildingId: number): string => {
       const found = findBuilding(buildingId);
       return found ? BUILDINGS[found.defId].name : 'building';

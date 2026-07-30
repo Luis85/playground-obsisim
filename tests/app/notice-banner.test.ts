@@ -3,17 +3,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { mount, type VueWrapper } from '@vue/test-utils';
 import { createTestingPinia } from '@pinia/testing';
 import NoticeBanner from '../../src/app/components/NoticeBanner.vue';
-import { useGameStore } from '../../src/app/stores/game-store';
+import { type NoticeEntry, useGameStore } from '../../src/app/stores/game-store';
 
-// Mirrors the store's recentNotices entry shape (game-store.ts), not
-// Snapshot['notices']: this file tests the banner given a rendered-notice
-// list, independent of how the store built it.
-interface NoticeFixture {
-  id: number;
-  tick: number;
-  kind: 'success' | 'rejection';
-  message: string;
-}
+// The store's own entry type, not a local copy of its fields: a copy only
+// fails typecheck when a field is added or renamed, so REMOVING one would
+// leave this file asserting against a shape the store no longer produces.
+// This is the banner's input (NoticeEntry), deliberately not Snapshot['notices']
+// — the tests below pin rendering given a notice list, not how the store built it.
+type NoticeFixture = NoticeEntry;
 
 // Sets recentNotices directly rather than driving it through store.ingest():
 // these tests pin the banner's rendering (classes, vnode keys) given a fixed

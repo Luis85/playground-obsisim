@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { IRuntimeWorld } from 'sim-ecs';
-import { CommandQueue, MAX_PENDING_COMMANDS, SimClock, SnapshotStore, Stockpile } from '../../../src/engine/resources';
+import { CommandQueue, IdCounter, MAX_PENDING_COMMANDS, SimClock, SnapshotStore, Stockpile } from '../../../src/engine/resources';
 import { CommandSystem } from '../../../src/engine/systems/command-system';
 import { SnapshotSystem } from '../../../src/engine/systems/snapshot-system';
-import { buildColonyPrepWorld, initialSave } from '../../../src/engine/world';
+import { enqueue } from '../fixtures';
+import { buildColonyPrepWorld, getPrepResource, initialSave, spawnWorker } from '../../../src/engine/world';
 import type { Command } from '../../../src/shared/commands';
 import type { SaveGameV1 } from '../../../src/shared/save';
 
@@ -17,8 +18,7 @@ async function setup(save: SaveGameV1 = initialSave()) {
     await world.step();
   };
   const dispatch = async (...commands: Command[]) => {
-    const queue = world.getResource(CommandQueue);
-    for (const command of commands) queue.push(command);
+    enqueue(world, ...commands);
     await tick();
   };
   const snapshot = (w: IRuntimeWorld = world) => w.getResource(SnapshotStore).latest!;
@@ -75,6 +75,25 @@ describe('CommandSystem', () => {
     expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Unassigned a worker from Forester.' }]);
     expect(snapshot().buildings[0].workers).toBe(1);
     expect(snapshot().idleWorkers).toBe(2);
+  });
+
+  it('falls back to a generic name when the building an assignment points at is gone', async () => {
+    // buildingName's 'building' fallback. Unreachable through the save path --
+    // isLoadableSave rejects a worker whose buildingId names no building -- but
+    // reachable through spawnWorker, and reachable in-game once entity REMOVAL
+    // lands (increment 2), when a JobAssignment can outlive its building. Pinned
+    // now so the change that makes it live doesn't also get to pick the wording.
+    const save = initialSave();
+    save.workers = [];
+    const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, SnapshotSystem] });
+    spawnWorker(prep, getPrepResource(prep, IdCounter), { buildingId: 404 }); // no building 404
+    const world = await prep.prepareRun();
+    enqueue(world, { type: 'unassignWorker', buildingId: 404 });
+    world.getResource(SimClock).tick++;
+    await world.step();
+
+    const notices = world.getResource(SnapshotStore).latest!.notices;
+    expect(notices).toEqual([{ kind: 'success', message: 'Unassigned a worker from building.' }]);
   });
 
   it('refuses entity creation once the id space is exhausted, without side effects', async () => {

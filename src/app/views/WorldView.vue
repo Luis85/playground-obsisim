@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { inject, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue';
+import { computed, inject, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue';
 import { useGameStore } from '../stores/game-store';
 import { WORLD_RENDERER_KEY } from '../world/renderer-key';
 import type { WorldRenderer } from '../world/renderer-key';
-import { describePick } from '../world/layout';
+import { describePick, type WorldPick } from '../world/layout';
 import WorldLegend from '../components/WorldLegend.vue';
 
 // Lifecycle contract (spec §2.2): this view is kept alive by App.vue, so the
@@ -17,17 +17,25 @@ const store = useGameStore();
 const factory = inject(WORLD_RENDERER_KEY, null);
 const host = ref<HTMLElement | null>(null);
 const failure = ref<string | null>(null);
-const hover = ref<{ x: number; y: number; lines: string[] } | null>(null);
+const hover = ref<{ x: number; y: number; pick: WorldPick } | null>(null);
 let renderer: WorldRenderer | null = null;
+
+// Derived reactively so a stationary pointer keeps live details (batch
+// progress, hunger, tool ticks) as snapshots tick underneath it; an entity
+// vanishing mid-hover yields no lines and the tooltip hides itself.
+const hoverLines = computed(() => {
+  if (!hover.value || !store.snapshot) return [];
+  return describePick(store.snapshot, hover.value.pick);
+});
 
 function onPointerMove(event: MouseEvent) {
   const pick = renderer?.pick(event.pageX, event.pageY) ?? null;
-  if (!pick || !host.value || !store.snapshot) {
+  if (!pick || !host.value) {
     hover.value = null;
     return;
   }
   const rect = host.value.getBoundingClientRect();
-  hover.value = { x: event.clientX - rect.left + 14, y: event.clientY - rect.top + 14, lines: describePick(store.snapshot, pick) };
+  hover.value = { x: event.clientX - rect.left + 14, y: event.clientY - rect.top + 14, pick };
 }
 
 onMounted(() => {
@@ -79,12 +87,12 @@ onBeforeUnmount(() => {
       @pointerleave="hover = null"
     />
     <div
-      v-if="hover && hover.lines.length > 0"
+      v-if="hover && hoverLines.length > 0"
       class="obsisim-world-tooltip"
       data-test="world-tooltip"
       :style="{ left: `${hover.x}px`, top: `${hover.y}px` }"
     >
-      <div v-for="line in hover.lines" :key="line">{{ line }}</div>
+      <div v-for="line in hoverLines" :key="line">{{ line }}</div>
     </div>
     <WorldLegend />
   </div>

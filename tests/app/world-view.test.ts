@@ -114,6 +114,26 @@ describe('WorldView', () => {
     expect(wrapper.find('[data-test="world-tooltip"]').exists()).toBe(false);
   });
 
+  it('keeps a stationary tooltip live as snapshots tick underneath it', async () => {
+    const { renderer, factory } = makeFake();
+    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'building', id: 7 });
+    const { wrapper } = mountHarness(factory);
+    const buildingAt = (progressPct: number) => makeSnapshot({
+      buildings: [{
+        id: 7, defId: 'bakery', workers: 1, workerSlots: 2, state: 'producing',
+        progress: 0, batchActive: true, progressPct, tooledWorkers: 0, workPower: 1,
+      }],
+    });
+    useGameStore().ingest(buildingAt(10), { paused: false, speed: 1, error: null });
+    await nextTick();
+    await wrapper.find('[data-test="world-host"]').trigger('pointermove', { pageX: 40, pageY: 40 });
+    expect(wrapper.find('[data-test="world-tooltip"]').text()).toContain('batch 10%');
+    // no further pointer event — the next snapshot alone must refresh it
+    useGameStore().ingest(buildingAt(60), { paused: false, speed: 1, error: null });
+    await nextTick();
+    expect(wrapper.find('[data-test="world-tooltip"]').text()).toContain('batch 60%');
+  });
+
   it('shows a worker tooltip with efficiency and tool state', async () => {
     const { renderer, factory } = makeFake();
     (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'worker', id: 3 });

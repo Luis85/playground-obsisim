@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { IEntity } from 'sim-ecs';
 import { Building, Production } from '../../../src/engine/components';
-import { IdCounter, Stockpile } from '../../../src/engine/resources';
+import { IdCounter, SnapshotStore, Stockpile } from '../../../src/engine/resources';
 import { ProductionSystem } from '../../../src/engine/systems/production-system';
+import { SnapshotSystem } from '../../../src/engine/systems/snapshot-system';
 import { buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spawnWorker } from '../../../src/engine/world';
 import type { BuildingDefId, ResourceId } from '../../../src/shared/content-types';
 
@@ -91,5 +92,28 @@ describe('ProductionSystem', () => {
     const { world, stockpile } = await setup('farm', {}, 4, 1000);
     for (let i = 0; i < 4; i++) await world.step();
     expect(stockpile.get('wheat')).toBe(6);
+  });
+
+  it('the work power the snapshot reports is the one production actually applied', async () => {
+    // Two INDEPENDENT derivations of the same number: this system sums live
+    // components, buildEntitySections sums WorkerFacts. They agreed only by
+    // both spelling out the tool bonus, so a change to one could make the UI
+    // report a work power the simulation never used. Both assertions are
+    // needed: the cross-check catches a change to one derivation, the absolute
+    // value catches a change to the shared formula they now both call.
+    const save = initialSave();
+    save.workers = [];
+    const prep = buildColonyPrepWorld({ save, systems: [ProductionSystem, SnapshotSystem] });
+    const ids = getPrepResource(prep, IdCounter);
+    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false });
+    const buildingId = building.getComponent(Building)!.id;
+    spawnWorker(prep, ids, { buildingId, toolTicks: 1000 }); // exercises the tooled branch
+    spawnWorker(prep, ids, { buildingId }); // and the untooled one
+    const world = await prep.prepareRun();
+    await world.step();
+
+    const reported = world.getResource(SnapshotStore).latest!.buildings[0].workPower;
+    expect(reported).toBeCloseTo(building.getComponent(Production)!.progress);
+    expect(reported).toBeCloseTo(2.5); // tooled 1 x 1.5 + untooled 1 x 1.0
   });
 });

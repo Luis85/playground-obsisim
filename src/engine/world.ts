@@ -1,6 +1,7 @@
 import { buildWorld } from 'sim-ecs';
 import type { IEntity, IPreptimeWorld, IRuntimeWorld } from 'sim-ecs';
-import { isSaveGameV1, MAX_SAVED_COUNTER } from '../shared/save';
+import { isSaveGameV1, LATEST_SAVE_VERSION, MAX_SAVED_COUNTER } from '../shared/save';
+import { migrateSaveToLatest } from '../shared/save-migration';
 import type { SaveGameV1, SavedBuilding } from '../shared/save';
 import type { ResourceId } from '../shared/content-types';
 import type { ResourceStats, Snapshot } from '../shared/snapshot';
@@ -14,7 +15,7 @@ import {
   CommandQueue, IdCounter, NoticeBoard, SimClock, SnapshotStore, StatsHistory, Stockpile,
 } from './resources';
 import type { BuildingFacts, WorkerFacts } from './snapshot-builder';
-import { buildEntitySections } from './snapshot-builder';
+import { buildEntitySections, gatherEntityFacts } from './snapshot-builder';
 import { CommandSystem } from './systems/command-system';
 import { HungerSystem } from './systems/hunger-system';
 import { EfficiencySystem } from './systems/efficiency-system';
@@ -66,7 +67,7 @@ const COMPONENT_TYPES = [Building, WorkerSlots, Production, Worker, Hunger, JobA
 
 export function initialSave(): SaveGameV1 {
   return {
-    version: 1,
+    version: LATEST_SAVE_VERSION,
     tick: 0,
     lastRecruitTick: -BALANCE.recruitCooldownTicks,
     stockpile: { ...STARTING_STOCK },
@@ -154,9 +155,13 @@ function isIdsValid(data: SaveGameV1): boolean {
 
 /**
  * Structural validity (isSaveGameV1) plus referential integrity against the content
- * catalog. The Obsidian shell must use THIS before restoring: a stale or hand-edited
- * save with an unknown building id would otherwise crash createColonyWorld instead of
- * taking the corrupt-save backup path (spec 7.2).
+ * catalog, for a save that is ALREADY at the current version. This is the internal
+ * current-version validator, not the shell's entry point: it has no idea how to
+ * migrate an older save, so calling it directly on unmigrated data would crash
+ * createColonyWorld (or wrongly reject a valid old save) instead of taking the
+ * corrupt-save backup path (spec 7.2). prepareLoadedSave (below) is the shell's
+ * entry point — and any future load path (import-save, a devtools command) must
+ * go through it too, not through this function directly.
  *
  * Principle (spec 4.5 — saves survive balancing changes): reject only what NO
  * version of the engine could have written (structural/identity invariants —
@@ -189,6 +194,39 @@ export function isLoadableSave(data: unknown): data is SaveGameV1 {
   if (!isBuildingsValid(data.buildings)) return false;
   if (!isIdsValid(data)) return false;
   return isWorkersValid(data);
+}
+
+/**
+ * The Obsidian shell's load entry point: migrate a save of any known version up
+ * to the latest, then apply the catalog-aware checks. Returns null for anything
+ * unloadable, which the shell turns into the corrupt-save backup path (spec
+ * 7.2). Kept here rather than in src/shared/ because isLoadableSave needs the
+ * content catalog, while the migration chain is pure structure.
+ */
+export function prepareLoadedSave(data: unknown): SaveGameV1 | null {
+  const migrated = migrateSaveToLatest(data);
+  return migrated !== null && isLoadableSave(migrated) ? migrated : null;
+}
+
+/** The three things the shell can do after reading data.json's `save` field. */
+export type LoadDecision =
+  | { kind: 'restore'; save: SaveGameV1 }
+  | { kind: 'backup' }
+  | { kind: 'fresh' };
+
+/**
+ * Pure decision for the Obsidian shell's load path (spec 7.2), given the raw
+ * `save` field read from data.json (undefined/null on a first-ever install,
+ * or whatever shape a prior version wrote). This is the ONLY production call
+ * site of prepareLoadedSave, and extracting the decision out of main.ts's
+ * loadSave() (which the Obsidian Plugin API makes hard to unit-test directly)
+ * is what makes that call site testable at all — main.ts's loadSave() is
+ * reduced to calling this and performing the I/O each branch implies.
+ */
+export function decideLoad(data: unknown): LoadDecision {
+  if (data === undefined || data === null) return { kind: 'fresh' };
+  const save = prepareLoadedSave(data);
+  return save !== null ? { kind: 'restore', save } : { kind: 'backup' };
 }
 
 export function spawnBuilding(
@@ -346,34 +384,8 @@ function buildInitialSnapshot(save: SaveGameV1): Snapshot {
 export function refreshEntitySections(world: IRuntimeWorld): void {
   const store = world.getResource(SnapshotStore);
   if (store.latest === null) return;
-
-  const workerFacts: WorkerFacts[] = [];
-  const buildingFacts: BuildingFacts[] = [];
-  for (const entity of world.getEntities()) {
-    const building = entity.getComponent(Building);
-    if (building) {
-      buildingFacts.push({
-        id: building.id,
-        defId: building.defId,
-        workerSlots: entity.getComponent(WorkerSlots)!.max,
-        progress: entity.getComponent(Production)!.progress,
-        batchActive: entity.getComponent(Production)!.batchActive,
-      });
-      continue;
-    }
-    const worker = entity.getComponent(Worker);
-    if (worker) {
-      workerFacts.push({
-        id: worker.id,
-        hunger: entity.getComponent(Hunger)!.value,
-        efficiency: entity.getComponent(Efficiency)!.value,
-        buildingId: entity.getComponent(JobAssignment)!.buildingId,
-        toolTicks: entity.getComponent(ToolCoverage)!.remainingTicks,
-      });
-    }
-  }
-
-  store.latest = { ...store.latest, ...buildEntitySections(workerFacts, buildingFacts) };
+  const { workers, buildings } = gatherEntityFacts(world);
+  store.latest = { ...store.latest, ...buildEntitySections(workers, buildings) };
 }
 
 /**

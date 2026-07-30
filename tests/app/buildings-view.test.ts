@@ -6,8 +6,12 @@ import BuildingsView from '../../src/app/views/BuildingsView.vue';
 import { ENGINE_KEY } from '../../src/app/engine-key';
 import { useGameStore } from '../../src/app/stores/game-store';
 import { makeSnapshot } from './fixtures';
+import type { BuildingState } from '../../src/shared/snapshot';
 
-function mountView(stock: { wood?: number } = {}) {
+// A single 1/2-staffed Forester, with the caller choosing the wood stock (to
+// drive the construct-button's affordable/disabled state) and the building's
+// reported state (to drive the humanized-label assertions below).
+function mountView(stock: { wood?: number } = {}, state: BuildingState = 'producing') {
   const engine = { dispatch: vi.fn() };
   const wrapper = mount(BuildingsView, {
     global: {
@@ -17,7 +21,7 @@ function mountView(stock: { wood?: number } = {}) {
   });
   const snapshot = makeSnapshot({
     buildings: [{
-      id: 7, defId: 'forester', workers: 1, workerSlots: 2, state: 'producing',
+      id: 7, defId: 'forester', workers: 1, workerSlots: 2, state,
       progress: 1, batchActive: true, progressPct: 33, tooledWorkers: 0, workPower: 1,
     }],
     idleWorkers: 2,
@@ -28,13 +32,38 @@ function mountView(stock: { wood?: number } = {}) {
 }
 
 describe('BuildingsView', () => {
-  it('renders constructed buildings with state', async () => {
-    const { wrapper } = mountView();
-    await wrapper.vm.$nextTick();
-    expect(wrapper.text()).toContain('Forester');
-    expect(wrapper.text()).toContain('producing');
+  // One test covers three related UX changes (Step 2's labels and Step 4's
+  // hint) against a single mounted view, reusing the `waiting` wrapper for
+  // the empty-colony re-ingest rather than mounting a fourth time.
+  it('renders humanized state labels and a starter hint once the colony has none', async () => {
+    const producing = mountView();
+    await producing.wrapper.vm.$nextTick();
+    expect(producing.wrapper.text()).toContain('Forester');
+    expect(producing.wrapper.text()).toContain('Producing');
+    expect(producing.wrapper.text()).not.toContain('producing'); // the raw state, not the label
+
+    const waiting = mountView({}, 'waitingForInput');
+    await waiting.wrapper.vm.$nextTick();
+    expect(waiting.wrapper.text()).toContain('Waiting for input');
+    expect(waiting.wrapper.text()).not.toContain('waitingForInput');
+
+    useGameStore().ingest(makeSnapshot({ buildings: [] }), { paused: true, speed: 1, error: null });
+    await waiting.wrapper.vm.$nextTick();
+    const cell = waiting.wrapper.get('td[colspan="6"]');
+    expect(cell.text()).toContain('Forester');
+    expect(cell.text()).toMatch(/Gatherer.?s Hut/);
+    expect(cell.text()).toContain('10 wood each');
+    expect(cell.text()).toContain('then assign your idle workers with');
+
+    const unstaffed = mountView({}, 'unstaffed');
+    await unstaffed.wrapper.vm.$nextTick();
+    expect(unstaffed.wrapper.text()).toContain('Unstaffed');
+    expect(unstaffed.wrapper.text()).not.toContain('unstaffed');
   });
 
+  // Assign/unassign dispatch a plain command object; the store's own success
+  // notice on the accepted path is covered at the engine layer in
+  // command-system.test.ts, not re-asserted against this stubbed engine here.
   it('dispatches assign/unassign for a building row', async () => {
     const { engine, wrapper } = mountView();
     await wrapper.vm.$nextTick();
@@ -44,6 +73,9 @@ describe('BuildingsView', () => {
     expect(engine.dispatch).toHaveBeenCalledWith({ type: 'unassignWorker', buildingId: 7 });
   });
 
+  // affordable is a computed Record<BuildingDefId, boolean>, one entry per
+  // catalog id; only the forester row is asserted here since every other id
+  // goes through the identical `every(cost >= stock)` check.
   it('construct button dispatches when affordable and disables when not', async () => {
     const rich = mountView({ wood: 100 });
     await rich.wrapper.vm.$nextTick();

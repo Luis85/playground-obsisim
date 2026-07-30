@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { inject } from 'vue';
+import { inject, ref } from 'vue';
 import { ENGINE_KEY } from '../engine-key';
 import { useGameStore } from '../stores/game-store';
 
@@ -7,8 +7,31 @@ const engine = inject(ENGINE_KEY)!;
 const store = useGameStore();
 const speeds = [1, 2, 4] as const;
 
-function onReset() {
-  if (window.confirm('Reset the colony? This cannot be undone.')) void engine.reset();
+// Two-step reset in place of window.confirm: a native confirm dialog was one
+// accidental Enter press away from wiping a colony with no way back. Arming
+// just flips a flag and swaps in the confirm/cancel pair below; nothing
+// destructive happens until confirmReset() itself is clicked.
+//
+// setResetArmed(bool) rather than two separate arm/cancel functions: both
+// idle->armed and armed->idle are the exact same state write, just with the
+// opposite boolean, so one small function covers both template call sites
+// (data-test="reset" and data-test="reset-cancel") instead of two near-
+// duplicates that would only differ in the literal they assign.
+const resetArmed = ref(false);
+function setResetArmed(armed: boolean) { resetArmed.value = armed; }
+
+// A double-click's second event can land on Confirm even with Cancel back in
+// the arming button's slot: Confirm's own margin/gap only clears that slot
+// when "Cancel" is wide enough relative to "Reset colony", and both widths
+// depend on the user's Obsidian theme font, so no layout arrangement can be
+// relied on to keep a stray double-click off Confirm. MouseEvent.detail is
+// theme-independent: it's 2 on a double-click's second click, 1 on a
+// deliberate single click, and 0 for keyboard activation (Enter/Space), so
+// gating on detail <= 1 blocks the double-click without breaking keyboard use.
+function confirmReset(event: MouseEvent) {
+  if (event.detail > 1) return;
+  resetArmed.value = false;
+  void engine.reset();
 }
 </script>
 
@@ -34,6 +57,22 @@ function onReset() {
       <span>💰 {{ store.snapshot.colonyWealth.toFixed(0) }}</span>
       <span v-if="store.lowFood" class="obsisim-warning" data-test="low-food">⚠ Low food</span>
     </div>
-    <button class="obsisim-reset" data-test="reset" @click="onReset">Reset colony</button>
+    <button v-if="!resetArmed" class="obsisim-reset" data-test="reset" @click="setResetArmed(true)">Reset colony</button>
+    <template v-else>
+      <!--
+        Cancel renders first, in the slot "Reset colony" vacated, as defence
+        in depth: Vue re-renders in a microtask, so a double-click's second
+        event can land 100-300ms later on whatever now occupies that
+        position, and this ordering means a stray click there hits the
+        harmless Cancel rather than Confirm. But it is NOT what makes this
+        safe -- Confirm's actual footprint (offset by margin-left + gap from
+        its CSS) only clears this slot when "Cancel" happens to be wide
+        enough relative to "Reset colony", and both widths depend on the
+        user's Obsidian theme font. The real guard is confirmReset()'s
+        MouseEvent.detail check, which is layout- and theme-independent.
+      -->
+      <button data-test="reset-cancel" @click="setResetArmed(false)">Cancel</button>
+      <button class="obsisim-reset" data-test="reset-confirm" @click="confirmReset">Confirm reset</button>
+    </template>
   </header>
 </template>

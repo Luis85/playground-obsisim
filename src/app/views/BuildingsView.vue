@@ -3,16 +3,26 @@ import { computed, inject } from 'vue';
 import { ENGINE_KEY } from '../engine-key';
 import { useGameStore } from '../stores/game-store';
 import { BUILDINGS, BUILDING_IDS, RESOURCES, type BuildingDefId, type CostMap, type ResourceId } from '../../engine/content';
+// Presentation lives in labels.ts, not the shared contract: BUILDING_STATE_LABELS
+// (used in the State cell below) is a Record keyed by the BuildingState union,
+// so a state added to the union without a matching label is a type error here,
+// not a silently-raw string in the rendered table.
+import { BUILDING_STATE_LABELS } from '../labels';
 
 const engine = inject(ENGINE_KEY)!;
 const store = useGameStore();
 
+// Used by the Construct table's Cost and Recipe columns (both columns
+// below), so it lives at the view level rather than duplicated per cell.
 function costLabel(cost: CostMap): string {
   return Object.entries(cost)
     .map(([id, amount]) => `${amount} ${RESOURCES[id as ResourceId].name}`)
     .join(', ');
 }
 
+// One boolean per catalog entry, recomputed whenever the stockpile changes,
+// so every "Build" button's disabled/title state in the table below is a
+// plain lookup rather than re-walking the cost map on every render.
 const affordable = computed(() => {
   const snapshot = store.snapshot;
   return Object.fromEntries(
@@ -42,13 +52,16 @@ const affordable = computed(() => {
             {{ b.workers }} / {{ b.workerSlots }}
             <button :data-test="`assign-${b.id}`" :disabled="b.workers >= b.workerSlots || store.snapshot.idleWorkers === 0" @click="engine.dispatch({ type: 'assignWorker', buildingId: b.id })">+</button>
           </td>
-          <td>{{ b.state }}</td>
+          <td>{{ BUILDING_STATE_LABELS[b.state] }}</td>
           <td>{{ b.progressPct }}%</td>
           <td>{{ b.workPower.toFixed(2) }}</td>
           <td>{{ b.tooledWorkers > 0 ? `⚒ ${b.tooledWorkers}/${b.workers}` : '—' }}</td>
         </tr>
         <tr v-if="store.snapshot.buildings.length === 0">
-          <td colspan="6">No buildings yet — construct one below.</td>
+          <td colspan="6">
+            No buildings yet. Start with a Forester or Gatherer's Hut (10 wood each) from the
+            list below, then assign your idle workers with <strong>+</strong>.
+          </td>
         </tr>
       </tbody>
     </table>

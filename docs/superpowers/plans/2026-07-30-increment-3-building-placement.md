@@ -95,6 +95,7 @@ export function isInsideMap(map: WorldMapSize, col: number, row: number): boolea
 export function isTileBuildable(map: WorldMapSize, occupied: readonly TileRef[], col: number, row: number): boolean;
 export function autoPlacePosition(map: WorldMapSize, occupied: readonly TileRef[]): TileRef | null;
 export function mapThatFits(buildingCount: number): WorldMapSize; // DEFAULT_MAP grown until the count fits
+export function autoPlaceSequence(map: WorldMapSize): Generator<TileRef>; // the empty-map placement order, linear
 ```
 
 - [ ] **Step 1: Write the failing test**
@@ -188,9 +189,20 @@ describe('mapThatFits', () => {
     expect(forTenThousand.rows).toBeLessThanOrEqual(MAX_MAP.rows);
   });
 });
+
+describe('autoPlaceSequence', () => {
+  it('is exactly autoPlacePosition replayed over an empty map', () => {
+    const occupied: TileRef[] = [];
+    for (const tile of autoPlaceSequence(DEFAULT_MAP)) {
+      expect(tile).toEqual(autoPlacePosition(DEFAULT_MAP, occupied));
+      occupied.push(tile);
+    }
+    expect(occupied).toHaveLength(336); // every buildable tile, each exactly once
+  });
+});
 ```
 
-(`MAX_MAP` and `mapThatFits` join the test file's placement import.)
+(`MAX_MAP`, `mapThatFits`, and `autoPlaceSequence` join the test file's placement import.)
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -297,12 +309,39 @@ export function mapThatFits(buildingCount: number): WorldMapSize {
   while (!fits(map) && map.cols < MAX_MAP.cols) map.cols += 1;
   return map;
 }
+
+/**
+ * The order auto-placement consumes an EMPTY map: the legacy plot pass, then
+ * row-major over everything not already yielded. Exists for the migration,
+ * which places every building of a save onto a fresh map — walking this
+ * sequence is linear, where replaying autoPlacePosition against a growing
+ * occupied-array is cubic in the building count (the structural guard admits
+ * 10,000 records; a migration must not stall plugin startup). Equivalence
+ * with autoPlacePosition-over-empty-map is pinned by a test.
+ */
+export function* autoPlaceSequence(map: WorldMapSize): Generator<TileRef> {
+  const yielded = new Set<string>();
+  for (let row = PLOT_ROW0; row < map.rows; row += 2) {
+    for (let plot = 0; plot < PLOTS_PER_ROW; plot++) {
+      const col = PLOT_COL0 + 2 * plot;
+      if (col < map.cols) {
+        yielded.add(`${col},${row}`);
+        yield { col, row };
+      }
+    }
+  }
+  for (let row = 0; row < map.rows; row++) {
+    for (let col = CAMP_COLS; col < map.cols; col++) {
+      if (!yielded.has(`${col},${row}`)) yield { col, row };
+    }
+  }
+}
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run tests/shared/placement.test.ts`
-Expected: PASS (13 tests)
+Expected: PASS (14 tests)
 
 - [ ] **Step 5: Lint, typecheck, full test run**
 
@@ -651,6 +690,17 @@ describe('migrateSaveToLatest (v1 -> v2)', () => {
     expect(tiles.size).toBe(337); // every position distinct and on the map
   });
 
+  it('migrates the guard-cap worst case (10,000 buildings) without stalling', () => {
+    // the sequence walk is linear — this is a performance contract as much as
+    // a correctness one (a save must never hang plugin startup); vitest's
+    // default per-test timeout doubles as the stall detector
+    const out = migrateSaveToLatest(v1Fixture(10_000)) as SaveGameV2;
+    expect(out.buildings).toHaveLength(10_000);
+    const tiles = new Set(out.buildings.map((b) => `${b.col},${b.row}`));
+    expect(tiles.size).toBe(10_000);
+    expect((out.map.cols - 3) * out.map.rows).toBeGreaterThanOrEqual(10_000);
+  });
+
   it('does not mutate its input', () => {
     const input = v1Fixture(1);
     migrateSaveToLatest(input);
@@ -806,7 +856,7 @@ In `src/shared/save-migration.ts`:
 ```ts
 import type { SaveGameV1, SaveGameV2 } from './save';
 import { isSaveGameV1, isSaveGameV2, LATEST_SAVE_VERSION } from './save';
-import { autoPlacePosition, mapThatFits } from './placement';
+import { autoPlaceSequence, mapThatFits } from './placement';
 ```
 
 2. `SAVE_GUARDS` becomes:
@@ -820,15 +870,18 @@ const SAVE_GUARDS: SaveGuards = { 1: isSaveGameV1, 2: isSaveGameV2 };
 ```ts
 /**
  * v1 -> v2: space arrives. Every building gets the position increment 2's
- * derived layout drew it at — autoPlacePosition replays exactly that plot
- * sequence for an ascending-id walk over an empty map — and the save gains
- * a map that FITS: the default one, grown by mapThatFits when a valid v1
- * colony outgrew it (v1 had no building cap, so oversized colonies are
- * legal saves, never corrupt ones). Placement geometry is structure, not
- * content (no catalog, no BALANCE), so this file's import discipline holds.
- * The null-check is an unreachable invariant guard — mapThatFits covers
- * every guard-admissible building count — kept so a future geometry bug
- * fails loudly into the corrupt-backup path instead of writing garbage.
+ * derived layout drew it at — autoPlaceSequence yields exactly the order
+ * autoPlacePosition would consume an empty map (pinned by test), walked
+ * once for an ascending-id pass, so migration is linear in the building
+ * count (the structural guard admits 10,000 records; startup must not
+ * stall). The save gains a map that FITS: the default one, grown by
+ * mapThatFits when a valid v1 colony outgrew it (v1 had no building cap,
+ * so oversized colonies are legal saves, never corrupt ones). Placement
+ * geometry is structure, not content (no catalog, no BALANCE), so this
+ * file's import discipline holds. The done-check is an unreachable
+ * invariant guard — mapThatFits covers every guard-admissible count —
+ * kept so a future geometry bug fails loudly into the corrupt-backup path
+ * instead of writing garbage.
  */
 const migrateV1toV2: MigrationStep = {
   from: 1,
@@ -836,12 +889,11 @@ const migrateV1toV2: MigrationStep = {
   migrate: (save) => {
     const v1 = save as SaveGameV1; // the runner guard-validated this shape
     const map = mapThatFits(v1.buildings.length);
-    const occupied: { col: number; row: number }[] = [];
+    const spots = autoPlaceSequence(map);
     const buildings = [...v1.buildings].sort((a, b) => a.id - b.id).map((b) => {
-      const at = autoPlacePosition(map, occupied);
-      if (at === null) throw new Error('more buildings than the world has tiles');
-      occupied.push(at);
-      return { ...b, col: at.col, row: at.row };
+      const at = spots.next();
+      if (at.done) throw new Error('more buildings than the world has tiles');
+      return { ...b, col: at.value.col, row: at.value.row };
     });
     return { ...v1, version: 2, map, buildings };
   },
@@ -2223,10 +2275,12 @@ the reset phases (final order: 0 first colony, 1 walk, 2 stop, 3 start,
 8 ghost+selection off**, 9 reset, 10 same-tick reset, 11 dispose):
 
 ```ts
-  // building 2 moved to a fresh tile: the ACTOR must follow (its position is
-  // re-applied on every sync, not only at spawn)
+  // the WORKERLESS sawmill moves to a fresh tile: with no worker target
+  // changing, the only thing that may alter the frame is the building actor
+  // itself — which is exactly what this phase exists to catch (its position
+  // must be re-applied on every sync, not only at spawn)
   () => renderer.sync(snap(4,
-    [building(1, 'forester', { workers: 2, state: 'producing', batchActive: true, progressPct: 90 }), building(2, 'farm', { col: 14, row: 7, workers: 1, state: 'producing', batchActive: true, progressPct: 10 }), building(3, 'sawmill')],
+    [building(1, 'forester', { workers: 2, state: 'producing', batchActive: true, progressPct: 90 }), building(2, 'farm', { workers: 1, state: 'producing', batchActive: true, progressPct: 10 }), building(3, 'sawmill', { col: 14, row: 7 })],
     [worker(10, { buildingId: 1, toolTicks: 100 }), worker(11, { buildingId: 1, efficiency: 0.3 }), worker(12, { buildingId: 2 }), worker(13)])),
   () => {
     renderer.setGhost({ defId: 'bakery', col: 10, row: 5, valid: true });
@@ -2242,11 +2296,12 @@ the reset phases (final order: 0 first colony, 1 walk, 2 stop, 3 start,
 `scripts/world-smoke.mjs` — after the `start() resumes` check, insert (and renumber the later `step(5)`/`step(6)`/`step(7)` calls to `step(9)`/`step(10)`/`step(11)`):
 
 ```js
+await wait(400); // let the grow phase's frame settle first
 const preMove = await shot();
-await step(5); // building 2 moves to a fresh tile
-await wait(2500); // its worker walks after it
+await step(5); // the workerless sawmill moves to a fresh tile
+await wait(300); // no walk to wait out — the building snaps
 const moved = await shot();
-check('a moved building is drawn at its new tile', !moved.equals(preMove));
+check('a moved building is drawn at its new tile (no worker motion to hide behind)', !moved.equals(preMove));
 
 const preGhost = await shot();
 await step(6); // ghost + selection on
@@ -2265,10 +2320,12 @@ const ghostOff = await shot();
 check('clearing ghost and selection restores the scene', ghostOff.equals(preGhost));
 ```
 
-(The moved-building check is screenshot-based like its neighbors: the frame
-must change when the building snaps to its new tile and its worker walks
-after it. The phase's `snap(4, …)` follows the grow phase's `snap(3, …)` —
-a normal next tick, safely clear of the same-or-earlier-tick reset signal.)
+(The moved-building check is screenshot-based like its neighbors, and it
+isolates the actor: the sawmill has no workers, so no worker target changes
+in phase 5 and the settled frame can only differ if the building actor
+itself moved. The phase's `snap(4, …)` follows the grow phase's
+`snap(3, …)` — a normal next tick, safely clear of the same-or-earlier-tick
+reset signal.)
 
 - [ ] **Step 5: Run suite + optional smoke**
 

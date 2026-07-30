@@ -142,9 +142,11 @@ they always have.
   capped construction, and the structural guard admits up to 10,000 building
   records — so the migration sizes the map to fit (`mapThatFits`: rows grow
   first, then columns, within `MAX_MAP`, whose 64,768 buildable tiles cover
-  the guard's cap). The step's throw-on-null remains only as an unreachable
-  invariant guard routing genuine geometry bugs to the corrupt-save backup
-  path.
+  the guard's cap) and walks the linear placement sequence
+  (`autoPlaceSequence` — provably `autoPlacePosition` replayed over an
+  empty map), so even the cap-sized save migrates without stalling startup.
+  The step's throw-on-exhaustion remains only as an unreachable invariant
+  guard routing genuine geometry bugs to the corrupt-save backup path.
 - `isLoadableSave` (v2, catalog-aware): every position on a buildable-class
   tile (in bounds, off the camp band) and **no two buildings on one tile**.
   Structural shape stays in `isSaveGameV2`; cross-field truths live here,

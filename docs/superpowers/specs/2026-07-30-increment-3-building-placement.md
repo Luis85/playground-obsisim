@@ -136,17 +136,22 @@ they always have.
   order via `autoPlacePosition` — pure structure, no catalog, honoring
   save-migration.ts's import discipline (shared-sibling imports only). An
   old colony loads with every building exactly where Increment 2 drew it.
-  The first 40 ids land on the legacy pattern (24×16 holds 8 plot rows × 5);
-  buildings beyond that continue in the row-major scan. A colony that
-  outgrew the default map is a **valid save, not a corrupt one** — v1 never
+  Fidelity governs the map size: `mapThatFits` makes the map tall enough
+  that the **legacy plot sequence itself holds the whole colony**, so every
+  building keeps the exact tile increment 2's (unbounded) derived grid drew
+  it at — building 41 lands on its historical `(4, 17)`, not in a row-major
+  spill. That exactness holds through 640 buildings (128 plot rows × 5
+  inside `MAX_MAP`'s 256 rows), far past any organic colony. A colony that
+  outgrew even that is a **valid save, not a corrupt one** — v1 never
   capped construction, and the structural guard admits up to 10,000 building
-  records — so the migration sizes the map to fit (`mapThatFits`: rows grow
-  first, then columns, within `MAX_MAP`, whose 64,768 buildable tiles cover
-  the guard's cap) and walks the linear placement sequence
-  (`autoPlaceSequence` — provably `autoPlacePosition` replayed over an
-  empty map), so even the cap-sized save migrates without stalling startup.
-  The step's throw-on-exhaustion remains only as an unreachable invariant
-  guard routing genuine geometry bugs to the corrupt-save backup path.
+  records — so the map then grows for raw capacity (rows, then columns,
+  within `MAX_MAP`, whose 64,768 buildable tiles cover the guard's cap) and
+  buildings past the legacy band get compact, not historical, positions.
+  The migration walks the linear placement sequence (`autoPlaceSequence` —
+  provably `autoPlacePosition` replayed over an empty map), so even the
+  cap-sized save migrates without stalling startup. The step's
+  throw-on-exhaustion remains only as an unreachable invariant guard
+  routing genuine geometry bugs to the corrupt-save backup path.
 - `isLoadableSave` (v2, catalog-aware): every position on a buildable-class
   tile (in bounds, off the camp band) and **no two buildings on one tile**.
   Structural shape stays in `isSaveGameV2`; cross-field truths live here,
@@ -271,7 +276,9 @@ A three-state machine in the World view: `idle` / `place(defId)` /
 4. Constructing from the Buildings table auto-places on the legacy pattern;
    the table shows tiles and can demolish; with WebGL unavailable the
    economy remains fully playable from tables.
-5. A v1 save loads with every building exactly where Increment 2 drew it; a
+5. A v1 save loads with every building exactly where Increment 2 drew it
+   (exact through 640 buildings — §2.4; compact positions only in the
+   pathological band beyond); a
    fresh colony starts as v2; saves round-trip positions and map byte-
    stably; unloadable v2 shapes (duplicate tiles, out-of-bounds) take the
    backup path.

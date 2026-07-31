@@ -176,13 +176,19 @@ describe('autoPlacePosition', () => {
 });
 
 describe('mapThatFits', () => {
-  it('returns the default map whenever the colony fits it', () => {
+  it('returns the default map while the legacy pattern holds the colony', () => {
     expect(mapThatFits(0)).toEqual(DEFAULT_MAP);
-    expect(mapThatFits(336)).toEqual(DEFAULT_MAP); // exactly full
+    expect(mapThatFits(40)).toEqual(DEFAULT_MAP); // exactly the default's 40 plots
   });
 
-  it('grows rows first, then columns, and covers the structural record cap', () => {
-    expect(mapThatFits(337)).toEqual({ cols: DEFAULT_MAP.cols, rows: 17 }); // 21 x 17 = 357
+  it('sizes rows for the legacy plot extent, keeping every increment-2 tile', () => {
+    // building 41 sat at (4, 17) under increment 2's unbounded derived grid —
+    // the map must be tall enough that the plot sequence itself reaches it
+    expect(mapThatFits(41)).toEqual({ cols: DEFAULT_MAP.cols, rows: 18 });
+    expect(mapThatFits(337)).toEqual({ cols: DEFAULT_MAP.cols, rows: 136 }); // 68 plot rows
+  });
+
+  it('falls back to capacity growth past the legacy band, covering the record cap', () => {
     const forTenThousand = mapThatFits(10_000);
     expect((forTenThousand.cols - CAMP_COLS) * forTenThousand.rows).toBeGreaterThanOrEqual(10_000);
     expect(forTenThousand.cols).toBeLessThanOrEqual(MAX_MAP.cols);
@@ -300,19 +306,26 @@ export function autoPlacePosition(map: WorldMapSize, occupied: readonly TileRef[
 }
 
 /**
- * The map a colony of this size needs: DEFAULT_MAP unless the building count
- * outgrows its buildable tiles, in which case rows extend (then, only past
- * 256 rows, columns), capped at MAX_MAP. Exists for the v1→v2 migration: a
- * v1 save can legally hold far more buildings than the default map (v1 had
- * no spatial or count cap; the structural guard admits 10,000 records, and
- * MAX_MAP's 64,768 buildable tiles cover that), and migration must never
- * classify a valid oversized colony as corrupt.
+ * The map a migrated colony of this size needs. Fidelity first: rows tall
+ * enough that the LEGACY PLOT SEQUENCE alone holds every building, because
+ * increment 2's derived grid grew rows without bound and the compatibility
+ * promise is "every building keeps the exact tile increment 2 drew" —
+ * sizing for raw capacity would spill building 41 of a 24×16 map into the
+ * row-major scan at (3,0) instead of its legacy (4,17). That fidelity holds
+ * through 640 buildings (128 plot rows × 5 inside MAX_MAP's 256 rows), far
+ * past any organic v1 colony. Capacity second: for pathological saves
+ * beyond the legacy band (the structural guard admits 10,000 records),
+ * grow rows then columns until the count simply fits — those buildings get
+ * compact, not historical, positions. Migration must never classify a
+ * valid oversized colony as corrupt.
  */
 export function mapThatFits(buildingCount: number): WorldMapSize {
-  const fits = (map: WorldMapSize) => (map.cols - CAMP_COLS) * map.rows >= buildingCount;
   const map = { ...DEFAULT_MAP };
-  while (!fits(map) && map.rows < MAX_MAP.rows) map.rows += 1;
-  while (!fits(map) && map.cols < MAX_MAP.cols) map.cols += 1;
+  const plotRows = Math.ceil(buildingCount / PLOTS_PER_ROW);
+  map.rows = Math.max(map.rows, Math.min(PLOT_ROW0 + 2 * plotRows - 1, MAX_MAP.rows));
+  const fits = () => (map.cols - CAMP_COLS) * map.rows >= buildingCount;
+  while (!fits() && map.rows < MAX_MAP.rows) map.rows += 1;
+  while (!fits() && map.cols < MAX_MAP.cols) map.cols += 1;
   return map;
 }
 
@@ -347,7 +360,7 @@ export function* autoPlaceSequence(map: WorldMapSize): Generator<TileRef> {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run tests/shared/placement.test.ts`
-Expected: PASS (14 tests)
+Expected: PASS (15 tests)
 
 - [ ] **Step 5: Lint, typecheck, full test run**
 
@@ -694,6 +707,10 @@ describe('migrateSaveToLatest (v1 -> v2)', () => {
     expect(out.map.rows).toBeGreaterThan(16); // grown past the 336-tile default
     const tiles = new Set(out.buildings.map((b) => `${b.col},${b.row}`));
     expect(tiles.size).toBe(337); // every position distinct and on the map
+    // legacy fidelity holds PAST the default map's 40 plots: the 41st
+    // building (id 50 — fixture ids start at 10) keeps the exact tile
+    // increment 2's derived grid drew it at, row 17 included
+    expect(out.buildings.find((b) => b.id === 50)).toMatchObject({ col: 4, row: 17 });
   });
 
   it('migrates the guard-cap worst case (10,000 buildings) without stalling', () => {
@@ -880,9 +897,11 @@ const SAVE_GUARDS: SaveGuards = { 1: isSaveGameV1, 2: isSaveGameV2 };
  * autoPlacePosition would consume an empty map (pinned by test), walked
  * once for an ascending-id pass, so migration is linear in the building
  * count (the structural guard admits 10,000 records; startup must not
- * stall). The save gains a map that FITS: the default one, grown by
- * mapThatFits when a valid v1 colony outgrew it (v1 had no building cap,
- * so oversized colonies are legal saves, never corrupt ones). Placement
+ * stall). The save gains a map sized by mapThatFits: tall enough that the
+ * legacy plot sequence itself holds the colony — every building keeps the
+ * exact increment-2 tile, through 640 buildings — growing for raw capacity
+ * only past that band (v1 had no building cap, so oversized colonies are
+ * legal saves, never corrupt ones). Placement
  * geometry is structure, not content (no catalog, no BALANCE), so this
  * file's import discipline holds. The done-check is an unreachable
  * invariant guard — mapThatFits covers every guard-admissible count —

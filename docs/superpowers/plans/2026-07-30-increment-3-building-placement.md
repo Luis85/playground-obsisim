@@ -2967,6 +2967,20 @@ describe('WorldView interaction', () => {
     expect(wrapper.find('[data-test="selection-panel"]').exists()).toBe(false);
   });
 
+  it('clicking a worker is a no-op for selection — only empty ground deselects', async () => {
+    const { renderer, wrapper } = armedHarness();
+    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'building', id: 7 });
+    await nextTick();
+    await wrapper.find('[data-test="world-host"]').trigger('click', { pageX: 40, pageY: 40 }); // select
+    expect(wrapper.find('[data-test="selection-panel"]').exists()).toBe(true);
+    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'worker', id: 3 });
+    await wrapper.find('[data-test="world-host"]').trigger('click', { pageX: 50, pageY: 50 });
+    expect(wrapper.find('[data-test="selection-panel"]').exists()).toBe(true); // hover-only: still selected
+    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    await wrapper.find('[data-test="world-host"]').trigger('click', { pageX: 60, pageY: 60 });
+    expect(wrapper.find('[data-test="selection-panel"]').exists()).toBe(false); // empty ground clears
+  });
+
   it('closing the panel disarms an armed move — no ghost, no dispatch afterwards', async () => {
     // the armed move belongs to the selection it came from: without the
     // cancel, an invisible move keeps previewing and clicking the canvas
@@ -3159,7 +3173,10 @@ function onClick(event: MouseEvent) {
     return;
   }
   const pick = renderer.pick(event.pageX, event.pageY);
-  select(pick?.kind === 'building' ? pick.id : null);
+  // workers are hover-only this increment: clicking one neither selects nor
+  // deselects — only a building selects, only empty ground clears
+  if (pick?.kind === 'worker') return;
+  select(pick === null ? null : pick.id);
 }
 
 function onContextMenu(event: MouseEvent) {

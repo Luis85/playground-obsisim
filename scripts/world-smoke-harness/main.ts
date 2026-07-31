@@ -56,6 +56,22 @@ const phases: Array<() => void> = [
   () => renderer.sync(snap(3,
     [building(1, 'forester', 4, 1, { workers: 2, state: 'producing', batchActive: true, progressPct: 90 }), building(2, 'farm', 6, 1, { workers: 1, state: 'producing', batchActive: true, progressPct: 10 }), building(3, 'sawmill', 8, 1)],
     [worker(10, { buildingId: 1, toolTicks: 100 }), worker(11, { buildingId: 1, efficiency: 0.3 }), worker(12, { buildingId: 2 }), worker(13)])),
+  // the WORKERLESS sawmill moves from (8,1) to a fresh tile: with no worker
+  // target changing, the only thing that may alter the frame is the building
+  // actor itself — which is exactly what this phase exists to catch (its
+  // position must be re-applied on every sync, not only at spawn)
+  () => renderer.sync(snap(4,
+    [building(1, 'forester', 4, 1, { workers: 2, state: 'producing', batchActive: true, progressPct: 90 }), building(2, 'farm', 6, 1, { workers: 1, state: 'producing', batchActive: true, progressPct: 10 }), building(3, 'sawmill', 14, 7)],
+    [worker(10, { buildingId: 1, toolTicks: 100 }), worker(11, { buildingId: 1, efficiency: 0.3 }), worker(12, { buildingId: 2 }), worker(13)])),
+  () => {
+    renderer.setGhost({ defId: 'bakery', col: 10, row: 5, valid: true });
+    renderer.setSelection(1);
+  },
+  () => renderer.setGhost({ defId: 'bakery', col: 10, row: 5, valid: false }),
+  () => {
+    renderer.setGhost(null);
+    renderer.setSelection(null);
+  },
   // colony reset: tick regresses, entity ids restart — the scene must forget
   // the old colony instead of gliding recycled ids from their former posts
   () => renderer.sync(snap(1, [], [worker(1), worker(2), worker(3)])),

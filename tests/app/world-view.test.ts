@@ -16,7 +16,9 @@ import { makeBuilding, makeSnapshot, makeWorker } from './fixtures';
 
 function makeFake() {
   const renderer: WorldRenderer = {
-    sync: vi.fn(), pick: vi.fn(() => null), onFatal: vi.fn(), start: vi.fn(), stop: vi.fn(), dispose: vi.fn(),
+    sync: vi.fn(), pick: vi.fn(() => null),
+    tileAt: vi.fn(() => null), setGhost: vi.fn(), setSelection: vi.fn(),
+    onFatal: vi.fn(), start: vi.fn(), stop: vi.fn(), dispose: vi.fn(),
   };
   const factory = vi.fn((host: HTMLElement) => {
     void host;

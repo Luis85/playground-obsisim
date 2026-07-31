@@ -3,7 +3,7 @@ import {
   Rectangle, Text, TextAlign, TileMap, vec, type Vector,
 } from 'excalibur';
 import type { Snapshot } from '../../shared/snapshot';
-import type { WorldRendererFactory } from './renderer-key';
+import type { GhostPreview, WorldRendererFactory } from './renderer-key';
 import {
   layoutWorld, pickBuildingAt, TILE,
   type PlacedBuilding, type PlacedWorker, type WorldLayout, type WorldPick,
@@ -21,8 +21,8 @@ import { efficiencyBucket, resolveWorldTheme, type WorldTheme } from './theme';
 const WORKER_RADIUS = 7;
 const WORKER_PICK_RADIUS = WORKER_RADIUS + 4; // px of hover slack around a dot
 const WORKER_SPEED = 90; // px/s walk speed toward a new post
-const BUILDING_SIZE = TILE * 1.5;
-const BAR_WIDTH = TILE * 1.2;
+const BUILDING_SIZE = TILE - 4;
+const BAR_WIDTH = TILE * 0.8;
 const BAR_HEIGHT = 5;
 
 // Draw order, back to front: ground tilemap (default z 0), building tiles and
@@ -104,6 +104,10 @@ class WorldScene {
   private workers = new Map<number, WorkerBundle>();
   private cache: GraphicCache;
   private lastLayout: WorldLayout | null = null;
+  private ghost: Actor | null = null;
+  private ghostLooks = new Map<string, GraphicsGroup>();
+  private selectionRing: Actor | null = null;
+  private selectedId: number | null = null;
 
   constructor(private engine: Engine, private theme: WorldTheme) {
     this.cache = new GraphicCache(theme);
@@ -118,6 +122,7 @@ class WorldScene {
     this.prune(this.buildings, layout.buildings, (bundle) => bundle.root.kill());
     this.prune(this.workers, layout.workers, (bundle) => bundle.actor.kill());
     this.fitCamera(layout);
+    this.applySelection();
   }
 
   /** Forget every entity actor — a colony reset reuses entity ids, so the
@@ -127,6 +132,9 @@ class WorldScene {
     for (const bundle of this.workers.values()) bundle.actor.kill();
     this.buildings.clear();
     this.workers.clear();
+    this.setGhost(null);
+    this.selectionRing?.kill();
+    this.selectionRing = null;
   }
 
   /** Re-frame after a pane resize — no snapshot arrives for that, and while
@@ -153,6 +161,83 @@ class WorldScene {
     return bestId;
   }
 
+  setGhost(ghost: GhostPreview | null): void {
+    if (ghost === null) {
+      this.ghost?.kill();
+      this.ghost = null;
+      return;
+    }
+    if (this.ghost === null || this.ghost.isKilled()) {
+      this.ghost = new Actor({ z: 4 });
+      this.ghost.graphics.opacity = 0.55;
+      this.engine.currentScene.add(this.ghost);
+    }
+    this.ghost.pos = vec((ghost.col + 0.5) * TILE, (ghost.row + 0.5) * TILE);
+    this.ghost.graphics.use(this.ghostLook(ghost));
+  }
+
+  /** Ghost looks are cached per (def, validity), like building looks. */
+  private ghostLook(ghost: GhostPreview): GraphicsGroup {
+    const key = `${ghost.defId}/${ghost.valid}`;
+    let group = this.ghostLooks.get(key);
+    if (!group) {
+      group = new GraphicsGroup({
+        useAnchor: false,
+        members: [
+          {
+            // Fill IS the feedback: accent when buildable, danger when not —
+            // exactly the WorldLegend's ghost chips (spec: "accent-tinted
+            // when valid"). The def's own color would read as an ordinary
+            // translucent building; the glyph still says WHAT is placed.
+            graphic: new Rectangle({
+              width: BUILDING_SIZE, height: BUILDING_SIZE,
+              color: Color.fromHex(ghost.valid ? this.theme.accent : this.theme.danger),
+              strokeColor: Color.fromHex(ghost.valid ? this.theme.accent : this.theme.danger), lineWidth: 3,
+            }),
+            offset: vec(-BUILDING_SIZE / 2, -BUILDING_SIZE / 2),
+          },
+          {
+            graphic: new Text({
+              text: this.theme.buildingGlyph[ghost.defId],
+              font: new Font({ family: 'sans-serif', size: 26, textAlign: TextAlign.Center, baseAlign: BaseAlign.Middle }),
+            }),
+            offset: vec(0, 0),
+            useBounds: false,
+          },
+        ],
+      });
+      this.ghostLooks.set(key, group);
+    }
+    return group;
+  }
+
+  setSelection(buildingId: number | null): void {
+    this.selectedId = buildingId;
+    this.applySelection();
+  }
+
+  /** Re-applied on every sync: the ring follows a moved building and dies
+   * with a demolished one (the view also clears its own selection state). */
+  private applySelection(): void {
+    const cell = this.selectedId === null
+      ? undefined
+      : this.lastLayout?.buildings.find((b) => b.id === this.selectedId);
+    if (!cell) {
+      this.selectionRing?.kill();
+      this.selectionRing = null;
+      return;
+    }
+    if (this.selectionRing === null || this.selectionRing.isKilled()) {
+      this.selectionRing = new Actor({ z: 2 });
+      this.selectionRing.graphics.use(new Rectangle({
+        width: TILE, height: TILE, color: Color.Transparent,
+        strokeColor: Color.fromHex(this.theme.accent), lineWidth: 3,
+      }));
+      this.engine.currentScene.add(this.selectionRing);
+    }
+    this.selectionRing.pos = vec((cell.col + 0.5) * TILE, (cell.row + 0.5) * TILE);
+  }
+
   /** Kill and forget every actor whose entity left the snapshot. */
   private prune<T>(live: Map<number, T>, placed: { id: number }[], kill: (bundle: T) => void): void {
     const seen = new Set<number>();
@@ -165,7 +250,8 @@ class WorldScene {
     }
   }
 
-  /** The checkered ground only rebuilds when the grid grows. */
+  /** The checkered ground rebuilds only once: the map is fixed per colony
+   * now (spec §2.1), so cols/rows never change again after the first sync. */
   private syncGround(layout: WorldLayout): void {
     const key = `${layout.cols}x${layout.rows}`;
     if (key === this.groundKey) return;
@@ -195,6 +281,7 @@ class WorldScene {
 
   private upsertBuilding(b: PlacedBuilding): void {
     const bundle = this.buildings.get(b.id) ?? this.spawnBuilding(b);
+    bundle.root.pos = vec((b.col + 0.5) * TILE, (b.row + 0.5) * TILE); // moves snap to the new tile
     // graphics are cached per (def, state): re-using the current one is trivial
     bundle.root.graphics.use(this.cache.building(b));
     bundle.track.graphics.isVisible = b.batchActive;
@@ -337,6 +424,19 @@ export const createExcaliburWorldRenderer: WorldRendererFactory = (host) => {
       const workerId = scene.workerAt(world.x, world.y);
       if (workerId !== null) return { kind: 'worker', id: workerId };
       return pickBuildingAt(last, world.x / TILE, world.y / TILE);
+    },
+    tileAt(pageX, pageY) {
+      if (disposed || last === undefined) return null;
+      const world = engine.screen.pageToWorldCoordinates(vec(pageX, pageY));
+      const col = Math.floor(world.x / TILE);
+      const row = Math.floor(world.y / TILE);
+      return col >= 0 && col < last.cols && row >= 0 && row < last.rows ? { col, row } : null;
+    },
+    setGhost(ghost) {
+      if (!disposed) scene.setGhost(ghost);
+    },
+    setSelection(buildingId) {
+      if (!disposed) scene.setSelection(buildingId);
     },
     onFatal(listener) {
       fatalListener = listener;

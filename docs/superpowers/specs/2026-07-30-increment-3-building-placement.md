@@ -208,9 +208,12 @@ A three-state machine in the World view: `idle` / `place(defId)` /
   vanishes from a snapshot (demolished, colony reset), selection clears and
   `move` mode cancels — the hover-revalidation pattern extended.
 - Escape handling uses a window-level keydown listener registered only
-  while a mode is armed or a selection exists — Escape cancels an armed
-  mode first, and clears the selection when pressed in `idle`; right-click
-  cancellation prevents the context menu only while armed.
+  while a mode is armed or a selection exists AND the view is the active
+  tab — Escape cancels an armed mode first, and clears the selection when
+  pressed in `idle`; right-click cancellation prevents the context menu
+  only while armed. The kept-alive view detaches the listener on
+  deactivation (armed mode and selection survive tab switches untouched)
+  and re-attaches it on activation.
 - The engine stays authoritative: a click racing a same-tick occupation or
   stock change simply produces the engine's rejection notice in the existing
   NoticeBanner; the ghost is cosmetic pre-validation, never a promise.

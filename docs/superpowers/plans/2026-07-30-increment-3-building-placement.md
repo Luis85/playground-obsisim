@@ -2997,6 +2997,23 @@ describe('WorldView interaction', () => {
     await wrapper.find('[data-test="world-host"]').trigger('click', { pageX: 40, pageY: 40 });
     expect(engine.dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'moveBuilding' }));
   });
+
+  it('Escape is ignored while the view is deactivated — armed mode survives tab switches', async () => {
+    // keep-alive hides the view without unmounting it; a live window listener
+    // there would let Escape on another tab silently disarm the hidden World
+    const { wrapper, active } = armedHarness();
+    await nextTick();
+    await wrapper.find('[data-test="palette-forester"]').trigger('click');
+    active.value = false; // switch tabs: deactivated, not unmounted
+    await nextTick();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    active.value = true;
+    await nextTick();
+    expect(wrapper.find('[data-test="palette-forester"]').classes()).toContain('is-armed');
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); // re-attached on activation
+    await nextTick();
+    expect(wrapper.find('[data-test="palette-forester"]').classes()).not.toContain('is-armed');
+  });
 });
 ```
 
@@ -3191,15 +3208,20 @@ function onKeydown(event: KeyboardEvent) {
   else select(null);
 }
 
-// Window-level Escape, registered only while something is cancellable —
-// Obsidian owns the key otherwise.
+// Window-level Escape, registered only while something is cancellable AND
+// the view is the visible tab — Obsidian owns the key otherwise, and the
+// kept-alive hidden view must not eat Escape meant for another tab. The
+// snapshot watch keeps firing while hidden (the store ticks on), so the
+// viewActive guard also stops a hidden re-attach.
 let escapeListening = false;
-watch([mode, selectedId], () => {
-  const needed = mode.value.kind !== 'idle' || selectedId.value !== null;
+let viewActive = true;
+function syncEscapeListener() {
+  const needed = viewActive && (mode.value.kind !== 'idle' || selectedId.value !== null);
   if (needed && !escapeListening) window.addEventListener('keydown', onKeydown);
   if (!needed && escapeListening) window.removeEventListener('keydown', onKeydown);
   escapeListening = needed;
-});
+}
+watch([mode, selectedId], syncEscapeListener);
 
 function onArm(defId: BuildingDefId) {
   mode.value = { kind: 'place', defId };
@@ -3249,8 +3271,16 @@ onMounted(() => {
     renderer = null;
   }
 });
-onActivated(() => renderer?.start());
-onDeactivated(() => renderer?.stop());
+onActivated(() => {
+  viewActive = true;
+  renderer?.start();
+  syncEscapeListener();
+});
+onDeactivated(() => {
+  viewActive = false;
+  renderer?.stop();
+  syncEscapeListener();
+});
 onBeforeUnmount(() => {
   if (hoverRecheck !== null) clearTimeout(hoverRecheck);
   if (escapeListening) window.removeEventListener('keydown', onKeydown);

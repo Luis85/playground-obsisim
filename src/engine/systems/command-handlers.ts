@@ -65,8 +65,10 @@ function findBuilding(ctx: CommandContext, buildingId: number): BuildingRow | nu
 
 // Only unassign needs to go from a bare id to a name without already holding
 // a findBuilding() result. The 'building' fallback fires when a
-// JobAssignment points at a building that no longer exists (reachable via
-// spawnWorker fixtures; live in-game once demolition lands in Task 5).
+// JobAssignment points at a building that no longer exists — fixture-only in
+// practice: demolition nulls every assignment to the building it removes and
+// the same-tick guard rejects later commands against the id, so no in-game
+// path leaves an assignment dangling. The fallback stays as defense in depth.
 function buildingName(ctx: CommandContext, buildingId: number): string {
   const found = findBuilding(ctx, buildingId);
   return found ? BUILDINGS[found.building.defId].name : 'building';

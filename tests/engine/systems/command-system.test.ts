@@ -79,10 +79,10 @@ describe('CommandSystem', () => {
 
   it('falls back to a generic name when the building an assignment points at is gone', async () => {
     // buildingName's 'building' fallback. Unreachable through the save path --
-    // isLoadableSave rejects a worker whose buildingId names no building -- but
-    // reachable through spawnWorker, and reachable in-game once entity REMOVAL
-    // lands (increment 2), when a JobAssignment can outlive its building. Pinned
-    // now so the change that makes it live doesn't also get to pick the wording.
+    // isLoadableSave rejects a worker whose buildingId names no building -- and
+    // demolition kept it fixture-only: it nulls every assignment it evicts and
+    // the same-tick demolishedIds guard rejects later commands against the id.
+    // Pinned as defense in depth for any future remover that misses eviction.
     const save = initialSave();
     save.workers = [];
     const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, SnapshotSystem] });

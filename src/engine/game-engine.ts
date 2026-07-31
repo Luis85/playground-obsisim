@@ -114,11 +114,13 @@ export class GameEngine {
       // is the only thing that consumes ids -> an id-counter delta is an exact
       // signal, so the common case skips a full entity walk.
       //
-      // INVARIANT for increment 2, CLOSED: entity REMOVAL (demolishBuilding)
-      // consumes no id, so the id-counter delta alone cannot see it. The
-      // RemovalLedger dirty flag is what closes the gap: the demolish handler
-      // raises it, and this gate reads-and-clears it beside the id check, so
-      // a tick that only removes something still refreshes on its own tick.
+      // INVARIANT from increment 2: entity REMOVAL consumes no id, so the
+      // id-counter delta alone cannot see it. The RemovalLedger dirty flag
+      // closes the gap for demolishBuilding — its handler raises it, and this
+      // gate reads-and-clears it beside the id check, so a tick that only
+      // removes something still refreshes on its own tick. The invariant
+      // itself stands: ANY future remover (aging, death, disasters) must
+      // raise the same flag, or its removal publishes a stale snapshot.
       const removals = this.world.getResource(RemovalLedger);
       if (this.world.getResource(IdCounter).peek() !== idsBefore || removals.dirty) {
         removals.dirty = false;

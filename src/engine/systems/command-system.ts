@@ -1,5 +1,5 @@
 import { Actions, createSystem, queryComponents, Read, ReadEntity, ReadResource, Write, WriteResource } from 'sim-ecs';
-import { Building, JobAssignment, Position, WorkerSlots } from '../components';
+import { Building, HaulTrip, JobAssignment, Position, WorkerSlots } from '../components';
 import { CommandQueue, IdCounter, NoticeBoard, RemovalLedger, SimClock, Stockpile, WorldMap } from '../resources';
 import {
   type CommandContext,
@@ -21,7 +21,7 @@ export const CommandSystem = () => createSystem({
   }),
   // JobAssignment alone identifies a worker entity — the Worker component
   // added nothing the handlers read.
-  workers: queryComponents({ job: Write(JobAssignment) }),
+  workers: queryComponents({ job: Write(JobAssignment), trip: Write(HaulTrip) }),
 })
   .withName('CommandSystem')
   // Handlers live in command-handlers.ts, one small function per command
@@ -31,7 +31,7 @@ export const CommandSystem = () => createSystem({
     const ctx: CommandContext = {
       clock, stockpile, ids, notices, map,
       buildings: [...buildings.iter()].map(({ entity, building, slots, position }) => ({ entity, building, slots, position })),
-      workers: [...workers.iter()].map(({ job }) => ({ job })),
+      workers: [...workers.iter()].map(({ job, trip }) => ({ job, trip })),
       spawn: (...components) => {
         let entity = actions.commands.buildEntity();
         for (const component of components) entity = entity.with(component);

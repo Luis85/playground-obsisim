@@ -1,6 +1,7 @@
 import type { IEntity } from 'sim-ecs';
 import type { Command } from '../../shared/commands';
 import type { ResourceId } from '../../shared/content-types';
+import { haulTicks } from '../../shared/haul';
 import { autoPlacePosition, isTileBuildable, type TileRef } from '../../shared/placement';
 import { BALANCE } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
@@ -25,6 +26,7 @@ export interface BuildingRow {
 
 export interface WorkerRow {
   job: JobAssignment;
+  trip: HaulTrip;
 }
 
 /**
@@ -211,6 +213,15 @@ export function handleMoveBuilding(ctx: CommandContext, command: Extract<Command
   }
   found.position.col = to.col;
   found.position.row = to.row;
+  // Haulers already walking to this building now have a different journey:
+  // recompute from the new tile so the ticks charged match the line the dot
+  // visibly travels. A returning hauler is unaffected — it walks to the camp,
+  // which did not move.
+  for (const { trip } of ctx.workers) {
+    if (trip.phase === 'outbound' && trip.targetId === command.buildingId) {
+      trip.ticksLeft = haulTicks(to.col, to.row, BALANCE.haulTilesPerTick);
+    }
+  }
   ctx.notices.succeed(`Moved the ${BUILDINGS[found.building.defId].name}.`);
 }
 
@@ -233,5 +244,12 @@ export function handleUnassignHauler(ctx: CommandContext): void {
     return;
   }
   hauler.job.hauling = false;
+  // Anything already in hand goes to the store: those goods left the building
+  // and must land somewhere. Only a returning hauler carries — an outbound one
+  // is empty — so this is exactly the mid-return case.
+  if (hauler.trip.resource !== null && hauler.trip.amount > 0) {
+    ctx.stockpile.add(hauler.trip.resource, hauler.trip.amount);
+  }
+  hauler.trip.reset();
   ctx.notices.succeed('Unassigned a hauler.');
 }

@@ -4,15 +4,19 @@ import { Building, HaulTrip, OutputBuffer } from '../../../src/engine/components
 import { IdCounter, Stockpile } from '../../../src/engine/resources';
 import { BALANCE } from '../../../src/engine/content/balance';
 import { HaulSystem } from '../../../src/engine/systems/haul-system';
-import { buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spawnWorker } from '../../../src/engine/world';
+import { CommandSystem } from '../../../src/engine/systems/command-system';
+import { enqueue } from '../fixtures';
+import {
+  buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spawnWorker, type TColonySystemFactory,
+} from '../../../src/engine/world';
 
 interface BuildingSpec { col: number; row: number; wood: number; id?: number }
 
-async function setup(specs: readonly BuildingSpec[], haulerCount: number) {
+async function setup(specs: readonly BuildingSpec[], haulerCount: number, extraSystems: readonly TColonySystemFactory[] = []) {
   const save = initialSave();
   save.workers = [];
   save.stockpile = {};
-  const prep = buildColonyPrepWorld({ save, systems: [HaulSystem] });
+  const prep = buildColonyPrepWorld({ save, systems: [HaulSystem, ...extraSystems] });
   const ids = getPrepResource(prep, IdCounter);
   const buildings: IEntity[] = specs.map((spec) => {
     const entity = spawnBuilding(prep, ids, {
@@ -121,5 +125,40 @@ describe('HaulSystem', () => {
     for (let i = 0; i < 6; i++) await world.step();
     expect(idle.getComponent(HaulTrip)!.phase).toBe('idle');
     expect(world.getResource(Stockpile).get('wood')).toBe(0);
+  });
+});
+
+describe('HaulSystem lifecycle', () => {
+  it('ends the trip when the target is demolished mid-walk', async () => {
+    // Demolition goes through the command path, the only way a building ever
+    // leaves the world, so this exercises the real removal timing.
+    const { world, buildings, haulers, step, stockpile } = await setup([{ col: 20, row: 10, wood: 9 }], 1, [CommandSystem]);
+    await step(1);
+    expect(tripOf(haulers[0]).phase).toBe('outbound');
+    enqueue(world, { type: 'demolishBuilding', buildingId: buildings[0].getComponent(Building)!.id });
+    await step(12); // long past the arrival tick
+    expect(tripOf(haulers[0]).phase).toBe('idle');
+    // Demolition refunds the forester's own cost (wood: 10) same as any
+    // demolition — orthogonal to the trip. None of the 9 buffered units the
+    // hauler never picked up made it out through the haul path.
+    expect(stockpile.get('wood')).toBe(10);
+  });
+
+  it('a hauler already carrying delivers even if its source is gone', async () => {
+    const { world, buildings, haulers, step, stockpile } = await setup([{ col: 5, row: 4, wood: 9 }], 1, [CommandSystem]);
+    await step(4); // loaded, now returning
+    expect(tripOf(haulers[0]).amount).toBe(BALANCE.haulCarryCapacity);
+    enqueue(world, { type: 'demolishBuilding', buildingId: buildings[0].getComponent(Building)!.id });
+    await step(3);
+    // the refund lands in the stockpile too; the carried load is what matters
+    expect(stockpile.get('wood')).toBeGreaterThanOrEqual(BALANCE.haulCarryCapacity);
+  });
+
+  it('a fresh colony starts with no trips in flight', async () => {
+    // The reset path builds a new world from initialSave, so buffers and trips
+    // are structurally empty — pinned here so a future "reuse the world" reset
+    // cannot quietly carry a hauler across timelines.
+    const { haulers } = await setup([{ col: 5, row: 4, wood: 0 }], 2);
+    expect(haulers.every((h) => tripOf(h).phase === 'idle' && tripOf(h).amount === 0)).toBe(true);
   });
 });

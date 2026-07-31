@@ -66,7 +66,19 @@ export function getPrepResource<T extends object>(prep: IPreptimeWorld, type: ne
   return instance as T;
 }
 
-const COMPONENT_TYPES = [Building, WorkerSlots, Production, Worker, Hunger, JobAssignment, Efficiency, ToolCoverage, Position, OutputBuffer, HaulTrip];
+// Typed as a uniform constructor array (not the inferred union of each
+// class's own constructor signature) so a caller can pass any one element
+// straight into IEntity.getComponent<T>: with the naked union, TS infers T as
+// a single arbitrary member of that union instead of distributing across it,
+// and rejects every other member as unassignable. `any[]` (not `unknown[]` or
+// `never[]`) mirrors sim-ecs's own TTypeProto<T> exactly — its bidirectional
+// escape hatch is what keeps both directions assignable: concrete component
+// constructors (each with its own specific parameter list) INTO this array,
+// and elements of this array back OUT into getComponent's parameter.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors sim-ecs's own TTypeProto<T> constructor-parameter shape exactly
+export const COMPONENT_TYPES: (new (...args: any[]) => object)[] = [
+  Building, WorkerSlots, Production, Worker, Hunger, JobAssignment, Efficiency, ToolCoverage, Position, OutputBuffer, HaulTrip,
+];
 
 export function initialSave(): SaveGameV2 {
   return {

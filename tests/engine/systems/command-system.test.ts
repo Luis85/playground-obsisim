@@ -2,16 +2,18 @@ import { describe, expect, it } from 'vitest';
 import type { IRuntimeWorld } from 'sim-ecs';
 import { CommandQueue, IdCounter, MAX_PENDING_COMMANDS, SimClock, SnapshotStore, Stockpile } from '../../../src/engine/resources';
 import { BALANCE } from '../../../src/engine/content/balance';
+import { Building, HaulTrip, OutputBuffer, Worker } from '../../../src/engine/components';
 import { CommandSystem } from '../../../src/engine/systems/command-system';
+import { HaulSystem } from '../../../src/engine/systems/haul-system';
 import { HungerSystem } from '../../../src/engine/systems/hunger-system';
 import { SnapshotSystem } from '../../../src/engine/systems/snapshot-system';
 import { enqueue } from '../fixtures';
-import { buildColonyPrepWorld, getPrepResource, initialSave, spawnWorker } from '../../../src/engine/world';
+import { buildColonyPrepWorld, COMPONENT_TYPES, getPrepResource, initialSave, spawnWorker } from '../../../src/engine/world';
 import type { Command } from '../../../src/shared/commands';
 import type { SaveGameV2 } from '../../../src/shared/save';
 
 async function setup(save: SaveGameV2 = initialSave()) {
-  const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, SnapshotSystem] });
+  const prep = buildColonyPrepWorld({ save, systems: [HaulSystem, CommandSystem, SnapshotSystem] });
   const world = await prep.prepareRun();
   // mirror GameEngine.stepOnce: the engine owns time, bumping the clock before each step.
   // Without this the recruit cooldown (which compares SimClock.tick) can never elapse.
@@ -381,5 +383,58 @@ describe('CommandSystem', () => {
     // Verify every hauler is still hauling with no buildingId
     expect(snapshot().workers.every((w) => w.hauling && w.buildingId === null)).toBe(true);
     expect(snapshot().buildings[0].workers).toBe(0);
+  });
+
+  it('a hauler unassigned mid-trip drops its load in the store, never into nothing', async () => {
+    const { world, tick, dispatch, snapshot } = await setup();
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 5, row: 4 } });
+    await tick();
+    const buildingId = snapshot().buildings[0].id;
+    for (const entity of world.getEntities()) {
+      const building = entity.getComponent(Building);
+      if (building?.id === buildingId) entity.getComponent(OutputBuffer)!.add('wood', 9);
+    }
+    await dispatch({ type: 'assignHauler' });
+    await tick(); await tick(); await tick(); await tick(); // out and loaded
+    const before = world.getResource(Stockpile).get('wood');
+    await dispatch({ type: 'unassignHauler' });
+    expect(world.getResource(Stockpile).get('wood')).toBe(before + BALANCE.haulCarryCapacity);
+    expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Unassigned a hauler.' }]);
+  });
+
+  it('a move retargets the haulers already walking to that building', async () => {
+    const { world, tick, dispatch, snapshot } = await setup();
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 20, row: 10 } });
+    await tick();
+    const buildingId = snapshot().buildings[0].id;
+    for (const entity of world.getEntities()) {
+      const building = entity.getComponent(Building);
+      if (building?.id === buildingId) entity.getComponent(OutputBuffer)!.add('wood', 9);
+    }
+    await dispatch({ type: 'assignHauler' });
+    await tick(); // dispatched: a long walk to (20,10)
+    await dispatch({ type: 'moveBuilding', buildingId, to: { col: 3, row: 0 } });
+    const trips = [...world.getEntities()].map((e) => e.getComponent(HaulTrip)).filter((t) => t?.phase === 'outbound');
+    expect(trips[0]!.ticksLeft).toBe(1); // recomputed against the new tile, not the old one
+  });
+
+  it('a recruited worker carries the same components as a restored one', async () => {
+    const { world, tick, dispatch } = await setup();
+    // The highest existing id, not just "the first worker found": entity
+    // iteration order is not id-ordered, and comparing against an arbitrary
+    // starting worker would let the id > before.id check below match another
+    // pre-existing (and therefore trivially complete) worker instead of the
+    // actual recruit, silently defeating the whole test.
+    const workers = [...world.getEntities()].filter((e) => e.getComponent(Worker) !== undefined);
+    const before = workers.reduce((max, e) => (e.getComponent(Worker)!.id > max.getComponent(Worker)!.id ? e : max));
+    const expected = COMPONENT_TYPES.filter((type) => before.getComponent(type) !== undefined);
+    await dispatch({ type: 'recruitWorker' });
+    await tick();
+    const recruited = [...world.getEntities()]
+      .filter((e) => e.getComponent(Worker) !== undefined)
+      .find((e) => e.getComponent(Worker)!.id > before.getComponent(Worker)!.id)!;
+    for (const type of expected) {
+      expect(recruited.getComponent(type), `recruited worker is missing ${type.name}`).toBeDefined();
+    }
   });
 });

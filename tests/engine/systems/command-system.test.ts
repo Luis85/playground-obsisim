@@ -146,4 +146,61 @@ describe('CommandSystem', () => {
     const dropNotices = snapshot().notices.filter((n) => n.message.includes('dropped'));
     expect(dropNotices).toEqual([{ kind: 'rejection', message: '5 command(s) were dropped: the queue was full.' }]);
   });
+
+  it('constructs at a chosen buildable tile', async () => {
+    const { tick, dispatch, snapshot } = await setup();
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 7, row: 4 } });
+    expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Built a Forester.' }]);
+    await tick();
+    expect(snapshot().buildings[0]).toMatchObject({ defId: 'forester', col: 7, row: 4 });
+  });
+
+  it('auto-places table constructions on the legacy plot pattern', async () => {
+    const { tick, dispatch, snapshot } = await setup();
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'gatherersHut' });
+    await tick();
+    expect(snapshot().buildings.map((b) => [b.col, b.row])).toEqual([[4, 1], [6, 1]]);
+  });
+
+  it('rejects out-of-bounds, camp-band, and occupied tiles without paying', async () => {
+    const { world, tick, dispatch, snapshot } = await setup();
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 0, row: 1 } });
+    expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'Cannot build there.' }]);
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 24, row: 1 } });
+    expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'Cannot build there.' }]);
+    expect(world.getResource(Stockpile).get('wood')).toBe(30); // nothing paid
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 5, row: 5 } });
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'gatherersHut', at: { col: 5, row: 5 } });
+    expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'Cannot build there.' }]);
+    expect(world.getResource(Stockpile).get('wood')).toBe(20); // only the forester paid
+    await tick();
+    expect(snapshot().buildings).toHaveLength(1);
+  });
+
+  it('two same-tick constructions cannot claim one tile', async () => {
+    const { tick, dispatch, snapshot } = await setup();
+    await dispatch(
+      { type: 'constructBuilding', buildingDefId: 'forester', at: { col: 6, row: 2 } },
+      { type: 'constructBuilding', buildingDefId: 'gatherersHut', at: { col: 6, row: 2 } },
+    );
+    expect(snapshot().notices.map((n) => n.kind)).toEqual(['success', 'rejection']);
+    await tick();
+    expect(snapshot().buildings).toHaveLength(1);
+  });
+
+  it('rejects construction once no buildable tile remains', async () => {
+    const save = initialSave();
+    let id = 10;
+    for (let row = 0; row < 16; row++) {
+      for (let col = 3; col < 24; col++) {
+        save.buildings.push({ id: id++, defId: 'forester', progress: 0, batchActive: false, col, row });
+      }
+    }
+    save.nextEntityId = id;
+    save.stockpile = { wood: 100 };
+    const { dispatch, snapshot } = await setup(save);
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
+    expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'No free tile left to build on.' }]);
+  });
 });

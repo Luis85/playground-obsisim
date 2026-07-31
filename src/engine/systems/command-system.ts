@@ -1,11 +1,10 @@
-import { Actions, createSystem, queryComponents, Read, ReadResource, Write, WriteResource } from 'sim-ecs';
-import type { Command } from '../../shared/commands';
-import type { BuildingDefId } from '../../shared/content-types';
-import { autoPlacePosition } from '../../shared/placement';
-import { BALANCE } from '../content/balance';
-import { BUILDINGS } from '../content/buildings';
-import { Building, Efficiency, Hunger, JobAssignment, Position, Production, ToolCoverage, Worker, WorkerSlots } from '../components';
+import { Actions, createSystem, queryComponents, Read, ReadEntity, ReadResource, Write, WriteResource } from 'sim-ecs';
+import { Building, JobAssignment, Position, WorkerSlots } from '../components';
 import { CommandQueue, IdCounter, NoticeBoard, SimClock, Stockpile, WorldMap } from '../resources';
+import {
+  type CommandContext,
+  handleAssignWorker, handleConstructBuilding, handleRecruitWorker, handleUnassignWorker,
+} from './command-handlers';
 
 export const CommandSystem = () => createSystem({
   actions: Actions,
@@ -15,150 +14,37 @@ export const CommandSystem = () => createSystem({
   ids: WriteResource(IdCounter),
   notices: WriteResource(NoticeBoard),
   map: ReadResource(WorldMap),
-  buildings: queryComponents({ building: Read(Building), slots: Read(WorkerSlots), position: Read(Position) }),
-  workers: queryComponents({ worker: Read(Worker), job: Write(JobAssignment) }),
+  buildings: queryComponents({
+    entity: ReadEntity(), building: Read(Building), slots: Read(WorkerSlots), position: Write(Position),
+  }),
+  // JobAssignment alone identifies a worker entity — the Worker component
+  // added nothing the handlers read.
+  workers: queryComponents({ job: Write(JobAssignment) }),
 })
   .withName('CommandSystem')
-  // One small handler per command type keeps each unit's complexity low; the
-  // run function itself is just a drain loop + dispatch.
-  //
-  // Every handler now emits exactly one notice per command: notices.reject()
-  // on every refused path (unchanged from before this task, just renamed
-  // from the old bare push()), and notices.succeed() once, at the end of the
-  // accepted path, after the state change it describes has already happened
-  // — so a notice never claims something that didn't actually occur.
+  // Handlers live in command-handlers.ts, one small function per command
+  // type; this run function only materializes the query rows into a context
+  // and drains the queue through the dispatch switch.
   .withRunFunction(({ actions, queue, clock, stockpile, ids, notices, map, buildings, workers }) => {
-    const findBuilding = (buildingId: number): { maxSlots: number; defId: BuildingDefId } | null => {
-      for (const { building, slots } of buildings.iter()) {
-        if (building.id === buildingId) return { maxSlots: slots.max, defId: building.defId };
-      }
-      return null;
+    const ctx: CommandContext = {
+      clock, stockpile, ids, notices, map,
+      buildings: [...buildings.iter()].map(({ entity, building, slots, position }) => ({ entity, building, slots, position })),
+      workers: [...workers.iter()].map(({ job }) => ({ job })),
+      spawn: (...components) => {
+        let entity = actions.commands.buildEntity();
+        for (const component of components) entity = entity.with(component);
+        entity.build();
+      },
+      claimedTiles: [],
     };
-
-    // Only unassign needs to go from a bare id to a name without already
-    // holding a findBuilding() result (construct/assign already have the def
-    // in hand from their own lookups).
-    //
-    // The 'building' fallback needs a JobAssignment pointing at a building that
-    // no longer exists. No PRODUCTION path builds one: isLoadableSave rejects a
-    // save whose worker names a missing building, and nothing removes buildings
-    // yet. It goes live with entity REMOVAL (increment 2) — an assignment can
-    // then outlive its building, between the removal and whatever clears the
-    // assignment. See game-engine.ts's runStep, the "INVARIANT for increment 2"
-    // comment above its refreshEntitySections call, for the sibling gap removal
-    // opens. command-system.test.ts reaches this branch through spawnWorker, so
-    // the wording is pinned before the change that makes it reachable for real.
-    const buildingName = (buildingId: number): string => {
-      const found = findBuilding(buildingId);
-      return found ? BUILDINGS[found.defId].name : 'building';
-    };
-
-    const handleConstructBuilding = (command: Extract<Command, { type: 'constructBuilding' }>) => {
-      // Checked BEFORE pay(): refusing after payment would swallow the cost.
-      if (ids.exhausted()) {
-        notices.reject('Cannot create more entities: id space exhausted.');
-        return;
-      }
-      const def = BUILDINGS[command.buildingDefId];
-      // Position resolves (and can refuse) BEFORE pay(), same principle as
-      // the ids.exhausted check above: refusing after payment swallows cost.
-      const occupied = [...buildings.iter()].map(({ position }) => ({ col: position.col, row: position.row }));
-      const at = autoPlacePosition(map, occupied);
-      if (at === null) {
-        notices.reject('No free tile left to build on.');
-        return;
-      }
-      if (!stockpile.pay(def.cost)) {
-        notices.reject(`Cannot afford ${def.name}.`);
-        return;
-      }
-      actions.commands
-        .buildEntity()
-        .with(new Building(ids.take(), def.id))
-        .with(new WorkerSlots(def.workerSlots))
-        .with(new Production())
-        .with(new Position(at.col, at.row))
-        .build();
-      notices.succeed(`Built a ${def.name}.`);
-    };
-
-    const handleRecruitWorker = () => {
-      // Checked BEFORE the cooldown write: a refused recruit must not start it.
-      if (ids.exhausted()) {
-        notices.reject('Cannot create more entities: id space exhausted.');
-        return;
-      }
-      if (clock.tick < clock.lastRecruitTick + BALANCE.recruitCooldownTicks) {
-        notices.reject('Recruiting is still on cooldown.');
-        return;
-      }
-      clock.lastRecruitTick = clock.tick;
-      const id = ids.take();
-      actions.commands
-        .buildEntity()
-        .with(new Worker(id))
-        .with(new Hunger())
-        .with(new JobAssignment())
-        .with(new Efficiency())
-        .with(new ToolCoverage())
-        .build();
-      notices.succeed(`Recruited worker #${id}.`);
-    };
-
-    const findAssignmentCandidates = (buildingId: number): { assigned: number; idle: JobAssignment | null } => {
-      let assigned = 0;
-      let idle: JobAssignment | null = null;
-      for (const { job } of workers.iter()) {
-        if (job.buildingId === buildingId) assigned++;
-        else if (job.buildingId === null && idle === null) idle = job;
-      }
-      return { assigned, idle };
-    };
-
-    const handleAssignWorker = (command: Extract<Command, { type: 'assignWorker' }>) => {
-      const found = findBuilding(command.buildingId);
-      if (found === null) {
-        notices.reject('Building not found.');
-        return;
-      }
-      const { assigned, idle } = findAssignmentCandidates(command.buildingId);
-      if (assigned >= found.maxSlots) {
-        notices.reject('No free worker slots at this building.');
-        return;
-      }
-      if (idle === null) {
-        notices.reject('No idle workers available.');
-        return;
-      }
-      idle.buildingId = command.buildingId;
-      notices.succeed(`Assigned a worker to ${BUILDINGS[found.defId].name}.`);
-    };
-
-    const handleUnassignWorker = (command: Extract<Command, { type: 'unassignWorker' }>) => {
-      let found = false;
-      for (const { job } of workers.iter()) {
-        if (job.buildingId === command.buildingId) {
-          job.buildingId = null;
-          found = true;
-          break;
-        }
-      }
-      if (!found) {
-        notices.reject('No worker assigned to this building.');
-        return;
-      }
-      notices.succeed(`Unassigned a worker from ${buildingName(command.buildingId)}.`);
-    };
-
     for (const command of queue.drain()) {
       switch (command.type) {
-        case 'constructBuilding': handleConstructBuilding(command); break;
-        case 'recruitWorker': handleRecruitWorker(); break;
-        case 'assignWorker': handleAssignWorker(command); break;
-        case 'unassignWorker': handleUnassignWorker(command); break;
+        case 'constructBuilding': handleConstructBuilding(ctx, command); break;
+        case 'recruitWorker': handleRecruitWorker(ctx); break;
+        case 'assignWorker': handleAssignWorker(ctx, command); break;
+        case 'unassignWorker': handleUnassignWorker(ctx, command); break;
       }
     }
-
     const dropped = queue.takeDropped();
     if (dropped > 0) notices.reject(`${dropped} command(s) were dropped: the queue was full.`);
   })

@@ -2278,22 +2278,23 @@ const BAR_WIDTH = TILE * 0.8;
 
 - [ ] **Step 4: Extend the smoke test**
 
-`scripts/world-smoke-harness/main.ts` — first, the harness's `building()`
-helper gains `col`/`row` defaults (id-keyed tiles, mirroring the test
-fixture's `makeBuilding`): `BuildingSnapshot` now requires positions, and
-the harness is not typechecked, so missing fields would surface as NaN
-actor positions at runtime. Then the phase array gains four entries before
-the reset phases (final order: 0 first colony, 1 walk, 2 stop, 3 start,
-4 grow, **5 building moved, 6 ghost+selection on, 7 ghost invalid,
+`scripts/world-smoke-harness/main.ts` — the harness helper is already
+positional after Task 7 (`building(id, defId, col, row, overrides?)`, with
+the grow-phase colony at forester 4,1 / farm 6,1 / sawmill 8,1); every
+phase added here uses that exact signature — the harness is not
+typechecked, so a mismatched call would surface only as NaN actor
+positions at runtime. The phase array gains four entries before the reset
+phases (final order: 0 first colony, 1 walk, 2 stop, 3 start, 4 grow,
+**5 building moved, 6 ghost+selection on, 7 ghost invalid,
 8 ghost+selection off**, 9 reset, 10 same-tick reset, 11 dispose):
 
 ```ts
-  // the WORKERLESS sawmill moves to a fresh tile: with no worker target
-  // changing, the only thing that may alter the frame is the building actor
-  // itself — which is exactly what this phase exists to catch (its position
-  // must be re-applied on every sync, not only at spawn)
+  // the WORKERLESS sawmill moves from (8,1) to a fresh tile: with no worker
+  // target changing, the only thing that may alter the frame is the building
+  // actor itself — which is exactly what this phase exists to catch (its
+  // position must be re-applied on every sync, not only at spawn)
   () => renderer.sync(snap(4,
-    [building(1, 'forester', { workers: 2, state: 'producing', batchActive: true, progressPct: 90 }), building(2, 'farm', { workers: 1, state: 'producing', batchActive: true, progressPct: 10 }), building(3, 'sawmill', { col: 14, row: 7 })],
+    [building(1, 'forester', 4, 1, { workers: 2, state: 'producing', batchActive: true, progressPct: 90 }), building(2, 'farm', 6, 1, { workers: 1, state: 'producing', batchActive: true, progressPct: 10 }), building(3, 'sawmill', 14, 7)],
     [worker(10, { buildingId: 1, toolTicks: 100 }), worker(11, { buildingId: 1, efficiency: 0.3 }), worker(12, { buildingId: 2 }), worker(13)])),
   () => {
     renderer.setGhost({ defId: 'bakery', col: 10, row: 5, valid: true });
@@ -2946,6 +2947,23 @@ describe('WorldView interaction', () => {
     expect(renderer.setSelection).toHaveBeenLastCalledWith(null);
     expect(wrapper.find('[data-test="selection-panel"]').exists()).toBe(false);
   });
+
+  it('closing the panel disarms an armed move — no ghost, no dispatch afterwards', async () => {
+    // the armed move belongs to the selection it came from: without the
+    // cancel, an invisible move keeps previewing and clicking the canvas
+    // still dispatches moveBuilding for the deselected building
+    const { renderer, wrapper, engine } = armedHarness({ col: 9, row: 6 });
+    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'building', id: 7 });
+    await nextTick();
+    await wrapper.find('[data-test="world-host"]').trigger('click', { pageX: 40, pageY: 40 }); // select
+    await wrapper.find('[data-test="selection-move"]').trigger('click'); // arm move
+    await wrapper.find('[data-test="selection-close"]').trigger('click');
+    expect(renderer.setGhost).toHaveBeenLastCalledWith(null);
+    (engine.dispatch as ReturnType<typeof vi.fn>).mockClear();
+    await wrapper.find('[data-test="world-host"]').trigger('pointermove', { pageX: 40, pageY: 40 });
+    await wrapper.find('[data-test="world-host"]').trigger('click', { pageX: 40, pageY: 40 });
+    expect(engine.dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'moveBuilding' }));
+  });
 });
 ```
 
@@ -3048,6 +3066,14 @@ function cancelMode() {
 function select(buildingId: number | null) {
   selectedId.value = buildingId;
   renderer?.setSelection(buildingId);
+}
+
+function closeSelection() {
+  // An armed move belongs to the selection it came from: closing the panel
+  // must disarm it, or an invisible move keeps previewing and a canvas
+  // click still dispatches moveBuilding for the deselected building.
+  if (mode.value.kind === 'move') cancelMode();
+  select(null);
 }
 
 function armHoverRecheck() {
@@ -3233,7 +3259,7 @@ Replace the `<template>` with:
       :building-id="selectedId"
       @move="onMoveRequest"
       @demolish="onDemolish"
-      @close="select(null)"
+      @close="closeSelection"
     />
     <WorldLegend />
   </div>

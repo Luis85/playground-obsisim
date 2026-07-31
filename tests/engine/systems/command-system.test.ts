@@ -362,4 +362,24 @@ describe('CommandSystem', () => {
     expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'No idle workers available.' }]);
     expect(snapshot().buildings[0].workers).toBe(2); // the staffed pair was never poached
   });
+
+  it('assigning a building worker never poaches a hauler', async () => {
+    const { tick, dispatch, snapshot } = await setup();
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
+    await tick();
+    const buildingId = snapshot().buildings[0].id;
+    // Turn every starting worker into a hauler (3 workers total)
+    await dispatch({ type: 'assignHauler' });
+    await dispatch({ type: 'assignHauler' });
+    await dispatch({ type: 'assignHauler' });
+    // Verify all are hauling and none are idle
+    expect(snapshot().workers.filter((w) => w.hauling)).toHaveLength(3);
+    expect(snapshot().idleWorkers).toBe(0);
+    // Try to assign a worker to the building — should reject, not poach a hauler
+    await dispatch({ type: 'assignWorker', buildingId });
+    expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'No idle workers available.' }]);
+    // Verify every hauler is still hauling with no buildingId
+    expect(snapshot().workers.every((w) => w.hauling && w.buildingId === null)).toBe(true);
+    expect(snapshot().buildings[0].workers).toBe(0);
+  });
 });

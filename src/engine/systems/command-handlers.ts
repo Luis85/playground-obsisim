@@ -135,7 +135,8 @@ export function handleAssignWorker(ctx: CommandContext, command: Extract<Command
   let idle: JobAssignment | null = null;
   for (const { job } of ctx.workers) {
     if (job.buildingId === command.buildingId) assigned++;
-    else if (job.buildingId === null && idle === null) idle = job;
+    // A hauler is staffed work, not spare capacity — never poach it.
+    else if (job.buildingId === null && !job.hauling && idle === null) idle = job;
   }
   if (assigned >= found.slots.max) {
     ctx.notices.reject('No free worker slots at this building.');

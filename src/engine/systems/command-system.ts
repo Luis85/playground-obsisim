@@ -3,7 +3,7 @@ import { Building, JobAssignment, Position, WorkerSlots } from '../components';
 import { CommandQueue, IdCounter, NoticeBoard, RemovalLedger, SimClock, Stockpile, WorldMap } from '../resources';
 import {
   type CommandContext,
-  handleAssignWorker, handleConstructBuilding, handleDemolishBuilding, handleRecruitWorker, handleUnassignWorker,
+  handleAssignWorker, handleConstructBuilding, handleDemolishBuilding, handleMoveBuilding, handleRecruitWorker, handleUnassignWorker,
 } from './command-handlers';
 
 export const CommandSystem = () => createSystem({
@@ -48,6 +48,7 @@ export const CommandSystem = () => createSystem({
         case 'assignWorker': handleAssignWorker(ctx, command); break;
         case 'unassignWorker': handleUnassignWorker(ctx, command); break;
         case 'demolishBuilding': handleDemolishBuilding(ctx, command); break;
+        case 'moveBuilding': handleMoveBuilding(ctx, command); break;
       }
     }
     const dropped = queue.takeDropped();

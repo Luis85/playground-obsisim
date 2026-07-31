@@ -256,4 +256,46 @@ describe('CommandSystem', () => {
     await dispatch({ type: 'constructBuilding', buildingDefId: 'gatherersHut', at: { col: 5, row: 5 } });
     expect(snapshot().notices).toEqual([{ kind: 'success', message: "Built a Gatherer's Hut." }]);
   });
+
+  it('moves a building in place — same id, workers and batch intact, visible same tick', async () => {
+    const { tick, dispatch, snapshot } = await setup();
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 5, row: 5 } });
+    await tick();
+    const buildingId = snapshot().buildings[0].id;
+    await dispatch({ type: 'assignWorker', buildingId });
+    await dispatch({ type: 'moveBuilding', buildingId, to: { col: 9, row: 6 } });
+    expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Moved the Forester.' }]);
+    // Position is a component mutation, not a deferred entity command — the
+    // same tick's snapshot already shows it.
+    expect(snapshot().buildings[0]).toMatchObject({ id: buildingId, col: 9, row: 6, workers: 1 });
+  });
+
+  it('rejects moving to an occupied tile, its own tile, off-map, or a missing building', async () => {
+    const { tick, dispatch, snapshot } = await setup();
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 5, row: 5 } });
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'gatherersHut', at: { col: 6, row: 5 } });
+    await tick();
+    const buildingId = snapshot().buildings[0].id;
+    await dispatch({ type: 'moveBuilding', buildingId, to: { col: 6, row: 5 } });
+    expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'Cannot move there.' }]);
+    await dispatch({ type: 'moveBuilding', buildingId, to: { col: 5, row: 5 } });
+    expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'Cannot move there.' }]);
+    await dispatch({ type: 'moveBuilding', buildingId, to: { col: 1, row: 5 } });
+    expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'Cannot move there.' }]);
+    await dispatch({ type: 'moveBuilding', buildingId: 999, to: { col: 9, row: 9 } });
+    expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'Building not found.' }]);
+    expect(snapshot().buildings[0]).toMatchObject({ col: 5, row: 5 }); // never moved
+  });
+
+  it('same-tick: a construction claims its tile before a later move can take it', async () => {
+    const { tick, dispatch, snapshot } = await setup();
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 5, row: 5 } });
+    await tick();
+    const buildingId = snapshot().buildings[0].id;
+    await dispatch(
+      { type: 'constructBuilding', buildingDefId: 'gatherersHut', at: { col: 7, row: 7 } },
+      { type: 'moveBuilding', buildingId, to: { col: 7, row: 7 } },
+    );
+    expect(snapshot().notices.map((n) => n.kind)).toEqual(['success', 'rejection']);
+  });
 });

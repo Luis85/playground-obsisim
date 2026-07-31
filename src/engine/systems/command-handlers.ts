@@ -190,3 +190,24 @@ export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Com
   ctx.removals.dirty = true;
   ctx.notices.succeed(`Demolished the ${def.name} — cost refunded.`);
 }
+
+export function handleMoveBuilding(ctx: CommandContext, command: Extract<Command, { type: 'moveBuilding' }>): void {
+  const found = findBuilding(ctx, command.buildingId);
+  if (found === null) {
+    ctx.notices.reject('Building not found.');
+    return;
+  }
+  const { to } = command;
+  // Own tile first: it IS occupied (by the mover), so isTileBuildable would
+  // reject it anyway — the explicit check just makes the no-op reject
+  // independent of that coincidence. occupiedTiles includes the mover's old
+  // tile, which a move to any DIFFERENT tile never matches.
+  const own = found.position.col === to.col && found.position.row === to.row;
+  if (own || !isTileBuildable(ctx.map, occupiedTiles(ctx), to.col, to.row)) {
+    ctx.notices.reject('Cannot move there.');
+    return;
+  }
+  found.position.col = to.col;
+  found.position.row = to.row;
+  ctx.notices.succeed(`Moved the ${BUILDINGS[found.building.defId].name}.`);
+}

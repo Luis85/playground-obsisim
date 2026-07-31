@@ -5,4 +5,5 @@ export type Command =
   | { type: 'recruitWorker' }
   | { type: 'assignWorker'; buildingId: number }
   | { type: 'unassignWorker'; buildingId: number }
-  | { type: 'demolishBuilding'; buildingId: number };
+  | { type: 'demolishBuilding'; buildingId: number }
+  | { type: 'moveBuilding'; buildingId: number; to: { col: number; row: number } };

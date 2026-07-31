@@ -461,8 +461,11 @@ describe('live-world projections agree', () => {
 
   it('every non-derived building fact is represented in the save record', async () => {
     const engine = await busyColony();
-    // workerSlots and progressPct/state/workPower/tooledWorkers are display-derived
-    const derivedBuilding = ['workers', 'workerSlots', 'state', 'progressPct', 'tooledWorkers', 'workPower'];
+    // workerSlots and progressPct/state/workPower/tooledWorkers are display-derived.
+    // buffered is real state, not derived — but Task 2 deliberately does not persist
+    // output-buffer contents yet (spawnBuilding always starts one empty; save v3 in
+    // Task 6 restores real contents), so it is excluded here too until then.
+    const derivedBuilding = ['workers', 'workerSlots', 'state', 'progressPct', 'tooledWorkers', 'workPower', 'buffered'];
     const factKeys = Object.keys(engine.snapshot!.buildings[0]).filter((k) => !derivedBuilding.includes(k));
     const savedKeys = Object.keys(engine.serialize().buildings[0]);
     expect(factKeys.filter((key) => !savedKeys.includes(key))).toEqual([]);

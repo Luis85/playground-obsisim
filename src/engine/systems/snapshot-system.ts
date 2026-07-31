@@ -2,7 +2,7 @@ import { createSystem, queryComponents, Read, ReadResource, WriteResource } from
 import type { ResourceStats } from '../../shared/snapshot';
 import type { ResourceId } from '../../shared/content-types';
 import { RESOURCES, RESOURCE_IDS } from '../content/resources';
-import { Building, Efficiency, Hunger, JobAssignment, Position, Production, ToolCoverage, Worker, WorkerSlots } from '../components';
+import { Building, Efficiency, Hunger, JobAssignment, OutputBuffer, Position, Production, ToolCoverage, Worker, WorkerSlots } from '../components';
 import { NoticeBoard, SimClock, SnapshotStore, StatsHistory, Stockpile, WorldMap } from '../resources';
 import type { BuildingFacts, WorkerFacts } from '../snapshot-builder';
 import { buildEntitySections, buildingFactsOf, workerFactsOf } from '../snapshot-builder';
@@ -15,7 +15,7 @@ export const SnapshotSystem = () => createSystem({
   store: WriteResource(SnapshotStore),
   map: ReadResource(WorldMap),
   buildings: queryComponents({
-    building: Read(Building), slots: Read(WorkerSlots), production: Read(Production), position: Read(Position),
+    building: Read(Building), slots: Read(WorkerSlots), production: Read(Production), position: Read(Position), buffer: Read(OutputBuffer),
   }),
   workers: queryComponents({
     worker: Read(Worker), hunger: Read(Hunger), job: Read(JobAssignment), efficiency: Read(Efficiency), coverage: Read(ToolCoverage),
@@ -34,8 +34,8 @@ export const SnapshotSystem = () => createSystem({
     }
 
     const buildingFacts: BuildingFacts[] = [];
-    for (const { building, slots, production, position } of buildings.iter()) {
-      buildingFacts.push(buildingFactsOf(building, slots, production, position));
+    for (const { building, slots, production, position, buffer } of buildings.iter()) {
+      buildingFacts.push(buildingFactsOf(building, slots, production, position, buffer));
     }
 
     const { workers: workerSnaps, buildings: buildingSnaps, population, idleWorkers } = buildEntitySections(workerFacts, buildingFacts);

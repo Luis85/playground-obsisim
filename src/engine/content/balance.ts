@@ -12,6 +12,13 @@ export const BALANCE = {
   autosaveEveryTicks: 100,
   baseTicksPerSecond: 2,
   statsWindowTicks: 100,
+  /** Units a building may hold before it stalls (total across resources). */
+  outputBufferCap: 12,
+  /** Units one hauler carries per trip: two trips clear a full buffer. */
+  haulCarryCapacity: 6,
+  /** Hauler walking speed. A building beside the camp is a 1-tick walk; the far
+   * corner of the default map is 13, so distance is a real investment. */
+  haulTilesPerTick: 2,
 } as const;
 
 /** Spec 3.5: fed = 1.0 up to the meal threshold, then linear down to 0.2 at max hunger. */

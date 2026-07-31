@@ -5,7 +5,7 @@ import { autoPlacePosition, isTileBuildable, type TileRef } from '../../shared/p
 import { BALANCE } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
 import {
-  Building, Efficiency, Hunger, JobAssignment, Position, Production, ToolCoverage, Worker, WorkerSlots,
+  Building, Efficiency, Hunger, JobAssignment, OutputBuffer, Position, Production, ToolCoverage, Worker, WorkerSlots,
 } from '../components';
 import type { IdCounter, NoticeBoard, RemovalLedger, SimClock, Stockpile, WorldMap } from '../resources';
 
@@ -104,6 +104,7 @@ export function handleConstructBuilding(ctx: CommandContext, command: Extract<Co
     new WorkerSlots(def.workerSlots),
     new Production(),
     new Position(at.col, at.row),
+    new OutputBuffer(),
   );
   ctx.notices.succeed(`Built a ${def.name}.`);
 }

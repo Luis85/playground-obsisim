@@ -10,7 +10,7 @@ import { BALANCE, STARTING_STOCK, STARTING_WORKERS, workerEfficiency } from './c
 import { BUILDINGS } from './content/buildings';
 import { RESOURCES, RESOURCE_IDS } from './content/resources';
 import {
-  Building, Efficiency, Hunger, JobAssignment, Position, Production, ToolCoverage, Worker, WorkerSlots,
+  Building, Efficiency, Hunger, JobAssignment, OutputBuffer, Position, Production, ToolCoverage, Worker, WorkerSlots,
 } from './components';
 import {
   CommandQueue, IdCounter, NoticeBoard, RemovalLedger, SimClock, SnapshotStore, StatsHistory, Stockpile, WorldMap,
@@ -64,7 +64,7 @@ export function getPrepResource<T extends object>(prep: IPreptimeWorld, type: ne
   return instance as T;
 }
 
-const COMPONENT_TYPES = [Building, WorkerSlots, Production, Worker, Hunger, JobAssignment, Efficiency, ToolCoverage, Position];
+const COMPONENT_TYPES = [Building, WorkerSlots, Production, Worker, Hunger, JobAssignment, Efficiency, ToolCoverage, Position, OutputBuffer];
 
 export function initialSave(): SaveGameV2 {
   return {
@@ -267,6 +267,7 @@ export function spawnBuilding(
     .with(new WorkerSlots(def.workerSlots))
     .with(new Production(progress, saved.batchActive))
     .with(new Position(saved.col, saved.row))
+    .with(new OutputBuffer())
     .build();
 }
 
@@ -373,6 +374,7 @@ function buildInitialSnapshot(save: SaveGameV2): Snapshot {
     // matches the spawned world
     progress: Math.min(saved.progress, BUILDINGS[saved.defId].recipe.ticksPerBatch),
     batchActive: saved.batchActive,
+    buffered: 0, // save v3 (Task 6) restores real buffer contents
   }));
   const { workers, buildings, population, idleWorkers } = buildEntitySections(workerFacts, buildingFacts);
   const stockpile = {} as Record<ResourceId, ResourceStats>;

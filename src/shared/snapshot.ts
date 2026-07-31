@@ -1,7 +1,7 @@
 import type { BuildingDefId, ResourceId } from './content-types';
 import type { WorldMapSize } from './placement';
 
-export type BuildingState = 'producing' | 'waitingForInput' | 'unstaffed';
+export type BuildingState = 'producing' | 'waitingForInput' | 'unstaffed' | 'outputFull';
 
 export type NoticeKind = 'success' | 'rejection';
 
@@ -29,6 +29,8 @@ export interface BuildingSnapshot {
   tooledWorkers: number;
   /** Effective work per tick: sum of assigned worker efficiencies x per-worker tool multiplier. */
   workPower: number;
+  /** Units waiting in this building's output buffer for a hauler. */
+  buffered: number;
 }
 
 export interface WorkerSnapshot {

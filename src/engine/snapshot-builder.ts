@@ -2,10 +2,10 @@ import type { IRuntimeWorld } from 'sim-ecs';
 import type { BuildingDefId } from '../shared/content-types';
 import type { SavedBuilding, SavedWorker } from '../shared/save';
 import type { BuildingSnapshot, BuildingState, WorkerSnapshot } from '../shared/snapshot';
-import { workerWorkPower } from './content/balance';
-import { BUILDINGS } from './content/buildings';
+import { BALANCE, workerWorkPower } from './content/balance';
+import { batchOutputUnits, BUILDINGS } from './content/buildings';
 import {
-  Building, Efficiency, Hunger, JobAssignment, Position, Production, ToolCoverage, Worker, WorkerSlots,
+  Building, Efficiency, Hunger, JobAssignment, OutputBuffer, Position, Production, ToolCoverage, Worker, WorkerSlots,
 } from './components';
 
 /**
@@ -31,6 +31,7 @@ export interface BuildingFacts {
   workerSlots: number;
   progress: number;
   batchActive: boolean;
+  buffered: number;
 }
 
 export interface EntitySections {
@@ -65,7 +66,14 @@ export function buildEntitySections(workers: readonly WorkerFacts[], buildings: 
     .map((b) => {
       const def = BUILDINGS[b.defId];
       const staffed = staffCount.get(b.id) ?? 0;
-      const state: BuildingState = staffed === 0 ? 'unstaffed' : b.batchActive ? 'producing' : 'waitingForInput';
+      // A staffed building that cannot bank another batch is stalled on output,
+      // whether or not its current batch has finished — the player's remedy is
+      // the same either way: send a hauler. Staffing still takes precedence,
+      // since an unstaffed building is not waiting on transport.
+      const outputBlocked = BALANCE.outputBufferCap - b.buffered < batchOutputUnits(def.recipe);
+      const state: BuildingState = staffed === 0
+        ? 'unstaffed'
+        : outputBlocked ? 'outputFull' : b.batchActive ? 'producing' : 'waitingForInput';
       return {
         id: b.id,
         defId: b.defId,
@@ -78,6 +86,7 @@ export function buildEntitySections(workers: readonly WorkerFacts[], buildings: 
         progressPct: Math.min(100, Math.round((b.progress / def.recipe.ticksPerBatch) * 100)),
         tooledWorkers: tooledByBuilding.get(b.id) ?? 0,
         workPower: powerByBuilding.get(b.id) ?? 0,
+        buffered: b.buffered,
       };
     })
     .sort((a, b) => a.id - b.id);
@@ -113,7 +122,9 @@ export function workerFactsOf(
   };
 }
 
-export function buildingFactsOf(building: Building, slots: WorkerSlots, production: Production, position: Position): BuildingFacts {
+export function buildingFactsOf(
+  building: Building, slots: WorkerSlots, production: Production, position: Position, buffer: OutputBuffer,
+): BuildingFacts {
   return {
     id: building.id,
     defId: building.defId,
@@ -122,6 +133,7 @@ export function buildingFactsOf(building: Building, slots: WorkerSlots, producti
     workerSlots: slots.max,
     progress: production.progress,
     batchActive: production.batchActive,
+    buffered: buffer.total(),
   };
 }
 
@@ -157,7 +169,13 @@ export function gatherEntityFacts(world: IRuntimeWorld): EntityFacts {
   for (const entity of world.getEntities()) {
     const building = entity.getComponent(Building);
     if (building) {
-      buildings.push(buildingFactsOf(building, entity.getComponent(WorkerSlots)!, entity.getComponent(Production)!, entity.getComponent(Position)!));
+      buildings.push(buildingFactsOf(
+        building,
+        entity.getComponent(WorkerSlots)!,
+        entity.getComponent(Production)!,
+        entity.getComponent(Position)!,
+        entity.getComponent(OutputBuffer)!,
+      ));
       continue;
     }
     const worker = entity.getComponent(Worker);

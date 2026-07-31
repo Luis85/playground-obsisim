@@ -2896,6 +2896,18 @@ describe('WorldView interaction', () => {
     expect(wrapper.find('[data-test="palette-forester"]').classes()).toContain('is-armed');
   });
 
+  it('switching armed definitions over a parked pointer swaps the ghost in place', async () => {
+    // keyboard activation of a second palette button moves no pointer: the
+    // ghost must re-render for the new def from the remembered tile
+    const { renderer, wrapper } = armedHarness();
+    await nextTick();
+    await wrapper.find('[data-test="palette-forester"]').trigger('click');
+    await wrapper.find('[data-test="world-host"]').trigger('pointermove', { pageX: 40, pageY: 40 });
+    expect(renderer.setGhost).toHaveBeenLastCalledWith({ defId: 'forester', col: 8, row: 4, valid: true });
+    await wrapper.find('[data-test="palette-farm"]').trigger('click');
+    expect(renderer.setGhost).toHaveBeenLastCalledWith({ defId: 'farm', col: 8, row: 4, valid: true });
+  });
+
   it('previews an invalid ghost on an occupied tile and dispatches nothing there', async () => {
     const { renderer, wrapper, engine } = armedHarness({ col: 6, row: 3 }); // the bakery's tile
     await nextTick();
@@ -3226,10 +3238,13 @@ watch([mode, selectedId], syncEscapeListener);
 function onArm(defId: BuildingDefId) {
   mode.value = { kind: 'place', defId };
   select(null); // a selection under an armed palette would double-claim clicks
+  refreshGhost(); // switching defs over a parked pointer must swap the ghost too
 }
 
 function onMoveRequest() {
-  if (selectedId.value !== null) mode.value = { kind: 'move', buildingId: selectedId.value };
+  if (selectedId.value === null) return;
+  mode.value = { kind: 'move', buildingId: selectedId.value };
+  refreshGhost(); // a pointer already parked on the canvas previews immediately
 }
 
 function onDemolish() {

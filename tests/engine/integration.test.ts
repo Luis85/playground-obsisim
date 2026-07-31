@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { SimClock, SnapshotStore } from '../../src/engine/resources';
 import { createColonyWorld, initialSave } from '../../src/engine/world';
 import { enqueue as dispatch } from './fixtures';
-import type { SaveGameV1 } from '../../src/shared/save';
+import type { SaveGameV2 } from '../../src/shared/save';
 
 async function run(world: Awaited<ReturnType<typeof createColonyWorld>>, ticks: number) {
   const clock = world.getResource(SimClock);
@@ -13,7 +13,7 @@ async function run(world: Awaited<ReturnType<typeof createColonyWorld>>, ticks: 
 }
 
 /** Rich fixture: enough stock + idle workers to build the full economy at once. */
-function richSave(): SaveGameV1 {
+function richSave(): SaveGameV2 {
   const save = initialSave();
   save.stockpile = { wood: 500, planks: 200, berries: 200 };
   save.workers = Array.from({ length: 14 }, (_, i) => ({ id: i + 1, hunger: 0, buildingId: null, toolTicks: 0 }));

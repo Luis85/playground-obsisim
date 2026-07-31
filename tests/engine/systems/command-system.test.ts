@@ -6,9 +6,9 @@ import { SnapshotSystem } from '../../../src/engine/systems/snapshot-system';
 import { enqueue } from '../fixtures';
 import { buildColonyPrepWorld, getPrepResource, initialSave, spawnWorker } from '../../../src/engine/world';
 import type { Command } from '../../../src/shared/commands';
-import type { SaveGameV1 } from '../../../src/shared/save';
+import type { SaveGameV2 } from '../../../src/shared/save';
 
-async function setup(save: SaveGameV1 = initialSave()) {
+async function setup(save: SaveGameV2 = initialSave()) {
   const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, SnapshotSystem] });
   const world = await prep.prepareRun();
   // mirror GameEngine.stepOnce: the engine owns time, bumping the clock before each step.

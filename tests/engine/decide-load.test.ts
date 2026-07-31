@@ -15,9 +15,27 @@ vi.mock('../../src/shared/save-migration', async (importOriginal) => {
 // `include`, unlike src/main.ts) specifically so this call site — previously
 // coverable only by clicking through Obsidian by hand — has unit tests at all.
 describe('decideLoad', () => {
-  it('restores a valid v1 save', () => {
+  it('restores a valid latest-version save', () => {
     const save = initialSave();
     expect(decideLoad(save)).toEqual({ kind: 'restore', save });
+  });
+
+  it('restores a genuine v1 save by migrating it (positions on the legacy pattern)', () => {
+    const v1 = {
+      version: 1, tick: 10, lastRecruitTick: -30, stockpile: { wood: 5 },
+      buildings: [
+        { id: 4, defId: 'forester', progress: 0, batchActive: false },
+        { id: 5, defId: 'farm', progress: 0, batchActive: false },
+      ],
+      workers: [{ id: 1, hunger: 0, buildingId: 4, toolTicks: 0 }],
+      nextEntityId: 6,
+    };
+    const decision = decideLoad(v1);
+    expect(decision.kind).toBe('restore');
+    if (decision.kind !== 'restore') return;
+    expect(decision.save.version).toBe(2);
+    expect(decision.save.map).toEqual({ cols: 24, rows: 16 });
+    expect(decision.save.buildings.map((b) => [b.col, b.row])).toEqual([[4, 1], [6, 1]]);
   });
 
   it('routes a save with an unknown version to backup', () => {
@@ -31,7 +49,7 @@ describe('decideLoad', () => {
 
   it('routes a structurally valid save with an unknown building id to backup', () => {
     const save = initialSave();
-    save.buildings = [{ id: 99, defId: 'notABuilding' as never, progress: 0, batchActive: false }];
+    save.buildings = [{ id: 99, defId: 'notABuilding' as never, progress: 0, batchActive: false, col: 4, row: 1 }];
     save.nextEntityId = 100;
     expect(decideLoad(save)).toEqual({ kind: 'backup' });
   });

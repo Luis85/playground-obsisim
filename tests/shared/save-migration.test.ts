@@ -2,6 +2,20 @@ import { describe, expect, it } from 'vitest';
 import type { MigrationStep, SaveGuards } from '../../src/shared/save-migration';
 import { migrateSaveToLatest, readSaveVersion } from '../../src/shared/save-migration';
 import { initialSave } from '../../src/engine/world';
+import type { SaveGameV2 } from '../../src/shared/save';
+
+/** A structurally valid v1 save (pre-spatial: no map, no positions). */
+function v1Fixture(buildingCount: number) {
+  return {
+    version: 1, tick: 5, lastRecruitTick: -30,
+    stockpile: { wood: 10 },
+    buildings: Array.from({ length: buildingCount }, (_, i) => ({
+      id: i + 10, defId: 'forester', progress: 0, batchActive: false,
+    })),
+    workers: [{ id: 1, hunger: 0, buildingId: null, toolTicks: 0 }],
+    nextEntityId: 1000,
+  };
+}
 
 // A fake chain: the runner is exercised end-to-end while the real chain is
 // still empty (v1 IS latest).
@@ -134,7 +148,7 @@ describe('migrateSaveToLatest (runner)', () => {
 });
 
 describe('migrateSaveToLatest (real chain)', () => {
-  it('passes a v1 save through unchanged', () => {
+  it('passes a latest-version save through unchanged', () => {
     const save = initialSave();
     expect(migrateSaveToLatest(save)).toEqual(save);
   });
@@ -154,5 +168,58 @@ describe('migrateSaveToLatest (real chain)', () => {
     expect(migrateSaveToLatest({ ...initialSave(), version: 99 })).toBeNull();
     expect(migrateSaveToLatest({ ...initialSave(), version: undefined })).toBeNull();
     expect(migrateSaveToLatest('nope')).toBeNull();
+  });
+});
+
+describe('migrateSaveToLatest (v1 -> v2)', () => {
+  it('migrates v1 to v2 with legacy-pattern positions and the default map', () => {
+    const out = migrateSaveToLatest(v1Fixture(7)) as SaveGameV2;
+    expect(out.version).toBe(2);
+    expect(out.map).toEqual({ cols: 24, rows: 16 });
+    expect(out.buildings.map((b) => ({ col: b.col, row: b.row }))).toEqual([
+      { col: 4, row: 1 }, { col: 6, row: 1 }, { col: 8, row: 1 }, { col: 10, row: 1 }, { col: 12, row: 1 },
+      { col: 4, row: 3 }, { col: 6, row: 3 },
+    ]);
+    expect(out.buildings.map((b) => b.id)).toEqual([10, 11, 12, 13, 14, 15, 16]);
+  });
+
+  it('assigns positions in ascending id order regardless of array order', () => {
+    const shuffled = v1Fixture(2);
+    shuffled.buildings.reverse();
+    const out = migrateSaveToLatest(shuffled) as SaveGameV2;
+    expect(out.buildings.find((b) => b.id === 10)).toMatchObject({ col: 4, row: 1 });
+    expect(out.buildings.find((b) => b.id === 11)).toMatchObject({ col: 6, row: 1 });
+  });
+
+  it('preserves a valid colony bigger than the default map by growing the map', () => {
+    // v1 had no building cap: 337 buildings is a legal save, never a corrupt
+    // one — the migration must not route it to the backup-and-start-fresh path
+    const out = migrateSaveToLatest(v1Fixture(337)) as SaveGameV2;
+    expect(out.version).toBe(2);
+    expect(out.buildings).toHaveLength(337);
+    expect(out.map.rows).toBeGreaterThan(16); // grown past the 336-tile default
+    const tiles = new Set(out.buildings.map((b) => `${b.col},${b.row}`));
+    expect(tiles.size).toBe(337); // every position distinct and on the map
+    // legacy fidelity holds PAST the default map's 40 plots: the 41st
+    // building (id 50 — fixture ids start at 10) keeps the exact tile
+    // increment 2's derived grid drew it at, row 17 included
+    expect(out.buildings.find((b) => b.id === 50)).toMatchObject({ col: 4, row: 17 });
+  });
+
+  it('migrates the guard-cap worst case (10,000 buildings) without stalling', () => {
+    // the sequence walk is linear — this is a performance contract as much as
+    // a correctness one (a save must never hang plugin startup); vitest's
+    // default per-test timeout doubles as the stall detector
+    const out = migrateSaveToLatest(v1Fixture(10_000)) as SaveGameV2;
+    expect(out.buildings).toHaveLength(10_000);
+    const tiles = new Set(out.buildings.map((b) => `${b.col},${b.row}`));
+    expect(tiles.size).toBe(10_000);
+    expect((out.map.cols - 3) * out.map.rows).toBeGreaterThanOrEqual(10_000);
+  });
+
+  it('does not mutate its input', () => {
+    const input = v1Fixture(1);
+    migrateSaveToLatest(input);
+    expect(input).toEqual(v1Fixture(1));
   });
 });

@@ -1,10 +1,11 @@
-import { Actions, createSystem, queryComponents, Read, Write, WriteResource } from 'sim-ecs';
+import { Actions, createSystem, queryComponents, Read, ReadResource, Write, WriteResource } from 'sim-ecs';
 import type { Command } from '../../shared/commands';
 import type { BuildingDefId } from '../../shared/content-types';
+import { autoPlacePosition } from '../../shared/placement';
 import { BALANCE } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
 import { Building, Efficiency, Hunger, JobAssignment, Position, Production, ToolCoverage, Worker, WorkerSlots } from '../components';
-import { CommandQueue, IdCounter, NoticeBoard, SimClock, Stockpile } from '../resources';
+import { CommandQueue, IdCounter, NoticeBoard, SimClock, Stockpile, WorldMap } from '../resources';
 
 export const CommandSystem = () => createSystem({
   actions: Actions,
@@ -13,7 +14,8 @@ export const CommandSystem = () => createSystem({
   stockpile: WriteResource(Stockpile),
   ids: WriteResource(IdCounter),
   notices: WriteResource(NoticeBoard),
-  buildings: queryComponents({ building: Read(Building), slots: Read(WorkerSlots) }),
+  map: ReadResource(WorldMap),
+  buildings: queryComponents({ building: Read(Building), slots: Read(WorkerSlots), position: Read(Position) }),
   workers: queryComponents({ worker: Read(Worker), job: Write(JobAssignment) }),
 })
   .withName('CommandSystem')
@@ -25,7 +27,7 @@ export const CommandSystem = () => createSystem({
   // from the old bare push()), and notices.succeed() once, at the end of the
   // accepted path, after the state change it describes has already happened
   // — so a notice never claims something that didn't actually occur.
-  .withRunFunction(({ actions, queue, clock, stockpile, ids, notices, buildings, workers }) => {
+  .withRunFunction(({ actions, queue, clock, stockpile, ids, notices, map, buildings, workers }) => {
     const findBuilding = (buildingId: number): { maxSlots: number; defId: BuildingDefId } | null => {
       for (const { building, slots } of buildings.iter()) {
         if (building.id === buildingId) return { maxSlots: slots.max, defId: building.defId };
@@ -58,6 +60,14 @@ export const CommandSystem = () => createSystem({
         return;
       }
       const def = BUILDINGS[command.buildingDefId];
+      // Position resolves (and can refuse) BEFORE pay(), same principle as
+      // the ids.exhausted check above: refusing after payment swallows cost.
+      const occupied = [...buildings.iter()].map(({ position }) => ({ col: position.col, row: position.row }));
+      const at = autoPlacePosition(map, occupied);
+      if (at === null) {
+        notices.reject('No free tile left to build on.');
+        return;
+      }
       if (!stockpile.pay(def.cost)) {
         notices.reject(`Cannot afford ${def.name}.`);
         return;
@@ -67,7 +77,7 @@ export const CommandSystem = () => createSystem({
         .with(new Building(ids.take(), def.id))
         .with(new WorkerSlots(def.workerSlots))
         .with(new Production())
-        .with(new Position(0, 0))
+        .with(new Position(at.col, at.row))
         .build();
       notices.succeed(`Built a ${def.name}.`);
     };

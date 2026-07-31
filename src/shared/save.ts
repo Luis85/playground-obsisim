@@ -1,4 +1,5 @@
 import type { BuildingDefId, ResourceId } from './content-types';
+import { MAX_MAP, MIN_MAP, type WorldMapSize } from './placement';
 
 /**
  * Hard ceiling per entity array in a save. Organic play cannot approach this
@@ -29,20 +30,27 @@ export const MAX_SAVED_COUNTER = Number.MAX_SAFE_INTEGER - 2 ** 32;
  *
  * Both producers (`buildSaveFromWorld`, `initialSave`) use this constant rather
  * than a literal, which makes the bump self-policing: because
- * `SaveGameV1.version` is the literal type `1`, raising this to 2 fails
+ * `SaveGameV2.version` is the literal type `2`, raising this to 3 fails
  * typecheck AT those producers (`Type '2' is not assignable to type '1'`) until
  * the save type is updated too. That is deliberate — with hardcoded literals,
  * bumping the constant would have pointed the loader at v2 while autosaves and
  * fresh colonies kept claiming v1, and a v1-labelled save carrying v2 fields
  * would then be migrated a second time on load.
  */
-export const LATEST_SAVE_VERSION = 1;
+export const LATEST_SAVE_VERSION = 2;
 
-export interface SavedBuilding {
+/** The v1 building record — frozen legacy shape, pre-spatial. */
+export interface SavedBuildingV1 {
   id: number;
   defId: BuildingDefId;
   progress: number;
   batchActive: boolean;
+}
+
+/** The current building record: v1 plus the tile it stands on (save v2). */
+export interface SavedBuilding extends SavedBuildingV1 {
+  col: number;
+  row: number;
 }
 
 export interface SavedWorker {
@@ -59,18 +67,48 @@ export interface SaveGameV1 {
   tick: number;
   lastRecruitTick: number;
   stockpile: Partial<Record<ResourceId, number>>;
+  buildings: SavedBuildingV1[];
+  workers: SavedWorker[];
+  nextEntityId: number;
+}
+
+export interface SaveGameV2 {
+  version: 2;
+  tick: number;
+  lastRecruitTick: number;
+  stockpile: Partial<Record<ResourceId, number>>;
+  /** World dimensions in tiles — persisted so a later increment can grow it. */
+  map: WorldMapSize;
   buildings: SavedBuilding[];
   workers: SavedWorker[];
   nextEntityId: number;
 }
 
-export function isSaveGameV1(data: unknown): data is SaveGameV1 {
-  if (typeof data !== 'object' || data === null) return false;
-  const save = data as Record<string, unknown>;
-  // Number.isFinite, never typeof: NaN and Infinity pass typeof === 'number'
-  // and would silently poison sim arithmetic instead of taking the backup path.
+function isSavedBuildingV1Shape(b: unknown): boolean {
   return (
-    save.version === 1 &&
+    typeof b === 'object' && b !== null &&
+    Number.isFinite((b as SavedBuildingV1).id) &&
+    typeof (b as SavedBuildingV1).defId === 'string' &&
+    Number.isFinite((b as SavedBuildingV1).progress) &&
+    typeof (b as SavedBuildingV1).batchActive === 'boolean'
+  );
+}
+
+function isSavedWorkerShape(w: unknown): boolean {
+  return (
+    typeof w === 'object' && w !== null &&
+    Number.isFinite((w as SavedWorker).id) &&
+    Number.isFinite((w as SavedWorker).hunger) &&
+    Number.isFinite((w as SavedWorker).toolTicks) &&
+    ((w as SavedWorker).buildingId === null || Number.isFinite((w as SavedWorker).buildingId))
+  );
+}
+
+/** The shape both versions share: counters, stockpile object, bounded entity
+ * arrays with per-record worker checks. Number.isFinite, never typeof: NaN
+ * and Infinity pass typeof === 'number' and would poison sim arithmetic. */
+function isCommonSaveShape(save: Record<string, unknown>): boolean {
+  return (
     Number.isFinite(save.tick) &&
     Number.isFinite(save.lastRecruitTick) &&
     Number.isFinite(save.nextEntityId) &&
@@ -78,19 +116,45 @@ export function isSaveGameV1(data: unknown): data is SaveGameV1 {
     !Array.isArray(save.stockpile) && // an array passes typeof 'object' but would restore as an empty stockpile
     Array.isArray(save.buildings) &&
     save.buildings.length <= MAX_SAVED_ENTITIES &&
-    save.buildings.every((b: unknown) =>
-      typeof b === 'object' && b !== null &&
-      Number.isFinite((b as SavedBuilding).id) &&
-      typeof (b as SavedBuilding).defId === 'string' &&
-      Number.isFinite((b as SavedBuilding).progress) &&
-      typeof (b as SavedBuilding).batchActive === 'boolean') &&
+    save.buildings.every(isSavedBuildingV1Shape) &&
     Array.isArray(save.workers) &&
     save.workers.length <= MAX_SAVED_ENTITIES &&
-    save.workers.every((w: unknown) =>
-      typeof w === 'object' && w !== null &&
-      Number.isFinite((w as SavedWorker).id) &&
-      Number.isFinite((w as SavedWorker).hunger) &&
-      Number.isFinite((w as SavedWorker).toolTicks) &&
-      ((w as SavedWorker).buildingId === null || Number.isFinite((w as SavedWorker).buildingId)))
+    save.workers.every(isSavedWorkerShape)
+  );
+}
+
+export function isSaveGameV1(data: unknown): data is SaveGameV1 {
+  if (typeof data !== 'object' || data === null) return false;
+  const save = data as Record<string, unknown>;
+  return save.version === 1 && isCommonSaveShape(save);
+}
+
+function isMapShape(map: unknown): map is WorldMapSize {
+  if (typeof map !== 'object' || map === null) return false;
+  const { cols, rows } = map as WorldMapSize;
+  return (
+    Number.isSafeInteger(cols) && cols >= MIN_MAP.cols && cols <= MAX_MAP.cols &&
+    Number.isSafeInteger(rows) && rows >= MIN_MAP.rows && rows <= MAX_MAP.rows
+  );
+}
+
+function hasSavedPosition(b: unknown): boolean {
+  return (
+    Number.isSafeInteger((b as SavedBuilding).col) && (b as SavedBuilding).col >= 0 &&
+    Number.isSafeInteger((b as SavedBuilding).row) && (b as SavedBuilding).row >= 0
+  );
+}
+
+/** Structural v2 guard. Cross-field position truths (in the save's own map,
+ * off the camp band, no two on one tile) live in isLoadableSave, like the
+ * id checks — they need the whole save, not one record. */
+export function isSaveGameV2(data: unknown): data is SaveGameV2 {
+  if (typeof data !== 'object' || data === null) return false;
+  const save = data as Record<string, unknown>;
+  return (
+    save.version === 2 &&
+    isCommonSaveShape(save) &&
+    isMapShape(save.map) &&
+    (save.buildings as unknown[]).every(hasSavedPosition)
   );
 }

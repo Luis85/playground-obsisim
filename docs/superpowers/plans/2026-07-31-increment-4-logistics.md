@@ -1311,6 +1311,42 @@ with `haulTicks` imported from `../../shared/haul` and `BALANCE` already importe
 
 Demolition needs no handler change: `HaulSystem`'s `load` already ends a trip whose target has vanished, which is why that guard exists. The tests above pin both halves.
 
+- [ ] **Step 4b: Close the spawn-path class of bug for good**
+
+Twice now a new component reached `src/engine/world.ts`'s spawn helpers but not
+the live command path, and both times it surfaced as an unrelated-looking test
+failure rather than a clear error (`OutputBuffer` in Task 2, `HaulTrip` in
+Task 4). Add one test that catches the whole class at the source.
+
+In `tests/engine/systems/command-system.test.ts`, add a test that recruits a
+worker through the command path, then asserts the resulting entity carries
+**every** component that `spawnWorker` attaches — read the component list from
+the entity spawned by the save-restore path in the same world and compare, so
+the test keeps working when a future component is added rather than pinning
+today's list:
+
+```ts
+  it('a recruited worker carries the same components as a restored one', async () => {
+    const { world, tick, dispatch } = await setup();
+    const before = [...world.getEntities()].find((e) => e.getComponent(Worker) !== undefined)!;
+    const expected = COMPONENT_TYPES.filter((type) => before.getComponent(type) !== undefined);
+    await dispatch({ type: 'recruitWorker' });
+    await tick();
+    const recruited = [...world.getEntities()]
+      .filter((e) => e.getComponent(Worker) !== undefined)
+      .find((e) => e.getComponent(Worker)!.id > before.getComponent(Worker)!.id)!;
+    for (const type of expected) {
+      expect(recruited.getComponent(type), `recruited worker is missing ${type.name}`).toBeDefined();
+    }
+  });
+```
+
+`COMPONENT_TYPES` must be exported from `src/engine/world.ts` for this (it is
+currently module-private; exporting it is the smallest change that makes the
+invariant testable). Do the same for buildings if it costs nothing — a
+constructed building versus a restored one — but the worker case is the one
+that has actually broken twice.
+
 - [ ] **Step 5: Run both files, then the full suite**
 
 Run: `npx vitest run tests/engine/systems/command-system.test.ts tests/engine/systems/haul-system.test.ts`
@@ -1659,10 +1695,11 @@ non-derived fact is represented in the save record" tests were disarmed twice
 while the save format lagged the sim. They use two separate exclusion arrays:
 
 - `derivedBuilding` (the building test) — Task 2 added `'buffered'`; remove it.
-- `DERIVED` (the worker test) — Task 3 added `'hauling'`; remove **only that
-  entry**. `'efficiency'` stays: it is genuinely derived, recomputed from
-  hunger every tick, and deleting it would break the test for the right
-  reason.
+- `DERIVED` (the worker test) — by the time you arrive it holds four entries:
+  `'efficiency'`, `'hauling'`, `'haulTargetId'`, `'carrying'`. Remove **only
+  `'hauling'`**. The other three stay and are not oversights: `efficiency` is
+  recomputed from hunger every tick, and `haulTargetId`/`carrying` are
+  runtime-only trip state that deliberately never enters the save (§2.5).
 
 Both fields persist as of this task, so both exclusions come out. These tests
 exist to catch a field that never reached the save; a permanent exclusion is

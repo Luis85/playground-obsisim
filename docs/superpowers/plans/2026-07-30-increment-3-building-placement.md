@@ -2191,9 +2191,13 @@ const BAR_WIDTH = TILE * 0.8;
         useAnchor: false,
         members: [
           {
+            // Fill IS the feedback: accent when buildable, danger when not —
+            // exactly the WorldLegend's ghost chips (spec: "accent-tinted
+            // when valid"). The def's own color would read as an ordinary
+            // translucent building; the glyph still says WHAT is placed.
             graphic: new Rectangle({
               width: BUILDING_SIZE, height: BUILDING_SIZE,
-              color: Color.fromHex(ghost.valid ? this.theme.buildingFill[ghost.defId] : this.theme.danger),
+              color: Color.fromHex(ghost.valid ? this.theme.accent : this.theme.danger),
               strokeColor: Color.fromHex(ghost.valid ? this.theme.accent : this.theme.danger), lineWidth: 3,
             }),
             offset: vec(-BUILDING_SIZE / 2, -BUILDING_SIZE / 2),

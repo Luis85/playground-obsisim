@@ -180,7 +180,8 @@
 }
 
 .obsisim-build-palette .is-armed,
-.obsisim-selection-panel .is-armed {
+.obsisim-selection-panel .is-armed,
+.obsisim-table .is-armed {
   background: var(--interactive-accent);
   color: var(--text-on-accent);
 }

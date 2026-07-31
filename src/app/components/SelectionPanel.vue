@@ -25,6 +25,6 @@ const building = computed(
     <span>{{ building.workers }}/{{ building.workerSlots }} workers — {{ BUILDING_STATE_LABELS[building.state] }}</span>
     <button data-test="selection-move" @click="emit('move')">Move</button>
     <TwoStepButton label="Demolish" confirm-label="Confirm demolish?" data-test="selection-demolish" @confirm="emit('demolish')" />
-    <button data-test="selection-close" title="Deselect" @click="emit('close')">✕</button>
+    <button data-test="selection-close" title="Deselect" aria-label="Deselect" @click="emit('close')">✕</button>
   </div>
 </template>

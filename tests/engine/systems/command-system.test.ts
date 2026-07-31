@@ -189,6 +189,20 @@ describe('CommandSystem', () => {
     expect(snapshot().buildings).toHaveLength(1);
   });
 
+  it('two same-tick auto-placed constructions land on distinct plots', async () => {
+    // the claimedTiles bridge must feed autoPlacePosition too, not only the
+    // explicit-at validator — otherwise both table builds pick one plot
+    const { tick, dispatch, snapshot } = await setup();
+    await dispatch(
+      { type: 'constructBuilding', buildingDefId: 'forester' },
+      { type: 'constructBuilding', buildingDefId: 'gatherersHut' },
+    );
+    expect(snapshot().notices.map((n) => n.kind)).toEqual(['success', 'success']);
+    await tick();
+    const tiles = snapshot().buildings.map((b) => `${b.col},${b.row}`);
+    expect(new Set(tiles).size).toBe(2);
+  });
+
   it('rejects construction once no buildable tile remains', async () => {
     const save = initialSave();
     let id = 10;

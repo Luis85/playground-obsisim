@@ -33,7 +33,7 @@ simulated production chains — in tables and, since Increment 2, a live
   intact) or demolish it (confirmed, full cost refund, workers walk home)
 - Positions are sim truth on a fixed 24×16 map (camp band on the left),
   persisted as save v2 — old saves migrate onto exactly the layout
-  increment 2 drew derived
+  increment 2 derived
 - Tables keep full economic parity: construct auto-places on the legacy
   pattern, a Tile column and Demolish per row — no-WebGL play stays whole
 

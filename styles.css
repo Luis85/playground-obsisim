@@ -160,3 +160,32 @@
   color: var(--text-muted);
   padding: var(--size-4-4);
 }
+
+.obsisim-build-palette {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.obsisim-build-palette button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.obsisim-palette-cost {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.obsisim-build-palette .is-armed,
+.obsisim-selection-panel .is-armed {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+/* the armed/accent state must also recolor the cost line for contrast */
+.obsisim-build-palette .is-armed .obsisim-palette-cost {
+  color: var(--text-on-accent);
+}

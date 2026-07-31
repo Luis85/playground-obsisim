@@ -35,7 +35,7 @@ const BUILDING_FILL: Record<BuildingDefId, string> = {
   forester: '#4e7a52', sawmill: '#8a6a49', workshop: '#6f6f85',
 };
 
-const BUILDING_GLYPH: Record<BuildingDefId, string> = {
+export const BUILDING_GLYPHS: Record<BuildingDefId, string> = {
   gatherersHut: '🧺', farm: '🌾', mill: '⚙️', bakery: '🍞',
   forester: '🌲', sawmill: '🪚', workshop: '🔨',
 };
@@ -65,7 +65,7 @@ export function resolveWorldTheme(read: VarReader): WorldTheme {
     background: pick(read, '--background-primary', '#20242b'),
     ground: ['#55714a', '#4d6743'],
     buildingFill: BUILDING_FILL,
-    buildingGlyph: BUILDING_GLYPH,
+    buildingGlyph: BUILDING_GLYPHS,
     stateRing: {
       producing: green,
       waitingForInput: pick(read, '--color-orange', '#e5a63a'),

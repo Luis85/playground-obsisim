@@ -180,9 +180,12 @@ interface WorldRenderer {
   with ghost/selection assertions) and the manual Obsidian pass.
 - `layout.ts` drops rank-derivation: buildings render at snapshot positions;
   grid dims come from `snapshot.map` (fixed — the rows-growth logic and
-  `MIN_ROWS` go away). Worker spot derivation, slot memory, camp layout,
-  and `pickBuildingAt` survive unchanged. The camera fit now frames constant
-  dims; the resize refit stays.
+  `MIN_ROWS` go away). Worker spot derivation, slot memory, and camp layout
+  survive unchanged; `pickBuildingAt` becomes cell-exact (floor the world
+  point to a tile, match the building on that tile) — adjacent one-tile
+  buildings are legal now, so the old 1.5-tile hit radius would overlap
+  neighbors and resolve clicks to whichever building happens to come first.
+  The camera fit now frames constant dims; the resize refit stays.
 
 ### 2.6 Interaction model — the Vue view owns every mode
 
@@ -200,7 +203,10 @@ A three-state machine in the World view: `idle` / `place(defId)` /
   ring) and shows **SelectionPanel.vue** (DOM): name, staffing, state, tile,
   and two actions. **Demolish** is two-step — the button becomes "Confirm
   demolish?" and only then dispatches (`MouseEvent.detail` guard against
-  double-click bypass, the colony-reset pattern). **Move** arms `move` with
+  double-click bypass, the colony-reset pattern). An armed confirm belongs
+  to one building: switching the selection always presents a fresh,
+  disarmed button (touch clients never blur the old one, so blur alone
+  cannot reset it). **Move** arms `move` with
   the building's own def as the ghost; a click on a valid target dispatches
   `moveBuilding` and returns to `idle` with the building still selected.
   Clicking empty ground deselects; workers stay hover-only this increment.

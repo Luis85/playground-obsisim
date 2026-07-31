@@ -2953,6 +2953,26 @@ describe('WorldView interaction', () => {
     expect(engine.dispatch).toHaveBeenCalledWith({ type: 'demolishBuilding', buildingId: 7 });
   });
 
+  it('selecting a different building resets an armed demolish — no cross-building confirm', async () => {
+    // touch clients never blur the armed button, so the :key="selectedId"
+    // remount is what guarantees building B gets a fresh, disarmed confirm
+    const { renderer, wrapper, engine } = armedHarness();
+    useGameStore().ingest(richSnapshot([
+      makeBuilding(7, { defId: 'bakery', col: 6, row: 3 }),
+      makeBuilding(9, { defId: 'farm', col: 9, row: 5 }),
+    ]), { paused: false, speed: 1, error: null });
+    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'building', id: 7 });
+    await nextTick();
+    await wrapper.find('[data-test="world-host"]').trigger('click', { pageX: 40, pageY: 40 }); // select A
+    await wrapper.find('[data-test="selection-demolish"]').trigger('click'); // arm A's confirm
+    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'building', id: 9 });
+    await wrapper.find('[data-test="world-host"]').trigger('click', { pageX: 60, pageY: 60 }); // select B
+    await wrapper.find('[data-test="selection-demolish"]').trigger('click'); // must arm, not confirm
+    expect(engine.dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'demolishBuilding' }));
+    await wrapper.find('[data-test="selection-demolish"]').trigger('click');
+    expect(engine.dispatch).toHaveBeenCalledWith({ type: 'demolishBuilding', buildingId: 9 });
+  });
+
   it('move flow: Move arms with the building def, a valid click dispatches and keeps the selection', async () => {
     const { renderer, wrapper, engine } = armedHarness({ col: 9, row: 6 });
     (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'building', id: 7 });
@@ -3337,6 +3357,7 @@ Replace the `<template>` with:
     </div>
     <SelectionPanel
       v-if="selectedId !== null"
+      :key="selectedId"
       :building-id="selectedId"
       @move="onMoveRequest"
       @demolish="onDemolish"

@@ -2502,7 +2502,7 @@ import BuildPalette from '../../src/app/components/BuildPalette.vue';
 import { useGameStore } from '../../src/app/stores/game-store';
 import { makeSnapshot, stockedWith } from './fixtures';
 
-function mountPalette(armedDefId: string | null = null, wood = 100) {
+function mountPalette(armedDefId: BuildingDefId | null = null, wood = 100) {
   const wrapper = mount(BuildPalette, {
     props: { armedDefId },
     global: { plugins: [createTestingPinia({ createSpy: vi.fn, stubActions: false })] },
@@ -2537,8 +2537,17 @@ describe('BuildPalette', () => {
     await wrapper.vm.$nextTick();
     expect((wrapper.find('[data-test="palette-forester"]').element as HTMLButtonElement).disabled).toBe(true);
   });
+
+  it('keeps the armed def enabled even when it became unaffordable', async () => {
+    // disarming must stay possible after the stockpile drains mid-arm
+    const wrapper = mountPalette('forester', 0);
+    await wrapper.vm.$nextTick();
+    expect((wrapper.find('[data-test="palette-forester"]').element as HTMLButtonElement).disabled).toBe(false);
+  });
 });
 ```
+
+(`BuildingDefId` joins the test file's imports from `../../src/shared/content-types`.)
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -2668,7 +2677,7 @@ Expected: all green. (TwoStepButton is consumed in Tasks 12/14; if `check:qualit
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/app/components/TwoStepButton.vue src/app/components/BuildPalette.vue styles.css tests/app/build-palette.test.ts
+git add src/app/components/TwoStepButton.vue src/app/components/BuildPalette.vue src/app/world/theme.ts styles.css tests/app/build-palette.test.ts
 git commit -m "feat(app): build palette and shared two-step confirm button"
 ```
 

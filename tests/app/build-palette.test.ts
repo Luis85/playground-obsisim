@@ -42,4 +42,11 @@ describe('BuildPalette', () => {
     await wrapper.vm.$nextTick();
     expect((wrapper.find('[data-test="palette-forester"]').element as HTMLButtonElement).disabled).toBe(true);
   });
+
+  it('keeps the armed def enabled even when it became unaffordable', async () => {
+    // disarming must stay possible after the stockpile drains mid-arm
+    const wrapper = mountPalette('forester', 0);
+    await wrapper.vm.$nextTick();
+    expect((wrapper.find('[data-test="palette-forester"]').element as HTMLButtonElement).disabled).toBe(false);
+  });
 });

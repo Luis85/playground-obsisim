@@ -189,3 +189,11 @@
 .obsisim-build-palette .is-armed .obsisim-palette-cost {
   color: var(--text-on-accent);
 }
+
+.obsisim-selection-panel {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}

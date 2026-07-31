@@ -144,8 +144,9 @@ nothing.
 
 ### 2.5 Save v3 and migration
 
-- `SavedBuilding` gains `buffer` (partial resource → amount map, omitted when
-  empty); `SavedWorker` gains `hauling`.
+- `SavedBuilding` gains `buffer` (partial resource → amount map, always
+  present and `{}` when the building is empty — a uniform shape keeps the
+  guard a single unconditional check); `SavedWorker` gains `hauling`.
 - The migration chain gains its second real step, v2→v3: buffers empty,
   `hauling: false` — which is precisely what a v2 colony was. `LATEST_SAVE_VERSION`
   becomes 3 with the same self-policing literal type.

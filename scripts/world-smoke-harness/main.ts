@@ -42,6 +42,11 @@ function snap(tick: number, buildings: BuildingSnapshot[], workers: WorkerSnapsh
 
 const renderer = createExcaliburWorldRenderer(document.getElementById('host')!);
 
+// Phases 4 and 5 keep the same roster (only the sawmill's tile moves between
+// them) — one helper expresses that identical-by-construction, instead of
+// two copies fallow's clone detector would otherwise flag as drift-prone.
+const growWorkers = () => [worker(10, { buildingId: 1, toolTicks: 100 }), worker(11, { buildingId: 1, efficiency: 0.3 }), worker(12, { buildingId: 2 }), worker(13)];
+
 // Phase script, advanced from the runner. Worker 12 walks in phase 1; the
 // batch progresses in both; phase 4 adds a building and a tooled worker.
 const phases: Array<() => void> = [
@@ -55,14 +60,14 @@ const phases: Array<() => void> = [
   () => renderer.start(),
   () => renderer.sync(snap(3,
     [building(1, 'forester', 4, 1, { workers: 2, state: 'producing', batchActive: true, progressPct: 90 }), building(2, 'farm', 6, 1, { workers: 1, state: 'producing', batchActive: true, progressPct: 10 }), building(3, 'sawmill', 8, 1)],
-    [worker(10, { buildingId: 1, toolTicks: 100 }), worker(11, { buildingId: 1, efficiency: 0.3 }), worker(12, { buildingId: 2 }), worker(13)])),
+    growWorkers())),
   // the WORKERLESS sawmill moves from (8,1) to a fresh tile: with no worker
   // target changing, the only thing that may alter the frame is the building
   // actor itself — which is exactly what this phase exists to catch (its
   // position must be re-applied on every sync, not only at spawn)
   () => renderer.sync(snap(4,
     [building(1, 'forester', 4, 1, { workers: 2, state: 'producing', batchActive: true, progressPct: 90 }), building(2, 'farm', 6, 1, { workers: 1, state: 'producing', batchActive: true, progressPct: 10 }), building(3, 'sawmill', 14, 7)],
-    [worker(10, { buildingId: 1, toolTicks: 100 }), worker(11, { buildingId: 1, efficiency: 0.3 }), worker(12, { buildingId: 2 }), worker(13)])),
+    growWorkers())),
   () => {
     renderer.setGhost({ defId: 'bakery', col: 10, row: 5, valid: true });
     renderer.setSelection(1);

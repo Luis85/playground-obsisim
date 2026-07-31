@@ -26,7 +26,8 @@ const BAR_WIDTH = TILE * 0.8;
 const BAR_HEIGHT = 5;
 
 // Draw order, back to front: ground tilemap (default z 0), building tiles and
-// the camp tent (z 1), progress bars (z 2), workers on top of everything (z 3).
+// the camp tent (z 1), progress bars and the selection ring (z 2), workers
+// (z 3), the placement ghost on top of everything (z 4).
 interface BuildingBundle { root: Actor; bar: Actor; track: Actor; }
 interface WorkerBundle { actor: Actor; target: Vector; }
 
@@ -150,7 +151,15 @@ class WorldScene {
    */
   workerAt(worldX: number, worldY: number): number | null {
     let bestId: number | null = null;
-    let bestD2 = WORKER_PICK_RADIUS ** 2;
+    // WORKER_PICK_RADIUS is a screen-space hover tolerance (its own comment:
+    // "px of hover slack"), so it is expressed at zoom 1 and converted to the
+    // live camera's zoom here — world-space distances shrink relative to a
+    // fixed screen radius as the camera zooms out, so comparing against a
+    // flat world-space radius made hover/pick accuracy zoom-dependent (only
+    // visible once a layout needed zoom < 1 to fit, same trigger as the
+    // fitCamera bug below).
+    const zoom = this.engine.currentScene.camera.zoom;
+    let bestD2 = (WORKER_PICK_RADIUS / zoom) ** 2;
     for (const [id, bundle] of this.workers) {
       const d2 = (bundle.actor.pos.x - worldX) ** 2 + (bundle.actor.pos.y - worldY) ** 2;
       if (d2 <= bestD2) {
@@ -216,17 +225,15 @@ class WorldScene {
     this.applySelection();
   }
 
-  /** Re-applied on every sync: the ring follows a moved building and dies
-   * with a demolished one (the view also clears its own selection state). */
-  private applySelection(): void {
-    const cell = this.selectedId === null
-      ? undefined
-      : this.lastLayout?.buildings.find((b) => b.id === this.selectedId);
-    if (!cell) {
-      this.selectionRing?.kill();
-      this.selectionRing = null;
-      return;
-    }
+  /** The currently selected building's cell, or undefined when nothing is
+   * selected or the selected id no longer exists in the layout. */
+  private selectedCell(): PlacedBuilding | undefined {
+    if (this.selectedId === null) return undefined;
+    return this.lastLayout?.buildings.find((b) => b.id === this.selectedId);
+  }
+
+  /** Lazily (re)creates the ring actor, mirroring the ghost/building caches. */
+  private ensureSelectionRing(): Actor {
     if (this.selectionRing === null || this.selectionRing.isKilled()) {
       this.selectionRing = new Actor({ z: 2 });
       this.selectionRing.graphics.use(new Rectangle({
@@ -235,7 +242,20 @@ class WorldScene {
       }));
       this.engine.currentScene.add(this.selectionRing);
     }
-    this.selectionRing.pos = vec((cell.col + 0.5) * TILE, (cell.row + 0.5) * TILE);
+    return this.selectionRing;
+  }
+
+  /** Re-applied on every sync: the ring follows a moved building and dies
+   * with a demolished one (the view also clears its own selection state). */
+  private applySelection(): void {
+    const cell = this.selectedCell();
+    if (!cell) {
+      this.selectionRing?.kill();
+      this.selectionRing = null;
+      return;
+    }
+    const ring = this.ensureSelectionRing();
+    ring.pos = vec((cell.col + 0.5) * TILE, (cell.row + 0.5) * TILE);
   }
 
   /** Kill and forget every actor whose entity left the snapshot. */
@@ -335,14 +355,29 @@ class WorldScene {
     bundle.actor.actions.moveTo(target, WORKER_SPEED);
   }
 
-  /** Frame the whole grid with a small margin, re-checked every sync. */
+  /** Frame the whole grid with a small margin, re-checked every sync.
+   * Sized from the screen's raw resolution, NOT engine.drawWidth/drawHeight —
+   * those already divide by the current camera.zoom, so feeding them back
+   * into a new zoom is self-referential: zoom_new = fit / zoom_old, which
+   * alternates between the correct fit and 1 on every call instead of
+   * landing on it. Harmless while the grid was small enough to stay fully
+   * on screen at zoom 1 too, but the fixed 24x16 map is the first layout
+   * that needs zoom < 1 to fit, so the wrong half of the oscillation crops
+   * real content off screen (root cause of the world-smoke regression). */
   private fitCamera(layout: WorldLayout): void {
     const worldW = layout.cols * TILE;
     const worldH = layout.rows * TILE;
     const camera = this.engine.currentScene.camera;
+    const { width, height } = this.engine.screen.resolution;
     camera.pos = vec(worldW / 2, worldH / 2);
-    camera.zoom = Math.min(this.engine.drawWidth / worldW, this.engine.drawHeight / worldH) * 0.95;
+    camera.zoom = Math.min(width / worldW, height / worldH) * 0.95;
   }
+}
+
+/** Whether a tile cell falls inside the grid — shared by tileAt so the bounds
+ * check reads as one thing instead of a four-term guard at the call site. */
+function inBounds(col: number, row: number, layout: WorldLayout): boolean {
+  return col >= 0 && col < layout.cols && row >= 0 && row < layout.rows;
 }
 
 /**
@@ -430,7 +465,7 @@ export const createExcaliburWorldRenderer: WorldRendererFactory = (host) => {
       const world = engine.screen.pageToWorldCoordinates(vec(pageX, pageY));
       const col = Math.floor(world.x / TILE);
       const row = Math.floor(world.y / TILE);
-      return col >= 0 && col < last.cols && row >= 0 && row < last.rows ? { col, row } : null;
+      return inBounds(col, row, last) ? { col, row } : null;
     },
     setGhost(ghost) {
       if (!disposed) scene.setGhost(ghost);

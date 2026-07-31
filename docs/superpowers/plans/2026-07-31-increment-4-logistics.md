@@ -1127,8 +1127,13 @@ only, because with output buffers and nobody hauling a multi-stage chain
 genuinely cannot run — the mill's wheat sits in the farm's buffer, not in the
 store. Haulers exist now, so restore the full assertion: staff the colony's
 chains **and** assign haulers, run the same colony, and assert bread and tools
-reach the stockpile as the original test did. Keep the raw-stage assertions the
-narrowing added; they are true and worth keeping.
+reach the stockpile as the original test did.
+
+Expect to **replace** the narrowing's raw-stage assertions rather than keep
+them: with haulers running, `buffered === outputBufferCap`,
+`state === 'outputFull'`, and the `wheat/flour/bread/tools === 0` checks all
+become false by design — that reversal is the proof hauling works. Delete the
+Task-4 restoration comment block the narrowing left behind at the same time.
 
 Run: `npx vitest run tests/engine/integration.test.ts`
 Expected: PASS — the full bread-and-tools chain, now dependent on hauling.
@@ -1648,6 +1653,14 @@ export function buildSaveFromWorld(world: IRuntimeWorld): SaveGameV3 {
 
 `src/main.ts`: the three `SaveGameV2` annotations become `SaveGameV3`.
 
+**Re-arm the save tripwire.** Task 2 added `'buffered'` to the
+`derivedBuilding` exclusion list in `tests/engine/world.test.ts`'s "every
+non-derived building fact is represented in the save record" test, because
+buffers were real state the save format did not yet know. Buffers persist now,
+so **remove that exclusion** — the test must bite on buffer contents again, or
+a future field can be dropped from the save silently. This is not optional
+cleanup; it is the whole point of that test.
+
 - [ ] **Step 6: Run the touched files, then the full suite**
 
 Run: `npx vitest run tests/shared/save-migration.test.ts tests/engine/world.test.ts tests/engine/game-engine.test.ts tests/engine/decide-load.test.ts`
@@ -1805,6 +1818,11 @@ git commit -m "feat(world): haulers appear where they are — doorstep or camp"
 
 - [ ] **Step 1: Write the failing tests**
 
+The `outputFull` ring value itself already exists — Task 2 had to add it the
+moment it widened `BuildingState`, since `stateRing` is a
+`Record<BuildingState, …>`. This test pins it and its distinctness, and passes
+on arrival; the RED for this task comes from the legend assertions below.
+
 Append to `tests/app/world-theme.test.ts`:
 
 ```ts
@@ -1823,10 +1841,10 @@ Append to the legend assertions in `tests/app/world-view.test.ts`:
     expect(legend.text()).toContain('carrying');
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [ ] **Step 2: Run to verify the legend assertions fail**
 
 Run: `npx vitest run tests/app/world-theme.test.ts tests/app/world-view.test.ts`
-Expected: FAIL — `stateRing.outputFull` is undefined and the legend has no such entries.
+Expected: the theme test PASSES (Task 2 supplied the value); the world-view legend assertions FAIL — the legend has no such entries yet.
 
 - [ ] **Step 3: Theme, label, legend, marker**
 

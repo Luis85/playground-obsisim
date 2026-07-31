@@ -1,0 +1,135 @@
+// The spatial law of the colony in one pure module: which tiles exist, which
+// are buildable, and where an unpositioned construction lands. Three
+// consumers must never disagree — the engine's command handlers
+// (authoritative validation), the app's ghost preview (cosmetic pre-check),
+// and the v1->v2 save migration (position synthesis for pre-spatial saves).
+// Imports nothing, so src/shared/ siblings (save.ts, save-migration.ts) can
+// import from it without cycles.
+
+/** Map dimensions in tiles. Persisted per colony since save v2. */
+export interface WorldMapSize {
+  cols: number;
+  rows: number;
+}
+
+/** A tile position. SavedBuilding and BuildingSnapshot both satisfy it. */
+export interface TileRef {
+  col: number;
+  row: number;
+}
+
+/** The fixed world size every new (and every migrated) colony starts with. */
+export const DEFAULT_MAP: WorldMapSize = { cols: 24, rows: 16 };
+
+/** Structural bounds for a persisted map size (isSaveGameV2). */
+export const MIN_MAP: WorldMapSize = { cols: 8, rows: 6 };
+export const MAX_MAP: WorldMapSize = { cols: 256, rows: 256 };
+
+/**
+ * The left CAMP_COLS columns are the idle-camp band — the tent and idle
+ * workers live there, buildings never. Derived from the map by constant
+ * rather than persisted: it has exactly one legal value per map today.
+ */
+export const CAMP_COLS = 3;
+
+// Legacy plot pattern — increment 2's derived layout, frozen here so
+// autoPlacePosition can replay it: 5 plots per row at cols 4,6,8,10,12,
+// plot rows at 1,3,5,...
+const PLOT_COL0 = 4;
+const PLOTS_PER_ROW = 5;
+const PLOT_ROW0 = 1;
+
+export function isInsideMap(map: WorldMapSize, col: number, row: number): boolean {
+  return (
+    Number.isSafeInteger(col) && Number.isSafeInteger(row) &&
+    col >= 0 && col < map.cols && row >= 0 && row < map.rows
+  );
+}
+
+/**
+ * THE placement predicate: inside the map, off the camp band, not occupied.
+ * `occupied` is whatever building list the caller holds — saved records,
+ * live component rows, and snapshot buildings all carry col/row.
+ */
+export function isTileBuildable(map: WorldMapSize, occupied: readonly TileRef[], col: number, row: number): boolean {
+  if (!isInsideMap(map, col, row) || col < CAMP_COLS) return false;
+  return !occupied.some((tile) => tile.col === col && tile.row === row);
+}
+
+/**
+ * Where a construction with no player-chosen tile lands: the first free tile
+ * in the legacy plot sequence (so migrated and table-built colonies keep the
+ * geometry increment 2 drew), then the first free buildable tile row-major,
+ * then null (map full). Occupancy is a prebuilt Set, not per-candidate
+ * `occupied.some()` — a table-build in a migrated colony near the guard's
+ * 10,000-record cap would otherwise pay ~50M comparisons inside one tick.
+ * O(occupied + tiles scanned).
+ */
+export function autoPlacePosition(map: WorldMapSize, occupied: readonly TileRef[]): TileRef | null {
+  const taken = new Set(occupied.map((tile) => `${tile.col},${tile.row}`));
+  const free = (col: number, row: number) =>
+    isInsideMap(map, col, row) && col >= CAMP_COLS && !taken.has(`${col},${row}`);
+  for (let row = PLOT_ROW0; row < map.rows; row += 2) {
+    for (let plot = 0; plot < PLOTS_PER_ROW; plot++) {
+      const col = PLOT_COL0 + 2 * plot;
+      if (col < map.cols && free(col, row)) return { col, row };
+    }
+  }
+  for (let row = 0; row < map.rows; row++) {
+    for (let col = CAMP_COLS; col < map.cols; col++) {
+      if (free(col, row)) return { col, row };
+    }
+  }
+  return null;
+}
+
+/**
+ * The map a migrated colony of this size needs. Fidelity first: rows tall
+ * enough that the LEGACY PLOT SEQUENCE alone holds every building, because
+ * increment 2's derived grid grew rows without bound and the compatibility
+ * promise is "every building keeps the exact tile increment 2 drew" —
+ * sizing for raw capacity would spill building 41 of a 24×16 map into the
+ * row-major scan at (3,0) instead of its legacy (4,17). That fidelity holds
+ * through 640 buildings (128 plot rows × 5 inside MAX_MAP's 256 rows), far
+ * past any organic v1 colony. Capacity second: for pathological saves
+ * beyond the legacy band (the structural guard admits 10,000 records),
+ * grow rows then columns until the count simply fits — those buildings get
+ * compact, not historical, positions. Migration must never classify a
+ * valid oversized colony as corrupt.
+ */
+export function mapThatFits(buildingCount: number): WorldMapSize {
+  const map = { ...DEFAULT_MAP };
+  const plotRows = Math.ceil(buildingCount / PLOTS_PER_ROW);
+  map.rows = Math.max(map.rows, Math.min(PLOT_ROW0 + 2 * plotRows - 1, MAX_MAP.rows));
+  const fits = () => (map.cols - CAMP_COLS) * map.rows >= buildingCount;
+  while (!fits() && map.rows < MAX_MAP.rows) map.rows += 1;
+  while (!fits() && map.cols < MAX_MAP.cols) map.cols += 1;
+  return map;
+}
+
+/**
+ * The order auto-placement consumes an EMPTY map: the legacy plot pass, then
+ * row-major over everything not already yielded. Exists for the migration,
+ * which places every building of a save onto a fresh map — walking this
+ * sequence is linear, where replaying autoPlacePosition against a growing
+ * occupied-array is cubic in the building count (the structural guard admits
+ * 10,000 records; a migration must not stall plugin startup). Equivalence
+ * with autoPlacePosition-over-empty-map is pinned by a test.
+ */
+export function* autoPlaceSequence(map: WorldMapSize): Generator<TileRef> {
+  const yielded = new Set<string>();
+  for (let row = PLOT_ROW0; row < map.rows; row += 2) {
+    for (let plot = 0; plot < PLOTS_PER_ROW; plot++) {
+      const col = PLOT_COL0 + 2 * plot;
+      if (col < map.cols) {
+        yielded.add(`${col},${row}`);
+        yield { col, row };
+      }
+    }
+  }
+  for (let row = 0; row < map.rows; row++) {
+    for (let col = CAMP_COLS; col < map.cols; col++) {
+      if (!yielded.has(`${col},${row}`)) yield { col, row };
+    }
+  }
+}

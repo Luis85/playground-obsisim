@@ -360,7 +360,7 @@ export function* autoPlaceSequence(map: WorldMapSize): Generator<TileRef> {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run tests/shared/placement.test.ts`
-Expected: PASS (15 tests)
+Expected: PASS (12 tests)
 
 - [ ] **Step 5: Lint, typecheck, full test run**
 

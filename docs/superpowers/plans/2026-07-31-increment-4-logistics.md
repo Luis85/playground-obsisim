@@ -1653,13 +1653,13 @@ export function buildSaveFromWorld(world: IRuntimeWorld): SaveGameV3 {
 
 `src/main.ts`: the three `SaveGameV2` annotations become `SaveGameV3`.
 
-**Re-arm the save tripwire.** Task 2 added `'buffered'` to the
-`derivedBuilding` exclusion list in `tests/engine/world.test.ts`'s "every
-non-derived building fact is represented in the save record" test, because
-buffers were real state the save format did not yet know. Buffers persist now,
-so **remove that exclusion** — the test must bite on buffer contents again, or
-a future field can be dropped from the save silently. This is not optional
-cleanup; it is the whole point of that test.
+**Re-arm both save tripwires.** `tests/engine/world.test.ts`'s "every
+non-derived fact is represented in the save record" tests were disarmed twice
+while the save format lagged the sim: Task 2 excluded `'buffered'` from the
+building list, Task 3 excluded `'hauling'` from the worker list. Both fields
+persist as of this task, so **remove both exclusions** — those tests exist to
+catch a field that never reached the save, and a permanent exclusion is
+exactly the failure they are meant to prevent. Not optional cleanup.
 
 - [ ] **Step 6: Run the touched files, then the full suite**
 

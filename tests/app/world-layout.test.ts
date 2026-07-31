@@ -34,25 +34,49 @@ describe('layoutWorld', () => {
     expect(layoutWorld(snapshot, fresh)).toEqual(fresh);
   });
 
-  it('places buildings on distinct plots in id order, row-major', () => {
-    const buildings = [1, 2, 3, 4, 5, 6].map((id) => makeBuilding(id));
-    const { buildings: placed, rows } = layoutWorld(makeSnapshot({ buildings }));
-    const cells = placed.map((b) => `${b.col},${b.row}`);
-    expect(new Set(cells).size).toBe(6);
-    // 5 plots per row: sixth building starts the second plot row
-    expect(placed[5].row).toBe(placed[0].row + 2);
-    expect(placed[5].col).toBe(placed[0].col);
-    expect(rows).toBeGreaterThanOrEqual(placed[5].row + 2);
+  it('renders each building exactly at its snapshot tile', () => {
+    const layout = layoutWorld(makeSnapshot({
+      buildings: [makeBuilding(1, { col: 5, row: 2 }), makeBuilding(2, { col: 6, row: 2 })],
+    }));
+    expect(layout.buildings.map((b) => [b.id, b.col, b.row])).toEqual([[1, 5, 2], [2, 6, 2]]);
   });
 
-  it('constructing a new building moves no existing placement', () => {
-    const base = makeSnapshot({ buildings: [makeBuilding(1), makeBuilding(2)] });
-    const grown = makeSnapshot({ buildings: [makeBuilding(1), makeBuilding(2), makeBuilding(9)] });
-    const before = layoutWorld(base).buildings;
-    const after = layoutWorld(grown).buildings;
-    for (const b of before) {
-      expect(after.find((a) => a.id === b.id)).toMatchObject({ col: b.col, row: b.row });
+  it('takes its dimensions from the snapshot map', () => {
+    const layout = layoutWorld(makeSnapshot({ map: { cols: 30, rows: 20 } }));
+    expect(layout.cols).toBe(30);
+    expect(layout.rows).toBe(20);
+  });
+
+  it('a moved building takes its standing crew with it (same slots, new cell)', () => {
+    const before = layoutWorld(makeSnapshot({
+      buildings: [makeBuilding(1, { col: 5, row: 3, workers: 2 })],
+      workers: [makeWorker(10, { buildingId: 1 }), makeWorker(11, { buildingId: 1 })],
+    }));
+    const after = layoutWorld(makeSnapshot({
+      buildings: [makeBuilding(1, { col: 9, row: 7, workers: 2 })],
+      workers: [makeWorker(10, { buildingId: 1 }), makeWorker(11, { buildingId: 1 })],
+    }), before);
+    for (const id of [10, 11]) {
+      const was = before.workers.find((w) => w.id === id)!;
+      const now = after.workers.find((w) => w.id === id)!;
+      expect(now.slot).toBe(was.slot); // slot memory survives the move
+      expect(now.x - was.x).toBeCloseTo(4); // 9 - 5
+      expect(now.y - was.y).toBeCloseTo(4); // 7 - 3
     }
+  });
+
+  it('contains pathological idle crowds inside the camp band of the fixed map', () => {
+    const crowd = Array.from({ length: 40 }, (_, i) => makeWorker(i + 1));
+    const layout = layoutWorld(makeSnapshot({ workers: crowd }));
+    const spots = new Set<string>();
+    for (const w of layout.workers) {
+      expect(w.x).toBeGreaterThan(0);
+      expect(w.x).toBeLessThan(3); // CAMP_COLS
+      expect(w.y).toBeGreaterThan(0);
+      expect(w.y).toBeLessThan(layout.rows);
+      spots.add(`${w.x},${w.y}`);
+    }
+    expect(spots.size).toBe(40);
   });
 
   it('clusters assigned workers inside their building cell', () => {
@@ -223,16 +247,12 @@ describe('layoutWorld', () => {
     expect(at.get(12)).toBeNull(); // orphaned assignment falls back to camp
   });
 
-  it('pickBuildingAt finds the tile under the cursor and nothing in the gutter', () => {
-    // workers are hit-tested by the renderer against live actor positions
-    // (they walk); buildings never move, so the layout is their truth
-    const layout = layoutWorld(makeSnapshot({ buildings: [makeBuilding(1), makeBuilding(2)] }));
-    const cell = layout.buildings[0];
-    expect(pickBuildingAt(layout, cell.col + 0.5, cell.row + 0.5)).toEqual({ kind: 'building', id: 1 });
-    // the gutter midpoint sits between the two buildings' 1.5-tile visuals
-    expect(pickBuildingAt(layout, cell.col + 1.5, cell.row + 0.5)).toBeNull();
-    // and the empty grass south of the plots picks nothing
-    expect(pickBuildingAt(layout, cell.col + 0.5, layout.rows - 0.5)).toBeNull();
+  it('pickBuildingAt resolves the exact tile and nothing else', () => {
+    const layout = layoutWorld(makeSnapshot({ buildings: [makeBuilding(1, { col: 5, row: 2 })] }));
+    expect(pickBuildingAt(layout, 5.5, 2.5)).toEqual({ kind: 'building', id: 1 });
+    expect(pickBuildingAt(layout, 6.5, 2.5)).toBeNull();  // adjacent tile, no building
+    expect(pickBuildingAt(layout, 4.99, 2.5)).toBeNull(); // one tile left
+    expect(pickBuildingAt(layout, 5.5, layout.rows - 0.5)).toBeNull(); // empty grass
   });
 
   it('keeps every placement inside the reported grid', () => {

@@ -192,6 +192,9 @@ describe('WorldView', () => {
     expect(legend.exists()).toBe(true);
     expect(legend.text()).toContain('producing');
     expect(legend.text()).toContain('idle camp');
+    expect(legend.text()).toContain('selected');
+    expect(legend.text()).toContain('ghost: buildable');
+    expect(legend.text()).toContain('ghost: blocked');
   });
 
   it('falls back when the renderer reports an async fatal failure', async () => {

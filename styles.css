@@ -111,6 +111,10 @@
   border-radius: 1px;
 }
 
+.obsisim-chip.is-ghost {
+  opacity: 0.55;
+}
+
 .obsisim-starved td {
   background-color: rgba(229, 166, 58, 0.08);
 }

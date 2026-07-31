@@ -43,6 +43,19 @@ describe('resolveWorldTheme', () => {
     expect(theme.ground[1]).toMatch(HEX);
     expect(theme.background).toMatch(HEX);
   });
+
+  it('resolves accent from --interactive-accent with a hex fallback', () => {
+    const themed = resolveWorldTheme((name) => (name === '--interactive-accent' ? '#123abc' : ''));
+    expect(themed.accent).toBe('#123abc');
+    const fallback = resolveWorldTheme(() => '');
+    expect(fallback.accent).toBe('#7c8cf0');
+  });
+
+  it('danger is the resolved red', () => {
+    const themed = resolveWorldTheme((name) => (name === '--color-red' ? '#aa1122' : ''));
+    expect(themed.danger).toBe('#aa1122');
+    expect(themed.workerColors[0]).toBe('#aa1122'); // same source as starving-worker red
+  });
 });
 
 describe('efficiencyBucket', () => {

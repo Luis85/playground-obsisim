@@ -13,6 +13,11 @@ export interface WorldTheme {
   workerToolRing: string;
   /** Batch progress fill — bright cream so it reads on green tiles. */
   progressFill: string;
+  /** Interactive accent — the selection ring and the valid-ghost tint. */
+  accent: string;
+  /** Danger — the blocked-ghost tint (the same resolved red the
+   * starving-worker gradient starts from). */
+  danger: string;
 }
 
 const HEX = /^#[0-9a-f]{6}$/i;
@@ -69,5 +74,7 @@ export function resolveWorldTheme(read: VarReader): WorldTheme {
     workerColors: Array.from({ length: WORKER_BUCKETS }, (_, i) => mixHex(red, green, i / (WORKER_BUCKETS - 1))),
     workerToolRing: '#f2ecdd',
     progressFill: '#f5efdc',
+    accent: pick(read, '--interactive-accent', '#7c8cf0'),
+    danger: red,
   };
 }

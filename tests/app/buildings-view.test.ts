@@ -46,7 +46,7 @@ describe('BuildingsView', () => {
 
     useGameStore().ingest(makeSnapshot({ buildings: [] }), { paused: true, speed: 1, error: null });
     await waiting.wrapper.vm.$nextTick();
-    const cell = waiting.wrapper.get('td[colspan="6"]');
+    const cell = waiting.wrapper.get('td[colspan="8"]');
     expect(cell.text()).toContain('Forester');
     expect(cell.text()).toMatch(/Gatherer.?s Hut/);
     expect(cell.text()).toContain('10 wood each');
@@ -82,5 +82,16 @@ describe('BuildingsView', () => {
     const poor = mountView({ wood: 0 });
     await poor.wrapper.vm.$nextTick();
     expect((poor.wrapper.find('[data-test="construct-forester"]').element as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('shows each building\'s tile and demolishes after the two-step confirm', async () => {
+    const { engine, wrapper } = mountView();
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).toContain('(5, 2)');
+    const demolish = wrapper.find('[data-test="demolish-7"]');
+    await demolish.trigger('click');
+    expect(engine.dispatch).not.toHaveBeenCalledWith({ type: 'demolishBuilding', buildingId: 7 });
+    await demolish.trigger('click');
+    expect(engine.dispatch).toHaveBeenCalledWith({ type: 'demolishBuilding', buildingId: 7 });
   });
 });

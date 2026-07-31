@@ -13,7 +13,7 @@ import type { Command } from '../../../src/shared/commands';
 import type { SaveGameV2 } from '../../../src/shared/save';
 
 async function setup(save: SaveGameV2 = initialSave()) {
-  const prep = buildColonyPrepWorld({ save, systems: [HaulSystem, CommandSystem, SnapshotSystem] });
+  const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, HaulSystem, SnapshotSystem] });
   const world = await prep.prepareRun();
   // mirror GameEngine.stepOnce: the engine owns time, bumping the clock before each step.
   // Without this the recruit cooldown (which compares SimClock.tick) can never elapse.
@@ -404,18 +404,70 @@ describe('CommandSystem', () => {
 
   it('a move retargets the haulers already walking to that building', async () => {
     const { world, tick, dispatch, snapshot } = await setup();
-    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 20, row: 10 } });
+    // The far corner of the default map: BALANCE.haulTilesPerTick's own comment
+    // pins it at 13 ticks each way -- genuinely distant, not a token trip.
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 23, row: 15 } });
     await tick();
     const buildingId = snapshot().buildings[0].id;
+    const before = world.getResource(Stockpile).get('wood'); // 30 starting - 10 forester cost
     for (const entity of world.getEntities()) {
       const building = entity.getComponent(Building);
       if (building?.id === buildingId) entity.getComponent(OutputBuffer)!.add('wood', 9);
     }
+    // CommandSystem runs before HaulSystem (the real ALL_SYSTEMS order), so the
+    // very tick that flags the worker as hauling also dispatches it -- no extra
+    // tick is needed to see it start walking.
     await dispatch({ type: 'assignHauler' });
-    await tick(); // dispatched: a long walk to (20,10)
-    await dispatch({ type: 'moveBuilding', buildingId, to: { col: 3, row: 0 } });
-    const trips = [...world.getEntities()].map((e) => e.getComponent(HaulTrip)).filter((t) => t?.phase === 'outbound');
-    expect(trips[0]!.ticksLeft).toBe(1); // recomputed against the new tile, not the old one
+    const hauler = [...world.getEntities()].find((e) => e.getComponent(HaulTrip)?.phase === 'outbound')!;
+    const trip = () => hauler.getComponent(HaulTrip)!;
+    expect(trip()).toMatchObject({ targetId: buildingId, ticksLeft: 13 }); // the far-corner distance
+
+    await tick(); await tick(); // well into the walk, nowhere near arrival
+    expect(trip()).toMatchObject({ phase: 'outbound', ticksLeft: 11 });
+
+    await dispatch({ type: 'moveBuilding', buildingId, to: { col: 5, row: 1 } }); // just past camp: 2 ticks away
+    // Recomputed against the new tile (2), then HaulSystem's same-tick decrement
+    // (CommandSystem runs first) takes it to 1 -- not the stale 11 the old,
+    // far-away tile would have left behind. Exact value, still true under the
+    // real order because 2 ticks leaves room for CommandSystem's write to be
+    // decremented once without hitting zero in this same tick.
+    expect(trip()).toMatchObject({ phase: 'outbound', ticksLeft: 1 });
+
+    // Behavioral proof, not another frame of the counter: within a handful of
+    // ticks (not the dozen the original far-corner distance demanded) the
+    // hauler must actually arrive, load, walk home and deposit.
+    await tick(); await tick(); await tick();
+    expect(trip().phase).toBe('idle'); // arrived, loaded, walked home, delivered
+    expect(world.getResource(Stockpile).get('wood')).toBe(before + BALANCE.haulCarryCapacity); // the goods actually reached the stockpile
+  });
+
+  it('a move does not disturb a hauler already on its return leg', async () => {
+    const { world, tick, dispatch, snapshot } = await setup();
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 5, row: 4 } }); // 5 tiles out -> 3 ticks each way
+    await tick();
+    const buildingId = snapshot().buildings[0].id;
+    const before = world.getResource(Stockpile).get('wood'); // 30 starting - 10 forester cost
+    for (const entity of world.getEntities()) {
+      const building = entity.getComponent(Building);
+      if (building?.id === buildingId) entity.getComponent(OutputBuffer)!.add('wood', BALANCE.haulCarryCapacity);
+    }
+    await dispatch({ type: 'assignHauler' }); // dispatched this same tick: outbound, ticksLeft 3
+    const hauler = [...world.getEntities()].find((e) => e.getComponent(HaulTrip)?.phase === 'outbound')!;
+    const trip = () => hauler.getComponent(HaulTrip)!;
+    await tick(); await tick(); await tick(); // walks the 3 ticks out and loads
+    expect(trip()).toMatchObject({ phase: 'returning', ticksLeft: 3, resource: 'wood', amount: BALANCE.haulCarryCapacity });
+
+    // The building it loaded from moves elsewhere. A returning hauler walks to
+    // the camp, which never moves, so this must leave the trip alone.
+    await dispatch({ type: 'moveBuilding', buildingId, to: { col: 9, row: 6 } });
+    expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Moved the Forester.' }]);
+    // Only HaulSystem's ordinary per-tick decrement (3 -> 2), nothing extra
+    // from the move: ticksLeft and the load it is carrying are untouched.
+    expect(trip()).toMatchObject({ phase: 'returning', ticksLeft: 2, resource: 'wood', amount: BALANCE.haulCarryCapacity });
+
+    await tick(); await tick(); // the same 2 ticks it would have taken without the move
+    expect(trip().phase).toBe('idle');
+    expect(world.getResource(Stockpile).get('wood')).toBe(before + BALANCE.haulCarryCapacity); // still delivers in full
   });
 
   it('a recruited worker carries the same components as a restored one', async () => {

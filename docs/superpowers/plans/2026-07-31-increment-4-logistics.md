@@ -263,7 +263,7 @@ export function nextHaulTarget(candidates: readonly HaulCandidate[]): HaulCandid
 - [ ] **Step 4: Run to verify they pass**
 
 Run: `npx vitest run tests/shared/haul.test.ts`
-Expected: PASS (12 tests).
+Expected: PASS (11 tests).
 
 - [ ] **Step 5: Full gates**
 

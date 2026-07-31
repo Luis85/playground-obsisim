@@ -291,7 +291,10 @@ git commit -m "feat(shared): the haul law — camp tile, trip length, job orderi
 - Modify: `src/engine/snapshot-builder.ts` (facts carry `buffered`; state derivation)
 - Modify: `src/engine/systems/snapshot-system.ts` (buffer in the buildings query)
 - Modify: `src/engine/world.ts` (register the component; spawn it; initial snapshot)
+- Modify: `src/engine/systems/command-handlers.ts` (the live construct path spawns the component too)
+- Modify: `src/app/labels.ts`, `src/app/world/theme.ts` (the two `Record<BuildingState, …>` maps must gain `outputFull` the moment the union widens, or typecheck goes red)
 - Test: `tests/engine/systems/production-system.test.ts` (new cases)
+- Test: `tests/engine/systems/stats-system.test.ts`, `tests/engine/world.test.ts`, `tests/engine/integration.test.ts` (assertions that read produced goods from the stockpile)
 
 **Interfaces:**
 - Consumes: nothing from Task 1 yet.
@@ -1117,7 +1120,20 @@ Expected: PASS (9 tests).
 Run: `npm run lint && npm run typecheck && npm test`
 Expected: all green. `tests/app/fixtures.ts`'s `makeWorker` gains `haulTargetId: null, carrying: 0`; typecheck names any other literal site.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 7: Restore the end-to-end chain test**
+
+`tests/engine/integration.test.ts` was narrowed in Task 2 to the raw stages
+only, because with output buffers and nobody hauling a multi-stage chain
+genuinely cannot run — the mill's wheat sits in the farm's buffer, not in the
+store. Haulers exist now, so restore the full assertion: staff the colony's
+chains **and** assign haulers, run the same colony, and assert bread and tools
+reach the stockpile as the original test did. Keep the raw-stage assertions the
+narrowing added; they are true and worth keeping.
+
+Run: `npx vitest run tests/engine/integration.test.ts`
+Expected: PASS — the full bread-and-tools chain, now dependent on hauling.
+
+- [ ] **Step 8: Commit**
 
 ```bash
 git add src/engine/components.ts src/engine/systems/haul-system.ts src/engine/systems/snapshot-system.ts src/engine/snapshot-builder.ts src/engine/world.ts src/shared/snapshot.ts tests/
@@ -1782,10 +1798,10 @@ git commit -m "feat(world): haulers appear where they are — doorstep or camp"
 - Test: `tests/app/world-theme.test.ts`, `tests/app/world-view.test.ts` (legend assertions)
 
 **Interfaces:**
-- Consumes: `BuildingState` including `'outputFull'` (Task 2), `PlacedWorker.carrying` (Task 7).
-- Produces: `WorldTheme.stateRing.outputFull`; `BUILDING_STATE_LABELS.outputFull`.
+- Consumes: `BuildingState` including `'outputFull'`, and its `stateRing`/`BUILDING_STATE_LABELS` entries (all Task 2); `PlacedWorker.carrying` (Task 7).
+- Produces: the legend entries and the carrying marker.
 
-`stateRing` and `BUILDING_STATE_LABELS` are both `Record<BuildingState, …>`, so the union member added in Task 2 has been a typecheck error since then — this task closes it deliberately rather than by accident.
+`stateRing` and `BUILDING_STATE_LABELS` are `Record<BuildingState, …>`, so Task 2 had to fill both the moment it widened the union — leaving them empty would have held typecheck red across six tasks, against this plan's own per-commit gate. This task therefore inherits working values and adds only what is genuinely visual: the legend rows and the carried-load marker.
 
 - [ ] **Step 1: Write the failing tests**
 

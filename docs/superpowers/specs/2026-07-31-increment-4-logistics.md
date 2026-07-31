@@ -71,8 +71,14 @@ carts and vehicles, and balance tuning beyond the documented starting values
   the work is done and waiting on a cart. Progress is neither lost nor banked
   further, and the building resumes the tick after a hauler makes room.
 - Buffer contents are **not** colony wealth and not spendable: they are not in
-  the stockpile yet. `colonyWealth` and every stock reading stay stockpile-only,
-  so no existing economic number changes meaning.
+  the stockpile yet. `colonyWealth` and every stock reading stay stockpile-only.
+- One consequence, stated rather than discovered: the stockpile's per-tick
+  flow statistics now measure the **store's inflow**, not gross production. A
+  forester filling its buffer contributes nothing to `productionRate` until a
+  hauler delivers. That is the honest reading of a colony whose income is what
+  actually arrives, and the Economy view's haul-pressure line (§2.7) is what
+  keeps it explicable; the same is true end to end, since a multi-stage chain
+  cannot run at all without hauling.
 
 ### 2.2 The camp is the store
 

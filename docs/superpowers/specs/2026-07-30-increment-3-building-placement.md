@@ -235,7 +235,10 @@ A three-state machine in the World view: `idle` / `place(defId)` /
   geometry exactly (the legacy capacity of the default map); full-map →
   `null`.
 - **`save-migration.test.ts`** — the real v1→v2 step: version/map/position
-  synthesis, legacy-pattern fidelity, ascending-id order, overflow → `null`,
+  synthesis, legacy-pattern fidelity (exact tiles past the default map's 40
+  plots), ascending-id order, **overflow → capacity growth** (the
+  guard-cap 10,000-building save migrates whole, distinct, and without
+  stalling — `null` is reserved for genuine invariant failures, §2.4),
   guard registration (v2 now known, v3 unknown).
 - **`command-system.test.ts`** — construct with `at` (accept; reject: out of
   bounds, camp band, occupied, unaffordable — and validate-before-pay:

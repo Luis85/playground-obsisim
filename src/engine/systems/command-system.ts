@@ -1,9 +1,9 @@
 import { Actions, createSystem, queryComponents, Read, ReadEntity, ReadResource, Write, WriteResource } from 'sim-ecs';
 import { Building, JobAssignment, Position, WorkerSlots } from '../components';
-import { CommandQueue, IdCounter, NoticeBoard, SimClock, Stockpile, WorldMap } from '../resources';
+import { CommandQueue, IdCounter, NoticeBoard, RemovalLedger, SimClock, Stockpile, WorldMap } from '../resources';
 import {
   type CommandContext,
-  handleAssignWorker, handleConstructBuilding, handleRecruitWorker, handleUnassignWorker,
+  handleAssignWorker, handleConstructBuilding, handleDemolishBuilding, handleRecruitWorker, handleUnassignWorker,
 } from './command-handlers';
 
 export const CommandSystem = () => createSystem({
@@ -13,6 +13,7 @@ export const CommandSystem = () => createSystem({
   stockpile: WriteResource(Stockpile),
   ids: WriteResource(IdCounter),
   notices: WriteResource(NoticeBoard),
+  removals: WriteResource(RemovalLedger),
   map: ReadResource(WorldMap),
   buildings: queryComponents({
     entity: ReadEntity(), building: Read(Building), slots: Read(WorkerSlots), position: Write(Position),
@@ -25,7 +26,7 @@ export const CommandSystem = () => createSystem({
   // Handlers live in command-handlers.ts, one small function per command
   // type; this run function only materializes the query rows into a context
   // and drains the queue through the dispatch switch.
-  .withRunFunction(({ actions, queue, clock, stockpile, ids, notices, map, buildings, workers }) => {
+  .withRunFunction(({ actions, queue, clock, stockpile, ids, notices, removals, map, buildings, workers }) => {
     const ctx: CommandContext = {
       clock, stockpile, ids, notices, map,
       buildings: [...buildings.iter()].map(({ entity, building, slots, position }) => ({ entity, building, slots, position })),
@@ -36,6 +37,9 @@ export const CommandSystem = () => createSystem({
         entity.build();
       },
       claimedTiles: [],
+      removals,
+      remove: (entity) => actions.commands.removeEntity(entity),
+      demolishedIds: new Set<number>(),
     };
     for (const command of queue.drain()) {
       switch (command.type) {
@@ -43,6 +47,7 @@ export const CommandSystem = () => createSystem({
         case 'recruitWorker': handleRecruitWorker(ctx); break;
         case 'assignWorker': handleAssignWorker(ctx, command); break;
         case 'unassignWorker': handleUnassignWorker(ctx, command); break;
+        case 'demolishBuilding': handleDemolishBuilding(ctx, command); break;
       }
     }
     const dropped = queue.takeDropped();

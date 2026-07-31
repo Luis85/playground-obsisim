@@ -1,12 +1,13 @@
 import type { IEntity } from 'sim-ecs';
 import type { Command } from '../../shared/commands';
+import type { ResourceId } from '../../shared/content-types';
 import { autoPlacePosition, isTileBuildable, type TileRef } from '../../shared/placement';
 import { BALANCE } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
 import {
   Building, Efficiency, Hunger, JobAssignment, Position, Production, ToolCoverage, Worker, WorkerSlots,
 } from '../components';
-import type { IdCounter, NoticeBoard, SimClock, Stockpile, WorldMap } from '../resources';
+import type { IdCounter, NoticeBoard, RemovalLedger, SimClock, Stockpile, WorldMap } from '../resources';
 
 // One small handler per command type (the complexity gate is why they live
 // here and not inline in the system's run function). Notice doctrine:
@@ -42,6 +43,11 @@ export interface CommandContext {
   workers: WorkerRow[];
   spawn: (...components: object[]) => void;
   claimedTiles: TileRef[];
+  removals: RemovalLedger;
+  remove: (entity: Readonly<IEntity>) => void;
+  /** Buildings demolished earlier in this same drain: removal is deferred to
+   * the post-step sync, so queries still see them — every lookup must not. */
+  demolishedIds: Set<number>;
 }
 
 /** Occupancy truth for this drain: live rows plus this drain's own claims. */
@@ -53,6 +59,7 @@ function occupiedTiles(ctx: CommandContext): TileRef[] {
 }
 
 function findBuilding(ctx: CommandContext, buildingId: number): BuildingRow | null {
+  if (ctx.demolishedIds.has(buildingId)) return null;
   return ctx.buildings.find((row) => row.building.id === buildingId) ?? null;
 }
 
@@ -140,6 +147,10 @@ export function handleAssignWorker(ctx: CommandContext, command: Extract<Command
 }
 
 export function handleUnassignWorker(ctx: CommandContext, command: Extract<Command, { type: 'unassignWorker' }>): void {
+  if (ctx.demolishedIds.has(command.buildingId)) {
+    ctx.notices.reject('Building not found.');
+    return;
+  }
   let found = false;
   for (const { job } of ctx.workers) {
     if (job.buildingId === command.buildingId) {
@@ -153,4 +164,27 @@ export function handleUnassignWorker(ctx: CommandContext, command: Extract<Comma
     return;
   }
   ctx.notices.succeed(`Unassigned a worker from ${buildingName(ctx, command.buildingId)}.`);
+}
+
+export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Command, { type: 'demolishBuilding' }>): void {
+  const found = findBuilding(ctx, command.buildingId);
+  if (found === null) {
+    ctx.notices.reject('Building not found.');
+    return;
+  }
+  const def = BUILDINGS[found.building.defId];
+  // Full refund — flagged balance knob (increment 5 owns tuning). add() is
+  // the one write path, so the refund shows in production stats; that is
+  // deliberate visibility, not an accounting bug. Active batch progress is
+  // simply lost with the entity.
+  for (const [resource, amount] of Object.entries(def.cost)) {
+    ctx.stockpile.add(resource as ResourceId, amount);
+  }
+  for (const { job } of ctx.workers) {
+    if (job.buildingId === command.buildingId) job.buildingId = null;
+  }
+  ctx.remove(found.entity);
+  ctx.demolishedIds.add(command.buildingId);
+  ctx.removals.dirty = true;
+  ctx.notices.succeed(`Demolished the ${def.name} — cost refunded.`);
 }

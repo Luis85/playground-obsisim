@@ -4,7 +4,7 @@ import type { EngineStatus, Snapshot } from '../shared/snapshot';
 import type { SaveGameV2 } from '../shared/save';
 import { LATEST_SAVE_VERSION } from '../shared/save';
 import { BALANCE } from './content/balance';
-import { CommandQueue, IdCounter, SimClock, SnapshotStore, Stockpile, WorldMap } from './resources';
+import { CommandQueue, IdCounter, RemovalLedger, SimClock, SnapshotStore, Stockpile, WorldMap } from './resources';
 import { gatherEntityFacts, savedBuildingOf, savedWorkerOf } from './snapshot-builder';
 import { createColonyWorld, initialSave, refreshEntitySections } from './world';
 
@@ -114,11 +114,14 @@ export class GameEngine {
       // is the only thing that consumes ids -> an id-counter delta is an exact
       // signal, so the common case skips a full entity walk.
       //
-      // INVARIANT for increment 2: entity REMOVAL (aging/death) consumes no id.
-      // The first system that removes an entity MUST extend this signal (e.g. a
-      // dirty flag it sets), or removed entities linger in the published
-      // snapshot until the next creating tick.
-      if (this.world.getResource(IdCounter).peek() !== idsBefore) {
+      // INVARIANT for increment 2, CLOSED: entity REMOVAL (demolishBuilding)
+      // consumes no id, so the id-counter delta alone cannot see it. The
+      // RemovalLedger dirty flag is what closes the gap: the demolish handler
+      // raises it, and this gate reads-and-clears it beside the id check, so
+      // a tick that only removes something still refreshes on its own tick.
+      const removals = this.world.getResource(RemovalLedger);
+      if (this.world.getResource(IdCounter).peek() !== idsBefore || removals.dirty) {
+        removals.dirty = false;
         refreshEntitySections(this.world);
       }
       if (clock.tick % BALANCE.autosaveEveryTicks === 0) {

@@ -13,7 +13,7 @@ import {
   Building, Efficiency, Hunger, JobAssignment, Position, Production, ToolCoverage, Worker, WorkerSlots,
 } from './components';
 import {
-  CommandQueue, IdCounter, NoticeBoard, SimClock, SnapshotStore, StatsHistory, Stockpile, WorldMap,
+  CommandQueue, IdCounter, NoticeBoard, RemovalLedger, SimClock, SnapshotStore, StatsHistory, Stockpile, WorldMap,
 } from './resources';
 import type { BuildingFacts, WorkerFacts } from './snapshot-builder';
 import { buildEntitySections, gatherEntityFacts } from './snapshot-builder';
@@ -324,6 +324,7 @@ export function buildColonyPrepWorld(
     new StatsHistory(),
     store,
     new WorldMap(save.map.cols, save.map.rows),
+    new RemovalLedger(),
   ];
   const registry = new Map<object, object>();
   for (const instance of instances) {

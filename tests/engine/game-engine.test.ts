@@ -251,4 +251,18 @@ describe('GameEngine', () => {
     // and the building must be visible on ITS OWN tick, not one later
     expect(engine.snapshot!.buildings).toHaveLength(1);
   });
+
+  it('a demolishing tick refreshes the published snapshot immediately', async () => {
+    const engine = await GameEngine.create();
+    engine.dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
+    await engine.stepOnce();
+    await engine.stepOnce();
+    const buildingId = engine.snapshot!.buildings[0].id;
+    engine.dispatch({ type: 'demolishBuilding', buildingId });
+    // Removal consumes no id, so without the RemovalLedger flag the
+    // id-delta-gated refresh would skip and the demolished building would
+    // linger in the published snapshot until the next id-consuming tick.
+    await engine.stepOnce();
+    expect(engine.snapshot!.buildings).toHaveLength(0);
+  });
 });

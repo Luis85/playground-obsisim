@@ -203,4 +203,57 @@ describe('CommandSystem', () => {
     await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
     expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'No free tile left to build on.' }]);
   });
+
+  it('demolishes: refunds the cost, idles the workers, removes the entity', async () => {
+    const { world, tick, dispatch, snapshot } = await setup();
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' }); // wood 30 -> 20
+    await tick();
+    const buildingId = snapshot().buildings[0].id;
+    await dispatch({ type: 'assignWorker', buildingId });
+    await dispatch({ type: 'demolishBuilding', buildingId });
+    expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Demolished the Forester — cost refunded.' }]);
+    expect(world.getResource(Stockpile).get('wood')).toBe(30); // full refund
+    await tick();
+    expect(snapshot().buildings).toHaveLength(0);
+    expect(snapshot().idleWorkers).toBe(3);
+  });
+
+  it('rejects demolishing a building that does not exist', async () => {
+    const { dispatch, snapshot } = await setup();
+    await dispatch({ type: 'demolishBuilding', buildingId: 999 });
+    expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'Building not found.' }]);
+  });
+
+  it('a demolished id is dead within its own tick: later commands against it reject', async () => {
+    const { tick, dispatch, snapshot } = await setup();
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
+    await tick();
+    const buildingId = snapshot().buildings[0].id;
+    await dispatch(
+      { type: 'demolishBuilding', buildingId },
+      { type: 'assignWorker', buildingId },
+      { type: 'unassignWorker', buildingId },
+      { type: 'demolishBuilding', buildingId },
+    );
+    expect(snapshot().notices).toEqual([
+      { kind: 'success', message: 'Demolished the Forester — cost refunded.' },
+      { kind: 'rejection', message: 'Building not found.' },
+      { kind: 'rejection', message: 'Building not found.' },
+      { kind: 'rejection', message: 'Building not found.' },
+    ]);
+  });
+
+  it('a tile freed by demolition is buildable again on the NEXT tick', async () => {
+    const { tick, dispatch, snapshot } = await setup();
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 5, row: 5 } });
+    await tick();
+    const buildingId = snapshot().buildings[0].id;
+    await dispatch(
+      { type: 'demolishBuilding', buildingId },
+      { type: 'constructBuilding', buildingDefId: 'gatherersHut', at: { col: 5, row: 5 } },
+    );
+    expect(snapshot().notices[1]).toEqual({ kind: 'rejection', message: 'Cannot build there.' });
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'gatherersHut', at: { col: 5, row: 5 } });
+    expect(snapshot().notices).toEqual([{ kind: 'success', message: "Built a Gatherer's Hut." }]);
+  });
 });

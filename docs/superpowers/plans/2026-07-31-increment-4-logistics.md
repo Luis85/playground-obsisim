@@ -1655,10 +1655,16 @@ export function buildSaveFromWorld(world: IRuntimeWorld): SaveGameV3 {
 
 **Re-arm both save tripwires.** `tests/engine/world.test.ts`'s "every
 non-derived fact is represented in the save record" tests were disarmed twice
-while the save format lagged the sim: Task 2 excluded `'buffered'` from the
-building list, Task 3 excluded `'hauling'` from the worker list. Both fields
-persist as of this task, so **remove both exclusions** — those tests exist to
-catch a field that never reached the save, and a permanent exclusion is
+while the save format lagged the sim. They use two separate exclusion arrays:
+
+- `derivedBuilding` (the building test) — Task 2 added `'buffered'`; remove it.
+- `DERIVED` (the worker test) — Task 3 added `'hauling'`; remove **only that
+  entry**. `'efficiency'` stays: it is genuinely derived, recomputed from
+  hunger every tick, and deleting it would break the test for the right
+  reason.
+
+Both fields persist as of this task, so both exclusions come out. These tests
+exist to catch a field that never reached the save; a permanent exclusion is
 exactly the failure they are meant to prevent. Not optional cleanup.
 
 - [ ] **Step 6: Run the touched files, then the full suite**
@@ -1998,8 +2004,18 @@ git commit -m "feat(app): store surfaces hauler count, backlog, and stalls"
 
 **Files:**
 - Modify: `src/app/views/DashboardView.vue`
+- Modify: `src/app/views/PopulationView.vue` (haulers currently render as "Idle")
 - Modify: `styles.css`
 - Create: `tests/app/dashboard-view.test.ts` (the view has no test file yet — this task adds its first)
+- Test: `tests/app/population-view.test.ts`
+
+**Also in this task — the Population view must stop calling haulers idle.**
+`PopulationView.vue`'s `jobLabel` returns `'Idle'` for any worker with
+`buildingId === null`, which is now true of every hauler. Give it a `hauling`
+branch returning `'Hauling'`, and pin it with a case in
+`tests/app/population-view.test.ts` asserting a hauling worker's row reads
+`Hauling` and an idle one still reads `Idle`. A player staffing haulers must
+not see them counted as doing nothing.
 
 **Interfaces:**
 - Consumes: `haulerCount` (Task 9), commands `assignHauler`/`unassignHauler` (Task 3), `ENGINE_KEY`.

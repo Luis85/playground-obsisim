@@ -19,7 +19,7 @@ import { efficiencyBucket, resolveWorldTheme, type WorldTheme } from './theme';
 // pick() through the live camera, and clean dispose.
 
 const WORKER_RADIUS = 7;
-const WORKER_PICK_RADIUS = WORKER_RADIUS + 4; // px of hover slack around a dot
+const WORKER_PICK_RADIUS = 11; // SCREEN px hover tolerance, world-converted per live zoom
 const WORKER_SPEED = 90; // px/s walk speed toward a new post
 const BUILDING_SIZE = TILE - 4;
 const BAR_WIDTH = TILE * 0.8;
@@ -151,14 +151,14 @@ class WorldScene {
    */
   workerAt(worldX: number, worldY: number): number | null {
     let bestId: number | null = null;
-    // WORKER_PICK_RADIUS is a screen-space hover tolerance (its own comment:
-    // "px of hover slack"), so it is expressed at zoom 1 and converted to the
+    // WORKER_PICK_RADIUS is a screen-space hover tolerance converted to the
     // live camera's zoom here — world-space distances shrink relative to a
     // fixed screen radius as the camera zooms out, so comparing against a
     // flat world-space radius made hover/pick accuracy zoom-dependent (only
     // visible once a layout needed zoom < 1 to fit, same trigger as the
-    // fitCamera bug below).
-    const zoom = this.engine.currentScene.camera.zoom;
+    // fitCamera bug below). The || 1 guards a 0x0-measured host: fitCamera
+    // would yield zoom 0 there, and dividing by it turns the radius infinite.
+    const zoom = this.engine.currentScene.camera.zoom || 1;
     let bestD2 = (WORKER_PICK_RADIUS / zoom) ** 2;
     for (const [id, bundle] of this.workers) {
       const d2 = (bundle.actor.pos.x - worldX) ** 2 + (bundle.actor.pos.y - worldY) ** 2;
@@ -374,7 +374,7 @@ class WorldScene {
   }
 }
 
-/** Whether a tile cell falls inside the grid — shared by tileAt so the bounds
+/** Whether a tile cell falls inside the grid — used by tileAt so the bounds
  * check reads as one thing instead of a four-term guard at the call site. */
 function inBounds(col: number, row: number, layout: WorldLayout): boolean {
   return col >= 0 && col < layout.cols && row >= 0 && row < layout.rows;

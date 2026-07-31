@@ -5,6 +5,7 @@ export const BUILDING_STATE_LABELS: Record<BuildingState, string> = {
   producing: 'Producing',
   waitingForInput: 'Waiting for input',
   unstaffed: 'Unstaffed',
+  outputFull: 'Output full',
 };
 
 /** "10 Wood, 5 Planks" — shared by the construct table and the build palette. */

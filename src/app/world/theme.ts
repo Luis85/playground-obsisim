@@ -70,6 +70,9 @@ export function resolveWorldTheme(read: VarReader): WorldTheme {
       producing: green,
       waitingForInput: pick(read, '--color-orange', '#e5a63a'),
       unstaffed: '#8f8f8f',
+      // Purple, deliberately outside the green/orange production language: this
+      // building is not short of anything, it has nowhere to put what it made.
+      outputFull: pick(read, '--color-purple', '#8f6fbf'),
     },
     workerColors: Array.from({ length: WORKER_BUCKETS }, (_, i) => mixHex(red, green, i / (WORKER_BUCKETS - 1))),
     workerToolRing: '#f2ecdd',

@@ -182,26 +182,28 @@ describe('isLoadableSave', () => {
   });
 
   it('a save producing onto a ceiling stockpile stays loadable (no boundary ping-pong)', async () => {
-    // Stockpile.add saturates at MAX_SAVED_COUNTER, so a staffed producer on a
+    // Stockpile.add saturates at MAX_SAVED_COUNTER, so a delivery onto a
     // ceiling stock must not push the written amount past the accept-bound.
-    const staffedForester = (wood: number) => {
+    // Production now banks into a building's own OutputBuffer rather than the
+    // Stockpile directly (Task 2), so a staffed forester can no longer drive
+    // this — only the mechanism that puts goods into the Stockpile moved.
+    // This deposits straight onto the live Stockpile instead, the same thing
+    // a hauler delivery will do from Task 4 onward.
+    const atWood = (wood: number) => {
       const save = initialSave();
       save.stockpile.wood = wood;
-      save.buildings.push({ id: 4, defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1 });
-      save.workers[0].buildingId = 4;
-      save.nextEntityId = 5;
       return save;
     };
-    const { GameEngine } = await import('../../src/engine/game-engine');
     const run = async (wood: number) => {
-      const engine = await GameEngine.create(staffedForester(wood));
-      for (let i = 0; i < 10; i++) await engine.stepOnce(); // plenty for at least one wood batch
+      const engine = await GameEngine.create(atWood(wood));
+      (engine as unknown as { world: IRuntimeWorld }).world.getResource(Stockpile).add('wood', 5);
+      await engine.stepOnce();
       return engine.serialize();
     };
-    // control: this setup really produces wood within the window
+    // control: this setup really does put wood in before serializing
     expect((await run(10)).stockpile.wood!).toBeGreaterThan(10);
     const ceiling = Number.MAX_SAFE_INTEGER - 2 ** 32; // == MAX_SAVED_COUNTER
-    expect(isLoadableSave(staffedForester(ceiling))).toBe(true);
+    expect(isLoadableSave(atWood(ceiling))).toBe(true);
     const written = await run(ceiling);
     expect(written.stockpile.wood).toBe(ceiling); // saturated, not overflowed
     expect(isLoadableSave(written)).toBe(true);

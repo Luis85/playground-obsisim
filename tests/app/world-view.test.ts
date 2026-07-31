@@ -6,8 +6,9 @@ import { createTestingPinia } from '@pinia/testing';
 import WorldView from '../../src/app/views/WorldView.vue';
 import { WORLD_RENDERER_KEY } from '../../src/app/world/renderer-key';
 import type { WorldRenderer } from '../../src/app/world/renderer-key';
+import { ENGINE_KEY } from '../../src/app/engine-key';
 import { useGameStore } from '../../src/app/stores/game-store';
-import { makeSnapshot } from './fixtures';
+import { makeBuilding, makeSnapshot, makeWorker, stockedWith } from './fixtures';
 
 // Everything here runs against a fake WorldRenderer injected through
 // WORLD_RENDERER_KEY — the real Excalibur factory must never be imported by
@@ -16,7 +17,9 @@ import { makeSnapshot } from './fixtures';
 
 function makeFake() {
   const renderer: WorldRenderer = {
-    sync: vi.fn(), pick: vi.fn(() => null), onFatal: vi.fn(), start: vi.fn(), stop: vi.fn(), dispose: vi.fn(),
+    sync: vi.fn(), pick: vi.fn(() => null),
+    tileAt: vi.fn(() => null), setGhost: vi.fn(), setSelection: vi.fn(),
+    onFatal: vi.fn(), start: vi.fn(), stop: vi.fn(), dispose: vi.fn(),
   };
   const factory = vi.fn((host: HTMLElement) => {
     void host;
@@ -29,16 +32,20 @@ function makeFake() {
 // `vue` to the runtime-only build, which cannot compile templates.
 function mountHarness(factory: unknown) {
   const active = ref(true);
+  const engine = { dispatch: vi.fn() };
   const Harness = defineComponent({
     setup: () => () => h(KeepAlive, null, [active.value ? h(WorldView) : null]),
   });
   const wrapper = mount(Harness, {
     global: {
       plugins: [createTestingPinia({ createSpy: vi.fn, stubActions: false })],
-      provide: { [WORLD_RENDERER_KEY as symbol]: factory },
+      provide: {
+        [WORLD_RENDERER_KEY as symbol]: factory,
+        [ENGINE_KEY as symbol]: engine,
+      },
     },
   });
-  return { wrapper, active };
+  return { wrapper, active, engine };
 }
 
 describe('WorldView', () => {
@@ -57,7 +64,12 @@ describe('WorldView', () => {
     const { renderer, factory } = makeFake();
     const pinia = createTestingPinia({ createSpy: vi.fn, stubActions: false });
     useGameStore(pinia).ingest(makeSnapshot({ tick: 9 }), { paused: true, speed: 1, error: null });
-    mount(WorldView, { global: { plugins: [pinia], provide: { [WORLD_RENDERER_KEY as symbol]: factory } } });
+    mount(WorldView, {
+      global: {
+        plugins: [pinia],
+        provide: { [WORLD_RENDERER_KEY as symbol]: factory, [ENGINE_KEY as symbol]: { dispatch: vi.fn() } },
+      },
+    });
     expect(renderer.sync).toHaveBeenCalledWith(expect.objectContaining({ tick: 9 }));
   });
 
@@ -99,10 +111,7 @@ describe('WorldView', () => {
     (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'building', id: 7 });
     const { wrapper } = mountHarness(factory);
     useGameStore().ingest(makeSnapshot({
-      buildings: [{
-        id: 7, defId: 'bakery', workers: 1, workerSlots: 2, state: 'producing',
-        progress: 0, batchActive: true, progressPct: 55, tooledWorkers: 0, workPower: 1,
-      }],
+      buildings: [makeBuilding(7, { defId: 'bakery', workers: 1, workerSlots: 2, state: 'producing', batchActive: true, progressPct: 55 })],
     }), { paused: false, speed: 1, error: null });
     await nextTick();
     await wrapper.find('[data-test="world-host"]').trigger('pointermove', { pageX: 40, pageY: 40 });
@@ -119,10 +128,7 @@ describe('WorldView', () => {
     (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'building', id: 7 });
     const { wrapper } = mountHarness(factory);
     const buildingAt = (progressPct: number) => makeSnapshot({
-      buildings: [{
-        id: 7, defId: 'bakery', workers: 1, workerSlots: 2, state: 'producing',
-        progress: 0, batchActive: true, progressPct, tooledWorkers: 0, workPower: 1,
-      }],
+      buildings: [makeBuilding(7, { defId: 'bakery', workers: 1, workerSlots: 2, state: 'producing', batchActive: true, progressPct })],
     });
     useGameStore().ingest(buildingAt(10), { paused: false, speed: 1, error: null });
     await nextTick();
@@ -139,7 +145,7 @@ describe('WorldView', () => {
     (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'worker', id: 3 });
     const { wrapper } = mountHarness(factory);
     useGameStore().ingest(makeSnapshot({
-      workers: [{ id: 3, hunger: 40, efficiency: 0.8, buildingId: null, toolTicks: 12 }],
+      workers: [makeWorker(3, { hunger: 40, efficiency: 0.8, buildingId: null, toolTicks: 12 })],
     }), { paused: false, speed: 1, error: null });
     await nextTick();
     await wrapper.find('[data-test="world-host"]').trigger('pointermove', { pageX: 10, pageY: 10 });
@@ -154,7 +160,7 @@ describe('WorldView', () => {
     (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'worker', id: 3 });
     const { wrapper } = mountHarness(factory);
     useGameStore().ingest(makeSnapshot({
-      workers: [{ id: 3, hunger: 0, efficiency: 1, buildingId: null, toolTicks: 0 }],
+      workers: [makeWorker(3, { hunger: 0, efficiency: 1, buildingId: null, toolTicks: 0 })],
     }), { paused: false, speed: 1, error: null });
     await nextTick();
     await wrapper.find('[data-test="world-host"]').trigger('pointermove', { pageX: 10, pageY: 10 });
@@ -162,7 +168,7 @@ describe('WorldView', () => {
     // the worker walks away; the next snapshot re-runs the live hit-test
     (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue(null);
     useGameStore().ingest(makeSnapshot({
-      workers: [{ id: 3, hunger: 0, efficiency: 1, buildingId: 1, toolTicks: 0 }],
+      workers: [makeWorker(3, { hunger: 0, efficiency: 1, buildingId: 1, toolTicks: 0 })],
     }), { paused: false, speed: 1, error: null });
     await nextTick();
     expect(wrapper.find('[data-test="world-tooltip"]').exists()).toBe(false);
@@ -175,7 +181,7 @@ describe('WorldView', () => {
       (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'worker', id: 3 });
       const { wrapper } = mountHarness(factory);
       useGameStore().ingest(makeSnapshot({
-        workers: [{ id: 3, hunger: 0, efficiency: 1, buildingId: null, toolTicks: 0 }],
+        workers: [makeWorker(3, { hunger: 0, efficiency: 1, buildingId: null, toolTicks: 0 })],
       }), { paused: true, speed: 1, error: null });
       await nextTick();
       await wrapper.find('[data-test="world-host"]').trigger('pointermove', { pageX: 10, pageY: 10 });
@@ -198,6 +204,9 @@ describe('WorldView', () => {
     expect(legend.exists()).toBe(true);
     expect(legend.text()).toContain('producing');
     expect(legend.text()).toContain('idle camp');
+    expect(legend.text()).toContain('selected');
+    expect(legend.text()).toContain('ghost: buildable');
+    expect(legend.text()).toContain('ghost: blocked');
   });
 
   it('falls back when the renderer reports an async fatal failure', async () => {
@@ -210,5 +219,214 @@ describe('WorldView', () => {
     const fallback = wrapper.find('[data-test="world-fallback"]');
     expect(fallback.exists()).toBe(true);
     expect(fallback.text()).toContain('context lost');
+  });
+});
+
+describe('WorldView interaction', () => {
+  const richSnapshot = (buildings = [makeBuilding(7, { defId: 'bakery', col: 6, row: 3 })]) =>
+    makeSnapshot({ buildings, stockpile: stockedWith({ wood: 100, planks: 100 }) });
+
+  function armedHarness(tile: { col: number; row: number } | null = { col: 8, row: 4 }) {
+    const { renderer, factory } = makeFake();
+    (renderer.tileAt as ReturnType<typeof vi.fn>).mockReturnValue(tile);
+    const mounted = mountHarness(factory);
+    useGameStore().ingest(richSnapshot(), { paused: false, speed: 1, error: null });
+    return { renderer, ...mounted };
+  }
+
+  it('arms from the palette, previews the ghost, and constructs at the clicked tile — staying armed', async () => {
+    const { renderer, wrapper, engine } = armedHarness();
+    await nextTick();
+    await wrapper.find('[data-test="palette-forester"]').trigger('click');
+    await wrapper.find('[data-test="world-host"]').trigger('pointermove', { pageX: 40, pageY: 40 });
+    expect(renderer.setGhost).toHaveBeenLastCalledWith({ defId: 'forester', col: 8, row: 4, valid: true });
+    await wrapper.find('[data-test="world-host"]').trigger('click', { pageX: 40, pageY: 40 });
+    expect(engine.dispatch).toHaveBeenCalledWith({
+      type: 'constructBuilding', buildingDefId: 'forester', at: { col: 8, row: 4 },
+    });
+    expect(wrapper.find('[data-test="palette-forester"]').classes()).toContain('is-armed');
+  });
+
+  it('switching armed definitions over a parked pointer swaps the ghost in place', async () => {
+    // keyboard activation of a second palette button moves no pointer: the
+    // ghost must re-render for the new def from the remembered tile
+    const { renderer, wrapper } = armedHarness();
+    await nextTick();
+    await wrapper.find('[data-test="palette-forester"]').trigger('click');
+    await wrapper.find('[data-test="world-host"]').trigger('pointermove', { pageX: 40, pageY: 40 });
+    expect(renderer.setGhost).toHaveBeenLastCalledWith({ defId: 'forester', col: 8, row: 4, valid: true });
+    await wrapper.find('[data-test="palette-farm"]').trigger('click');
+    expect(renderer.setGhost).toHaveBeenLastCalledWith({ defId: 'farm', col: 8, row: 4, valid: true });
+  });
+
+  it('previews an invalid ghost on an occupied tile and dispatches nothing there', async () => {
+    const { renderer, wrapper, engine } = armedHarness({ col: 6, row: 3 }); // the bakery's tile
+    await nextTick();
+    await wrapper.find('[data-test="palette-forester"]').trigger('click');
+    await wrapper.find('[data-test="world-host"]').trigger('pointermove', { pageX: 40, pageY: 40 });
+    expect(renderer.setGhost).toHaveBeenLastCalledWith({ defId: 'forester', col: 6, row: 3, valid: false });
+    await wrapper.find('[data-test="world-host"]').trigger('click', { pageX: 40, pageY: 40 });
+    expect(engine.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('suppresses hover tooltips while armed', async () => {
+    const { renderer, wrapper } = armedHarness();
+    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'building', id: 7 });
+    await nextTick();
+    await wrapper.find('[data-test="palette-forester"]').trigger('click');
+    await wrapper.find('[data-test="world-host"]').trigger('pointermove', { pageX: 40, pageY: 40 });
+    expect(wrapper.find('[data-test="world-tooltip"]').exists()).toBe(false);
+  });
+
+  it('hides a parked tooltip the moment the palette arms — no pointer event needed', async () => {
+    // keyboard activation fires no pointerleave: arming itself must clear hover
+    const { renderer, wrapper } = armedHarness();
+    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'building', id: 7 });
+    await nextTick();
+    await wrapper.find('[data-test="world-host"]').trigger('pointermove', { pageX: 40, pageY: 40 });
+    expect(wrapper.find('[data-test="world-tooltip"]').exists()).toBe(true);
+    await wrapper.find('[data-test="palette-forester"]').trigger('click');
+    expect(wrapper.find('[data-test="world-tooltip"]').exists()).toBe(false);
+  });
+
+  it('Escape and right-click both disarm and clear the ghost', async () => {
+    const { renderer, wrapper } = armedHarness();
+    await nextTick();
+    await wrapper.find('[data-test="palette-forester"]').trigger('click');
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    await nextTick();
+    expect(wrapper.find('[data-test="palette-forester"]').classes()).not.toContain('is-armed');
+    expect(renderer.setGhost).toHaveBeenLastCalledWith(null);
+
+    await wrapper.find('[data-test="palette-forester"]').trigger('click');
+    await wrapper.find('[data-test="world-host"]').trigger('contextmenu');
+    expect(wrapper.find('[data-test="palette-forester"]').classes()).not.toContain('is-armed');
+  });
+
+  it('clicking a building selects it; the panel demolishes after confirm', async () => {
+    const { renderer, wrapper, engine } = armedHarness();
+    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'building', id: 7 });
+    await nextTick();
+    await wrapper.find('[data-test="world-host"]').trigger('click', { pageX: 40, pageY: 40 });
+    expect(renderer.setSelection).toHaveBeenLastCalledWith(7);
+    const demolish = wrapper.find('[data-test="selection-demolish"]');
+    await demolish.trigger('click');
+    await demolish.trigger('click');
+    expect(engine.dispatch).toHaveBeenCalledWith({ type: 'demolishBuilding', buildingId: 7 });
+  });
+
+  it('selecting a different building resets an armed demolish — no cross-building confirm', async () => {
+    // touch clients never blur the armed button, so the :key="selectedId"
+    // remount is what guarantees building B gets a fresh, disarmed confirm
+    const { renderer, wrapper, engine } = armedHarness();
+    useGameStore().ingest(richSnapshot([
+      makeBuilding(7, { defId: 'bakery', col: 6, row: 3 }),
+      makeBuilding(9, { defId: 'farm', col: 9, row: 5 }),
+    ]), { paused: false, speed: 1, error: null });
+    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'building', id: 7 });
+    await nextTick();
+    await wrapper.find('[data-test="world-host"]').trigger('click', { pageX: 40, pageY: 40 }); // select A
+    await wrapper.find('[data-test="selection-demolish"]').trigger('click'); // arm A's confirm
+    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'building', id: 9 });
+    await wrapper.find('[data-test="world-host"]').trigger('click', { pageX: 60, pageY: 60 }); // select B
+    await wrapper.find('[data-test="selection-demolish"]').trigger('click'); // must arm, not confirm
+    expect(engine.dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'demolishBuilding' }));
+    await wrapper.find('[data-test="selection-demolish"]').trigger('click');
+    expect(engine.dispatch).toHaveBeenCalledWith({ type: 'demolishBuilding', buildingId: 9 });
+  });
+
+  it('move flow: Move arms with the building def, a valid click dispatches and keeps the selection', async () => {
+    const { renderer, wrapper, engine } = armedHarness({ col: 9, row: 6 });
+    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'building', id: 7 });
+    await nextTick();
+    await wrapper.find('[data-test="world-host"]').trigger('click', { pageX: 40, pageY: 40 }); // select
+    await wrapper.find('[data-test="selection-move"]').trigger('click');
+    await wrapper.find('[data-test="world-host"]').trigger('pointermove', { pageX: 40, pageY: 40 });
+    expect(renderer.setGhost).toHaveBeenLastCalledWith({ defId: 'bakery', col: 9, row: 6, valid: true });
+    await wrapper.find('[data-test="world-host"]').trigger('click', { pageX: 40, pageY: 40 });
+    expect(engine.dispatch).toHaveBeenCalledWith({ type: 'moveBuilding', buildingId: 7, to: { col: 9, row: 6 } });
+    expect(renderer.setGhost).toHaveBeenLastCalledWith(null);
+    expect(wrapper.find('[data-test="selection-panel"]').exists()).toBe(true);
+  });
+
+  it('selection clears reactively when its building vanishes', async () => {
+    const { renderer, wrapper } = armedHarness();
+    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'building', id: 7 });
+    await nextTick();
+    await wrapper.find('[data-test="world-host"]').trigger('click', { pageX: 40, pageY: 40 });
+    expect(wrapper.find('[data-test="selection-panel"]').exists()).toBe(true);
+    useGameStore().ingest(makeSnapshot({ buildings: [], stockpile: stockedWith({ wood: 100 }) }), { paused: false, speed: 1, error: null });
+    await nextTick();
+    expect(renderer.setSelection).toHaveBeenLastCalledWith(null);
+    expect(wrapper.find('[data-test="selection-panel"]').exists()).toBe(false);
+  });
+
+  it('a timeline reset (tick regression) clears the selection even though the id survives', async () => {
+    // colony reset recycles entity ids from 1 (Task 9 review): a selected id
+    // can survive into an unrelated new-timeline building. The id-based
+    // vanish check alone would see id 7 still present and keep a stale
+    // selection ring on what is now a completely different building — only
+    // the tick-regression check catches this.
+    const { renderer, wrapper } = armedHarness();
+    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'building', id: 7 });
+    await nextTick();
+    await wrapper.find('[data-test="world-host"]').trigger('click', { pageX: 40, pageY: 40 });
+    expect(wrapper.find('[data-test="selection-panel"]').exists()).toBe(true);
+    useGameStore().ingest(makeSnapshot({
+      tick: 0, // same tick as the very first snapshot: a reset timeline, not a new tick
+      buildings: [makeBuilding(7, { defId: 'farm', col: 4, row: 1 })], // id 7 recycled, unrelated building
+      stockpile: stockedWith({ wood: 100 }),
+    }), { paused: false, speed: 1, error: null });
+    await nextTick();
+    expect(renderer.setSelection).toHaveBeenLastCalledWith(null);
+    expect(wrapper.find('[data-test="selection-panel"]').exists()).toBe(false);
+  });
+
+  it('clicking a worker is a no-op for selection — only empty ground deselects', async () => {
+    const { renderer, wrapper } = armedHarness();
+    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'building', id: 7 });
+    await nextTick();
+    await wrapper.find('[data-test="world-host"]').trigger('click', { pageX: 40, pageY: 40 }); // select
+    expect(wrapper.find('[data-test="selection-panel"]').exists()).toBe(true);
+    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'worker', id: 3 });
+    await wrapper.find('[data-test="world-host"]').trigger('click', { pageX: 50, pageY: 50 });
+    expect(wrapper.find('[data-test="selection-panel"]').exists()).toBe(true); // hover-only: still selected
+    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    await wrapper.find('[data-test="world-host"]').trigger('click', { pageX: 60, pageY: 60 });
+    expect(wrapper.find('[data-test="selection-panel"]').exists()).toBe(false); // empty ground clears
+  });
+
+  it('closing the panel disarms an armed move — no ghost, no dispatch afterwards', async () => {
+    // the armed move belongs to the selection it came from: without the
+    // cancel, an invisible move keeps previewing and clicking the canvas
+    // still dispatches moveBuilding for the deselected building
+    const { renderer, wrapper, engine } = armedHarness({ col: 9, row: 6 });
+    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'building', id: 7 });
+    await nextTick();
+    await wrapper.find('[data-test="world-host"]').trigger('click', { pageX: 40, pageY: 40 }); // select
+    await wrapper.find('[data-test="selection-move"]').trigger('click'); // arm move
+    await wrapper.find('[data-test="selection-close"]').trigger('click');
+    expect(renderer.setGhost).toHaveBeenLastCalledWith(null);
+    (engine.dispatch as ReturnType<typeof vi.fn>).mockClear();
+    await wrapper.find('[data-test="world-host"]').trigger('pointermove', { pageX: 40, pageY: 40 });
+    await wrapper.find('[data-test="world-host"]').trigger('click', { pageX: 40, pageY: 40 });
+    expect(engine.dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'moveBuilding' }));
+  });
+
+  it('Escape is ignored while the view is deactivated — armed mode survives tab switches', async () => {
+    // keep-alive hides the view without unmounting it; a live window listener
+    // there would let Escape on another tab silently disarm the hidden World
+    const { wrapper, active } = armedHarness();
+    await nextTick();
+    await wrapper.find('[data-test="palette-forester"]').trigger('click');
+    active.value = false; // switch tabs: deactivated, not unmounted
+    await nextTick();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    active.value = true;
+    await nextTick();
+    expect(wrapper.find('[data-test="palette-forester"]').classes()).toContain('is-armed');
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); // re-attached on activation
+    await nextTick();
+    expect(wrapper.find('[data-test="palette-forester"]').classes()).not.toContain('is-armed');
   });
 });

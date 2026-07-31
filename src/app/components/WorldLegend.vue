@@ -23,6 +23,9 @@ onMounted(() => {
       <span><i class="obsisim-chip is-round" :style="{ background: theme.workerColors[0] }" /> starving worker</span>
       <span><i class="obsisim-chip is-round" :style="{ background: theme.workerColors[theme.workerColors.length - 1], borderColor: theme.workerToolRing }" /> tooled</span>
       <span><i class="obsisim-chip is-bar" :style="{ background: theme.progressFill }" /> batch progress</span>
+      <span><i class="obsisim-chip" :style="{ borderColor: theme.accent }" /> selected</span>
+      <span><i class="obsisim-chip is-ghost" :style="{ background: theme.accent }" /> ghost: buildable</span>
+      <span><i class="obsisim-chip is-ghost" :style="{ background: theme.danger }" /> ghost: blocked</span>
       <span>⛺ idle camp</span>
     </template>
   </div>

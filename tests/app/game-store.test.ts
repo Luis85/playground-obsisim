@@ -131,7 +131,7 @@ describe('useGameStore', () => {
   it('staffingByDef aggregates totals, staffing, and starvation per def', () => {
     const store = useGameStore();
     const base = {
-      workers: 0, workerSlots: 2, progress: 0, batchActive: false,
+      col: 0, row: 0, workers: 0, workerSlots: 2, progress: 0, batchActive: false,
       progressPct: 0, tooledWorkers: 0, workPower: 0,
     };
     store.ingest(makeSnapshot({
@@ -150,5 +150,17 @@ describe('useGameStore', () => {
     const store = useGameStore();
     expect(store.runways).toEqual({});
     expect(store.staffingByDef).toEqual({});
+  });
+
+  it('affordableDefs reflects the stockpile per def', () => {
+    const store = useGameStore();
+    store.ingest(makeSnapshot({ stockpile: stockedWith({ wood: 10 }) }), { paused: true, speed: 1, error: null });
+    expect(store.affordableDefs.forester).toBe(true);  // costs 10 wood
+    expect(store.affordableDefs.farm).toBe(false);     // costs 20 wood
+    expect(store.affordableDefs.workshop).toBe(false); // costs 20 planks
+  });
+
+  it('affordableDefs is all-false before the first snapshot', () => {
+    expect(useGameStore().affordableDefs.forester).toBe(false);
   });
 });

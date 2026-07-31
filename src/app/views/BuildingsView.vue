@@ -1,40 +1,17 @@
 <script setup lang="ts">
-import { computed, inject } from 'vue';
+import { inject } from 'vue';
 import { ENGINE_KEY } from '../engine-key';
 import { useGameStore } from '../stores/game-store';
-import { BUILDINGS, BUILDING_IDS, RESOURCES, type BuildingDefId, type CostMap, type ResourceId } from '../../engine/content';
+import { BUILDINGS, BUILDING_IDS } from '../../engine/content';
 // Presentation lives in labels.ts, not the shared contract: BUILDING_STATE_LABELS
 // (used in the State cell below) is a Record keyed by the BuildingState union,
 // so a state added to the union without a matching label is a type error here,
 // not a silently-raw string in the rendered table.
-import { BUILDING_STATE_LABELS } from '../labels';
+import { BUILDING_STATE_LABELS, costLabel } from '../labels';
+import TwoStepButton from '../components/TwoStepButton.vue';
 
 const engine = inject(ENGINE_KEY)!;
 const store = useGameStore();
-
-// Used by the Construct table's Cost and Recipe columns (both columns
-// below), so it lives at the view level rather than duplicated per cell.
-function costLabel(cost: CostMap): string {
-  return Object.entries(cost)
-    .map(([id, amount]) => `${amount} ${RESOURCES[id as ResourceId].name}`)
-    .join(', ');
-}
-
-// One boolean per catalog entry, recomputed whenever the stockpile changes,
-// so every "Build" button's disabled/title state in the table below is a
-// plain lookup rather than re-walking the cost map on every render.
-const affordable = computed(() => {
-  const snapshot = store.snapshot;
-  return Object.fromEntries(
-    BUILDING_IDS.map((id) => [
-      id,
-      snapshot !== null &&
-        Object.entries(BUILDINGS[id].cost).every(
-          ([res, amount]) => snapshot.stockpile[res as ResourceId].stock >= amount,
-        ),
-    ]),
-  ) as Record<BuildingDefId, boolean>;
-});
 </script>
 
 <template>
@@ -42,11 +19,12 @@ const affordable = computed(() => {
     <h3>Buildings</h3>
     <table class="obsisim-table">
       <thead>
-        <tr><th>Building</th><th>Workers</th><th>State</th><th>Batch</th><th>Work power</th><th>Tools</th></tr>
+        <tr><th>Building</th><th>Tile</th><th>Workers</th><th>State</th><th>Batch</th><th>Work power</th><th>Tools</th><th /></tr>
       </thead>
       <tbody>
         <tr v-for="b in store.snapshot.buildings" :key="b.id">
           <td>{{ BUILDINGS[b.defId].name }}</td>
+          <td>({{ b.col }}, {{ b.row }})</td>
           <td>
             <button :data-test="`unassign-${b.id}`" :disabled="b.workers === 0" @click="engine.dispatch({ type: 'unassignWorker', buildingId: b.id })">−</button>
             {{ b.workers }} / {{ b.workerSlots }}
@@ -56,9 +34,15 @@ const affordable = computed(() => {
           <td>{{ b.progressPct }}%</td>
           <td>{{ b.workPower.toFixed(2) }}</td>
           <td>{{ b.tooledWorkers > 0 ? `⚒ ${b.tooledWorkers}/${b.workers}` : '—' }}</td>
+          <td>
+            <TwoStepButton
+              label="Demolish" confirm-label="Confirm demolish?" :data-test="`demolish-${b.id}`"
+              @confirm="engine.dispatch({ type: 'demolishBuilding', buildingId: b.id })"
+            />
+          </td>
         </tr>
         <tr v-if="store.snapshot.buildings.length === 0">
-          <td colspan="6">
+          <td colspan="8">
             No buildings yet. Start with a Forester or Gatherer's Hut (10 wood each) from the
             list below, then assign your idle workers with <strong>+</strong>.
           </td>
@@ -83,8 +67,8 @@ const affordable = computed(() => {
           <td>
             <button
               :data-test="`construct-${id}`"
-              :disabled="!affordable[id]"
-              :title="affordable[id] ? '' : 'Not enough resources'"
+              :disabled="!store.affordableDefs[id]"
+              :title="store.affordableDefs[id] ? 'Placed automatically — pick the tile yourself in the World tab' : 'Not enough resources'"
               @click="engine.dispatch({ type: 'constructBuilding', buildingDefId: id })"
             >
               Build

@@ -5,7 +5,7 @@ import { createTestingPinia } from '@pinia/testing';
 import BuildingsView from '../../src/app/views/BuildingsView.vue';
 import { ENGINE_KEY } from '../../src/app/engine-key';
 import { useGameStore } from '../../src/app/stores/game-store';
-import { makeSnapshot } from './fixtures';
+import { makeBuilding, makeSnapshot } from './fixtures';
 import type { BuildingState } from '../../src/shared/snapshot';
 
 // A single 1/2-staffed Forester, with the caller choosing the wood stock (to
@@ -20,10 +20,7 @@ function mountView(stock: { wood?: number } = {}, state: BuildingState = 'produc
     },
   });
   const snapshot = makeSnapshot({
-    buildings: [{
-      id: 7, defId: 'forester', workers: 1, workerSlots: 2, state,
-      progress: 1, batchActive: true, progressPct: 33, tooledWorkers: 0, workPower: 1,
-    }],
+    buildings: [makeBuilding(7, { defId: 'forester', workers: 1, workerSlots: 2, state, progress: 1, batchActive: true, progressPct: 33, workPower: 1, col: 5, row: 2 })],
     idleWorkers: 2,
   });
   snapshot.stockpile.wood.stock = stock.wood ?? 0;
@@ -49,7 +46,7 @@ describe('BuildingsView', () => {
 
     useGameStore().ingest(makeSnapshot({ buildings: [] }), { paused: true, speed: 1, error: null });
     await waiting.wrapper.vm.$nextTick();
-    const cell = waiting.wrapper.get('td[colspan="6"]');
+    const cell = waiting.wrapper.get('td[colspan="8"]');
     expect(cell.text()).toContain('Forester');
     expect(cell.text()).toMatch(/Gatherer.?s Hut/);
     expect(cell.text()).toContain('10 wood each');
@@ -85,5 +82,16 @@ describe('BuildingsView', () => {
     const poor = mountView({ wood: 0 });
     await poor.wrapper.vm.$nextTick();
     expect((poor.wrapper.find('[data-test="construct-forester"]').element as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('shows each building\'s tile and demolishes after the two-step confirm', async () => {
+    const { engine, wrapper } = mountView();
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).toContain('(5, 2)');
+    const demolish = wrapper.find('[data-test="demolish-7"]');
+    await demolish.trigger('click');
+    expect(engine.dispatch).not.toHaveBeenCalledWith({ type: 'demolishBuilding', buildingId: 7 });
+    await demolish.trigger('click');
+    expect(engine.dispatch).toHaveBeenCalledWith({ type: 'demolishBuilding', buildingId: 7 });
   });
 });

@@ -1,5 +1,6 @@
-import type { SaveGameV1 } from './save';
-import { isSaveGameV1, LATEST_SAVE_VERSION } from './save';
+import type { SaveGameV1, SaveGameV2 } from './save';
+import { isSaveGameV1, isSaveGameV2, LATEST_SAVE_VERSION } from './save';
+import { autoPlaceSequence, mapThatFits } from './placement';
 
 /**
  * One structural upgrade between ADJACENT save versions. Migrations know
@@ -26,19 +27,45 @@ export interface MigrationStep {
  */
 export type SaveGuards = Partial<Record<number, (data: unknown) => boolean>>;
 
-const SAVE_GUARDS: SaveGuards = { 1: isSaveGameV1 };
+const SAVE_GUARDS: SaveGuards = { 1: isSaveGameV1, 2: isSaveGameV2 };
 
 /**
- * Empty by design: v1 IS the latest version. The first entry lands with v2
- * (increment 2 adds save fields), and the runner below already has tests.
- *
- * Deliberately NOT exported, along with SAVE_GUARDS: both are the registration
- * tables this module owns, edited in place when a version lands. Tests inject
- * their own fakes through migrateSaveToLatest's parameters instead of importing
- * these, so exporting them would add public surface with no consumer — and a
- * fallow ignoreExports entry to excuse it.
+ * v1 -> v2: space arrives. Every building gets the position increment 2's
+ * derived layout drew it at — autoPlaceSequence yields exactly the order
+ * autoPlacePosition would consume an empty map (pinned by test), walked
+ * once for an ascending-id pass, so migration is linear in the building
+ * count (the structural guard admits 10,000 records; startup must not
+ * stall). The save gains a map sized by mapThatFits: tall enough that the
+ * legacy plot sequence itself holds the colony — every building keeps the
+ * exact increment-2 tile, through 640 buildings — growing for raw capacity
+ * only past that band (v1 had no building cap, so oversized colonies are
+ * legal saves, never corrupt ones). Placement
+ * geometry is structure, not content (no catalog, no BALANCE), so this
+ * file's import discipline holds. The done-check is an unreachable
+ * invariant guard — mapThatFits covers every guard-admissible count —
+ * kept so a future geometry bug fails loudly into the corrupt-backup path
+ * instead of writing garbage.
  */
-const SAVE_MIGRATIONS: readonly MigrationStep[] = [];
+const migrateV1toV2: MigrationStep = {
+  from: 1,
+  to: 2,
+  migrate: (save) => {
+    const v1 = save as SaveGameV1; // the runner guard-validated this shape
+    const map = mapThatFits(v1.buildings.length);
+    const spots = autoPlaceSequence(map);
+    const buildings = [...v1.buildings].sort((a, b) => a.id - b.id).map((b) => {
+      const at = spots.next();
+      if (at.done) throw new Error('more buildings than the world has tiles');
+      return { ...b, col: at.value.col, row: at.value.row };
+    });
+    return { ...v1, version: 2, map, buildings };
+  },
+};
+
+/** The registration tables this module owns, edited in place when a version
+ * lands. Deliberately not exported: tests inject fakes through
+ * migrateSaveToLatest's parameters instead. */
+const SAVE_MIGRATIONS: readonly MigrationStep[] = [migrateV1toV2];
 
 export function readSaveVersion(data: unknown): number | null {
   if (typeof data !== 'object' || data === null) return null;
@@ -120,7 +147,7 @@ export function migrateSaveToLatest(
   guards: SaveGuards = SAVE_GUARDS,
   steps: readonly MigrationStep[] = SAVE_MIGRATIONS,
   target: number = LATEST_SAVE_VERSION,
-): SaveGameV1 | null {
+): SaveGameV2 | null {
   const version = readSaveVersion(data);
   if (version === null || version > target) return null; // a save from a NEWER build is not downgradable
   if (!passesGuard(guards[version], data)) return null;  // validate at the version it claims
@@ -133,5 +160,5 @@ export function migrateSaveToLatest(
   // same value. Kept so a future change to runSteps or to the early-return
   // above doesn't silently stop being caught here.
   if (migrated === null || !passesGuard(guards[target], migrated)) return null;
-  return migrated as SaveGameV1;
+  return migrated as SaveGameV2;
 }

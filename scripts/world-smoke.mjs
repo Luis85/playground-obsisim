@@ -108,7 +108,30 @@ await wait(600);
 const resumed = await shot();
 check('start() resumes and draws the grown colony', !resumed.equals(stoppedA));
 
-await step(5); // colony reset: tick regresses, ids recycle
+await wait(400); // let the grow phase's frame settle first
+const preMove = await shot();
+await step(5); // the workerless sawmill moves to a fresh tile
+await wait(300); // no walk to wait out — the building snaps
+const moved = await shot();
+check('a moved building is drawn at its new tile (no worker motion to hide behind)', !moved.equals(preMove));
+
+const preGhost = await shot();
+await step(6); // ghost + selection on
+await wait(300);
+const ghostOn = await shot();
+check('setGhost + setSelection draw over the scene', !ghostOn.equals(preGhost));
+
+await step(7); // same tile, invalid tint
+await wait(300);
+const ghostInvalid = await shot();
+check('an invalid ghost reads differently from a valid one', !ghostInvalid.equals(ghostOn));
+
+await step(8); // both cleared
+await wait(300);
+const ghostOff = await shot();
+check('clearing ghost and selection restores the scene', ghostOff.equals(preGhost));
+
+await step(9); // colony reset: tick regresses, ids recycle
 await wait(400);
 const afterReset = await page.evaluate(() => window.__probe());
 check(
@@ -116,15 +139,18 @@ check(
   afterReset.building === 0 && afterReset.worker > 0,
 );
 
-await step(6); // same-tick reset: a new snapshot at the same tick is a new timeline
+await step(10); // same-tick reset: a new snapshot at the same tick is a new timeline
 await wait(400);
 const afterSameTickReset = await page.evaluate(() => window.__probe());
 check(
+  // worker > 0, not an exact count: the probe grid's nearest sample sits
+  // within ~1px of the pick radius at this zoom — an exact count flips on
+  // any TILE/margin/host change and would read as a renderer regression
   `same-tick reset also clears the previous colony (${JSON.stringify(afterSameTickReset)})`,
-  afterSameTickReset.building === 0 && afterSameTickReset.worker === 2,
+  afterSameTickReset.building === 0 && afterSameTickReset.worker > 0,
 );
 
-await step(7); // dispose()
+await step(11); // dispose()
 await wait(300);
 check('dispose() raises no errors', pageErrors.length === 0);
 

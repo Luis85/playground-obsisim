@@ -11,7 +11,7 @@ describe('SnapshotSystem', () => {
     save.stockpile = { wood: 10, bread: 2 };
     const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
     const ids = getPrepResource(prep, IdCounter);
-    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 1.5, batchActive: true });
+    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 1.5, batchActive: true, col: 4, row: 1 });
     const buildingId = building.getComponent(Building)!.id;
     spawnWorker(prep, ids, { buildingId, hunger: 20, toolTicks: 10 });
     spawnWorker(prep, ids); // idle
@@ -44,8 +44,8 @@ describe('SnapshotSystem', () => {
     save.workers = [];
     const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
     const ids = getPrepResource(prep, IdCounter);
-    spawnBuilding(prep, ids, { defId: 'mill', progress: 0, batchActive: false });
-    const staffed = spawnBuilding(prep, ids, { defId: 'mill', progress: 0, batchActive: false });
+    spawnBuilding(prep, ids, { defId: 'mill', progress: 0, batchActive: false, col: 4, row: 1 });
+    const staffed = spawnBuilding(prep, ids, { defId: 'mill', progress: 0, batchActive: false, col: 6, row: 1 });
     spawnWorker(prep, ids, { buildingId: staffed.getComponent(Building)!.id });
     const world = await prep.prepareRun();
     await world.step();

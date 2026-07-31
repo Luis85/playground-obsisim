@@ -13,6 +13,11 @@ export interface WorldTheme {
   workerToolRing: string;
   /** Batch progress fill — bright cream so it reads on green tiles. */
   progressFill: string;
+  /** Interactive accent — the selection ring and the valid-ghost tint. */
+  accent: string;
+  /** Danger — the blocked-ghost tint (the same resolved red the
+   * starving-worker gradient starts from). */
+  danger: string;
 }
 
 const HEX = /^#[0-9a-f]{6}$/i;
@@ -30,7 +35,7 @@ const BUILDING_FILL: Record<BuildingDefId, string> = {
   forester: '#4e7a52', sawmill: '#8a6a49', workshop: '#6f6f85',
 };
 
-const BUILDING_GLYPH: Record<BuildingDefId, string> = {
+export const BUILDING_GLYPHS: Record<BuildingDefId, string> = {
   gatherersHut: '🧺', farm: '🌾', mill: '⚙️', bakery: '🍞',
   forester: '🌲', sawmill: '🪚', workshop: '🔨',
 };
@@ -60,7 +65,7 @@ export function resolveWorldTheme(read: VarReader): WorldTheme {
     background: pick(read, '--background-primary', '#20242b'),
     ground: ['#55714a', '#4d6743'],
     buildingFill: BUILDING_FILL,
-    buildingGlyph: BUILDING_GLYPH,
+    buildingGlyph: BUILDING_GLYPHS,
     stateRing: {
       producing: green,
       waitingForInput: pick(read, '--color-orange', '#e5a63a'),
@@ -69,5 +74,7 @@ export function resolveWorldTheme(read: VarReader): WorldTheme {
     workerColors: Array.from({ length: WORKER_BUCKETS }, (_, i) => mixHex(red, green, i / (WORKER_BUCKETS - 1))),
     workerToolRing: '#f2ecdd',
     progressFill: '#f5efdc',
+    accent: pick(read, '--interactive-accent', '#7c8cf0'),
+    danger: red,
   };
 }

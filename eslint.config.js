@@ -13,7 +13,7 @@ export default tseslint.config(
       parserOptions: { parser: tseslint.parser },
       globals: {
         window: 'readonly', document: 'readonly', HTMLElement: 'readonly',
-        MouseEvent: 'readonly', getComputedStyle: 'readonly',
+        MouseEvent: 'readonly', KeyboardEvent: 'readonly', getComputedStyle: 'readonly',
         setTimeout: 'readonly', clearTimeout: 'readonly',
       },
     },

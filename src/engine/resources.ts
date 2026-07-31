@@ -1,6 +1,7 @@
 import type { CostMap, ResourceId } from '../shared/content-types';
 import type { Command } from '../shared/commands';
 import type { NoticeMessage, Snapshot } from '../shared/snapshot';
+import type { WorldMapSize } from '../shared/placement';
 import { MAX_SAVED_COUNTER } from '../shared/save';
 import { BALANCE } from './content/balance';
 
@@ -186,4 +187,19 @@ export class StatsHistory {
 
 export class SnapshotStore {
   latest: Snapshot | null = null;
+}
+
+/** The colony's world dimensions, restored from the save (v2). */
+export class WorldMap implements WorldMapSize {
+  constructor(public cols: number, public rows: number) {}
+}
+
+/**
+ * Entity removal consumes no id, so the id-counter delta that gates
+ * GameEngine's post-step snapshot refresh cannot see it (the "INVARIANT for
+ * increment 2" reserved in game-engine.ts). The demolish handler raises this
+ * flag instead; runStep reads-and-clears it beside the id check.
+ */
+export class RemovalLedger {
+  dirty = false;
 }

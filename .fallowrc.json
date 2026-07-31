@@ -28,6 +28,7 @@
     }
   ],
   "usedClassMembers": [
-    "setSpeed"
+    "setSpeed",
+    "dirty"
   ]
 }

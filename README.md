@@ -22,8 +22,20 @@ simulated production chains — in tables and, since Increment 2, a live
   legend under the canvas explains every encoding
 - Economy readability: per-resource **Empties in** runway on the Dashboard and
   per-stage bottleneck status (`⚠ starved`) on the Economy chains
-- Read-only: tables stay the interface for acting; positions are derived until
-  Increment 3 makes placement player-driven
+- Read-only in its day: Increment 3 has since made the canvas interactive
+
+## Increment 3 — Building Placement
+
+- Build on the world: arm a building in the World tab's palette, a ghost
+  preview follows the cursor (accent = buildable, red = blocked), click to
+  place — placement stays armed for repeat building
+- Select any building on the canvas: move it (workers walk after it, batch
+  intact) or demolish it (confirmed, full cost refund, workers walk home)
+- Positions are sim truth on a fixed 24×16 map (camp band on the left),
+  persisted as save v2 — old saves migrate onto exactly the layout
+  increment 2 derived
+- Tables keep full economic parity: construct auto-places on the legacy
+  pattern, a Tile column and Demolish per row — no-WebGL play stays whole
 
 ## Development
 
@@ -45,12 +57,15 @@ simulated production chains — in tables and, since Increment 2, a live
 - Plan: `docs/superpowers/plans/2026-07-03-increment-1-economy-core.md`
 - Increment 2 spec: `docs/superpowers/specs/2026-07-30-increment-2-excalibur-world-view.md`
 - Increment 2 plan: `docs/superpowers/plans/2026-07-30-increment-2-excalibur-world-view.md`
+- Increment 3 spec: `docs/superpowers/specs/2026-07-30-increment-3-building-placement.md`
+- Increment 3 plan: `docs/superpowers/plans/2026-07-30-increment-3-building-placement.md`
 
 ## Architecture (one paragraph)
 
 `src/engine/` is a headless, UI-agnostic sim-ecs world behind a `GameEngine`
 facade (commands in, immutable snapshots out). `src/app/` is a Vue 3 + Pinia
 read-model over those snapshots; `src/app/world/` renders the same snapshots
-as a 2D tile world via Excalibur, behind an injected renderer seam. `src/view/`
-+ `src/main.ts` are the thin Obsidian shell that hosts the app and persists
-saves.
+as a 2D tile world via Excalibur, behind an injected renderer seam — and
+since Increment 3 sends place/move/demolish commands back through the
+`GameEngine` facade. `src/view/` + `src/main.ts` are the thin Obsidian shell
+that hosts the app and persists saves.

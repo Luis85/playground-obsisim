@@ -5,7 +5,7 @@ import type { BuildingSnapshot, BuildingState, WorkerSnapshot } from '../shared/
 import { workerWorkPower } from './content/balance';
 import { BUILDINGS } from './content/buildings';
 import {
-  Building, Efficiency, Hunger, JobAssignment, Production, ToolCoverage, Worker, WorkerSlots,
+  Building, Efficiency, Hunger, JobAssignment, Position, Production, ToolCoverage, Worker, WorkerSlots,
 } from './components';
 
 /**
@@ -26,6 +26,8 @@ export interface WorkerFacts {
 export interface BuildingFacts {
   id: number;
   defId: BuildingDefId;
+  col: number;
+  row: number;
   workerSlots: number;
   progress: number;
   batchActive: boolean;
@@ -67,6 +69,7 @@ export function buildEntitySections(workers: readonly WorkerFacts[], buildings: 
       return {
         id: b.id,
         defId: b.defId,
+        col: b.col, row: b.row,
         workers: staffed,
         workerSlots: b.workerSlots,
         state,
@@ -110,10 +113,12 @@ export function workerFactsOf(
   };
 }
 
-export function buildingFactsOf(building: Building, slots: WorkerSlots, production: Production): BuildingFacts {
+export function buildingFactsOf(building: Building, slots: WorkerSlots, production: Production, position: Position): BuildingFacts {
   return {
     id: building.id,
     defId: building.defId,
+    col: position.col,
+    row: position.row,
     workerSlots: slots.max,
     progress: production.progress,
     batchActive: production.batchActive,
@@ -133,7 +138,7 @@ export function savedWorkerOf(facts: WorkerFacts): SavedWorker {
 }
 
 export function savedBuildingOf(facts: BuildingFacts): SavedBuilding {
-  return { id: facts.id, defId: facts.defId, progress: facts.progress, batchActive: facts.batchActive };
+  return { id: facts.id, defId: facts.defId, col: facts.col, row: facts.row, progress: facts.progress, batchActive: facts.batchActive };
 }
 
 export interface EntityFacts {
@@ -152,7 +157,7 @@ export function gatherEntityFacts(world: IRuntimeWorld): EntityFacts {
   for (const entity of world.getEntities()) {
     const building = entity.getComponent(Building);
     if (building) {
-      buildings.push(buildingFactsOf(building, entity.getComponent(WorkerSlots)!, entity.getComponent(Production)!));
+      buildings.push(buildingFactsOf(building, entity.getComponent(WorkerSlots)!, entity.getComponent(Production)!, entity.getComponent(Position)!));
       continue;
     }
     const worker = entity.getComponent(Worker);

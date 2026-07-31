@@ -4,23 +4,12 @@ import { BUILDINGS } from '../../engine/content';
 
 export const TILE = 48;
 
-// Fixed geography (tile coords): idle camp on the left, building plots to the
-// right of it, one-tile gutters between plots. Placement depends only on ids
-// and remembered slots, so the world never reshuffles under the player
-// (spec §2.3).
-//
-//   col: 0    1    2    3    4    5    6    ...
-//   row 0     ⛺ (camp anchor)
-//   row 1     [camp][camp]     [plot]     [plot]  ...
-//   row 2     [camp][camp]
-//   ...                        [plot]     [plot]  ...
-const PLOTS_PER_ROW = 5;
-const PLOT_COL0 = 4;
-const PLOT_ROW0 = 1;
+// Geography is sim truth now (increment 3): buildings render at their
+// snapshot col/row, and the grid dims come from snapshot.map. Only the
+// worker spots stay derived — id-keyed and slot-stable (spec §2.3 of
+// increment 2 still governs them).
 const CAMP_COL0 = 1;
 const CAMP_PER_ROW = 2;
-const MIN_ROWS = 7;
-const COLS = PLOT_COL0 + PLOTS_PER_ROW * 2;
 
 export interface PlacedBuilding {
   id: number;
@@ -65,19 +54,13 @@ function byId(a: { id: number }, b: { id: number }): number {
   return a.id - b.id;
 }
 
-/** Plot index = rank in id order, row-major — construction appends, never moves. */
+/** Buildings render exactly where the sim says they stand. */
 function placeBuildings(snapshot: Snapshot): Map<number, PlacedBuilding> {
   const cellById = new Map<number, PlacedBuilding>();
-  const sorted = [...snapshot.buildings].sort(byId);
-  for (const [rank, b] of sorted.entries()) {
+  for (const b of snapshot.buildings) {
     cellById.set(b.id, {
-      id: b.id,
-      defId: b.defId,
-      col: PLOT_COL0 + 2 * (rank % PLOTS_PER_ROW),
-      row: PLOT_ROW0 + 2 * Math.floor(rank / PLOTS_PER_ROW),
-      state: b.state,
-      progressPct: b.progressPct,
-      batchActive: b.batchActive,
+      id: b.id, defId: b.defId, col: b.col, row: b.row,
+      state: b.state, progressPct: b.progressPct, batchActive: b.batchActive,
     });
   }
   return cellById;
@@ -183,25 +166,31 @@ export function describePick(snapshot: Snapshot, pick: WorldPick): string[] {
 }
 
 /**
- * Hit-test the building visual (1.5-tile square on the cell center) under a
- * tile-space point. Buildings never move, so the layout is their truth —
- * workers walk, so the renderer hit-tests them against live actor positions
- * before falling back to this.
+ * Hit-test the tile under a tile-space point against the buildings' cells.
+ * Buildings are 1-tile visuals now that adjacency is legal, so an exact
+ * floor-and-match is correct — workers are still hit-tested live by the
+ * renderer first, since they walk.
  */
 export function pickBuildingAt(layout: WorldLayout, x: number, y: number): WorldPick | null {
-  for (const b of layout.buildings) {
-    if (Math.abs(x - (b.col + 0.5)) <= 0.75 && Math.abs(y - (b.row + 0.5)) <= 0.75) {
-      return { kind: 'building', id: b.id };
-    }
-  }
-  return null;
+  const col = Math.floor(x);
+  const row = Math.floor(y);
+  const b = layout.buildings.find((candidate) => candidate.col === col && candidate.row === row);
+  return b ? { kind: 'building', id: b.id } : null;
 }
 
-function campSpot(slot: number): Spot {
-  return { x: CAMP_COL0 + (slot % CAMP_PER_ROW) + 0.5, y: 1.5 + Math.floor(slot / CAMP_PER_ROW) };
+/** Camp spots: two per row from the top of the band. Rosters past the
+ * band's regular capacity take unique low-discrepancy spots on a bottom
+ * shelf — even pathological idle crowds stay inside the fixed map. */
+function campSpot(slot: number, rows: number): Spot {
+  const capacity = CAMP_PER_ROW * (rows - 3);
+  if (slot < capacity) {
+    return { x: CAMP_COL0 + (slot % CAMP_PER_ROW) + 0.5, y: 1.5 + Math.floor(slot / CAMP_PER_ROW) };
+  }
+  return { x: CAMP_COL0 + 2 * vanDerCorput(slot - capacity + 1), y: rows - 0.75 };
 }
 
 export function layoutWorld(snapshot: Snapshot, previous?: WorldLayout): WorldLayout {
+  const { cols, rows } = snapshot.map;
   const cellById = placeBuildings(snapshot);
   const held = heldSlots(previous);
   const sorted = [...snapshot.workers].sort(byId);
@@ -224,18 +213,13 @@ export function layoutWorld(snapshot: Snapshot, previous?: WorldLayout): WorldLa
 
   const idle = sorted.filter((w) => !placements.has(w.id));
   const campSlots = allocateSlots(idle, CAMP_MIN_SPOTS, held.get(null));
-  let maxCampSlot = CAMP_MIN_SPOTS - 1;
   for (const [id, slot] of campSlots) {
-    placements.set(id, { at: null, slot, spot: campSpot(slot) });
-    maxCampSlot = Math.max(maxCampSlot, slot);
+    placements.set(id, { at: null, slot, spot: campSpot(slot, rows) });
   }
 
   const workers: PlacedWorker[] = sorted.map((w) => {
     const p = placements.get(w.id)!;
     return { id: w.id, x: p.spot.x, y: p.spot.y, at: p.at, slot: p.slot, efficiency: w.efficiency, tooled: w.toolTicks > 0 };
   });
-  const plotRows = Math.ceil(cellById.size / PLOTS_PER_ROW);
-  const campRows = Math.ceil((maxCampSlot + 1) / CAMP_PER_ROW);
-  const rows = Math.max(MIN_ROWS, PLOT_ROW0 + 2 * plotRows + 1, campRows + 3);
-  return { tile: TILE, cols: COLS, rows, camp: CAMP_ANCHOR, buildings: [...cellById.values()], workers };
+  return { tile: TILE, cols, rows, camp: CAMP_ANCHOR, buildings: [...cellById.values()], workers };
 }

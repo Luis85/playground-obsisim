@@ -31,10 +31,10 @@ export const MAX_SAVED_COUNTER = Number.MAX_SAFE_INTEGER - 2 ** 32;
  * Both producers (`buildSaveFromWorld`, `initialSave`) use this constant rather
  * than a literal, which makes the bump self-policing: because
  * `SaveGameV2.version` is the literal type `2`, raising this to 3 fails
- * typecheck AT those producers (`Type '2' is not assignable to type '1'`) until
+ * typecheck AT those producers (`Type '3' is not assignable to type '2'`) until
  * the save type is updated too. That is deliberate — with hardcoded literals,
- * bumping the constant would have pointed the loader at v2 while autosaves and
- * fresh colonies kept claiming v1, and a v1-labelled save carrying v2 fields
+ * bumping the constant would have pointed the loader at v3 while autosaves and
+ * fresh colonies kept claiming v2, and a v2-labelled save carrying v3 fields
  * would then be migrated a second time on load.
  */
 export const LATEST_SAVE_VERSION = 2;
@@ -104,22 +104,37 @@ function isSavedWorkerShape(w: unknown): boolean {
   );
 }
 
-/** The shape both versions share: counters, stockpile object, bounded entity
- * arrays with per-record worker checks. Number.isFinite, never typeof: NaN
- * and Infinity pass typeof === 'number' and would poison sim arithmetic. */
-function isCommonSaveShape(save: Record<string, unknown>): boolean {
+/** Validate stockpile structure: object (not array, not null). Number.isFinite
+ * on amounts is checked per-record in isLoadableSave. */
+function isValidStockpile(stockpile: unknown): boolean {
   return (
-    Number.isFinite(save.tick) &&
-    Number.isFinite(save.lastRecruitTick) &&
-    Number.isFinite(save.nextEntityId) &&
-    typeof save.stockpile === 'object' && save.stockpile !== null &&
-    !Array.isArray(save.stockpile) && // an array passes typeof 'object' but would restore as an empty stockpile
+    typeof stockpile === 'object' && stockpile !== null &&
+    !Array.isArray(stockpile) // an array passes typeof 'object' but would restore as an empty stockpile
+  );
+}
+
+/** Validate bounded entity arrays with per-record checks for both collections. */
+function isValidSaveArrays(save: Record<string, unknown>): boolean {
+  return (
     Array.isArray(save.buildings) &&
     save.buildings.length <= MAX_SAVED_ENTITIES &&
     save.buildings.every(isSavedBuildingV1Shape) &&
     Array.isArray(save.workers) &&
     save.workers.length <= MAX_SAVED_ENTITIES &&
     save.workers.every(isSavedWorkerShape)
+  );
+}
+
+/** The shape both versions share: counters, stockpile object, bounded entity
+ * arrays with per-record checks. Number.isFinite, never typeof: NaN
+ * and Infinity pass typeof === 'number' and would poison sim arithmetic. */
+function isCommonSaveShape(save: Record<string, unknown>): boolean {
+  return (
+    Number.isFinite(save.tick) &&
+    Number.isFinite(save.lastRecruitTick) &&
+    Number.isFinite(save.nextEntityId) &&
+    isValidStockpile(save.stockpile) &&
+    isValidSaveArrays(save)
   );
 }
 

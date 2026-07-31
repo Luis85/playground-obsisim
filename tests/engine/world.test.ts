@@ -283,6 +283,13 @@ describe('isLoadableSave', () => {
     expect(isLoadableSave(stacked)).toBe(false);
   });
 
+  it('rejects a v2 save with buildings missing col/row', () => {
+    const save = initialSave();
+    save.buildings.push({ id: 4, defId: 'forester', progress: 0, batchActive: false } as never);
+    save.nextEntityId = 5;
+    expect(isLoadableSave(save)).toBe(false);
+  });
+
   it('rejects a map outside the structural bounds', () => {
     const tiny = initialSave();
     tiny.map = { cols: 4, rows: 4 };

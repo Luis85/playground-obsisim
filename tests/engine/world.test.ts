@@ -411,7 +411,10 @@ describe('live-world projections agree', () => {
   // Facts DERIVED each tick and deliberately not persisted. Everything else must
   // be persisted AND survive save -> restore, so a new fact is covered by
   // default and opting out is a visible, deliberate edit to this list.
-  const DERIVED = ['efficiency'] as const;
+  // `hauling` is real state, not derived — but Task 3 deliberately does not
+  // persist it yet (save v3 in Task 6 restores hauler assignments), so it is
+  // excluded here too until then.
+  const DERIVED = ['efficiency', 'hauling'] as const;
 
   function persisted(workers: readonly object[]): Record<string, unknown>[] {
     return workers.map((w) => {

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { IRuntimeWorld } from 'sim-ecs';
 import { CommandQueue, IdCounter, MAX_PENDING_COMMANDS, SimClock, SnapshotStore, Stockpile } from '../../../src/engine/resources';
+import { BALANCE } from '../../../src/engine/content/balance';
 import { CommandSystem } from '../../../src/engine/systems/command-system';
+import { HungerSystem } from '../../../src/engine/systems/hunger-system';
 import { SnapshotSystem } from '../../../src/engine/systems/snapshot-system';
 import { enqueue } from '../fixtures';
 import { buildColonyPrepWorld, getPrepResource, initialSave, spawnWorker } from '../../../src/engine/world';
@@ -311,5 +313,53 @@ describe('CommandSystem', () => {
       { type: 'moveBuilding', buildingId, to: { col: 7, row: 7 } },
     );
     expect(snapshot().notices.map((n) => n.kind)).toEqual(['success', 'rejection']);
+  });
+
+  it('assigns and unassigns haulers, with one notice each', async () => {
+    const { dispatch, snapshot } = await setup();
+    await dispatch({ type: 'assignHauler' });
+    expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Assigned a hauler.' }]);
+    expect(snapshot().workers.filter((w) => w.hauling)).toHaveLength(1);
+    expect(snapshot().idleWorkers).toBe(2); // 3 starting workers, one now hauling
+
+    await dispatch({ type: 'unassignHauler' });
+    expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Unassigned a hauler.' }]);
+    expect(snapshot().workers.filter((w) => w.hauling)).toHaveLength(0);
+    expect(snapshot().idleWorkers).toBe(3);
+  });
+
+  it('rejects hauler assignment with no idle worker, and unassignment with no hauler', async () => {
+    const { dispatch, snapshot } = await setup();
+    await dispatch({ type: 'unassignHauler' });
+    expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'No hauler to unassign.' }]);
+
+    await dispatch({ type: 'assignHauler' }, { type: 'assignHauler' }, { type: 'assignHauler' });
+    await dispatch({ type: 'assignHauler' });
+    expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'No idle workers available.' }]);
+  });
+
+  it('haulers are workers in every other respect — they still eat', async () => {
+    // Built directly against HungerSystem: the shared `setup` runs only the
+    // command and snapshot systems, so it could never show a hauler eating.
+    const save = initialSave();
+    save.workers = [];
+    save.stockpile = { berries: 5 };
+    const prep = buildColonyPrepWorld({ save, systems: [HungerSystem] });
+    spawnWorker(prep, getPrepResource(prep, IdCounter), { hauling: true });
+    const world = await prep.prepareRun();
+    for (let i = 0; i <= BALANCE.mealThreshold; i++) await world.step();
+    expect(world.getResource(Stockpile).get('berries')).toBeLessThan(5);
+  });
+
+  it('never takes a building worker for hauling', async () => {
+    const { tick, dispatch, snapshot } = await setup();
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
+    await tick();
+    const buildingId = snapshot().buildings[0].id;
+    await dispatch({ type: 'assignWorker', buildingId }, { type: 'assignWorker', buildingId });
+    await dispatch({ type: 'assignHauler' }); // one idle worker left
+    await dispatch({ type: 'assignHauler' }); // none left
+    expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'No idle workers available.' }]);
+    expect(snapshot().buildings[0].workers).toBe(2); // the staffed pair was never poached
   });
 });

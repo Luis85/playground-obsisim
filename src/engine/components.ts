@@ -25,7 +25,7 @@ export class Hunger {
 }
 
 export class JobAssignment {
-  constructor(public buildingId: number | null = null) {}
+  constructor(public buildingId: number | null = null, public hauling = false) {}
 }
 
 export class Efficiency {

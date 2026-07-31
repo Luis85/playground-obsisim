@@ -20,6 +20,7 @@ export interface WorkerFacts {
   hunger: number;
   efficiency: number;
   buildingId: number | null;
+  hauling: boolean;
   toolTicks: number;
 }
 
@@ -59,7 +60,9 @@ export function buildEntitySections(workers: readonly WorkerFacts[], buildings: 
   }
 
   const workerSnaps: WorkerSnapshot[] = workers
-    .map((w) => ({ id: w.id, hunger: w.hunger, efficiency: w.efficiency, buildingId: w.buildingId, toolTicks: w.toolTicks }))
+    .map((w) => ({
+      id: w.id, hunger: w.hunger, efficiency: w.efficiency, buildingId: w.buildingId, hauling: w.hauling, toolTicks: w.toolTicks,
+    }))
     .sort((a, b) => a.id - b.id);
 
   const buildingSnaps: BuildingSnapshot[] = buildings
@@ -95,7 +98,9 @@ export function buildEntitySections(workers: readonly WorkerFacts[], buildings: 
     workers: workerSnaps,
     buildings: buildingSnaps,
     population: workerSnaps.length,
-    idleWorkers: workerSnaps.filter((w) => w.buildingId === null).length,
+    // Idle, on-a-building, and hauling are mutually exclusive states: a
+    // hauler's buildingId is null too, so idle must also exclude hauling.
+    idleWorkers: workerSnaps.filter((w) => w.buildingId === null && !w.hauling).length,
   };
 }
 
@@ -118,6 +123,7 @@ export function workerFactsOf(
     hunger: hunger.value,
     efficiency: efficiency.value,
     buildingId: job.buildingId,
+    hauling: job.hauling,
     toolTicks: coverage.remainingTicks,
   };
 }

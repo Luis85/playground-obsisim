@@ -212,3 +212,25 @@ export function handleMoveBuilding(ctx: CommandContext, command: Extract<Command
   found.position.row = to.row;
   ctx.notices.succeed(`Moved the ${BUILDINGS[found.building.defId].name}.`);
 }
+
+export function handleAssignHauler(ctx: CommandContext): void {
+  // The first idle worker, matching handleAssignWorker's selection rule. A
+  // worker already on a building is never poached: the player staffed it.
+  const idle = ctx.workers.find(({ job }) => job.buildingId === null && !job.hauling);
+  if (idle === undefined) {
+    ctx.notices.reject('No idle workers available.');
+    return;
+  }
+  idle.job.hauling = true;
+  ctx.notices.succeed('Assigned a hauler.');
+}
+
+export function handleUnassignHauler(ctx: CommandContext): void {
+  const hauler = ctx.workers.find(({ job }) => job.hauling);
+  if (hauler === undefined) {
+    ctx.notices.reject('No hauler to unassign.');
+    return;
+  }
+  hauler.job.hauling = false;
+  ctx.notices.succeed('Unassigned a hauler.');
+}

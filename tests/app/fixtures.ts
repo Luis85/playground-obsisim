@@ -37,5 +37,5 @@ export function makeBuilding(id: number, overrides: Partial<BuildingSnapshot> = 
 }
 
 export function makeWorker(id: number, overrides: Partial<WorkerSnapshot> = {}): WorkerSnapshot {
-  return { id, hunger: 0, efficiency: 1, buildingId: null, toolTicks: 0, ...overrides };
+  return { id, hunger: 0, efficiency: 1, buildingId: null, hauling: false, toolTicks: 0, ...overrides };
 }

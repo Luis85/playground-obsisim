@@ -38,6 +38,8 @@ export interface WorkerSnapshot {
   hunger: number;
   efficiency: number;
   buildingId: number | null;
+  /** True while this worker is assigned to hauling rather than to a building. */
+  hauling: boolean;
   /** Remaining ticks of this worker's tool coverage (0 = none). */
   toolTicks: number;
 }

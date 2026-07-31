@@ -274,7 +274,7 @@ export function spawnBuilding(
 export function spawnWorker(
   prep: IPreptimeWorld,
   ids: IdCounter,
-  opts: { id?: number; hunger?: number; buildingId?: number | null; efficiency?: number; toolTicks?: number } = {},
+  opts: { id?: number; hunger?: number; buildingId?: number | null; hauling?: boolean; efficiency?: number; toolTicks?: number } = {},
 ): IEntity {
   // Balance-coupled fields from old saves clamp to CURRENT balance here: a
   // save written under a higher hungerMax/toolDurationTicks still loads
@@ -286,7 +286,7 @@ export function spawnWorker(
     .buildEntity()
     .with(new Worker(opts.id ?? ids.take()))
     .with(new Hunger(hunger))
-    .with(new JobAssignment(opts.buildingId ?? null))
+    .with(new JobAssignment(opts.buildingId ?? null, opts.hauling ?? false))
     .with(new Efficiency(opts.efficiency ?? 1))
     .with(new ToolCoverage(toolTicks))
     .build();
@@ -362,6 +362,7 @@ function buildInitialSnapshot(save: SaveGameV2): Snapshot {
       hunger,
       efficiency: workerEfficiency(hunger),
       buildingId: saved.buildingId,
+      hauling: false, // save v3 (Task 6) restores hauler assignments
       toolTicks,
     };
   });

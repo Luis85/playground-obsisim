@@ -332,6 +332,21 @@ describe('createColonyWorld', () => {
     expect(snapshot.colonyWealth).toBe(50); // 30 wood@1 + 20 berries@1
     expect(snapshot.notices).toEqual([]);
   });
+
+  it('seeds the map dimensions into the snapshot', async () => {
+    const world = await createColonyWorld();
+    expect(world.getResource(SnapshotStore).latest!.map).toEqual({ cols: 24, rows: 16 });
+  });
+
+  it('carries building positions from components into snapshots', async () => {
+    const save = initialSave();
+    save.buildings.push({ id: 4, defId: 'forester', progress: 0, batchActive: false });
+    save.nextEntityId = 5;
+    const world = await createColonyWorld(save);
+    const b = world.getResource(SnapshotStore).latest!.buildings[0];
+    // transitional default — Task 3 (save v2) makes these the saved values
+    expect(b).toMatchObject({ col: 0, row: 0 });
+  });
 });
 
 describe('prepareLoadedSave', () => {
@@ -416,7 +431,9 @@ describe('live-world projections agree', () => {
     const engine = await busyColony();
     // workerSlots and progressPct/state/workPower/tooledWorkers are display-derived
     const derivedBuilding = ['workers', 'workerSlots', 'state', 'progressPct', 'tooledWorkers', 'workPower'];
-    const factKeys = Object.keys(engine.snapshot!.buildings[0]).filter((k) => !derivedBuilding.includes(k));
+    // col/row are sim truth (not derived) but transitionally unsaved — save v2 (Task 3) persists them
+    const notYetSaved = ['col', 'row'];
+    const factKeys = Object.keys(engine.snapshot!.buildings[0]).filter((k) => !derivedBuilding.includes(k) && !notYetSaved.includes(k));
     const savedKeys = Object.keys(engine.serialize().buildings[0]);
     expect(factKeys.filter((key) => !savedKeys.includes(key))).toEqual([]);
   });

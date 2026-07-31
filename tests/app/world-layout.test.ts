@@ -1,25 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { layoutWorld, pickBuildingAt, TILE } from '../../src/app/world/layout';
-import { makeSnapshot } from './fixtures';
-import type { BuildingSnapshot, WorkerSnapshot } from '../../src/shared/snapshot';
+import { makeBuilding, makeSnapshot, makeWorker } from './fixtures';
 
 // The layout invariants the world view stands on (spec §2.3): determinism
 // (same snapshot, same layout), stability across snapshots (a worker whose
 // post is unchanged never moves — layoutWorld's `previous` carries the slot
 // memory), and containment (everything inside the grid the renderer sizes
 // its ground and camera by).
-
-function building(id: number, overrides: Partial<BuildingSnapshot> = {}): BuildingSnapshot {
-  return {
-    id, defId: 'farm', workers: 0, workerSlots: 4, state: 'unstaffed',
-    progress: 0, batchActive: false, progressPct: 0, tooledWorkers: 0, workPower: 0,
-    ...overrides,
-  };
-}
-
-function worker(id: number, overrides: Partial<WorkerSnapshot> = {}): WorkerSnapshot {
-  return { id, hunger: 0, efficiency: 1, buildingId: null, toolTicks: 0, ...overrides };
-}
 
 /** Every worker present in both layouts and unmoved — the stability check. */
 function unmoved(before: ReturnType<typeof layoutWorld>, after: ReturnType<typeof layoutWorld>, ids: number[]) {
@@ -32,23 +19,23 @@ function unmoved(before: ReturnType<typeof layoutWorld>, after: ReturnType<typeo
 describe('layoutWorld', () => {
   it('is deterministic: same snapshot -> deep-equal layout', () => {
     const snapshot = makeSnapshot({
-      buildings: [building(1), building(4, { defId: 'mill' })],
-      workers: [worker(2, { buildingId: 1 }), worker(3)],
+      buildings: [makeBuilding(1), makeBuilding(4, { defId: 'mill' })],
+      workers: [makeWorker(2, { buildingId: 1 }), makeWorker(3)],
     });
     expect(layoutWorld(snapshot)).toEqual(layoutWorld(snapshot));
   });
 
   it('is a fixpoint: relayout with itself as previous changes nothing', () => {
     const snapshot = makeSnapshot({
-      buildings: [building(1, { workers: 1 })],
-      workers: [worker(2, { buildingId: 1 }), worker(3)],
+      buildings: [makeBuilding(1, { workers: 1 })],
+      workers: [makeWorker(2, { buildingId: 1 }), makeWorker(3)],
     });
     const fresh = layoutWorld(snapshot);
     expect(layoutWorld(snapshot, fresh)).toEqual(fresh);
   });
 
   it('places buildings on distinct plots in id order, row-major', () => {
-    const buildings = [1, 2, 3, 4, 5, 6].map((id) => building(id));
+    const buildings = [1, 2, 3, 4, 5, 6].map((id) => makeBuilding(id));
     const { buildings: placed, rows } = layoutWorld(makeSnapshot({ buildings }));
     const cells = placed.map((b) => `${b.col},${b.row}`);
     expect(new Set(cells).size).toBe(6);
@@ -59,8 +46,8 @@ describe('layoutWorld', () => {
   });
 
   it('constructing a new building moves no existing placement', () => {
-    const base = makeSnapshot({ buildings: [building(1), building(2)] });
-    const grown = makeSnapshot({ buildings: [building(1), building(2), building(9)] });
+    const base = makeSnapshot({ buildings: [makeBuilding(1), makeBuilding(2)] });
+    const grown = makeSnapshot({ buildings: [makeBuilding(1), makeBuilding(2), makeBuilding(9)] });
     const before = layoutWorld(base).buildings;
     const after = layoutWorld(grown).buildings;
     for (const b of before) {
@@ -70,8 +57,8 @@ describe('layoutWorld', () => {
 
   it('clusters assigned workers inside their building cell', () => {
     const snapshot = makeSnapshot({
-      buildings: [building(1, { workerSlots: 4, workers: 2 })],
-      workers: [worker(10, { buildingId: 1 }), worker(11, { buildingId: 1 })],
+      buildings: [makeBuilding(1, { workerSlots: 4, workers: 2 })],
+      workers: [makeWorker(10, { buildingId: 1 }), makeWorker(11, { buildingId: 1 })],
     });
     const layout = layoutWorld(snapshot);
     const cell = layout.buildings[0];
@@ -86,12 +73,12 @@ describe('layoutWorld', () => {
 
   it('staffing another slot never moves the workers already there', () => {
     const before = layoutWorld(makeSnapshot({
-      buildings: [building(1, { workerSlots: 4, workers: 2 })],
-      workers: [worker(10, { buildingId: 1 }), worker(11, { buildingId: 1 })],
+      buildings: [makeBuilding(1, { workerSlots: 4, workers: 2 })],
+      workers: [makeWorker(10, { buildingId: 1 }), makeWorker(11, { buildingId: 1 })],
     }));
     const after = layoutWorld(makeSnapshot({
-      buildings: [building(1, { workerSlots: 4, workers: 3 })],
-      workers: [worker(10, { buildingId: 1 }), worker(11, { buildingId: 1 }), worker(12, { buildingId: 1 })],
+      buildings: [makeBuilding(1, { workerSlots: 4, workers: 3 })],
+      workers: [makeWorker(10, { buildingId: 1 }), makeWorker(11, { buildingId: 1 }), makeWorker(12, { buildingId: 1 })],
     }), before);
     unmoved(before, after, [10, 11]);
   });
@@ -101,12 +88,12 @@ describe('layoutWorld', () => {
     // arrives (hashing to 1 as well), the holders stand still and 1 must end
     // up somewhere distinct — never stacked on a parked colleague.
     const before = layoutWorld(makeSnapshot({
-      buildings: [building(2, { workerSlots: 4, workers: 2 })],
-      workers: [worker(5, { buildingId: 2 }), worker(9, { buildingId: 2 })],
+      buildings: [makeBuilding(2, { workerSlots: 4, workers: 2 })],
+      workers: [makeWorker(5, { buildingId: 2 }), makeWorker(9, { buildingId: 2 })],
     }));
     const after = layoutWorld(makeSnapshot({
-      buildings: [building(2, { workerSlots: 4, workers: 3 })],
-      workers: [worker(1, { buildingId: 2 }), worker(5, { buildingId: 2 }), worker(9, { buildingId: 2 })],
+      buildings: [makeBuilding(2, { workerSlots: 4, workers: 3 })],
+      workers: [makeWorker(1, { buildingId: 2 }), makeWorker(5, { buildingId: 2 }), makeWorker(9, { buildingId: 2 })],
     }), before);
     unmoved(before, after, [5, 9]);
     const spots = after.workers.map((w) => `${w.x},${w.y}`);
@@ -115,12 +102,12 @@ describe('layoutWorld', () => {
 
   it('a lower-id worker joining leaves the existing crew in place', () => {
     const before = layoutWorld(makeSnapshot({
-      buildings: [building(1, { workerSlots: 4, workers: 2 })],
-      workers: [worker(10, { buildingId: 1 }), worker(11, { buildingId: 1 })],
+      buildings: [makeBuilding(1, { workerSlots: 4, workers: 2 })],
+      workers: [makeWorker(10, { buildingId: 1 }), makeWorker(11, { buildingId: 1 })],
     }));
     const after = layoutWorld(makeSnapshot({
-      buildings: [building(1, { workerSlots: 4, workers: 3 })],
-      workers: [worker(9, { buildingId: 1 }), worker(10, { buildingId: 1 }), worker(11, { buildingId: 1 })],
+      buildings: [makeBuilding(1, { workerSlots: 4, workers: 3 })],
+      workers: [makeWorker(9, { buildingId: 1 }), makeWorker(10, { buildingId: 1 }), makeWorker(11, { buildingId: 1 })],
     }), before);
     unmoved(before, after, [10, 11]);
   });
@@ -129,9 +116,9 @@ describe('layoutWorld', () => {
     // a save from before a slot retuning may legally carry more workers than
     // workerSlots — overflow fills diameter-spaced shelf rows (review rounds
     // 5 and 8: 11 workers at a 2-slot def must all be visible and hoverable)
-    const crew = Array.from({ length: 11 }, (_, i) => worker(10 + i, { buildingId: 1 }));
+    const crew = Array.from({ length: 11 }, (_, i) => makeWorker(10 + i, { buildingId: 1 }));
     const layout = layoutWorld(makeSnapshot({
-      buildings: [building(1, { workerSlots: 2, workers: crew.length })],
+      buildings: [makeBuilding(1, { workerSlots: 2, workers: crew.length })],
       workers: crew,
     }));
     const cell = layout.buildings[0];
@@ -152,9 +139,9 @@ describe('layoutWorld', () => {
   });
 
   it('contains even pathological rosters far past capacity, on distinct spots', () => {
-    const crew = Array.from({ length: 20 }, (_, i) => worker(10 + i, { buildingId: 1 }));
+    const crew = Array.from({ length: 20 }, (_, i) => makeWorker(10 + i, { buildingId: 1 }));
     const layout = layoutWorld(makeSnapshot({
-      buildings: [building(1, { workerSlots: 2, workers: crew.length })],
+      buildings: [makeBuilding(1, { workerSlots: 2, workers: crew.length })],
       workers: crew,
     }));
     const cell = layout.buildings[0];
@@ -171,20 +158,20 @@ describe('layoutWorld', () => {
 
   it('shrinking an over-capacity roster leaves the remaining crew in place (review round 3)', () => {
     const overCapacity = layoutWorld(makeSnapshot({
-      buildings: [building(1, { workerSlots: 2, workers: 3 })],
-      workers: [worker(1, { buildingId: 1 }), worker(2, { buildingId: 1 }), worker(3, { buildingId: 1 })],
+      buildings: [makeBuilding(1, { workerSlots: 2, workers: 3 })],
+      workers: [makeWorker(1, { buildingId: 1 }), makeWorker(2, { buildingId: 1 }), makeWorker(3, { buildingId: 1 })],
     }));
     const shrunk = layoutWorld(makeSnapshot({
-      buildings: [building(1, { workerSlots: 2, workers: 2 })],
-      workers: [worker(1, { buildingId: 1 }), worker(2, { buildingId: 1 }), worker(3)],
+      buildings: [makeBuilding(1, { workerSlots: 2, workers: 2 })],
+      workers: [makeWorker(1, { buildingId: 1 }), makeWorker(2, { buildingId: 1 }), makeWorker(3)],
     }), overCapacity);
     unmoved(overCapacity, shrunk, [1, 2]);
   });
 
   it('parks idle workers at the camp, left of the plots', () => {
     const snapshot = makeSnapshot({
-      buildings: [building(1)],
-      workers: [worker(10), worker(11), worker(12)],
+      buildings: [makeBuilding(1)],
+      workers: [makeWorker(10), makeWorker(11), makeWorker(12)],
     });
     const layout = layoutWorld(snapshot);
     const minPlotCol = Math.min(...layout.buildings.map((b) => b.col));
@@ -200,24 +187,24 @@ describe('layoutWorld', () => {
   });
 
   it('crossing the camp baseline leaves existing campers in place (review round 3)', () => {
-    const six = [3, 7, 12, 15, 21, 26].map((id) => worker(id));
+    const six = [3, 7, 12, 15, 21, 26].map((id) => makeWorker(id));
     const before = layoutWorld(makeSnapshot({ workers: six }));
-    const after = layoutWorld(makeSnapshot({ workers: [...six, worker(30)] }), before);
+    const after = layoutWorld(makeSnapshot({ workers: [...six, makeWorker(30)] }), before);
     unmoved(before, after, [3, 7, 12, 15, 21, 26]);
     const spots = after.workers.map((w) => `${w.x},${w.y}`);
     expect(new Set(spots).size).toBe(7);
   });
 
   it('a worker going idle leaves the existing campers in place', () => {
-    const before = layoutWorld(makeSnapshot({ workers: [worker(10), worker(11)] }));
-    const after = layoutWorld(makeSnapshot({ workers: [worker(9), worker(10), worker(11)] }), before);
+    const before = layoutWorld(makeSnapshot({ workers: [makeWorker(10), makeWorker(11)] }));
+    const after = layoutWorld(makeSnapshot({ workers: [makeWorker(9), makeWorker(10), makeWorker(11)] }), before);
     unmoved(before, after, [10, 11]);
   });
 
   it('carries state, progress, efficiency and tool coverage through', () => {
     const snapshot = makeSnapshot({
-      buildings: [building(1, { state: 'producing', progressPct: 40, batchActive: true })],
-      workers: [worker(10, { buildingId: 1, efficiency: 0.5, toolTicks: 7 })],
+      buildings: [makeBuilding(1, { state: 'producing', progressPct: 40, batchActive: true })],
+      workers: [makeWorker(10, { buildingId: 1, efficiency: 0.5, toolTicks: 7 })],
     });
     const layout = layoutWorld(snapshot);
     expect(layout.buildings[0]).toMatchObject({ state: 'producing', progressPct: 40, batchActive: true });
@@ -227,8 +214,8 @@ describe('layoutWorld', () => {
 
   it('reports each worker\'s post: the building id, or null at the camp', () => {
     const layout = layoutWorld(makeSnapshot({
-      buildings: [building(1)],
-      workers: [worker(10, { buildingId: 1 }), worker(11), worker(12, { buildingId: 99 })],
+      buildings: [makeBuilding(1)],
+      workers: [makeWorker(10, { buildingId: 1 }), makeWorker(11), makeWorker(12, { buildingId: 99 })],
     }));
     const at = new Map(layout.workers.map((w) => [w.id, w.at]));
     expect(at.get(10)).toBe(1);
@@ -239,7 +226,7 @@ describe('layoutWorld', () => {
   it('pickBuildingAt finds the tile under the cursor and nothing in the gutter', () => {
     // workers are hit-tested by the renderer against live actor positions
     // (they walk); buildings never move, so the layout is their truth
-    const layout = layoutWorld(makeSnapshot({ buildings: [building(1), building(2)] }));
+    const layout = layoutWorld(makeSnapshot({ buildings: [makeBuilding(1), makeBuilding(2)] }));
     const cell = layout.buildings[0];
     expect(pickBuildingAt(layout, cell.col + 0.5, cell.row + 0.5)).toEqual({ kind: 'building', id: 1 });
     // the gutter midpoint sits between the two buildings' 1.5-tile visuals
@@ -250,8 +237,8 @@ describe('layoutWorld', () => {
 
   it('keeps every placement inside the reported grid', () => {
     const layout = layoutWorld(makeSnapshot({
-      buildings: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((id) => building(id)),
-      workers: [10, 11, 12, 13, 14, 15, 16, 17].map((id) => worker(id)),
+      buildings: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((id) => makeBuilding(id)),
+      workers: [10, 11, 12, 13, 14, 15, 16, 17].map((id) => makeWorker(id)),
     }));
     for (const b of layout.buildings) {
       expect(b.col).toBeGreaterThanOrEqual(0);

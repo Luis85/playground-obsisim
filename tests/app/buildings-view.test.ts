@@ -5,7 +5,7 @@ import { createTestingPinia } from '@pinia/testing';
 import BuildingsView from '../../src/app/views/BuildingsView.vue';
 import { ENGINE_KEY } from '../../src/app/engine-key';
 import { useGameStore } from '../../src/app/stores/game-store';
-import { makeSnapshot } from './fixtures';
+import { makeBuilding, makeSnapshot } from './fixtures';
 import type { BuildingState } from '../../src/shared/snapshot';
 
 // A single 1/2-staffed Forester, with the caller choosing the wood stock (to
@@ -20,10 +20,7 @@ function mountView(stock: { wood?: number } = {}, state: BuildingState = 'produc
     },
   });
   const snapshot = makeSnapshot({
-    buildings: [{
-      id: 7, defId: 'forester', workers: 1, workerSlots: 2, state,
-      progress: 1, batchActive: true, progressPct: 33, tooledWorkers: 0, workPower: 1,
-    }],
+    buildings: [makeBuilding(7, { defId: 'forester', workers: 1, workerSlots: 2, state, progress: 1, batchActive: true, progressPct: 33, workPower: 1, col: 5, row: 2 })],
     idleWorkers: 2,
   });
   snapshot.stockpile.wood.stock = stock.wood ?? 0;

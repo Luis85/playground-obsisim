@@ -19,7 +19,7 @@ function mountWith(component: typeof EconomyView | typeof DashboardView, snapsho
 }
 
 const baseBuilding = {
-  workers: 0, workerSlots: 2, progress: 0, batchActive: false,
+  col: 0, row: 0, workers: 0, workerSlots: 2, progress: 0, batchActive: false,
   progressPct: 0, tooledWorkers: 0, workPower: 0,
 };
 

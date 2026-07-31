@@ -7,7 +7,7 @@ import WorldView from '../../src/app/views/WorldView.vue';
 import { WORLD_RENDERER_KEY } from '../../src/app/world/renderer-key';
 import type { WorldRenderer } from '../../src/app/world/renderer-key';
 import { useGameStore } from '../../src/app/stores/game-store';
-import { makeSnapshot } from './fixtures';
+import { makeBuilding, makeSnapshot, makeWorker } from './fixtures';
 
 // Everything here runs against a fake WorldRenderer injected through
 // WORLD_RENDERER_KEY — the real Excalibur factory must never be imported by
@@ -99,10 +99,7 @@ describe('WorldView', () => {
     (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'building', id: 7 });
     const { wrapper } = mountHarness(factory);
     useGameStore().ingest(makeSnapshot({
-      buildings: [{
-        id: 7, defId: 'bakery', workers: 1, workerSlots: 2, state: 'producing',
-        progress: 0, batchActive: true, progressPct: 55, tooledWorkers: 0, workPower: 1,
-      }],
+      buildings: [makeBuilding(7, { defId: 'bakery', workers: 1, workerSlots: 2, state: 'producing', batchActive: true, progressPct: 55 })],
     }), { paused: false, speed: 1, error: null });
     await nextTick();
     await wrapper.find('[data-test="world-host"]').trigger('pointermove', { pageX: 40, pageY: 40 });
@@ -119,10 +116,7 @@ describe('WorldView', () => {
     (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'building', id: 7 });
     const { wrapper } = mountHarness(factory);
     const buildingAt = (progressPct: number) => makeSnapshot({
-      buildings: [{
-        id: 7, defId: 'bakery', workers: 1, workerSlots: 2, state: 'producing',
-        progress: 0, batchActive: true, progressPct, tooledWorkers: 0, workPower: 1,
-      }],
+      buildings: [makeBuilding(7, { defId: 'bakery', workers: 1, workerSlots: 2, state: 'producing', batchActive: true, progressPct })],
     });
     useGameStore().ingest(buildingAt(10), { paused: false, speed: 1, error: null });
     await nextTick();
@@ -139,7 +133,7 @@ describe('WorldView', () => {
     (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'worker', id: 3 });
     const { wrapper } = mountHarness(factory);
     useGameStore().ingest(makeSnapshot({
-      workers: [{ id: 3, hunger: 40, efficiency: 0.8, buildingId: null, toolTicks: 12 }],
+      workers: [makeWorker(3, { hunger: 40, efficiency: 0.8, buildingId: null, toolTicks: 12 })],
     }), { paused: false, speed: 1, error: null });
     await nextTick();
     await wrapper.find('[data-test="world-host"]').trigger('pointermove', { pageX: 10, pageY: 10 });
@@ -154,7 +148,7 @@ describe('WorldView', () => {
     (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'worker', id: 3 });
     const { wrapper } = mountHarness(factory);
     useGameStore().ingest(makeSnapshot({
-      workers: [{ id: 3, hunger: 0, efficiency: 1, buildingId: null, toolTicks: 0 }],
+      workers: [makeWorker(3, { hunger: 0, efficiency: 1, buildingId: null, toolTicks: 0 })],
     }), { paused: false, speed: 1, error: null });
     await nextTick();
     await wrapper.find('[data-test="world-host"]').trigger('pointermove', { pageX: 10, pageY: 10 });
@@ -162,7 +156,7 @@ describe('WorldView', () => {
     // the worker walks away; the next snapshot re-runs the live hit-test
     (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue(null);
     useGameStore().ingest(makeSnapshot({
-      workers: [{ id: 3, hunger: 0, efficiency: 1, buildingId: 1, toolTicks: 0 }],
+      workers: [makeWorker(3, { hunger: 0, efficiency: 1, buildingId: 1, toolTicks: 0 })],
     }), { paused: false, speed: 1, error: null });
     await nextTick();
     expect(wrapper.find('[data-test="world-tooltip"]').exists()).toBe(false);
@@ -175,7 +169,7 @@ describe('WorldView', () => {
       (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'worker', id: 3 });
       const { wrapper } = mountHarness(factory);
       useGameStore().ingest(makeSnapshot({
-        workers: [{ id: 3, hunger: 0, efficiency: 1, buildingId: null, toolTicks: 0 }],
+        workers: [makeWorker(3, { hunger: 0, efficiency: 1, buildingId: null, toolTicks: 0 })],
       }), { paused: true, speed: 1, error: null });
       await nextTick();
       await wrapper.find('[data-test="world-host"]').trigger('pointermove', { pageX: 10, pageY: 10 });

@@ -2,8 +2,8 @@ import { createSystem, queryComponents, Read, ReadResource, WriteResource } from
 import type { ResourceStats } from '../../shared/snapshot';
 import type { ResourceId } from '../../shared/content-types';
 import { RESOURCES, RESOURCE_IDS } from '../content/resources';
-import { Building, Efficiency, Hunger, JobAssignment, Production, ToolCoverage, Worker, WorkerSlots } from '../components';
-import { NoticeBoard, SimClock, SnapshotStore, StatsHistory, Stockpile } from '../resources';
+import { Building, Efficiency, Hunger, JobAssignment, Position, Production, ToolCoverage, Worker, WorkerSlots } from '../components';
+import { NoticeBoard, SimClock, SnapshotStore, StatsHistory, Stockpile, WorldMap } from '../resources';
 import type { BuildingFacts, WorkerFacts } from '../snapshot-builder';
 import { buildEntitySections, buildingFactsOf, workerFactsOf } from '../snapshot-builder';
 
@@ -13,8 +13,9 @@ export const SnapshotSystem = () => createSystem({
   stats: ReadResource(StatsHistory),
   notices: WriteResource(NoticeBoard),
   store: WriteResource(SnapshotStore),
+  map: ReadResource(WorldMap),
   buildings: queryComponents({
-    building: Read(Building), slots: Read(WorkerSlots), production: Read(Production),
+    building: Read(Building), slots: Read(WorkerSlots), production: Read(Production), position: Read(Position),
   }),
   workers: queryComponents({
     worker: Read(Worker), hunger: Read(Hunger), job: Read(JobAssignment), efficiency: Read(Efficiency), coverage: Read(ToolCoverage),
@@ -24,7 +25,7 @@ export const SnapshotSystem = () => createSystem({
   // Entity-derived sections (workers/buildings/population/idleWorkers) come from the
   // shared buildEntitySections builder; this system only gathers facts from its
   // queries and assembles the remaining stockpile/notices sections.
-  .withRunFunction(({ clock, stockpile, stats, notices, store, buildings, workers }) => {
+  .withRunFunction(({ clock, stockpile, stats, notices, store, map, buildings, workers }) => {
     // Fact shape lives in the shared mappers, never here: this system only
     // supplies component instances from its queries (see snapshot-builder).
     const workerFacts: WorkerFacts[] = [];
@@ -33,8 +34,8 @@ export const SnapshotSystem = () => createSystem({
     }
 
     const buildingFacts: BuildingFacts[] = [];
-    for (const { building, slots, production } of buildings.iter()) {
-      buildingFacts.push(buildingFactsOf(building, slots, production));
+    for (const { building, slots, production, position } of buildings.iter()) {
+      buildingFacts.push(buildingFactsOf(building, slots, production, position));
     }
 
     const { workers: workerSnaps, buildings: buildingSnaps, population, idleWorkers } = buildEntitySections(workerFacts, buildingFacts);
@@ -58,6 +59,7 @@ export const SnapshotSystem = () => createSystem({
     store.latest = {
       tick: clock.tick,
       lastRecruitTick: clock.lastRecruitTick,
+      map: { cols: map.cols, rows: map.rows },
       stockpile: stockpileStats,
       colonyWealth,
       population,

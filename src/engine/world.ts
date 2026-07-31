@@ -5,14 +5,15 @@ import { migrateSaveToLatest } from '../shared/save-migration';
 import type { SaveGameV1, SavedBuilding } from '../shared/save';
 import type { ResourceId } from '../shared/content-types';
 import type { ResourceStats, Snapshot } from '../shared/snapshot';
+import { DEFAULT_MAP } from '../shared/placement';
 import { BALANCE, STARTING_STOCK, STARTING_WORKERS, workerEfficiency } from './content/balance';
 import { BUILDINGS } from './content/buildings';
 import { RESOURCES, RESOURCE_IDS } from './content/resources';
 import {
-  Building, Efficiency, Hunger, JobAssignment, Production, ToolCoverage, Worker, WorkerSlots,
+  Building, Efficiency, Hunger, JobAssignment, Position, Production, ToolCoverage, Worker, WorkerSlots,
 } from './components';
 import {
-  CommandQueue, IdCounter, NoticeBoard, SimClock, SnapshotStore, StatsHistory, Stockpile,
+  CommandQueue, IdCounter, NoticeBoard, SimClock, SnapshotStore, StatsHistory, Stockpile, WorldMap,
 } from './resources';
 import type { BuildingFacts, WorkerFacts } from './snapshot-builder';
 import { buildEntitySections, gatherEntityFacts } from './snapshot-builder';
@@ -63,7 +64,7 @@ export function getPrepResource<T extends object>(prep: IPreptimeWorld, type: ne
   return instance as T;
 }
 
-const COMPONENT_TYPES = [Building, WorkerSlots, Production, Worker, Hunger, JobAssignment, Efficiency, ToolCoverage];
+const COMPONENT_TYPES = [Building, WorkerSlots, Production, Worker, Hunger, JobAssignment, Efficiency, ToolCoverage, Position];
 
 export function initialSave(): SaveGameV1 {
   return {
@@ -245,6 +246,7 @@ export function spawnBuilding(
     .with(new Building(saved.id ?? ids.take(), saved.defId))
     .with(new WorkerSlots(def.workerSlots))
     .with(new Production(progress, saved.batchActive))
+    .with(new Position(0, 0))
     .build();
 }
 
@@ -301,6 +303,7 @@ export function buildColonyPrepWorld(
     ids,
     new StatsHistory(),
     store,
+    new WorldMap(DEFAULT_MAP.cols, DEFAULT_MAP.rows),
   ];
   const registry = new Map<object, object>();
   for (const instance of instances) {
@@ -343,6 +346,7 @@ function buildInitialSnapshot(save: SaveGameV1): Snapshot {
   const buildingFacts: BuildingFacts[] = save.buildings.map((saved) => ({
     id: saved.id,
     defId: saved.defId,
+    col: 0, row: 0,
     workerSlots: BUILDINGS[saved.defId].workerSlots,
     // same balance-coupled clamp as spawnBuilding, so the seeded snapshot
     // matches the spawned world
@@ -361,6 +365,7 @@ function buildInitialSnapshot(save: SaveGameV1): Snapshot {
   return {
     tick: Math.min(save.tick, MAX_SAVED_COUNTER), // same clamp as the spawned clock
     lastRecruitTick: Math.min(save.lastRecruitTick, Math.min(save.tick, MAX_SAVED_COUNTER)),
+    map: { ...DEFAULT_MAP },
     stockpile,
     colonyWealth,
     population,

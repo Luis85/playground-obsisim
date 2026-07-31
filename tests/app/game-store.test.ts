@@ -131,7 +131,7 @@ describe('useGameStore', () => {
   it('staffingByDef aggregates totals, staffing, and starvation per def', () => {
     const store = useGameStore();
     const base = {
-      workers: 0, workerSlots: 2, progress: 0, batchActive: false,
+      col: 0, row: 0, workers: 0, workerSlots: 2, progress: 0, batchActive: false,
       progressPct: 0, tooledWorkers: 0, workPower: 0,
     };
     store.ingest(makeSnapshot({

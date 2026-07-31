@@ -3,7 +3,7 @@ import type { Command } from '../../shared/commands';
 import type { BuildingDefId } from '../../shared/content-types';
 import { BALANCE } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
-import { Building, Efficiency, Hunger, JobAssignment, Production, ToolCoverage, Worker, WorkerSlots } from '../components';
+import { Building, Efficiency, Hunger, JobAssignment, Position, Production, ToolCoverage, Worker, WorkerSlots } from '../components';
 import { CommandQueue, IdCounter, NoticeBoard, SimClock, Stockpile } from '../resources';
 
 export const CommandSystem = () => createSystem({
@@ -67,6 +67,7 @@ export const CommandSystem = () => createSystem({
         .with(new Building(ids.take(), def.id))
         .with(new WorkerSlots(def.workerSlots))
         .with(new Production())
+        .with(new Position(0, 0))
         .build();
       notices.succeed(`Built a ${def.name}.`);
     };

@@ -1,4 +1,5 @@
 import type { BuildingDefId, ResourceId } from './content-types';
+import type { WorldMapSize } from './placement';
 
 export type BuildingState = 'producing' | 'waitingForInput' | 'unstaffed';
 
@@ -13,6 +14,9 @@ export interface NoticeMessage {
 export interface BuildingSnapshot {
   id: number;
   defId: BuildingDefId;
+  /** Tile position — sim truth since increment 3. */
+  col: number;
+  row: number;
   workers: number;
   workerSlots: number;
   state: BuildingState;
@@ -47,6 +51,8 @@ export interface ResourceStats {
 export interface Snapshot {
   tick: number;
   lastRecruitTick: number;
+  /** The colony's world dimensions in tiles. */
+  map: WorldMapSize;
   stockpile: Record<ResourceId, ResourceStats>;
   colonyWealth: number;
   population: number;

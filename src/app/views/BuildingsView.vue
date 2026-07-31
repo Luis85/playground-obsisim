@@ -1,40 +1,16 @@
 <script setup lang="ts">
-import { computed, inject } from 'vue';
+import { inject } from 'vue';
 import { ENGINE_KEY } from '../engine-key';
 import { useGameStore } from '../stores/game-store';
-import { BUILDINGS, BUILDING_IDS, RESOURCES, type BuildingDefId, type CostMap, type ResourceId } from '../../engine/content';
+import { BUILDINGS, BUILDING_IDS } from '../../engine/content';
 // Presentation lives in labels.ts, not the shared contract: BUILDING_STATE_LABELS
 // (used in the State cell below) is a Record keyed by the BuildingState union,
 // so a state added to the union without a matching label is a type error here,
 // not a silently-raw string in the rendered table.
-import { BUILDING_STATE_LABELS } from '../labels';
+import { BUILDING_STATE_LABELS, costLabel } from '../labels';
 
 const engine = inject(ENGINE_KEY)!;
 const store = useGameStore();
-
-// Used by the Construct table's Cost and Recipe columns (both columns
-// below), so it lives at the view level rather than duplicated per cell.
-function costLabel(cost: CostMap): string {
-  return Object.entries(cost)
-    .map(([id, amount]) => `${amount} ${RESOURCES[id as ResourceId].name}`)
-    .join(', ');
-}
-
-// One boolean per catalog entry, recomputed whenever the stockpile changes,
-// so every "Build" button's disabled/title state in the table below is a
-// plain lookup rather than re-walking the cost map on every render.
-const affordable = computed(() => {
-  const snapshot = store.snapshot;
-  return Object.fromEntries(
-    BUILDING_IDS.map((id) => [
-      id,
-      snapshot !== null &&
-        Object.entries(BUILDINGS[id].cost).every(
-          ([res, amount]) => snapshot.stockpile[res as ResourceId].stock >= amount,
-        ),
-    ]),
-  ) as Record<BuildingDefId, boolean>;
-});
 </script>
 
 <template>
@@ -83,8 +59,8 @@ const affordable = computed(() => {
           <td>
             <button
               :data-test="`construct-${id}`"
-              :disabled="!affordable[id]"
-              :title="affordable[id] ? '' : 'Not enough resources'"
+              :disabled="!store.affordableDefs[id]"
+              :title="store.affordableDefs[id] ? '' : 'Not enough resources'"
               @click="engine.dispatch({ type: 'constructBuilding', buildingDefId: id })"
             >
               Build

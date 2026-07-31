@@ -2,7 +2,7 @@ import { defineStore } from 'pinia';
 import { toRaw } from 'vue';
 import type { EngineStatus, NoticeKind, Snapshot } from '../../shared/snapshot';
 import {
-  BALANCE, RESOURCE_IDS, RESOURCES,
+  BALANCE, BUILDINGS, BUILDING_IDS, RESOURCE_IDS, RESOURCES,
   type BuildingDefId, type ResourceId,
 } from '../../engine/content';
 
@@ -102,6 +102,20 @@ export const useGameStore = defineStore('game', {
         statuses[defId as BuildingDefId] = { label, starved: staffing.starved > 0 };
       }
       return statuses;
+    },
+    /** One affordability flag per catalog def — the construct table and the
+     * build palette bind to this, so the check exists exactly once. */
+    affordableDefs(state): Record<BuildingDefId, boolean> {
+      const snapshot = state.snapshot;
+      return Object.fromEntries(
+        BUILDING_IDS.map((id) => [
+          id,
+          snapshot !== null &&
+            Object.entries(BUILDINGS[id].cost).every(
+              ([res, amount]) => snapshot.stockpile[res as ResourceId].stock >= amount,
+            ),
+        ]),
+      ) as Record<BuildingDefId, boolean>;
     },
   },
   actions: {

@@ -13,7 +13,10 @@ import type { WorkerSnapshot } from '../../src/shared/snapshot';
 // field this file's cases vary, but the full shape keeps callers honest
 // about what a WorkerSnapshot actually carries.
 function worker(overrides: Partial<WorkerSnapshot> = {}): WorkerSnapshot {
-  return { id: 1, hunger: 0, efficiency: 1, buildingId: null, hauling: false, toolTicks: 0, ...overrides };
+  return {
+    id: 1, hunger: 0, efficiency: 1, buildingId: null, hauling: false, haulTargetId: null, carrying: 0, toolTicks: 0,
+    ...overrides,
+  };
 }
 
 // Mounts with a fresh testing Pinia each call, so tests never leak state

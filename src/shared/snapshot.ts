@@ -40,6 +40,10 @@ export interface WorkerSnapshot {
   buildingId: number | null;
   /** True while this worker is assigned to hauling rather than to a building. */
   hauling: boolean;
+  /** The building this hauler is walking to, or null when idle or heading home. */
+  haulTargetId: number | null;
+  /** Units in hand (0 unless carrying a load home). */
+  carrying: number;
   /** Remaining ticks of this worker's tool coverage (0 = none). */
   toolTicks: number;
 }

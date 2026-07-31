@@ -90,3 +90,30 @@ export class OutputBuffer {
     return best;
   }
 }
+
+export type HaulPhase = 'idle' | 'outbound' | 'returning';
+
+/**
+ * A hauler's current trip. Runtime-only: it never enters the save — a hauler
+ * caught mid-trip banks its load into the saved stockpile instead — so nothing
+ * here needs a load guard or a migration. Present on every worker; anyone who
+ * is not hauling simply sits at 'idle'.
+ */
+export class HaulTrip {
+  constructor(
+    public phase: HaulPhase = 'idle',
+    public targetId: number | null = null,
+    public ticksLeft = 0,
+    public resource: ResourceId | null = null,
+    public amount = 0,
+  ) {}
+
+  /** Back to standing at the camp with empty hands. */
+  reset(): void {
+    this.phase = 'idle';
+    this.targetId = null;
+    this.ticksLeft = 0;
+    this.resource = null;
+    this.amount = 0;
+  }
+}

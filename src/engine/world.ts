@@ -10,7 +10,7 @@ import { BALANCE, STARTING_STOCK, STARTING_WORKERS, workerEfficiency } from './c
 import { BUILDINGS } from './content/buildings';
 import { RESOURCES, RESOURCE_IDS } from './content/resources';
 import {
-  Building, Efficiency, Hunger, JobAssignment, OutputBuffer, Position, Production, ToolCoverage, Worker, WorkerSlots,
+  Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, ToolCoverage, Worker, WorkerSlots,
 } from './components';
 import {
   CommandQueue, IdCounter, NoticeBoard, RemovalLedger, SimClock, SnapshotStore, StatsHistory, Stockpile, WorldMap,
@@ -21,6 +21,7 @@ import { CommandSystem } from './systems/command-system';
 import { HungerSystem } from './systems/hunger-system';
 import { EfficiencySystem } from './systems/efficiency-system';
 import { ProductionSystem } from './systems/production-system';
+import { HaulSystem } from './systems/haul-system';
 import { StatsSystem } from './systems/stats-system';
 import { SnapshotSystem } from './systems/snapshot-system';
 
@@ -45,6 +46,7 @@ export const ALL_SYSTEMS: TColonySystemFactory[] = [
   HungerSystem,
   EfficiencySystem,
   ProductionSystem,
+  HaulSystem,
   StatsSystem,
   SnapshotSystem,
 ];
@@ -64,7 +66,7 @@ export function getPrepResource<T extends object>(prep: IPreptimeWorld, type: ne
   return instance as T;
 }
 
-const COMPONENT_TYPES = [Building, WorkerSlots, Production, Worker, Hunger, JobAssignment, Efficiency, ToolCoverage, Position, OutputBuffer];
+const COMPONENT_TYPES = [Building, WorkerSlots, Production, Worker, Hunger, JobAssignment, Efficiency, ToolCoverage, Position, OutputBuffer, HaulTrip];
 
 export function initialSave(): SaveGameV2 {
   return {
@@ -289,6 +291,7 @@ export function spawnWorker(
     .with(new JobAssignment(opts.buildingId ?? null, opts.hauling ?? false))
     .with(new Efficiency(opts.efficiency ?? 1))
     .with(new ToolCoverage(toolTicks))
+    .with(new HaulTrip())
     .build();
 }
 
@@ -363,6 +366,7 @@ function buildInitialSnapshot(save: SaveGameV2): Snapshot {
       efficiency: workerEfficiency(hunger),
       buildingId: saved.buildingId,
       hauling: false, // save v3 (Task 6) restores hauler assignments
+      haulTargetId: null, carrying: 0, carryingResource: null, // a restored colony's haulers start at the camp
       toolTicks,
     };
   });

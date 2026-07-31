@@ -414,7 +414,11 @@ describe('live-world projections agree', () => {
   // `hauling` is real state, not derived — but Task 3 deliberately does not
   // persist it yet (save v3 in Task 6 restores hauler assignments), so it is
   // excluded here too until then.
-  const DERIVED = ['efficiency', 'hauling'] as const;
+  // `haulTargetId` and `carrying` are real state too, but HaulTrip (Task 4) is
+  // deliberately runtime-only for good: a hauler caught mid-trip banks its
+  // carried load into the saved stockpile instead (Task 6), so the trip
+  // itself never has a save-record counterpart to agree with.
+  const DERIVED = ['efficiency', 'hauling', 'haulTargetId', 'carrying'] as const;
 
   function persisted(workers: readonly object[]): Record<string, unknown>[] {
     return workers.map((w) => {

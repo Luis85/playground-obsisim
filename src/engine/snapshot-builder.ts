@@ -1,11 +1,11 @@
 import type { IRuntimeWorld } from 'sim-ecs';
-import type { BuildingDefId } from '../shared/content-types';
+import type { BuildingDefId, ResourceId } from '../shared/content-types';
 import type { SavedBuilding, SavedWorker } from '../shared/save';
 import type { BuildingSnapshot, BuildingState, WorkerSnapshot } from '../shared/snapshot';
 import { BALANCE, workerWorkPower } from './content/balance';
 import { batchOutputUnits, BUILDINGS } from './content/buildings';
 import {
-  Building, Efficiency, Hunger, JobAssignment, OutputBuffer, Position, Production, ToolCoverage, Worker, WorkerSlots,
+  Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, ToolCoverage, Worker, WorkerSlots,
 } from './components';
 
 /**
@@ -21,6 +21,9 @@ export interface WorkerFacts {
   efficiency: number;
   buildingId: number | null;
   hauling: boolean;
+  haulTargetId: number | null;
+  carrying: number;
+  carryingResource: ResourceId | null;
   toolTicks: number;
 }
 
@@ -61,7 +64,8 @@ export function buildEntitySections(workers: readonly WorkerFacts[], buildings: 
 
   const workerSnaps: WorkerSnapshot[] = workers
     .map((w) => ({
-      id: w.id, hunger: w.hunger, efficiency: w.efficiency, buildingId: w.buildingId, hauling: w.hauling, toolTicks: w.toolTicks,
+      id: w.id, hunger: w.hunger, efficiency: w.efficiency, buildingId: w.buildingId, hauling: w.hauling,
+      haulTargetId: w.haulTargetId, carrying: w.carrying, toolTicks: w.toolTicks,
     }))
     .sort((a, b) => a.id - b.id);
 
@@ -116,7 +120,7 @@ export function buildEntitySections(workers: readonly WorkerFacts[], buildings: 
  * entity exists and maps SavedWorker/SavedBuilding instead.
  */
 export function workerFactsOf(
-  worker: Worker, hunger: Hunger, job: JobAssignment, efficiency: Efficiency, coverage: ToolCoverage,
+  worker: Worker, hunger: Hunger, job: JobAssignment, efficiency: Efficiency, coverage: ToolCoverage, trip: HaulTrip,
 ): WorkerFacts {
   return {
     id: worker.id,
@@ -124,6 +128,11 @@ export function workerFactsOf(
     efficiency: efficiency.value,
     buildingId: job.buildingId,
     hauling: job.hauling,
+    // Only an outbound hauler has somewhere to be: a returning one is walking
+    // to the camp, which the layout places without needing a target.
+    haulTargetId: trip.phase === 'outbound' ? trip.targetId : null,
+    carrying: trip.amount,
+    carryingResource: trip.resource,
     toolTicks: coverage.remainingTicks,
   };
 }
@@ -192,6 +201,7 @@ export function gatherEntityFacts(world: IRuntimeWorld): EntityFacts {
         entity.getComponent(JobAssignment)!,
         entity.getComponent(Efficiency)!,
         entity.getComponent(ToolCoverage)!,
+        entity.getComponent(HaulTrip)!,
       ));
     }
   }

@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { BALANCE } from '../../src/engine/content/balance';
 import { SimClock, SnapshotStore } from '../../src/engine/resources';
 import { createColonyWorld, initialSave } from '../../src/engine/world';
 import { enqueue as dispatch } from './fixtures';
@@ -13,25 +12,24 @@ async function run(world: Awaited<ReturnType<typeof createColonyWorld>>, ticks: 
   }
 }
 
-/** Rich fixture: enough stock + idle workers to build the full economy at once. */
+/**
+ * Rich fixture: enough stock + idle workers to build the full economy at
+ * once. 13 staff the two production chains below; the remaining 5 haul —
+ * without them the chain stalls at each building's OutputBuffer exactly as
+ * tests/engine/systems/haul-system.test.ts pins in isolation, since a
+ * downstream building's input is paid from the Stockpile, never straight
+ * from an upstream building's buffer.
+ */
 function richSave(): SaveGameV2 {
   const save = initialSave();
   save.stockpile = { wood: 500, planks: 200, berries: 200 };
-  save.workers = Array.from({ length: 14 }, (_, i) => ({ id: i + 1, hunger: 0, buildingId: null, toolTicks: 0 }));
-  save.nextEntityId = 15;
+  save.workers = Array.from({ length: 18 }, (_, i) => ({ id: i + 1, hunger: 0, buildingId: null, toolTicks: 0 }));
+  save.nextEntityId = 19;
   return save;
 }
 
 describe('full colony integration', () => {
-  // The full bread-and-tools chain assertions this test used to make were
-  // removed here: with output buffers (Task 2 of the logistics increment)
-  // and nobody hauling, a multi-stage chain cannot run end to end — a
-  // downstream building's input is sitting in the upstream building's
-  // OutputBuffer, not in the shared Stockpile, so it never arrives. Task 4 of
-  // docs/superpowers/plans/2026-07-31-increment-4-logistics.md restores an
-  // end-to-end chain test here with haulers staffed. Until then, this test
-  // only covers what is actually true of this colony today.
-  it('raw stages fill their buffers; downstream stages stall until hauling exists', async () => {
+  it('bootstraps both chains to steady bread and tools production', async () => {
     const world = await createColonyWorld(richSave());
     dispatch(
       world,
@@ -61,52 +59,26 @@ describe('full colony integration', () => {
       { type: 'assignWorker', buildingId: byDef.sawmill },
       { type: 'assignWorker', buildingId: byDef.workshop },
       { type: 'assignWorker', buildingId: byDef.workshop },
+      // The 5 remaining idle workers haul: without them wheat, flour and
+      // bread all sit in their makers' OutputBuffers forever (Task 2), and
+      // this test would fail exactly as the raw-stage version it replaces
+      // asserted it must.
+      { type: 'assignHauler' },
+      { type: 'assignHauler' },
+      { type: 'assignHauler' },
+      { type: 'assignHauler' },
+      { type: 'assignHauler' },
     );
     await run(world, 400);
 
     const final = snapshot();
-    const finalByDef = Object.fromEntries(final.buildings.map((b) => [b.defId, b]));
-
-    // Stage 1 — recipes with no inputs (forester, gatherersHut, farm): nothing
-    // can block them, so they run every tick until their own OutputBuffer is
-    // full, then hold there (outputFull) instead of losing throughput.
-    for (const defId of ['forester', 'gatherersHut', 'farm']) {
-      expect(finalByDef[defId].buffered).toBe(BALANCE.outputBufferCap);
-      expect(finalByDef[defId].state).toBe('outputFull');
-    }
-
-    // Stage 2 — mill and bakery need wheat and flour respectively, and
-    // neither ever reaches the Stockpile (farm's wheat and mill's flour are
-    // both stuck in their own OutputBuffers): batchActive never turns on, so
-    // these two buildings bank zero, ever.
-    for (const defId of ['mill', 'bakery']) {
-      expect(finalByDef[defId].buffered).toBe(0);
-      expect(finalByDef[defId].state).toBe('waitingForInput');
-    }
-    expect(final.stockpile.wheat.stock).toBe(0);
-    expect(final.stockpile.flour.stock).toBe(0);
-    expect(final.stockpile.bread.stock).toBe(0);
-    expect(final.stockpile.bread.productionRate).toBe(0);
-
-    // sawmill and workshop are staffed on recipes whose inputs (wood, planks)
-    // richSave seeds directly into the Stockpile to afford construction — so
-    // unlike mill/bakery they DO run, but only by spending that starting
-    // stock. Neither forester's wood nor sawmill's own planks output ever
-    // crosses back into the Stockpile (both stay trapped in their makers'
-    // OutputBuffers), so both cap out at their own buffer exactly like the
-    // input-free stages, and the thing the colony actually wants — tools in
-    // the Stockpile — never leaves zero.
-    for (const defId of ['sawmill', 'workshop']) {
-      expect(finalByDef[defId].buffered).toBe(BALANCE.outputBufferCap);
-      expect(finalByDef[defId].state).toBe('outputFull');
-    }
-    expect(final.stockpile.tools.stock).toBe(0);
-    expect(final.stockpile.tools.productionRate).toBe(0);
-    expect(final.stockpile.planks.stock).toBeLessThan(200); // consumed by workshop, never topped up by sawmill
-
-    // the colony itself is not in danger: the berries richSave also seeds
-    // directly into the Stockpile carry everyone through the full run even
-    // though gatherersHut's own berries output never reaches the Stockpile.
+    expect(final.stockpile.bread.stock).toBeGreaterThan(0);
+    expect(final.stockpile.tools.productionRate).toBeGreaterThan(0);
+    expect(final.stockpile.bread.productionRate).toBeGreaterThan(0);
+    // wheat must not accumulate unboundedly (2 farm workers vs 2 mill workers,
+    // fed by haulers rather than a direct stockpile write)
+    expect(final.stockpile.wheat.stock).toBeLessThan(50);
+    // everyone stays fed on the safety net + bread
     expect(final.workers.every((w) => w.efficiency > 0.5)).toBe(true);
     expect(final.colonyWealth).toBeGreaterThan(0);
   });

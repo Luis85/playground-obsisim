@@ -5,7 +5,7 @@ import { autoPlacePosition, isTileBuildable, type TileRef } from '../../shared/p
 import { BALANCE } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
 import {
-  Building, Efficiency, Hunger, JobAssignment, OutputBuffer, Position, Production, ToolCoverage, Worker, WorkerSlots,
+  Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, ToolCoverage, Worker, WorkerSlots,
 } from '../components';
 import type { IdCounter, NoticeBoard, RemovalLedger, SimClock, Stockpile, WorldMap } from '../resources';
 
@@ -121,7 +121,7 @@ export function handleRecruitWorker(ctx: CommandContext): void {
   }
   ctx.clock.lastRecruitTick = ctx.clock.tick;
   const id = ctx.ids.take();
-  ctx.spawn(new Worker(id), new Hunger(), new JobAssignment(), new Efficiency(), new ToolCoverage());
+  ctx.spawn(new Worker(id), new Hunger(), new JobAssignment(), new Efficiency(), new ToolCoverage(), new HaulTrip());
   ctx.notices.succeed(`Recruited worker #${id}.`);
 }
 

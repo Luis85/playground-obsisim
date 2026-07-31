@@ -213,13 +213,18 @@ watch([mode, selectedId], syncEscapeListener);
 function onArm(defId: BuildingDefId) {
   mode.value = { kind: 'place', defId };
   select(null); // a selection under an armed palette would double-claim clicks
+  hover.value = null; // keyboard arming moves no pointer: hide the parked tooltip now
   refreshGhost(); // switching defs over a parked pointer must swap the ghost too
 }
 
 function onMoveRequest() {
   if (selectedId.value === null) return;
   mode.value = { kind: 'move', buildingId: selectedId.value };
-  refreshGhost(); // a pointer already parked on the canvas previews immediately
+  hover.value = null; // same suppression as onArm — no pointer event will do it for us
+  // lastTile is always null here (cancelMode cleared it on the way to idle),
+  // so this reduces to clearing any stale ghost; the preview appears on the
+  // next pointer move.
+  refreshGhost();
 }
 
 function onDemolish() {

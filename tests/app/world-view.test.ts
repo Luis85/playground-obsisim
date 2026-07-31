@@ -278,6 +278,17 @@ describe('WorldView interaction', () => {
     expect(wrapper.find('[data-test="world-tooltip"]').exists()).toBe(false);
   });
 
+  it('hides a parked tooltip the moment the palette arms — no pointer event needed', async () => {
+    // keyboard activation fires no pointerleave: arming itself must clear hover
+    const { renderer, wrapper } = armedHarness();
+    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'building', id: 7 });
+    await nextTick();
+    await wrapper.find('[data-test="world-host"]').trigger('pointermove', { pageX: 40, pageY: 40 });
+    expect(wrapper.find('[data-test="world-tooltip"]').exists()).toBe(true);
+    await wrapper.find('[data-test="palette-forester"]').trigger('click');
+    expect(wrapper.find('[data-test="world-tooltip"]').exists()).toBe(false);
+  });
+
   it('Escape and right-click both disarm and clear the ghost', async () => {
     const { renderer, wrapper } = armedHarness();
     await nextTick();

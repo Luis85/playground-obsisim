@@ -39,6 +39,9 @@ let hoverRecheck: ReturnType<typeof setTimeout> | null = null;
 
 const armedDefId = computed(() => (mode.value.kind === 'place' ? mode.value.defId : null));
 
+// Derived reactively so a stationary pointer keeps live details (batch
+// progress, hunger, tool ticks) as snapshots tick underneath it; an entity
+// vanishing mid-hover yields no lines and the tooltip hides itself.
 const hoverLines = computed(() => {
   if (!hover.value || !store.snapshot) return [];
   return describePick(store.snapshot, hover.value.pick);
@@ -95,6 +98,10 @@ function closeSelection() {
   select(null);
 }
 
+// A stationary pointer must not keep describing a worker that walked away:
+// re-run the live hit-test at the stored pointer position on every snapshot,
+// and once more after the walk animation has settled (no snapshots arrive
+// for the animation tail, none at all while paused — review round 9).
 function armHoverRecheck() {
   if (hoverRecheck !== null) clearTimeout(hoverRecheck);
   hoverRecheck = setTimeout(() => revalidateHover(false), 2000);
@@ -142,27 +149,38 @@ function onPointerLeave() {
   refreshGhost();
 }
 
-function onClick(event: MouseEvent) {
-  if (!renderer) return;
-  const m = mode.value;
-  if (m.kind === 'place' || m.kind === 'move') {
-    const tile = renderer.tileAt(event.pageX, event.pageY);
-    if (!tile || !tileValid(m, tile.col, tile.row)) return;
-    if (m.kind === 'place') {
-      // stays armed — Banished-style repeat placement (Escape/right-click/
-      // palette-toggle disarm)
-      engine.dispatch({ type: 'constructBuilding', buildingDefId: m.defId, at: tile });
-    } else {
-      engine.dispatch({ type: 'moveBuilding', buildingId: m.buildingId, to: tile });
-      cancelMode(); // back to idle; the selection stays on the moved building
-    }
-    return;
-  }
-  const pick = renderer.pick(event.pageX, event.pageY);
+function clickWhilePlacing(m: Extract<Mode, { kind: 'place' }>, tile: { col: number; row: number } | null) {
+  if (!tile || !tileValid(m, tile.col, tile.row)) return;
+  // stays armed — Banished-style repeat placement (Escape/right-click/
+  // palette-toggle disarm)
+  engine.dispatch({ type: 'constructBuilding', buildingDefId: m.defId, at: tile });
+}
+
+function clickWhileMoving(m: Extract<Mode, { kind: 'move' }>, tile: { col: number; row: number } | null) {
+  if (!tile || !tileValid(m, tile.col, tile.row)) return;
+  engine.dispatch({ type: 'moveBuilding', buildingId: m.buildingId, to: tile });
+  cancelMode(); // back to idle; the selection stays on the moved building
+}
+
+function clickIdle(pick: WorldPick | null) {
   // workers are hover-only this increment: clicking one neither selects nor
   // deselects — only a building selects, only empty ground clears
   if (pick?.kind === 'worker') return;
   select(pick === null ? null : pick.id);
+}
+
+function onClick(event: MouseEvent) {
+  if (!renderer) return;
+  const m = mode.value;
+  if (m.kind === 'place') {
+    clickWhilePlacing(m, renderer.tileAt(event.pageX, event.pageY));
+    return;
+  }
+  if (m.kind === 'move') {
+    clickWhileMoving(m, renderer.tileAt(event.pageX, event.pageY));
+    return;
+  }
+  clickIdle(renderer.pick(event.pageX, event.pageY));
 }
 
 function onContextMenu(event: MouseEvent) {
@@ -217,9 +235,12 @@ onMounted(() => {
     const created = factory(host.value!);
     renderer = created;
     created.onFatal((message) => {
+      // async engine failure after a successful boot: same fallback path
       failure.value = message;
       renderer = null;
     });
+    // registered only on success, immediate: the watcher both replays an
+    // already-present snapshot and follows every later ingest
     watch(
       () => store.snapshot,
       (snapshot, previousSnapshot) => {
@@ -250,6 +271,7 @@ onMounted(() => {
       { immediate: true },
     );
   } catch (error) {
+    // A rendering failure must never take the tables down (spec §2.2).
     failure.value = error instanceof Error ? error.message : String(error);
     renderer = null;
   }

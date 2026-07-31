@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { Building } from '../../../src/engine/components';
+import { Building, OutputBuffer } from '../../../src/engine/components';
 import { IdCounter, NoticeBoard, SnapshotStore } from '../../../src/engine/resources';
 import { SnapshotSystem } from '../../../src/engine/systems/snapshot-system';
+import { BALANCE } from '../../../src/engine/content/balance';
 import { buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spawnWorker } from '../../../src/engine/world';
 
 describe('SnapshotSystem', () => {
@@ -51,6 +52,29 @@ describe('SnapshotSystem', () => {
     await world.step();
     const snapshot = world.getResource(SnapshotStore).latest!;
     expect(snapshot.buildings.map((b) => b.state)).toEqual(['unstaffed', 'waitingForInput']);
+  });
+
+  it('pins staffing precedence: unstaffed wins over outputFull', async () => {
+    const save = initialSave();
+    save.workers = [];
+    const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
+    const ids = getPrepResource(prep, IdCounter);
+
+    // Unstaffed building with full buffer: should report 'unstaffed', not 'outputFull'
+    const unstaffedFull = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1 });
+    unstaffedFull.getComponent(OutputBuffer)!.add('wood', BALANCE.outputBufferCap);
+
+    // Staffed building with full buffer: should report 'outputFull'
+    const staffedFull = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1 });
+    staffedFull.getComponent(OutputBuffer)!.add('wood', BALANCE.outputBufferCap);
+    spawnWorker(prep, ids, { buildingId: staffedFull.getComponent(Building)!.id });
+
+    const world = await prep.prepareRun();
+    await world.step();
+    const snapshot = world.getResource(SnapshotStore).latest!;
+
+    expect(snapshot.buildings[0].state).toBe('unstaffed');
+    expect(snapshot.buildings[1].state).toBe('outputFull');
   });
 
   it('clears notices after snapshotting them', async () => {

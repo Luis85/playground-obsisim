@@ -102,7 +102,7 @@ describe('full colony integration', () => {
     }
     expect(final.stockpile.tools.stock).toBe(0);
     expect(final.stockpile.tools.productionRate).toBe(0);
-    expect(final.stockpile.planks.stock).toBeLessThanOrEqual(200); // never topped up by sawmill
+    expect(final.stockpile.planks.stock).toBeLessThan(200); // consumed by workshop, never topped up by sawmill
 
     // the colony itself is not in danger: the berries richSave also seeds
     // directly into the Stockpile carry everyone through the full run even

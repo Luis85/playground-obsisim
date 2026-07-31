@@ -181,7 +181,7 @@ describe('isLoadableSave', () => {
     expect(isLoadableSave(written)).toBe(true);
   });
 
-  it('a save producing onto a ceiling stockpile stays loadable (no boundary ping-pong)', async () => {
+  it('a save written from a ceiling stockpile is itself loadable (no boundary ping-pong)', async () => {
     // Stockpile.add saturates at MAX_SAVED_COUNTER, so a delivery onto a
     // ceiling stock must not push the written amount past the accept-bound.
     // Production now banks into a building's own OutputBuffer rather than the

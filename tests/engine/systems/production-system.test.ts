@@ -158,4 +158,37 @@ describe('ProductionSystem', () => {
     expect(stockpile.get('wheat')).toBe(20);
     expect(buffer.total()).toBe(BALANCE.outputBufferCap);
   });
+
+  it('consumes at most one batch of inputs beyond a full buffer', async () => {
+    // Mill: inputs 1 wheat per batch, outputs 1 flour per batch (1 unit).
+    // Buffer cap: 12 units. Arithmetic for the bound:
+    // - Start buffer at 11 flour: room = 12 - 11 = 1 unit (exactly room for 1 batch)
+    // - 1 worker contributes 1.0 work power per tick
+    // - Mill recipe needs 3 ticks per batch (ticksPerBatch)
+    // - Tick 1-3: consume 1 wheat (line 31), produce 1 flour per tick, bank at tick 3
+    // - At tick 3: bank 1 flour (buffer = 12) and consume 1 more wheat for next batch (line 53)
+    // - Total: 2 wheat consumed, 1 batch banked, 1 batch in flight
+    // - Tick 4+: room check (line 30) prevents new batches
+    // Expected: exactly one batch's worth of inputs held in flight, no more consumed
+    const { world, building, stockpile } = await setup('mill', { wheat: 2 });
+    const buffer = building.getComponent(OutputBuffer)!;
+    const production = building.getComponent(Production)!;
+
+    // Fill buffer to 11 flour (leaving room for exactly 1 more batch)
+    buffer.add('flour', 11);
+
+    // Run ticks for 1 batch to complete: 3 ticks
+    for (let i = 0; i < 3; i++) await world.step();
+
+    // Exactly 2 wheat consumed: 1 for the batch that completed, 1 for the batch in flight
+    expect(stockpile.get('wheat')).toBe(0); // 2 - 2 = 0
+    expect(buffer.total()).toBe(12); // 11 + 1 = 12 (full)
+    expect(production.batchActive).toBe(true); // One batch in flight (inputs paid, waiting to bank)
+    expect(production.progress).toBe(0); // Progress reset after banking
+
+    // Run many more ticks: no further wheat consumed (can't start new batch due to full buffer)
+    for (let i = 0; i < 50; i++) await world.step();
+    expect(stockpile.get('wheat')).toBe(0);
+    expect(buffer.total()).toBe(12);
+  });
 });

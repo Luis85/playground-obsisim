@@ -1694,7 +1694,15 @@ export function buildSaveFromWorld(world: IRuntimeWorld): SaveGameV3 {
 non-derived fact is represented in the save record" tests were disarmed twice
 while the save format lagged the sim. They use two separate exclusion arrays:
 
-- `derivedBuilding` (the building test) — Task 2 added `'buffered'`; remove it.
+- `derivedBuilding` (the building test) — **keep `'buffered'`.** It looked like
+  a temporary exclusion when Task 2 added it, but it is a permanent and
+  correct one: this test compares `BuildingSnapshot` keys against
+  `SavedBuilding` keys, and `buffered` is a display *total* derived from the
+  persisted `buffer` map (`buffered: buffer.total()`), exactly like `workers`,
+  `state`, and `progressPct` beside it. The real state persists as `buffer`,
+  and the "restores buffered goods into the building that held them" test is
+  what guards it. Removing this entry makes the test fail on a naming
+  difference, not on a persistence gap.
 - `DERIVED` (the worker test) — by the time you arrive it holds four entries:
   `'efficiency'`, `'hauling'`, `'haulTargetId'`, `'carrying'`. Remove **only
   `'hauling'`**. The other three stay and are not oversights: `efficiency` is

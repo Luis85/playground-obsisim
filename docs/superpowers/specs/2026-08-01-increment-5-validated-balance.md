@@ -68,7 +68,7 @@ steps `ALL_SYSTEMS`, and reports:
 
 | metric | meaning |
 | --- | --- |
-| `made` | units banked into output buffers (gross production) |
+| `made` | gross production: reached the store, plus still in the buffer, plus in a hauler's hands |
 | `delivered` | units that reached the stockpile |
 | `stalledTicks` | ticks the building spent in `outputFull` |
 | `relocatingTicks` | ticks the building spent unable to work after a move |
@@ -260,15 +260,15 @@ found their gradient sound and only their documented justification wrong.
 | `outputBufferCap` | 12 | Validated: ~18 ticks of a 2-worker forester before stalling, matching its original claim. |
 | `haulCarryCapacity` | 6 | Validated: two trips clear a full buffer. |
 | `haulTilesPerTick` | 2 | Validated as a *gradient* — 1 hauler to leg ≈4, 2 by leg 8, 3 by leg 13. Its original one-hauler-per-far-producer claim was wrong and is corrected. |
-| `relocationTilesPerTick` | 1 | **Measured.** Half the hauler rate. Held distance-constant — two leg-4 tiles 9.9 apart — 10 ticks out of action cost 3 of a 200-tick run's 129 units. A far-corner move costs 18 ticks and lands at 87 units, *below* the 96 of a building that started in the far corner and never moved, despite the mover spending its first 50 ticks at the nearer leg-4 tile. Downtime and the haul gradient compound, so a misplaced building is not cheaply undone. |
+| `relocationTilesPerTick` | 1 | **Measured.** Half the hauler rate. Held distance-constant — two leg-4 tiles 9.9 apart — 10 ticks out of action cost 7 of a 200-tick run's 133 units, matching 10 ticks × ⅔ units per tick almost exactly. The loss is stable across run lengths (6 of 266 over 400 ticks) because both runs share the same history apart from the move. A far-corner move costs 18 ticks out of action; its effect on output is *not* quoted here, because a mover and a building that started far apart have different histories and the comparison's sign flips with run length. |
 
 Every figure above comes from one configuration — a forester with a crew of 2
 and 2 haulers over a 200-tick run — reproducible via `npm run balance:report`
 and `tests/engine/balance.test.ts`. The suite pins the *relationships* (which
-leg needs how many haulers; that a mover finishes below a building that never
-moved) and the relocation countdown, deliberately not the unit counts: an exact
-`delivered === 129` would break on any unrelated recipe change and teach nobody
-anything.
+leg needs how many haulers; that a relocation costs output against both the
+origin and the destination once distance is held constant) and the relocation
+countdown, deliberately not the unit counts: an exact `delivered === 129`
+would break on any unrelated recipe change and teach nobody anything.
 
 The gradient these produce is the point, and it now bites: near buildings are
 cheap to serve, far ones demand real hauler investment, and — since relocation

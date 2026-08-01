@@ -31,7 +31,12 @@ export interface Scenario {
 }
 
 export interface BalanceResult {
-  /** Units banked into the building's buffer — gross production. */
+  /**
+   * Gross production: units that reached the store, plus units still sitting
+   * in the building's buffer, plus units in a hauler's hands. A unit a hauler
+   * has picked up but not yet deposited has left the buffer and not arrived
+   * at the store, so it must be counted separately from both.
+   */
   made: number;
   /** Units that reached the stockpile. */
   delivered: number;
@@ -88,10 +93,14 @@ export async function runScenario(scenario: Scenario): Promise<BalanceResult> {
   const snapshot = world.getResource(SnapshotStore).latest!;
   const finalBuffer = snapshot.buildings.find((b) => b.id === buildingId)?.buffered ?? 0;
   const delivered = world.getResource(Stockpile).get(resource) - before;
+  const inTransit = snapshot.workers.reduce((sum, w) => sum + w.carrying, 0);
   // Gross production, derived rather than sampled: madeRate is a rolling mean
   // over statsWindowTicks and would understate a short run. Everything made
-  // either reached the store or is still in the buffer.
-  const made = delivered + finalBuffer;
+  // either reached the store, is still in the buffer, or is in a hauler's
+  // hands — a unit a hauler has picked up but not yet deposited has left the
+  // buffer and not arrived at the store, so omitting it under-reports every
+  // run that ends mid-trip.
+  const made = delivered + finalBuffer + inTransit;
 
   const recipe = BUILDINGS[defId].recipe;
   const perBatch = Object.values(recipe.outputs).reduce((sum, n) => sum + n, 0);

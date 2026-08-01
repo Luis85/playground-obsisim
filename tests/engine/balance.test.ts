@@ -99,22 +99,19 @@ describe('haul balance gradient', () => {
     expect(moved.made).toBeLessThan(to.made);   //   ...and against the destination
   }, 180000);
 
-  it('a far-corner relocation costs more than starting far ever does', async () => {
+  it('a far-corner relocation puts a building out of action for a large share of a run', async () => {
     // (8,4) -> (23,15) is hypot(15,11) = 18.6 tiles: a plausible "I put this in
     // the wrong place" correction, not a contrived worst case.
-    const stayed = await relocating(8, 4);       // leg 4 all run
-    const settledFar = await relocating(23, 15); // leg 13 all run, never moves
+    //
+    // Only the downtime is asserted. A `made` comparison against a building
+    // that started in the far corner was tried and removed: the mover gets 50
+    // ticks at the near tile that the control never gets, so such a comparison
+    // measures head-start-minus-downtime, and its sign flips with run length
+    // (the mover is behind at 200 ticks and ahead at 400). The distance-neutral
+    // test above is the one that isolates downtime, and it holds at every
+    // horizon because both runs share the same history apart from the move.
     const moved = await relocating(8, 4, { col: 23, row: 15, atTick: 50 });
-
     expect(moved.relocatingTicks).toBeGreaterThan(15);
     expect(moved.relocatingTicks).toBeLessThan(25);
-
-    // Distance alone predicts the OPPOSITE of what happens. The mover spends
-    // its first 50 ticks at the near tile, where `stayed` runs at full rate, so
-    // it should finish ahead of a building that sat in the far corner all run.
-    // It finishes behind: the downtime more than cancels a 50-tick head start.
-    // This is the comparison §4 of the spec cites.
-    expect(moved.made).toBeLessThan(settledFar.made);
-    expect(settledFar.made).toBeLessThan(stayed.made);
-  }, 180000);
+  }, 120000);
 });

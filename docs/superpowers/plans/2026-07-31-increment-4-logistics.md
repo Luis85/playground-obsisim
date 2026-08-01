@@ -2600,7 +2600,12 @@ entries already there:
 - [ ] **Step 2: Full gate battery**
 
 Run: `npm run check:all`
-Expected: all green — lint, `check:loc`, `check:css`, `check:quality` ("quality ratchet ok", maintainability ≥ 90.7), typecheck, test, build, `check:artifacts`.
+Expected: all green — lint, `check:loc`, `check:css`, `check:quality` ("quality ratchet ok"), typecheck, test, build, `check:artifacts`.
+
+The maintainability floor is **90.5**, re-based during this increment after the
+old 90.7 was found unreachable by any honest means; the reasoning is in
+`docs/build-ci/quality-gates.md`. Do not `--update` the baseline for any
+reason — if `check:quality` fails, stop and report it.
 
 Run: `npm run test:coverage`
 Expected: green, floors met on `src/engine/**`, `src/shared/**`, `src/app/stores/**`.

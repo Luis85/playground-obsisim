@@ -159,6 +159,19 @@ describe('check:quality maintainability floor', () => {
     expect(code).toBe(1);
     expect(err).toContain('missing gated entries: worstSrcFileMaintainability');
   });
+
+  // Coverage for the normal run path (no --update): the pinned-at-zero counters
+  // only had coverage via `--update`'s refusal-to-lock branch, so a mutation
+  // that dropped pinnedBreaches from the plain gate's `failures` list left
+  // circularDependencies / reExportCycles / boundaryViolations /
+  // criticalComplexity entirely ungated here and every existing test stayed
+  // green.
+  it('fails on the normal run when a pinned-at-zero key is breached', () => {
+    const { code, err } = run([...SRC, ...TESTS, ...SCRIPTS], { overrides: { boundaryViolations: 3 } });
+    expect(code).toBe(1);
+    expect(err).toContain('boundaryViolations: 3');
+    expect(err).toContain('pinned at 0');
+  });
 });
 
 describe('check:quality --update', () => {

@@ -541,11 +541,14 @@ describe('live-world projections agree', () => {
   // be persisted AND survive save -> restore, so a new fact is covered by
   // default and opting out is a visible, deliberate edit to this list.
   // `efficiency` is recomputed from hunger every tick, never stored.
-  // `haulTargetId` and `carrying` are real state too, but HaulTrip (Task 4) is
-  // deliberately runtime-only for good: a hauler caught mid-trip banks its
-  // carried load into the saved stockpile instead (Task 6), so the trip
-  // itself never has a save-record counterpart to agree with.
-  const DERIVED = ['efficiency', 'haulTargetId', 'carrying'] as const;
+  // `haulTargetId`, `haulPhase`, `haulTicksLeft` and `carrying` are real state
+  // too, but HaulTrip (Task 4) is deliberately runtime-only for good: a hauler
+  // caught mid-trip banks its carried load into the saved stockpile instead
+  // (Task 6), so the trip itself never has a save-record counterpart to agree
+  // with. `haulPhase`/`haulTicksLeft` joined the snapshot in increment 5 to
+  // drive the dot's position from the trip's real duration (OBS-4-09) — same
+  // component, same runtime-only status.
+  const DERIVED = ['efficiency', 'haulTargetId', 'haulPhase', 'haulTicksLeft', 'carrying'] as const;
 
   function persisted(workers: readonly object[]): Record<string, unknown>[] {
     return workers.map((w) => {

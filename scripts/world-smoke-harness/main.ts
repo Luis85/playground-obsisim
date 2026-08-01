@@ -29,7 +29,8 @@ function building(id: number, defId: BuildingSnapshot['defId'], col: number, row
 
 function worker(id: number, overrides: Partial<WorkerSnapshot> = {}): WorkerSnapshot {
   return {
-    id, hunger: 0, efficiency: 1, buildingId: null, hauling: false, haulTargetId: null, carrying: 0, toolTicks: 0,
+    id, hunger: 0, efficiency: 1, buildingId: null, hauling: false,
+    haulTargetId: null, haulPhase: 'idle', haulTicksLeft: 0, carrying: 0, toolTicks: 0,
     ...overrides,
   };
 }
@@ -91,11 +92,14 @@ const phases: Array<() => void> = [
   () => renderer.sync(snap(4,
     [building(1, 'forester', 4, 1, { workers: 2, state: 'producing', batchActive: true, progressPct: 90 }), building(2, 'farm', 6, 1, { workers: 1, state: 'producing', batchActive: true, progressPct: 10 }), building(3, 'sawmill', 14, 7)],
     growWorkers())),
-  // Four haul phases, one change each — see haulScene above.
-  () => renderer.sync(haulScene(5, {})),                                 // 6: baseline, worker 12 idle at camp
-  () => renderer.sync(haulScene(6, { hauling: true, haulTargetId: 1 })), // 7: + dispatched to building 1
-  () => renderer.sync(haulScene(7, { hauling: true })),                  // 8: + walking home, still empty
-  () => renderer.sync(haulScene(8, { hauling: true, carrying: 6 })),     // 9: + carrying a load, same tile
+  // Four haul phases, one change each — see haulScene above. Building 1 sits at
+  // (4,1), hypot(2,1) = 2.24 tiles from the camp, so each leg is
+  // ceil(2.24/2) = 2 ticks. The dot's position comes from haulTicksLeft
+  // (OBS-4-09), so these values are what move it, not elapsed wall-clock.
+  () => renderer.sync(haulScene(5, {})),                                                    // 6: baseline, idle at camp
+  () => renderer.sync(haulScene(6, { hauling: true, haulTargetId: 1, haulPhase: 'outbound', haulTicksLeft: 0 })), // 7: arrived at the building
+  () => renderer.sync(haulScene(7, { hauling: true, haulTargetId: 1, haulPhase: 'returning', haulTicksLeft: 1 })), // 8: half way home — a genuinely interpolated point, neither endpoint
+  () => renderer.sync(haulScene(8, { hauling: true, haulTargetId: 1, haulPhase: 'returning', haulTicksLeft: 1, carrying: 6 })), // 9: same point, now loaded
   () => {
     renderer.setGhost({ defId: 'bakery', col: 10, row: 5, valid: true });
     renderer.setSelection(1);

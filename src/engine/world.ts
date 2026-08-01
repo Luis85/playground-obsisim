@@ -434,7 +434,8 @@ function buildInitialSnapshot(save: SaveGameV3): Snapshot {
       efficiency: workerEfficiency(hunger),
       buildingId: saved.buildingId,
       hauling: saved.hauling,
-      haulTargetId: null, carrying: 0, carryingResource: null, // a restored colony's haulers start at the camp
+      // a restored colony's haulers start at the camp: HaulTrip never enters the save
+      haulTargetId: null, haulPhase: 'idle' as const, haulTicksLeft: 0, carrying: 0, carryingResource: null,
       toolTicks,
     };
   });

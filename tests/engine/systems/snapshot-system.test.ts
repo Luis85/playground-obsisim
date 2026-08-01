@@ -78,13 +78,17 @@ describe('SnapshotSystem', () => {
     expect(snapshot.buildings[1].state).toBe('outputFull');
   });
 
-  it('reports a haul target while outbound and none while returning', async () => {
+  it('reports the trip target, phase and remaining ticks on BOTH legs', async () => {
     // Driven by a REAL trip, not a hand-written fixture: every other
     // haulTargetId in the suite is a literal handed to the layout, so nothing
-    // else pins what the engine actually publishes. Acceptance criterion 2
-    // needs the dot to come home visibly, and it only does when a returning
-    // hauler reports no target — otherwise placeHaulers pins it at the source
-    // building's doorstep for the whole walk back.
+    // else pins what the engine actually publishes.
+    //
+    // Increment 4 published the target outbound only, and the layout parked an
+    // outbound dot at the doorstep and let a fixed-speed walk do the rest. The
+    // layout now interpolates from `haulTicksLeft`, so a returning hauler needs
+    // the building it is walking BACK from, and both legs need their remaining
+    // ticks (OBS-4-09). `trip.targetId` survives the phase flip; only
+    // trip.reset() clears it.
     const save = initialSave();
     save.workers = [];
     save.stockpile = {};
@@ -99,14 +103,28 @@ describe('SnapshotSystem', () => {
     const hauler = () => world.getResource(SnapshotStore).latest!.workers[0];
 
     await world.step(); // dispatched: walking out to the building
-    expect(hauler()).toMatchObject({ hauling: true, haulTargetId: buildingId, carrying: 0 });
+    // The dispatch tick sets the full 3-tick leg without decrementing it, so
+    // the hauler has not travelled yet — legProgress(3, 3) is 0 and the dot
+    // correctly still stands at the camp on the tick it was assigned.
+    expect(hauler()).toMatchObject({
+      hauling: true, haulTargetId: buildingId, haulPhase: 'outbound', haulTicksLeft: 3, carrying: 0,
+    });
 
-    for (let i = 0; i < 3; i++) await world.step(); // arrives, loads, turns for home
-    expect(hauler().carrying).toBe(BALANCE.haulCarryCapacity);
-    expect(hauler().haulTargetId).toBeNull();
+    await world.step(); // one tick of walking: now genuinely partway out
+    expect(hauler()).toMatchObject({ haulPhase: 'outbound', haulTicksLeft: 2 });
 
-    for (let i = 0; i < 3; i++) await world.step(); // banks the load, back to idle
-    expect(hauler()).toMatchObject({ haulTargetId: null, carrying: 0 });
+    for (let i = 0; i < 2; i++) await world.step(); // arrives, loads, turns for home
+    expect(hauler()).toMatchObject({
+      haulTargetId: buildingId, haulPhase: 'returning', carrying: BALANCE.haulCarryCapacity,
+    });
+    // The turn sets the full return leg, exactly as dispatch did: the dot is at
+    // the building's door with the whole walk home still ahead of it.
+    expect(hauler().haulTicksLeft).toBe(3);
+    await world.step();
+    expect(hauler()).toMatchObject({ haulPhase: 'returning', haulTicksLeft: 2 }); // genuinely walking home
+
+    for (let i = 0; i < 2; i++) await world.step(); // banks the load, back to idle
+    expect(hauler()).toMatchObject({ haulTargetId: null, haulPhase: 'idle', haulTicksLeft: 0, carrying: 0 });
   });
 
   it('clears notices after snapshotting them', async () => {

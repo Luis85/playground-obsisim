@@ -1,4 +1,5 @@
 import type { BuildingDefId, ResourceId } from './content-types';
+import type { HaulPhase } from './haul';
 import type { WorldMapSize } from './placement';
 
 export type BuildingState = 'producing' | 'waitingForInput' | 'unstaffed' | 'outputFull';
@@ -40,8 +41,18 @@ export interface WorkerSnapshot {
   buildingId: number | null;
   /** True while this worker is assigned to hauling rather than to a building. */
   hauling: boolean;
-  /** The building this hauler is walking to, or null when idle or heading home. */
+  /**
+   * The building this trip serves — set on BOTH legs, so a returning hauler is
+   * still drawn on the line back from the building it loaded at. Null only when
+   * the worker is not on a trip. (Increment 4 published this outbound-only; the
+   * layout then had no way to know where a returning dot was walking from, which
+   * is half of why it turned round in open ground — OBS-4-09.)
+   */
   haulTargetId: number | null;
+  /** Which leg of the round trip, or 'idle' when not on one. */
+  haulPhase: HaulPhase;
+  /** Ticks remaining on the current leg — the dot's position is derived from it. */
+  haulTicksLeft: number;
   /** Units in hand (0 unless carrying a load home). */
   carrying: number;
   /** Remaining ticks of this worker's tool coverage (0 = none). */

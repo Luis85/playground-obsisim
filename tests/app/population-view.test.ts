@@ -14,7 +14,8 @@ import type { WorkerSnapshot } from '../../src/shared/snapshot';
 // about what a WorkerSnapshot actually carries.
 function worker(overrides: Partial<WorkerSnapshot> = {}): WorkerSnapshot {
   return {
-    id: 1, hunger: 0, efficiency: 1, buildingId: null, hauling: false, haulTargetId: null, carrying: 0, toolTicks: 0,
+    id: 1, hunger: 0, efficiency: 1, buildingId: null, hauling: false,
+    haulTargetId: null, haulPhase: 'idle', haulTicksLeft: 0, carrying: 0, toolTicks: 0,
     ...overrides,
   };
 }

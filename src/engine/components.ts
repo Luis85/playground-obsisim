@@ -1,4 +1,5 @@
 import type { BuildingDefId, ResourceId } from '../shared/content-types';
+import type { HaulPhase } from '../shared/haul';
 
 export class Building {
   constructor(public id: number, public defId: BuildingDefId) {}
@@ -91,7 +92,9 @@ export class OutputBuffer {
   }
 }
 
-export type HaulPhase = 'idle' | 'outbound' | 'returning';
+// Defined in src/shared/haul.ts (the snapshot publishes it, and shared may
+// not import the engine); re-exported here so component consumers need one import.
+export type { HaulPhase };
 
 /**
  * A hauler's current trip. Runtime-only: it never enters the save — a hauler

@@ -1,5 +1,6 @@
 import type { IRuntimeWorld } from 'sim-ecs';
 import type { BuildingDefId, ResourceId } from '../shared/content-types';
+import type { HaulPhase } from '../shared/haul';
 import type { SavedBuilding, SavedWorker } from '../shared/save';
 import type { BuildingSnapshot, BuildingState, WorkerSnapshot } from '../shared/snapshot';
 import { BALANCE, workerWorkPower } from './content/balance';
@@ -22,6 +23,8 @@ export interface WorkerFacts {
   buildingId: number | null;
   hauling: boolean;
   haulTargetId: number | null;
+  haulPhase: HaulPhase;
+  haulTicksLeft: number;
   carrying: number;
   carryingResource: ResourceId | null;
   toolTicks: number;
@@ -66,7 +69,8 @@ export function buildEntitySections(workers: readonly WorkerFacts[], buildings: 
   const workerSnaps: WorkerSnapshot[] = workers
     .map((w) => ({
       id: w.id, hunger: w.hunger, efficiency: w.efficiency, buildingId: w.buildingId, hauling: w.hauling,
-      haulTargetId: w.haulTargetId, carrying: w.carrying, toolTicks: w.toolTicks,
+      haulTargetId: w.haulTargetId, haulPhase: w.haulPhase, haulTicksLeft: w.haulTicksLeft,
+      carrying: w.carrying, toolTicks: w.toolTicks,
     }))
     .sort((a, b) => a.id - b.id);
 
@@ -129,9 +133,13 @@ export function workerFactsOf(
     efficiency: efficiency.value,
     buildingId: job.buildingId,
     hauling: job.hauling,
-    // Only an outbound hauler has somewhere to be: a returning one is walking
-    // to the camp, which the layout places without needing a target.
-    haulTargetId: trip.phase === 'outbound' ? trip.targetId : null,
+    // Published on BOTH legs now: the layout interpolates the dot along the
+    // camp<->building line, so a returning hauler still needs to know which
+    // building it is walking back from (OBS-4-09). `trip.targetId` survives the
+    // phase flip and is cleared only by trip.reset().
+    haulTargetId: trip.targetId,
+    haulPhase: trip.phase,
+    haulTicksLeft: trip.ticksLeft,
     carrying: trip.amount,
     carryingResource: trip.resource,
     toolTicks: coverage.remainingTicks,

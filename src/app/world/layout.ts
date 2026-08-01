@@ -1,6 +1,7 @@
 import type { Snapshot, BuildingState, WorkerSnapshot } from '../../shared/snapshot';
 import type { BuildingDefId } from '../../shared/content-types';
-import { BUILDINGS } from '../../engine/content';
+import { BALANCE, BUILDINGS } from '../../engine/content';
+import { haulTicks, legProgress } from '../../shared/haul';
 
 export const TILE = 48;
 
@@ -33,6 +34,13 @@ export interface PlacedWorker {
   efficiency: number;
   tooled: boolean;
   carrying: boolean;
+  /**
+   * True while this worker is mid-haul. The renderer walks these at whatever
+   * speed reaches the next point before the next snapshot, instead of the fixed
+   * pixel rate it uses for a cosmetic reassignment walk — the trip has a
+   * simulated duration and the dot must respect it (OBS-4-09).
+   */
+  travelling: boolean;
 }
 
 export interface WorldLayout {
@@ -202,21 +210,42 @@ function haulerSpot(cell: PlacedBuilding): Spot {
 }
 
 /**
- * Outbound haulers stand at their target; returning and idle ones fall
- * through to the camp allocation below. Successive layouts therefore hand
- * the renderer a moving target, and its existing walk animation does the
- * rest — the dot carries the goods across the map on its own.
+ * Where a hauler's dot is RIGHT NOW: interpolated along the camp<->building
+ * line from the leg's remaining ticks.
+ *
+ * Increment 4 placed an outbound hauler at its target and let the renderer walk
+ * there at a fixed 90 px/s. That is 1.875 tiles/s against a simulation moving
+ * the hauler 4 tiles/s at 1x — and over 8x faster at 4x speed — so the dot was
+ * still in open ground when the trip flipped legs, and turned round without
+ * ever reaching the building it was sent to (OBS-4-09). Deriving the position
+ * from `haulTicksLeft` makes the two clocks identical by construction, at every
+ * game speed, and needs no notion of speed here at all.
+ *
+ * The leg's full length is recomputed with the same `haulTicks` the simulation
+ * charged, so the endpoints of the drawn walk and the cost model agree.
+ */
+function haulSpot(w: WorkerSnapshot, cell: PlacedBuilding): Spot {
+  const door = haulerSpot(cell);
+  const travelled = legProgress(w.haulTicksLeft, haulTicks(cell.col, cell.row, BALANCE.haulTilesPerTick));
+  const from = w.haulPhase === 'outbound' ? CAMP_ANCHOR : door;
+  const to = w.haulPhase === 'outbound' ? door : CAMP_ANCHOR;
+  return { x: from.x + (to.x - from.x) * travelled, y: from.y + (to.y - from.y) * travelled };
+}
+
+/**
+ * Haulers on a leg sit on the line between camp and building; idle ones fall
+ * through to the camp allocation below, which is also where a hauler whose
+ * target was demolished mid-trip ends up.
  *
  * Its own function (not inlined in layoutWorld) purely to keep that
- * orchestrator's complexity within the project's gate — the logic is
- * unchanged from a plain loop over `sorted`.
+ * orchestrator's complexity within the project's gate.
  */
 function placeHaulers(sorted: WorkerSnapshot[], cellById: Map<number, PlacedBuilding>, placements: Map<number, Placement>): void {
   for (const w of sorted) {
-    if (!w.hauling || w.haulTargetId === null) continue;
+    if (!w.hauling || w.haulTargetId === null || w.haulPhase === 'idle') continue;
     const cell = cellById.get(w.haulTargetId);
     if (cell === undefined) continue; // target demolished: the camp claims them
-    placements.set(w.id, { at: w.haulTargetId, slot: HAULER_SLOT, spot: haulerSpot(cell) });
+    placements.set(w.id, { at: w.haulTargetId, slot: HAULER_SLOT, spot: haulSpot(w, cell) });
   }
 }
 
@@ -255,6 +284,7 @@ export function layoutWorld(snapshot: Snapshot, previous?: WorldLayout): WorldLa
     return {
       id: w.id, x: p.spot.x, y: p.spot.y, at: p.at, slot: p.slot,
       efficiency: w.efficiency, tooled: w.toolTicks > 0, carrying: w.carrying > 0,
+      travelling: p.slot === HAULER_SLOT,
     };
   });
   return { tile: TILE, cols, rows, camp: CAMP_ANCHOR, buildings: [...cellById.values()], workers };

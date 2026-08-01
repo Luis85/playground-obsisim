@@ -278,12 +278,19 @@ describe('layoutWorld', () => {
 });
 
 describe('hauler placement', () => {
+  // (8,4) is hypot(6,4) = 7.21 tiles from the camp, so haulTicks at 2 tiles/tick
+  // is ceil(7.21/2) = 4. Every leg below is 4 ticks long.
+  const LEG_TICKS = 4;
   const haulSnapshot = (overrides: Partial<WorkerSnapshot>) => makeSnapshot({
     buildings: [makeBuilding(1, { defId: 'forester', col: 8, row: 4 })],
-    workers: [makeWorker(20, { hauling: true, ...overrides })],
+    // Default: an outbound hauler that has ARRIVED (0 ticks left), which is the
+    // doorstep case the placement tests below were written against.
+    workers: [makeWorker(20, { hauling: true, haulPhase: 'outbound', haulTicksLeft: 0, ...overrides })],
   });
+  const haulerIn = (snapshot: ReturnType<typeof makeSnapshot>) =>
+    layoutWorld(snapshot).workers.find((w) => w.id === 20)!;
 
-  it('stands an outbound hauler at the building it is walking to', () => {
+  it('stands an arrived outbound hauler at the building it walked to', () => {
     const layout = layoutWorld(haulSnapshot({ haulTargetId: 1 }));
     const hauler = layout.workers.find((w) => w.id === 20)!;
     const cell = layout.buildings.find((b) => b.id === 1)!;
@@ -292,12 +299,63 @@ describe('hauler placement', () => {
     expect(hauler.y).toBeGreaterThan(cell.row + 0.5); // on the doorstep, not in the crew's spots
   });
 
-  it('sends a returning hauler back to the camp band', () => {
-    const layout = layoutWorld(haulSnapshot({ haulTargetId: null, carrying: 6 }));
-    const hauler = layout.workers.find((w) => w.id === 20)!;
-    expect(hauler.at).toBeNull();
+  it('sends a hauler that finished its return leg back to the camp', () => {
+    const hauler = haulerIn(haulSnapshot({ haulTargetId: 1, haulPhase: 'returning', haulTicksLeft: 0, carrying: 6 }));
     expect(hauler.x).toBeLessThan(CAMP_COLS);
     expect(hauler.carrying).toBe(true);
+  });
+
+  // OBS-4-09. The dot used to be walked at a fixed 90 px/s with no relation to
+  // the trip's simulated duration — 1.875 tiles/s against a sim moving it 4,
+  // and over 8x adrift at 4x speed. It was still in open ground when the trip
+  // flipped legs, so it turned round without ever reaching the building.
+  // Position is now derived from the leg's remaining ticks, so the two clocks
+  // agree by construction at any speed.
+  it('places a just-dispatched hauler at the camp, not already at its target', () => {
+    const justSent = haulerIn(haulSnapshot({ haulTargetId: 1, haulTicksLeft: LEG_TICKS }));
+    const camp = layoutWorld(haulSnapshot({ haulTargetId: 1 })).camp;
+    expect(justSent.x).toBeCloseTo(camp.x);
+    expect(justSent.y).toBeCloseTo(camp.y);
+  });
+
+  it('advances an outbound hauler monotonically from camp to doorstep', () => {
+    const at = (ticksLeft: number) => haulerIn(haulSnapshot({ haulTargetId: 1, haulTicksLeft: ticksLeft }));
+    const xs = [LEG_TICKS, 3, 2, 1, 0].map((t) => at(t).x);
+    for (let i = 1; i < xs.length; i++) {
+      expect(xs[i]).toBeGreaterThan(xs[i - 1]); // never stalls, never doubles back
+    }
+    // Halfway through the leg it is genuinely halfway across, not at either end.
+    const half = at(LEG_TICKS / 2);
+    expect(half.x).toBeCloseTo((xs[0] + xs[xs.length - 1]) / 2);
+  });
+
+  it('turns for home from the building, never from open ground', () => {
+    // The exact reversal this issue is about: on the tick the trip flips, the
+    // sim has the hauler AT the building with a full return leg ahead of it.
+    const arrived = haulerIn(haulSnapshot({ haulTargetId: 1, haulTicksLeft: 0 }));
+    const turning = haulerIn(haulSnapshot({
+      haulTargetId: 1, haulPhase: 'returning', haulTicksLeft: LEG_TICKS, carrying: 6,
+    }));
+    expect(turning.x).toBeCloseTo(arrived.x);
+    expect(turning.y).toBeCloseTo(arrived.y);
+  });
+
+  it('walks a returning hauler back along the same line it came out on', () => {
+    const out = (t: number) => haulerIn(haulSnapshot({ haulTargetId: 1, haulTicksLeft: t }));
+    const back = (t: number) => haulerIn(haulSnapshot({
+      haulTargetId: 1, haulPhase: 'returning', haulTicksLeft: t, carrying: 6,
+    }));
+    // Same fraction of the leg travelled, opposite direction: one tick out of
+    // four is the mirror of three ticks left on the way home.
+    expect(back(3).x).toBeCloseTo(out(1).x);
+    expect(back(3).y).toBeCloseTo(out(1).y);
+  });
+
+  it('marks a hauler mid-trip as travelling, and an idle worker as not', () => {
+    // The flag the renderer uses to pick trip-duration pacing over the cosmetic
+    // reassignment walk — without it the dot falls behind its own trip again.
+    expect(haulerIn(haulSnapshot({ haulTargetId: 1, haulTicksLeft: 2 })).travelling).toBe(true);
+    expect(haulerIn(haulSnapshot({ haulTargetId: null, haulPhase: 'idle' })).travelling).toBe(false);
   });
 
   it('keeps a hauler at the doorstep of its target while the crew hold their own distinct spots', () => {
@@ -307,7 +365,7 @@ describe('hauler placement', () => {
     // rather than hardcoding the cell's offset here.
     const haulerAlone = layoutWorld(makeSnapshot({
       buildings: [building],
-      workers: [makeWorker(20, { hauling: true, haulTargetId: 1 })],
+      workers: [makeWorker(20, { hauling: true, haulTargetId: 1, haulPhase: 'outbound', haulTicksLeft: 0 })],
     }));
     const doorstep = haulerAlone.workers.find((w) => w.id === 20)!;
 
@@ -316,7 +374,7 @@ describe('hauler placement', () => {
       workers: [
         makeWorker(1, { buildingId: 1 }),
         makeWorker(2, { buildingId: 1 }),
-        makeWorker(20, { hauling: true, haulTargetId: 1 }),
+        makeWorker(20, { hauling: true, haulTargetId: 1, haulPhase: 'outbound', haulTicksLeft: 0 }),
       ],
     }));
 
@@ -350,7 +408,7 @@ describe('hauler placement', () => {
     const building = makeBuilding(1, { defId: 'forester', col: 8, row: 4, workerSlots: 4 });
     const before = layoutWorld(makeSnapshot({
       buildings: [building],
-      workers: [makeWorker(20, { hauling: true, haulTargetId: 1 })],
+      workers: [makeWorker(20, { hauling: true, haulTargetId: 1, haulPhase: 'outbound', haulTicksLeft: 0 })],
     }));
     const wasHauler = before.workers.find((w) => w.id === 20)!;
     expect(wasHauler.at).toBe(1); // sanity: this frame is the doorstep case, its placement carries the sentinel

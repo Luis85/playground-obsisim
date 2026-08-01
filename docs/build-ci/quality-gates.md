@@ -128,6 +128,63 @@ Two rules follow:
   penalising the right change. Re-base the floor and note it here; do not pad
   comments to compensate.
 
+### Re-based to 90.5 in increment 4 — and why this floor's *shape* is wrong
+
+Increment 4 (logistics) ended with the gate red at `maintainability: 90.7 ->
+90.5`. Before re-basing, we checked whether the floor could be earned back, and
+it could not. The finding is worth recording because it invalidates the model
+two earlier sections of this document were written against.
+
+**The actual formula** (fallow's own CLI reference, `Maintainability index
+formula`) is:
+
+```
+100 - (complexity_density x 30) - (dead_code_ratio x 20) - min(ln(fan_out+1) x 4, 15)
+```
+
+clamped to 0-100, where `complexity_density` is `total_cyclomatic / lines`.
+There is **no length term and no comment-density term.** The section above
+attributes the increment-1.5 regression to "a comment-density term"; that
+attribution is wrong, though its conclusion happens to be right. Deleting
+comments does lower MI — not because comments are rewarded, but because they
+are *lines*, and lines are the denominator of complexity density. Removing them
+raises density. The practical warning stands; the stated reason does not.
+
+Three consequences follow, and all three are counter-intuitive enough to be
+worth stating outright:
+
+1. **Splitting a file does not raise its maintainability.** Length is not
+   penalised. An extraction only helps if the block you remove has *higher*
+   complexity density than what stays behind. Increment 4 tested this on a
+   genuinely sound seam — the save guard coming out of `src/engine/world.ts` —
+   and measured the average moving 90.5 -> **90.4**. The extraction was
+   reverted on the evidence.
+2. **Decomposition is actively penalised.** Every new module adds a
+   below-average file to the mean and charges each importer an extra `fan_out`.
+   The save-guard split cost 6.3 MI across its ten importers alone.
+3. **Adding comments raises the score and deleting them lowers it**, with no
+   change to the code. That is a padding vector, and padding remains
+   forbidden — see the rule above.
+
+**The deeper problem is that this floor is a mean over every analysed file,
+tests included.** At the time of re-basing: 78 files at 90.49 overall, but 48
+source files at 90.99 and 30 test files at 89.70. So the floor falls whenever an
+increment adds test files, regardless of whether anything got worse — which is
+the opposite of what a ratchet is for.
+
+Restoring 90.7 would have required **+16.1 MI points**. The three largest levers
+available were to strip *all* branching from `src/shared/save.ts` (+8.8),
+`WorldView.vue` (+8.8), or `command-system.ts` (+8.2 — an eighteen-branch
+command dispatcher whose branches are its job). Gutting two or three of the
+worst files is not refactoring, and every alternative was metric-gaming.
+
+The floor was therefore re-based to the measured **90.5**. The gate's shape is
+tracked as a defect, not accepted as correct — see
+`docs/issues/` for the proposal to floor source files only, or to floor the
+worst single file rather than the mean. Until that lands, expect this number to
+need re-basing roughly once per increment, and re-base it on measurement rather
+than defending it with padding.
+
 Getting `complexFunctions` and `criticalComplexity` to 0 required real
 refactoring, not tuning: `CommandSystem`'s run function (cognitive
 complexity 44), `ProductionSystem` and `SnapshotSystem`'s run functions,

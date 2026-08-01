@@ -5,8 +5,9 @@ import { createTestingPinia } from '@pinia/testing';
 import SelectionPanel from '../../src/app/components/SelectionPanel.vue';
 import { useGameStore } from '../../src/app/stores/game-store';
 import { makeBuilding, makeSnapshot } from './fixtures';
+import type { BuildingSnapshot } from '../../src/shared/snapshot';
 
-function mountPanel(buildingId = 7) {
+function mountPanel(buildingId = 7, building: Partial<BuildingSnapshot> = {}) {
   const wrapper = mount(SelectionPanel, {
     props: { buildingId },
     global: { plugins: [createTestingPinia({ createSpy: vi.fn, stubActions: false })] },
@@ -14,6 +15,7 @@ function mountPanel(buildingId = 7) {
   useGameStore().ingest(makeSnapshot({
     buildings: [makeBuilding(7, {
       defId: 'bakery', col: 6, row: 3, workers: 1, workerSlots: 2, state: 'producing',
+      ...building,
     })],
   }), { paused: true, speed: 1, error: null });
   return wrapper;
@@ -59,5 +61,11 @@ describe('SelectionPanel', () => {
     useGameStore().ingest(makeSnapshot({ buildings: [] }), { paused: true, speed: 1, error: null });
     await wrapper.vm.$nextTick();
     expect(wrapper.find('[data-test="selection-panel"]').exists()).toBe(false);
+  });
+
+  it('reports the goods waiting at the selected building', async () => {
+    const wrapper = mountPanel(7, { buffered: 4 });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-test="selection-waiting"]').text()).toContain('4');
   });
 });

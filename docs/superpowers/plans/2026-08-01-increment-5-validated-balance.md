@@ -1389,6 +1389,24 @@ In `src/engine/world.ts`: change every `SaveGameV3` type reference to `SaveGameV
 
 `spawnBuilding` already forwards `relocatingTicks` because it spreads `saved` into `buildingComponents`.
 
+- [ ] **Step 5b: Remove the temporary save-gap exclusion Task 6 left**
+
+Task 6 published `relocatingTicks` through the snapshot but deliberately did not
+wire `savedBuildingOf`, so `tests/engine/world.test.ts`'s "every non-derived
+building fact is represented in the save record" invariant would have failed. It
+added a clearly-named exclusion for exactly this task to remove:
+
+```ts
+    const pendingSaveFields = ['relocatingTicks'];
+    const factKeys = Object.keys(engine.snapshot!.buildings[0]).filter((k) => ![...derivedBuilding, ...pendingSaveFields].includes(k));
+```
+
+Delete `pendingSaveFields` and restore the filter to use `derivedBuilding` alone,
+along with the comment block above it that explains the gap. **The invariant must
+then pass on its own merits** — that is the real proof this task wired the write
+path, and it is stronger than the round-trip test below because it fails for any
+future building fact that is published but never saved.
+
 - [ ] **Step 6: Write the round-trip test**
 
 Append to `tests/engine/world.test.ts`:
@@ -1446,7 +1464,7 @@ written under a slower rate still loads."
 ### Task 8: Relocation in the UI
 
 **Files:**
-- Modify: `src/app/world/theme.ts` (`stateRing.relocating`)
+- Verify only: `src/app/world/theme.ts` and `src/app/labels.ts` — Task 6 already added `stateRing.relocating` and the `Relocating` label (forced by the widened union)
 - Modify: `src/app/components/WorldLegend.vue`
 - Modify: `src/app/components/SelectionPanel.vue`
 - Modify: `src/app/views/BuildingsView.vue`
@@ -1493,14 +1511,22 @@ it('shows no downtime line for a settled building', async () => {
 Run: `npx vitest run tests/app/world-theme.test.ts tests/app/selection-panel.test.ts`
 Expected: FAIL.
 
-- [ ] **Step 3: Add the theme colour**
+- [ ] **Step 3: Verify the theme colour — do NOT re-add it**
 
-In `src/app/world/theme.ts`, inside `stateRing`:
+**`stateRing.relocating` and `BUILDING_STATE_LABELS.relocating` already exist.**
+Task 6 was forced to add them: `WorldTheme.stateRing` is
+`Record<BuildingState, string>`, so widening the `BuildingState` union broke the
+build immediately, and a pre-existing test pins every ring colour pairwise
+distinct. Task 6 used the colour this plan specifies, so there is nothing to
+change:
 
 ```ts
-      // Cyan-adjacent, matching the carried-load hue: both say "in transit".
-      relocating: pick(read, '--color-cyan', '#4bbfd4'),
+      relocating: pick(read, '--color-cyan', '#4bbfd4'),   // already present
 ```
+
+Confirm it is there and matches, then move on. Your theme test still belongs —
+it pins the colour as a deliberate choice rather than an accident of the build
+breaking.
 
 - [ ] **Step 4: Add the legend entry**
 

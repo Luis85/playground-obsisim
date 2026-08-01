@@ -81,6 +81,13 @@ describe('resolveWorldTheme', () => {
     expect(new Set(rings).size).toBe(rings.length);
   });
 
+  it('gives the relocating state its own ring colour', () => {
+    const theme = resolveWorldTheme(() => '');
+    expect(theme.stateRing.relocating).toMatch(HEX);
+    expect(theme.stateRing.relocating).not.toBe(theme.stateRing.outputFull);
+    expect(theme.stateRing.relocating).not.toBe(theme.stateRing.unstaffed);
+  });
+
   it('gives a carried load its own colour, meaningfully distinct from the tool ring and the progress fill', () => {
     const theme = resolveWorldTheme(none);
     expect(theme.carriedLoad).toBe('#4bbfd4');

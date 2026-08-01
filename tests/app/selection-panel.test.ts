@@ -68,4 +68,20 @@ describe('SelectionPanel', () => {
     await wrapper.vm.$nextTick();
     expect(wrapper.find('[data-test="selection-waiting"]').text()).toContain('4');
   });
+
+  // relocatingTicks: 9 is deliberately distinct from every other numeric field
+  // on this fixture (col 6, row 3, workers 1, workerSlots 2) — a mis-binding
+  // to any neighbour would render a different number and fail the exact match.
+  it('shows the remaining downtime for a relocating building', async () => {
+    const wrapper = mountPanel(7, { state: 'relocating', relocatingTicks: 9 });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-test="selection-relocating"]').text()).toBe('Relocating: 9t left');
+    expect(wrapper.text()).toContain('Relocating');
+  });
+
+  it('shows no downtime line for a settled building', async () => {
+    const wrapper = mountPanel(7, { state: 'producing', relocatingTicks: 0 });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-test="selection-relocating"]').exists()).toBe(false);
+  });
 });

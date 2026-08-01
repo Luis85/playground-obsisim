@@ -89,12 +89,13 @@ const GATED = [...PINNED_AT_ZERO, ...SHRINK_ONLY, ...FLOORS];
 const hasBaseline = existsSync(BASELINE_PATH);
 const baseline = hasBaseline ? JSON.parse(readFileSync(BASELINE_PATH, 'utf8')) : {};
 
-// Validated BEFORE the --update branch: a baseline missing a gated entry has
-// no value to compare against, so every comparison against it below silently
-// passes (current[key] > undefined and current[key] < undefined are both
-// false) and --update would re-lock whatever the current number happens to
-// be, with no regression ever detected. Only meaningful once a baseline
-// already exists — the first --update creates one from nothing.
+// Validated BEFORE the --update branch: a baseline entry that is missing, or
+// present but not a finite number, has no value to compare against, so every
+// comparison against it below silently passes (current[key] > undefined/NaN
+// and current[key] < undefined/NaN are both false) and --update would
+// re-lock whatever the current number happens to be, with no regression ever
+// detected. Only meaningful once a baseline already exists — the first
+// --update creates one from nothing.
 const known = new Set([...GATED, 'reported']);
 const schemaErrors = [];
 if (hasBaseline) {
@@ -102,6 +103,18 @@ if (hasBaseline) {
   if (unknown.length) schemaErrors.push(`baseline has entries the gate does not read: ${unknown.join(', ')}`);
   const missing = GATED.filter((key) => !(key in baseline));
   if (missing.length) schemaErrors.push(`baseline is missing gated entries: ${missing.join(', ')} (re-lock with --update --allow-regression)`);
+  // A present-but-non-numeric entry (a string, null, NaN, ...) passes the `in`
+  // check above and then poisons the comparisons below exactly like a missing
+  // key does: current[key] > baseline[key] and current[key] < baseline[key]
+  // are both false under NaN coercion, so neither a regression nor an
+  // improvement is ever recorded. Same bypass as the missing-key case, through
+  // a different door — checked the same way, and reported separately so the
+  // two failure modes stay tellable apart.
+  const nonNumeric = GATED.filter((key) => key in baseline && !Number.isFinite(baseline[key]));
+  if (nonNumeric.length)
+    schemaErrors.push(
+      `baseline has gated entries that are not finite numbers: ${nonNumeric.map((key) => `${key}=${JSON.stringify(baseline[key])}`).join(', ')} (re-lock with --update --allow-regression)`,
+    );
 }
 
 const failures = [];

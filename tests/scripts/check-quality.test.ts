@@ -165,6 +165,26 @@ describe('check:quality maintainability floor', () => {
     expect(err).toContain('missing gated entries: worstSrcFileMaintainability');
   });
 
+  // A malformed value passes the `in` check the missing-key test above covers,
+  // then poisons the same comparisons the same way: current[key] > 'not-a-number'
+  // and current[key] < 'not-a-number' are both false under NaN coercion, so the
+  // gate would otherwise print ok. Distinct error text from the missing-key case
+  // so the two failure modes stay tellable apart.
+  it('fails when a gated key is present but not a number', () => {
+    const malformed = { ...BASELINE, complexFunctions: 'not-a-number' };
+    const { code, err } = run([...SRC, ...TESTS, ...SCRIPTS], { baseline: malformed });
+    expect(code).toBe(1);
+    expect(err).toContain('not finite numbers: complexFunctions="not-a-number"');
+    expect(err).not.toContain('missing gated entries');
+  });
+
+  it('fails when a gated key is null', () => {
+    const malformed = { ...BASELINE, worstSrcFileMaintainability: null };
+    const { code, err } = run([...SRC, ...TESTS, ...SCRIPTS], { baseline: malformed });
+    expect(code).toBe(1);
+    expect(err).toContain('not finite numbers: worstSrcFileMaintainability=null');
+  });
+
   // Coverage for the normal run path (no --update): the pinned-at-zero counters
   // only had coverage via `--update`'s refusal-to-lock branch, so a mutation
   // that dropped pinnedBreaches from the plain gate's `failures` list left
@@ -245,6 +265,41 @@ describe('check:quality --update', () => {
     });
     expect(code).toBe(0);
     expect(lockedBaseline().complexFunctions).toBe(0);
+  });
+
+  // Same door Finding A closes: a non-numeric gated value must not be
+  // re-lockable any more easily than a missing one is above, and --update
+  // must not have written anything before refusing.
+  it('refuses to re-lock a baseline with a non-numeric gated value, leaving the file unchanged', () => {
+    const malformed = { ...BASELINE, complexFunctions: 'not-a-number' };
+    const { code, err } = run([...SRC, ...TESTS, ...SCRIPTS], {
+      baseline: malformed,
+      args: ['--update'],
+    });
+    expect(code).toBe(1);
+    expect(err).toContain('not finite numbers: complexFunctions="not-a-number"');
+    expect(lockedBaseline()).toEqual(malformed); // file on disk untouched, not merely a non-zero exit
+  });
+
+  it('refuses to re-lock a baseline with a null gated value, leaving the file unchanged', () => {
+    const malformed = { ...BASELINE, worstSrcFileMaintainability: null };
+    const { code, err } = run([...SRC, ...TESTS, ...SCRIPTS], {
+      baseline: malformed,
+      args: ['--update'],
+    });
+    expect(code).toBe(1);
+    expect(err).toContain('not finite numbers: worstSrcFileMaintainability=null');
+    expect(lockedBaseline()).toEqual(malformed);
+  });
+
+  it('re-locks a baseline with a non-numeric gated value when --allow-regression is passed', () => {
+    const malformed = { ...BASELINE, complexFunctions: 'not-a-number' };
+    const { code } = run([...SRC, ...TESTS, ...SCRIPTS], {
+      baseline: malformed,
+      args: ['--update', '--allow-regression'],
+    });
+    expect(code).toBe(0);
+    expect(lockedBaseline().complexFunctions).toBe(0); // re-derived from the current, real measurement
   });
 
   // Same malformed-baseline refusal applies to a stale key the gate no longer

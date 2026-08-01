@@ -2,11 +2,11 @@ import type { IEntity } from 'sim-ecs';
 import type { Command } from '../../shared/commands';
 import type { ResourceId } from '../../shared/content-types';
 import { haulTicks } from '../../shared/haul';
-import { autoPlacePosition, isTileBuildable, type TileRef } from '../../shared/placement';
+import { autoPlacePosition, isTileBuildable, relocationTicks, type TileRef } from '../../shared/placement';
 import { BALANCE } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
 import { RESOURCES, RESOURCE_IDS } from '../content/resources';
-import { Building, HaulTrip, JobAssignment, OutputBuffer, Position, WorkerSlots } from '../components';
+import { Building, HaulTrip, JobAssignment, OutputBuffer, Position, Relocation, WorkerSlots } from '../components';
 import { buildingComponents, workerComponents } from '../spawn';
 import type { IdCounter, NoticeBoard, RemovalLedger, SimClock, Stockpile, WorldMap } from '../resources';
 
@@ -23,6 +23,7 @@ export interface BuildingRow {
   slots: WorkerSlots;
   position: Position;
   buffer: OutputBuffer;
+  relocation: Relocation;
 }
 
 export interface WorkerRow {
@@ -251,8 +252,16 @@ export function handleMoveBuilding(ctx: CommandContext, command: Extract<Command
     ctx.notices.reject('Cannot move there.');
     return;
   }
+  // Read BEFORE overwriting found.position: doing this after would measure a
+  // zero-distance move against the tile the building already occupies.
+  const moved = Math.hypot(to.col - found.position.col, to.row - found.position.row);
   found.position.col = to.col;
   found.position.row = to.row;
+  // Distance-scaled downtime: relocation used to be free and instant, which let
+  // a player cluster at the camp and never feel haul pressure. Replaces any
+  // remaining downtime rather than adding to it — accumulating would let a
+  // player trap a building by accident.
+  found.relocation.ticksLeft = relocationTicks(moved, BALANCE.relocationTilesPerTick);
   // Haulers already walking to this building now have a different journey:
   // recompute from the new tile so the ticks charged match the line the dot
   // visibly travels. A returning hauler is unaffected — it walks to the camp,

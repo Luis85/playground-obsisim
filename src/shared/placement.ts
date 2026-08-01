@@ -133,3 +133,20 @@ export function* autoPlaceSequence(map: WorldMapSize): Generator<TileRef> {
     }
   }
 }
+
+/**
+ * Ticks a building is out of action after being moved `tilesMoved` tiles.
+ *
+ * `tilesPerTick` arrives as an argument rather than an import, for the same
+ * reason `haulTicks` takes one: this module lives in src/shared/, which may
+ * import nothing outside itself, while the tunable rate belongs to BALANCE.
+ *
+ * Never zero. Relocation used to be free and instant, which let a player
+ * cluster every building beside the camp and never feel increment 4's haul
+ * pressure at all — the gradient existed but need never be paid. The floor
+ * means even a one-tile nudge costs something, while distance-scaling keeps
+ * iterating on a layout cheap.
+ */
+export function relocationTicks(tilesMoved: number, tilesPerTick: number): number {
+  return Math.max(1, Math.ceil(tilesMoved / tilesPerTick));
+}

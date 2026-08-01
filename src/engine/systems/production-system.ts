@@ -2,7 +2,7 @@ import { createSystem, queryComponents, Read, Write, WriteResource } from 'sim-e
 import type { RecipeDef, ResourceId } from '../../shared/content-types';
 import { BALANCE, workerWorkPower } from '../content/balance';
 import { batchOutputUnits, BUILDINGS } from '../content/buildings';
-import { Building, Efficiency, JobAssignment, OutputBuffer, Production, ToolCoverage } from '../components';
+import { Building, Efficiency, JobAssignment, OutputBuffer, Production, Relocation, ToolCoverage } from '../components';
 import { ProductionLedger, Stockpile } from '../resources';
 
 /**
@@ -51,7 +51,7 @@ export const ProductionSystem = () => createSystem({
   stockpile: WriteResource(Stockpile),
   ledger: WriteResource(ProductionLedger),
   buildings: queryComponents({
-    building: Read(Building), production: Write(Production), buffer: Write(OutputBuffer),
+    building: Read(Building), production: Write(Production), buffer: Write(OutputBuffer), relocation: Write(Relocation),
   }),
   workers: queryComponents({ job: Read(JobAssignment), efficiency: Read(Efficiency), coverage: Read(ToolCoverage) }),
 })
@@ -74,7 +74,14 @@ export const ProductionSystem = () => createSystem({
       completeBatches(production, buffer, stockpile, recipe, perBatch, ledger);
     };
 
-    for (const { building, production, buffer } of buildings.iter()) {
+    for (const { building, production, buffer, relocation } of buildings.iter()) {
+      // A relocating building is out of action: its crew are carrying it, not
+      // working. Haulers still collect from its buffer — goods already made
+      // exist regardless of whether the crew is working.
+      if (relocation.ticksLeft > 0) {
+        relocation.ticksLeft--;
+        continue;
+      }
       const workPower = powerByBuilding.get(building.id) ?? 0;
       if (workPower === 0) continue;
       advanceBatches(building, production, buffer, workPower);

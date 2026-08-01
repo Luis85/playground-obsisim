@@ -10,7 +10,8 @@ import { BALANCE, STARTING_STOCK, STARTING_WORKERS, workerEfficiency } from './c
 import { BUILDINGS } from './content/buildings';
 import { RESOURCES, RESOURCE_IDS } from './content/resources';
 import {
-  Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, ToolCoverage, Worker, WorkerSlots,
+  Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Worker,
+  WorkerSlots,
 } from './components';
 import {
   buildingComponents, clampedBuffer, clampedHunger, clampedProgress, clampedToolTicks, workerComponents,
@@ -81,6 +82,7 @@ export function getPrepResource<T extends object>(prep: IPreptimeWorld, type: ne
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors sim-ecs's own TTypeProto<T> constructor-parameter shape exactly
 export const COMPONENT_TYPES: (new (...args: any[]) => object)[] = [
   Building, WorkerSlots, Production, Worker, Hunger, JobAssignment, Efficiency, ToolCoverage, Position, OutputBuffer, HaulTrip,
+  Relocation,
 ];
 
 export function initialSave(): SaveGameV3 {

@@ -97,6 +97,15 @@ export class OutputBuffer {
 export type { HaulPhase };
 
 /**
+ * Ticks a building is still out of action after being moved. Runtime state that
+ * IS saved (unlike HaulTrip): it is a penalty already incurred, so leaving it
+ * out of the save would let save-and-reload cancel it.
+ */
+export class Relocation {
+  constructor(public ticksLeft = 0) {}
+}
+
+/**
  * A hauler's current trip. Runtime-only: it never enters the save — a hauler
  * caught mid-trip banks its load into the saved stockpile instead — so nothing
  * here needs a load guard or a migration. Present on every worker; anyone who

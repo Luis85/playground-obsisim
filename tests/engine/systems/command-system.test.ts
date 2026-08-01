@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest';
 import type { IRuntimeWorld } from 'sim-ecs';
 import { CommandQueue, IdCounter, MAX_PENDING_COMMANDS, SimClock, SnapshotStore, Stockpile } from '../../../src/engine/resources';
 import { BALANCE } from '../../../src/engine/content/balance';
-import { Building, HaulTrip, OutputBuffer, Worker } from '../../../src/engine/components';
+import { Building, HaulTrip, OutputBuffer, Relocation, Worker } from '../../../src/engine/components';
 import { CommandSystem } from '../../../src/engine/systems/command-system';
 import { HaulSystem } from '../../../src/engine/systems/haul-system';
 import { HungerSystem } from '../../../src/engine/systems/hunger-system';
+import { ProductionSystem } from '../../../src/engine/systems/production-system';
 import { SnapshotSystem } from '../../../src/engine/systems/snapshot-system';
 import { enqueue } from '../fixtures';
 import { buildSaveFromWorld } from '../../../src/engine/game-engine';
@@ -27,6 +28,24 @@ async function setup(save: SaveGameV3 = initialSave()) {
     await tick();
   };
   const snapshot = (w: IRuntimeWorld = world) => w.getResource(SnapshotStore).latest!;
+  return { world, tick, dispatch, snapshot };
+}
+
+// Relocation downtime is enforced by ProductionSystem, which the shared setup()
+// deliberately omits. Order matches ALL_SYSTEMS (buildColonyPrepWorld throws
+// otherwise).
+async function setupWithProduction(save: SaveGameV3 = initialSave()) {
+  const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, ProductionSystem, HaulSystem, SnapshotSystem] });
+  const world = await prep.prepareRun();
+  const tick = async () => {
+    world.getResource(SimClock).tick++;
+    await world.step();
+  };
+  const dispatch = async (...commands: Command[]) => {
+    enqueue(world, ...commands);
+    await tick();
+  };
+  const snapshot = () => world.getResource(SnapshotStore).latest!;
   return { world, tick, dispatch, snapshot };
 }
 
@@ -592,5 +611,66 @@ describe('CommandSystem', () => {
     for (const type of expected) {
       expect(recruited.getComponent(type), `recruited worker is missing ${type.name}`).toBeDefined();
     }
+  });
+
+  it('a moved building stops producing for a distance-scaled downtime', async () => {
+    const { tick, dispatch, snapshot } = await setupWithProduction();
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 5, row: 4 } });
+    await tick();
+    const buildingId = snapshot().buildings[0].id;
+    await dispatch({ type: 'assignWorker', buildingId });
+    await dispatch({ type: 'assignWorker', buildingId });
+    for (let i = 0; i < 10; i++) await tick(); // it is genuinely producing
+    const madeBefore = snapshot().buildings[0].buffered;
+    expect(madeBefore).toBeGreaterThan(0);
+
+    // (5,4) -> (15,4) is exactly 10 tiles; at 1 tile/tick that is 10 ticks.
+    await dispatch({ type: 'moveBuilding', buildingId, to: { col: 15, row: 4 } });
+    const paused = snapshot().buildings[0].buffered;
+    for (let i = 0; i < 9; i++) await tick();
+    expect(snapshot().buildings[0].buffered).toBe(paused); // nothing made while relocating
+
+    for (let i = 0; i < 6; i++) await tick(); // downtime over, work resumes
+    expect(snapshot().buildings[0].buffered).toBeGreaterThan(paused);
+  });
+
+  it('moving again replaces the remaining downtime rather than adding to it', async () => {
+    const { world, tick, dispatch, snapshot } = await setupWithProduction();
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 5, row: 4 } });
+    await tick();
+    const buildingId = snapshot().buildings[0].id;
+    await dispatch({ type: 'moveBuilding', buildingId, to: { col: 20, row: 14 } }); // long move
+    await dispatch({ type: 'moveBuilding', buildingId, to: { col: 21, row: 14 } }); // 1 tile: 1 tick
+    const relocation = [...world.getEntities()]
+      .find((e) => e.getComponent(Building)?.id === buildingId)!
+      .getComponent(Relocation)!;
+    expect(relocation.ticksLeft).toBeLessThanOrEqual(1);
+  });
+
+  it('haulers still collect from a relocating building', async () => {
+    // Acceptance criterion 3. Goods already in the buffer exist whether or not
+    // the crew is working, so only production pauses — a relocating building
+    // with a full buffer must still drain.
+    const { world, tick, dispatch, snapshot } = await setupWithProduction();
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 5, row: 4 } });
+    await tick();
+    const buildingId = snapshot().buildings[0].id;
+    for (const entity of world.getEntities()) {
+      if (entity.getComponent(Building)?.id === buildingId) {
+        entity.getComponent(OutputBuffer)!.add('wood', BALANCE.haulCarryCapacity);
+      }
+    }
+    await dispatch({ type: 'assignHauler' });
+    // Move it far enough that the downtime outlasts the whole haul round trip.
+    await dispatch({ type: 'moveBuilding', buildingId, to: { col: 20, row: 14 } });
+    const relocating = [...world.getEntities()]
+      .find((e) => e.getComponent(Building)?.id === buildingId)!
+      .getComponent(Relocation)!;
+    expect(relocating.ticksLeft).toBeGreaterThan(10); // genuinely out of action for the whole trip
+
+    const before = world.getResource(Stockpile).get('wood');
+    for (let i = 0; i < 40; i++) await tick();
+    expect(world.getResource(Stockpile).get('wood')).toBe(before + BALANCE.haulCarryCapacity);
+    expect(snapshot().buildings[0].buffered).toBe(0); // the buffer genuinely drained
   });
 });

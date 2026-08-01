@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  autoPlacePosition, autoPlaceSequence, CAMP_COLS, DEFAULT_MAP, isTileBuildable, mapThatFits, MAX_MAP, type TileRef,
+  autoPlacePosition, autoPlaceSequence, CAMP_COLS, DEFAULT_MAP, isTileBuildable, mapThatFits, MAX_MAP, relocationTicks, type TileRef,
 } from '../../src/shared/placement';
 
 // The spatial law all three consumers share (spec §2.2): the engine's
@@ -99,5 +99,21 @@ describe('autoPlaceSequence', () => {
       occupied.push(tile);
     }
     expect(occupied).toHaveLength(336); // every buildable tile, each exactly once
+  });
+});
+
+describe('relocationTicks', () => {
+  it('scales with distance moved', () => {
+    expect(relocationTicks(10, 1)).toBe(10);
+    expect(relocationTicks(10, 2)).toBe(5);
+  });
+
+  it('rounds up, so a partial tile still costs a whole tick', () => {
+    expect(relocationTicks(7.21, 2)).toBe(4);
+  });
+
+  it('never returns zero — even a one-tile nudge costs something', () => {
+    expect(relocationTicks(1, 100)).toBe(1);
+    expect(relocationTicks(0, 1)).toBe(1);
   });
 });

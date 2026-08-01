@@ -19,6 +19,12 @@ export const BALANCE = {
   /** Hauler walking speed. A building beside the camp is a 1-tick walk; the far
    * corner of the default map is 13, so distance is a real investment. */
   haulTilesPerTick: 2,
+  /** Building relocation speed — half the hauler rate, because carrying a
+   * building is harder than carrying goods. */
+  relocationTilesPerTick: 1,
+  /** Clamp for a saved countdown (spec 4.5). The default 24x16 map's diagonal
+   * is ~28 tiles, so 30 covers any move the current balance can produce. */
+  maxRelocationTicks: 30,
 } as const;
 
 /** Spec 3.5: fed = 1.0 up to the meal threshold, then linear down to 0.2 at max hunger. */

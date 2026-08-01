@@ -3,7 +3,8 @@ import { BALANCE } from './content/balance';
 import { BUILDINGS } from './content/buildings';
 import { RESOURCE_IDS } from './content/resources';
 import {
-  Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, ToolCoverage, Worker, WorkerSlots,
+  Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Worker,
+  WorkerSlots,
 } from './components';
 
 /**
@@ -48,6 +49,17 @@ export function clampedToolTicks(toolTicks: number): number {
 }
 
 /**
+ * A saved relocation countdown, clamped to what current balance can produce.
+ * Not exported like its siblings above: `buildInitialSnapshot` has nothing to
+ * clamp it for until a future increment adds `relocatingTicks` to the save
+ * format and the snapshot. Kept as its own function rather than inlined, so
+ * promoting it is a one-word `export` when that lands.
+ */
+function clampedRelocation(ticksLeft: number): number {
+  return Math.max(0, Math.min(ticksLeft, BALANCE.maxRelocationTicks));
+}
+
+/**
  * A saved buffer trimmed to the CURRENT cap, counted across all resources in
  * catalog order. An over-cap buffer loads and trims rather than being refused.
  */
@@ -75,6 +87,7 @@ export interface BuildingSpec {
   progress?: number;
   batchActive?: boolean;
   buffer?: Partial<Record<ResourceId, number>>;
+  relocatingTicks?: number;
 }
 
 /** Every component a building needs, in one list. Order is not significant. */
@@ -85,6 +98,7 @@ export function buildingComponents(spec: BuildingSpec): object[] {
     new Production(clampedProgress(spec.defId, spec.progress ?? 0), spec.batchActive ?? false),
     new Position(spec.col, spec.row),
     new OutputBuffer(clampedBuffer(spec.buffer ?? {})),
+    new Relocation(clampedRelocation(spec.relocatingTicks ?? 0)),
   ];
 }
 

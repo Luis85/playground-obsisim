@@ -285,15 +285,21 @@ Expected: PASS — all tests green, including the new one.
 - [ ] **Step 9: Mutation-test**
 
 ```bash
+# Restore by copy, NOT `git checkout` — these mutations run BEFORE the
+# task is committed, and `git checkout <file>` would revert to HEAD and
+# destroy the implementation you just wrote (this bit Task 1).
+SP=/tmp/obsisim-mutation && mkdir -p $SP
+cp src/engine/systems/production-system.ts "$SP/$(basename src/engine/systems/production-system.ts)"
+cp src/engine/systems/stats-system.ts "$SP/$(basename src/engine/systems/stats-system.ts)"
 # The ledger must actually be written
 sed -i 's|      ledger.add(id as ResourceId, amount); // gross production, before any hauling||' src/engine/systems/production-system.ts
 npx vitest run tests/engine/systems/stats-system.test.ts -t "made and delivered"   # expect FAIL
-git checkout src/engine/systems/production-system.ts
+cp "$SP/$(basename src/engine/systems/production-system.ts)" src/engine/systems/production-system.ts
 
 # The ledger must actually be reset
 sed -i 's|    ledger.reset();||' src/engine/systems/stats-system.ts
 npx vitest run tests/engine/systems/stats-system.test.ts -t "made and delivered"   # expect FAIL
-git checkout src/engine/systems/stats-system.ts
+cp "$SP/$(basename src/engine/systems/stats-system.ts)" src/engine/systems/stats-system.ts
 ```
 
 Both must fail. If either passes, the assertion does not discriminate — fix it before continuing.
@@ -378,9 +384,14 @@ Expected: PASS (all cases).
 - [ ] **Step 5: Mutation-test**
 
 ```bash
+# Restore by copy, NOT `git checkout` — these mutations run BEFORE the
+# task is committed, and `git checkout <file>` would revert to HEAD and
+# destroy the implementation you just wrote (this bit Task 1).
+SP=/tmp/obsisim-mutation && mkdir -p $SP
+cp src/app/views/EconomyView.vue "$SP/$(basename src/app/views/EconomyView.vue)"
 sed -i 's|made: stats.madeRate.toFixed(2),|made: stats.deliveredRate.toFixed(2),|' src/app/views/EconomyView.vue
 npx vitest run tests/app/economy-view.test.ts -t "made and delivered side by side"   # expect FAIL
-git checkout src/app/views/EconomyView.vue
+cp "$SP/$(basename src/app/views/EconomyView.vue)" src/app/views/EconomyView.vue
 ```
 
 - [ ] **Step 6: Commit**
@@ -570,9 +581,14 @@ If `ceiling` is off, check `perBatch` against `BUILDINGS.forester.recipe` (`outp
 - [ ] **Step 5: Mutation-test**
 
 ```bash
+# Restore by copy, NOT `git checkout` — these mutations run BEFORE the
+# task is committed, and `git checkout <file>` would revert to HEAD and
+# destroy the implementation you just wrote (this bit Task 1).
+SP=/tmp/obsisim-mutation && mkdir -p $SP
+cp tests/support/balance-harness.ts "$SP/$(basename tests/support/balance-harness.ts)"
 sed -i 's|  made = delivered + finalBuffer;|  made = delivered;|' tests/support/balance-harness.ts
 npx vitest run tests/support/balance-harness.test.ts   # expect the made/delivered test to FAIL
-git checkout tests/support/balance-harness.ts
+cp "$SP/$(basename tests/support/balance-harness.ts)" tests/support/balance-harness.ts
 ```
 
 - [ ] **Step 6: Commit**
@@ -702,9 +718,14 @@ Expected: the 16-row sweep table printed, all tests green.
 - [ ] **Step 5: Mutation-test the pin**
 
 ```bash
+# Restore by copy, NOT `git checkout` — these mutations run BEFORE the
+# task is committed, and `git checkout <file>` would revert to HEAD and
+# destroy the implementation you just wrote (this bit Task 1).
+SP=/tmp/obsisim-mutation && mkdir -p $SP
+cp src/engine/content/balance.ts "$SP/$(basename src/engine/content/balance.ts)"
 sed -i 's|  haulTilesPerTick: 2,|  haulTilesPerTick: 8,|' src/engine/content/balance.ts
 npx vitest run tests/engine/balance.test.ts   # expect FAILs — the gradient is gone
-git checkout src/engine/content/balance.ts
+cp "$SP/$(basename src/engine/content/balance.ts)" src/engine/content/balance.ts
 npx vitest run tests/engine/balance.test.ts   # green again
 ```
 
@@ -1022,13 +1043,19 @@ Expected: PASS.
 - [ ] **Step 11: Mutation-test**
 
 ```bash
+# Restore by copy, NOT `git checkout` — these mutations run BEFORE the
+# task is committed, and `git checkout <file>` would revert to HEAD and
+# destroy the implementation you just wrote (this bit Task 1).
+SP=/tmp/obsisim-mutation && mkdir -p $SP
+cp src/engine/systems/command-handlers.ts "$SP/$(basename src/engine/systems/command-handlers.ts)"
+cp src/engine/systems/production-system.ts "$SP/$(basename src/engine/systems/production-system.ts)"
 sed -i 's|      if (relocation.ticksLeft > 0) {|      if (false) {|' src/engine/systems/production-system.ts
 npx vitest run tests/engine/systems/command-system.test.ts -t "distance-scaled downtime"  # expect FAIL
-git checkout src/engine/systems/production-system.ts
+cp "$SP/$(basename src/engine/systems/production-system.ts)" src/engine/systems/production-system.ts
 
 sed -i 's|  found.relocation.ticksLeft = relocationTicks(moved, BALANCE.relocationTilesPerTick);||' src/engine/systems/command-handlers.ts
 npx vitest run tests/engine/systems/command-system.test.ts -t "distance-scaled downtime"  # expect FAIL
-git checkout src/engine/systems/command-handlers.ts
+cp "$SP/$(basename src/engine/systems/command-handlers.ts)" src/engine/systems/command-handlers.ts
 ```
 
 - [ ] **Step 12: Commit**
@@ -1196,9 +1223,14 @@ Expected: PASS.
 - [ ] **Step 7: Mutation-test**
 
 ```bash
+# Restore by copy, NOT `git checkout` — these mutations run BEFORE the
+# task is committed, and `git checkout <file>` would revert to HEAD and
+# destroy the implementation you just wrote (this bit Task 1).
+SP=/tmp/obsisim-mutation && mkdir -p $SP
+cp src/engine/snapshot-builder.ts "$SP/$(basename src/engine/snapshot-builder.ts)"
 sed -i "s|      const state: BuildingState = b.relocatingTicks > 0|      const state: BuildingState = false|" src/engine/snapshot-builder.ts
 npx vitest run tests/engine/systems/snapshot-system.test.ts -t "relocating building"  # expect FAIL
-git checkout src/engine/snapshot-builder.ts
+cp "$SP/$(basename src/engine/snapshot-builder.ts)" src/engine/snapshot-builder.ts
 ```
 
 - [ ] **Step 8: Commit**
@@ -1375,13 +1407,19 @@ Expected: PASS. Fix whatever the compiler names — the v3→v4 split touches ev
 - [ ] **Step 8: Mutation-test**
 
 ```bash
+# Restore by copy, NOT `git checkout` — these mutations run BEFORE the
+# task is committed, and `git checkout <file>` would revert to HEAD and
+# destroy the implementation you just wrote (this bit Task 1).
+SP=/tmp/obsisim-mutation && mkdir -p $SP
+cp src/engine/snapshot-builder.ts "$SP/$(basename src/engine/snapshot-builder.ts)"
+cp src/shared/save-migration.ts "$SP/$(basename src/shared/save-migration.ts)"
 sed -i 's|      buildings: v3.buildings.map((b) => ({ ...b, relocatingTicks: 0 })),|      buildings: v3.buildings,|' src/shared/save-migration.ts
 npx vitest run tests/shared/save-migration.test.ts -t "v3 -> v4"   # expect FAIL
-git checkout src/shared/save-migration.ts
+cp "$SP/$(basename src/shared/save-migration.ts)" src/shared/save-migration.ts
 
 sed -i 's|    relocatingTicks: facts.relocatingTicks,||' src/engine/snapshot-builder.ts
 npx vitest run tests/engine/world.test.ts -t "mid-relocation"      # expect FAIL
-git checkout src/engine/snapshot-builder.ts
+cp "$SP/$(basename src/engine/snapshot-builder.ts)" src/engine/snapshot-builder.ts
 ```
 
 - [ ] **Step 9: Commit**
@@ -1511,9 +1549,14 @@ Expected: PASS.
 - [ ] **Step 8: Mutation-test**
 
 ```bash
+# Restore by copy, NOT `git checkout` — these mutations run BEFORE the
+# task is committed, and `git checkout <file>` would revert to HEAD and
+# destroy the implementation you just wrote (this bit Task 1).
+SP=/tmp/obsisim-mutation && mkdir -p $SP
+cp src/app/components/SelectionPanel.vue "$SP/$(basename src/app/components/SelectionPanel.vue)"
 sed -i 's|v-if="building.relocatingTicks > 0" data-test="selection-relocating"|v-if="false" data-test="selection-relocating"|' src/app/components/SelectionPanel.vue
 npx vitest run tests/app/selection-panel.test.ts   # expect FAIL
-git checkout src/app/components/SelectionPanel.vue
+cp "$SP/$(basename src/app/components/SelectionPanel.vue)" src/app/components/SelectionPanel.vue
 ```
 
 - [ ] **Step 9: Commit**
@@ -1586,10 +1629,15 @@ Expected: `world-smoke: all green`, 19 checks.
 - [ ] **Step 5: Mutation-test**
 
 ```bash
+# Restore by copy, NOT `git checkout` — these mutations run BEFORE the
+# task is committed, and `git checkout <file>` would revert to HEAD and
+# destroy the implementation you just wrote (this bit Task 1).
+SP=/tmp/obsisim-mutation && mkdir -p $SP
+cp src/app/world/theme.ts "$SP/$(basename src/app/world/theme.ts)"
 # Remove the relocating ring colour distinction
 sed -i "s|      relocating: pick(read, '--color-cyan', '#4bbfd4'),|      relocating: pick(read, '--color-purple', '#8f6fbf'),|" src/app/world/theme.ts
 npm run smoke:world    # expect the relocating check to FAIL (same colour as outputFull)
-git checkout src/app/world/theme.ts
+cp "$SP/$(basename src/app/world/theme.ts)" src/app/world/theme.ts
 npm run smoke:world    # all green again
 ```
 

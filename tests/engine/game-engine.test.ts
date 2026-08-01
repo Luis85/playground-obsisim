@@ -8,19 +8,22 @@ vi.mock('../../src/engine/world', async (importOriginal) => {
   return { ...actual, refreshEntitySections: vi.fn(actual.refreshEntitySections) };
 });
 
-import { GameEngine } from '../../src/engine/game-engine';
+import { buildSaveFromWorld, GameEngine } from '../../src/engine/game-engine';
 import * as worldModule from '../../src/engine/world';
-import { initialSave } from '../../src/engine/world';
+import { createColonyWorld, initialSave, isLoadableSave } from '../../src/engine/world';
+import { HaulTrip } from '../../src/engine/components';
+import { Stockpile } from '../../src/engine/resources';
 
 const refreshMock = vi.mocked(worldModule.refreshEntitySections);
-import type { SaveGameV2 } from '../../src/shared/save';
+import type { SaveGameV3 } from '../../src/shared/save';
+import { MAX_SAVED_COUNTER } from '../../src/shared/save';
 
 async function steps(engine: GameEngine, n: number) {
   for (let i = 0; i < n; i++) await engine.stepOnce();
 }
 
 /** Deterministic scripted session used by both determinism tests. */
-async function scriptedRun(ticks: number, save?: SaveGameV2): Promise<GameEngine> {
+async function scriptedRun(ticks: number, save?: SaveGameV3): Promise<GameEngine> {
   const engine = await GameEngine.create(save ?? null);
   if (!save) {
     engine.dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
@@ -86,8 +89,8 @@ describe('GameEngine', () => {
     await steps(engine, 99);
     engine.dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
     await engine.stepOnce(); // tick 100 -> autosave fires
-    const save: SaveGameV2 = autosave.mock.calls[0][0];
-    expect(save.buildings).toEqual([{ id: 4, defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1 }]);
+    const save: SaveGameV3 = autosave.mock.calls[0][0];
+    expect(save.buildings).toEqual([{ id: 4, defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, buffer: {} }]);
     expect(save.stockpile.wood).toBe(20); // cost paid AND building present
   });
 
@@ -136,7 +139,7 @@ describe('GameEngine', () => {
     engine.dispatch({ type: 'constructBuilding', buildingDefId: 'forester' }); // paused: no tick runs
     await engine.flush(); // runs one final tick to process the queue
     const save = engine.serialize();
-    expect(save.buildings).toEqual([{ id: 4, defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1 }]);
+    expect(save.buildings).toEqual([{ id: 4, defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, buffer: {} }]);
     expect(save.stockpile.wood).toBe(20); // cost paid AND building present
     await engine.flush(); // empty queue: no extra tick
     expect(engine.serialize().tick).toBe(1);
@@ -149,10 +152,10 @@ describe('GameEngine', () => {
   it('serializes entities in ascending id order regardless of spawn order', async () => {
     const save = initialSave();
     save.buildings = [
-      { id: 5, defId: 'sawmill', progress: 0, batchActive: false, col: 6, row: 1 },
-      { id: 4, defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1 },
+      { id: 5, defId: 'sawmill', progress: 0, batchActive: false, col: 6, row: 1, buffer: {} },
+      { id: 4, defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, buffer: {} },
     ];
-    save.workers = [3, 1, 2].map((id) => ({ id, hunger: 0, buildingId: null, toolTicks: 0 }));
+    save.workers = [3, 1, 2].map((id) => ({ id, hunger: 0, buildingId: null, toolTicks: 0, hauling: false }));
     save.nextEntityId = 6;
     const engine = await GameEngine.create(save);
     const out = engine.serialize();
@@ -264,5 +267,52 @@ describe('GameEngine', () => {
     // linger in the published snapshot until the next id-consuming tick.
     await engine.stepOnce();
     expect(engine.snapshot!.buildings).toHaveLength(0);
+  });
+
+  it('banks a hauler mid-trip load into the saved stockpile without touching the live world', async () => {
+    const world = await createColonyWorld();
+    let carried: HaulTrip | null = null;
+    for (const entity of world.getEntities()) {
+      const trip = entity.getComponent(HaulTrip);
+      if (trip !== undefined) {
+        trip.phase = 'returning';
+        trip.resource = 'wood';
+        trip.amount = 4;
+        carried = trip;
+        break;
+      }
+    }
+    const before = world.getResource(Stockpile).get('wood');
+    const save = buildSaveFromWorld(world);
+
+    expect(save.stockpile.wood).toBe(before + 4);
+    // A save is a snapshot, not an event: the running colony still delivers
+    // that load normally, so the live world must be untouched.
+    expect(world.getResource(Stockpile).get('wood')).toBe(before);
+    expect(carried!.amount).toBe(4);
+  });
+
+  it('saturates deposit-on-save at the counter ceiling so an accepted save stays accepted', async () => {
+    const world = await createColonyWorld();
+    // Stockpile.add itself saturates, so this reaches the ceiling exactly
+    // regardless of the starting amount.
+    world.getResource(Stockpile).add('wood', MAX_SAVED_COUNTER);
+    for (const entity of world.getEntities()) {
+      const trip = entity.getComponent(HaulTrip);
+      if (trip !== undefined) {
+        trip.phase = 'returning';
+        trip.resource = 'wood';
+        trip.amount = 4;
+        break;
+      }
+    }
+
+    const save = buildSaveFromWorld(world);
+
+    // Raw addition would write MAX_SAVED_COUNTER + 4, one past isStockpileValid's
+    // bound — exactly the ping-pong (accepted save -> deposit-on-save -> rejected
+    // save) the load guard's comment says cannot happen.
+    expect(save.stockpile.wood).toBe(MAX_SAVED_COUNTER);
+    expect(isLoadableSave(save)).toBe(true);
   });
 });

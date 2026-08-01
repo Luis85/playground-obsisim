@@ -13,7 +13,10 @@ import type { WorkerSnapshot } from '../../src/shared/snapshot';
 // field this file's cases vary, but the full shape keeps callers honest
 // about what a WorkerSnapshot actually carries.
 function worker(overrides: Partial<WorkerSnapshot> = {}): WorkerSnapshot {
-  return { id: 1, hunger: 0, efficiency: 1, buildingId: null, toolTicks: 0, ...overrides };
+  return {
+    id: 1, hunger: 0, efficiency: 1, buildingId: null, hauling: false, haulTargetId: null, carrying: 0, toolTicks: 0,
+    ...overrides,
+  };
 }
 
 // Mounts with a fresh testing Pinia each call, so tests never leak state
@@ -43,5 +46,20 @@ describe('PopulationView', () => {
     await wrapper.vm.$nextTick();
     const cell = wrapper.get('[data-test="hunger-1"]');
     expect(cell.classes()).toEqual(expected === '' ? [] : [expected]);
+  });
+
+  // A hauler's own buildingId is null, same as a truly idle worker's — jobLabel
+  // must tell them apart via `hauling`, not just render "Idle" for both. Two
+  // rows in one mount (rather than two mounts) so the assertion also pins the
+  // row ordering matching worker array order, not just the label text.
+  it('labels a hauling worker "Hauling" and leaves an idle one "Idle"', async () => {
+    const wrapper = mountPopulationView([
+      worker({ id: 1, hauling: true }),
+      worker({ id: 2 }),
+    ]);
+    await wrapper.vm.$nextTick();
+    const rows = wrapper.findAll('tbody tr');
+    expect(rows[0].text()).toContain('Hauling');
+    expect(rows[1].text()).toContain('Idle');
   });
 });

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { Building } from '../../../src/engine/components';
+import { Building, OutputBuffer } from '../../../src/engine/components';
 import { IdCounter, NoticeBoard, SnapshotStore } from '../../../src/engine/resources';
+import { HaulSystem } from '../../../src/engine/systems/haul-system';
 import { SnapshotSystem } from '../../../src/engine/systems/snapshot-system';
+import { BALANCE } from '../../../src/engine/content/balance';
 import { buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spawnWorker } from '../../../src/engine/world';
 
 describe('SnapshotSystem', () => {
@@ -51,6 +53,60 @@ describe('SnapshotSystem', () => {
     await world.step();
     const snapshot = world.getResource(SnapshotStore).latest!;
     expect(snapshot.buildings.map((b) => b.state)).toEqual(['unstaffed', 'waitingForInput']);
+  });
+
+  it('pins staffing precedence: unstaffed wins over outputFull', async () => {
+    const save = initialSave();
+    save.workers = [];
+    const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
+    const ids = getPrepResource(prep, IdCounter);
+
+    // Unstaffed building with full buffer: should report 'unstaffed', not 'outputFull'
+    const unstaffedFull = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1 });
+    unstaffedFull.getComponent(OutputBuffer)!.add('wood', BALANCE.outputBufferCap);
+
+    // Staffed building with full buffer: should report 'outputFull'
+    const staffedFull = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1 });
+    staffedFull.getComponent(OutputBuffer)!.add('wood', BALANCE.outputBufferCap);
+    spawnWorker(prep, ids, { buildingId: staffedFull.getComponent(Building)!.id });
+
+    const world = await prep.prepareRun();
+    await world.step();
+    const snapshot = world.getResource(SnapshotStore).latest!;
+
+    expect(snapshot.buildings[0].state).toBe('unstaffed');
+    expect(snapshot.buildings[1].state).toBe('outputFull');
+  });
+
+  it('reports a haul target while outbound and none while returning', async () => {
+    // Driven by a REAL trip, not a hand-written fixture: every other
+    // haulTargetId in the suite is a literal handed to the layout, so nothing
+    // else pins what the engine actually publishes. Acceptance criterion 2
+    // needs the dot to come home visibly, and it only does when a returning
+    // hauler reports no target — otherwise placeHaulers pins it at the source
+    // building's doorstep for the whole walk back.
+    const save = initialSave();
+    save.workers = [];
+    save.stockpile = {};
+    const prep = buildColonyPrepWorld({ save, systems: [HaulSystem, SnapshotSystem] });
+    const ids = getPrepResource(prep, IdCounter);
+    // (5,4) is 5 tiles from the camp -> 3 ticks each way
+    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 5, row: 4 });
+    building.getComponent(OutputBuffer)!.add('wood', 9);
+    const buildingId = building.getComponent(Building)!.id;
+    spawnWorker(prep, ids, { hauling: true });
+    const world = await prep.prepareRun();
+    const hauler = () => world.getResource(SnapshotStore).latest!.workers[0];
+
+    await world.step(); // dispatched: walking out to the building
+    expect(hauler()).toMatchObject({ hauling: true, haulTargetId: buildingId, carrying: 0 });
+
+    for (let i = 0; i < 3; i++) await world.step(); // arrives, loads, turns for home
+    expect(hauler().carrying).toBe(BALANCE.haulCarryCapacity);
+    expect(hauler().haulTargetId).toBeNull();
+
+    for (let i = 0; i < 3; i++) await world.step(); // banks the load, back to idle
+    expect(hauler()).toMatchObject({ haulTargetId: null, carrying: 0 });
   });
 
   it('clears notices after snapshotting them', async () => {

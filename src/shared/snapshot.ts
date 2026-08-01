@@ -1,7 +1,7 @@
 import type { BuildingDefId, ResourceId } from './content-types';
 import type { WorldMapSize } from './placement';
 
-export type BuildingState = 'producing' | 'waitingForInput' | 'unstaffed';
+export type BuildingState = 'producing' | 'waitingForInput' | 'unstaffed' | 'outputFull';
 
 export type NoticeKind = 'success' | 'rejection';
 
@@ -29,6 +29,8 @@ export interface BuildingSnapshot {
   tooledWorkers: number;
   /** Effective work per tick: sum of assigned worker efficiencies x per-worker tool multiplier. */
   workPower: number;
+  /** Units waiting in this building's output buffer for a hauler. */
+  buffered: number;
 }
 
 export interface WorkerSnapshot {
@@ -36,6 +38,12 @@ export interface WorkerSnapshot {
   hunger: number;
   efficiency: number;
   buildingId: number | null;
+  /** True while this worker is assigned to hauling rather than to a building. */
+  hauling: boolean;
+  /** The building this hauler is walking to, or null when idle or heading home. */
+  haulTargetId: number | null;
+  /** Units in hand (0 unless carrying a load home). */
+  carrying: number;
   /** Remaining ticks of this worker's tool coverage (0 = none). */
   toolTicks: number;
 }

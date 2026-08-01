@@ -13,6 +13,14 @@ export interface WorldTheme {
   workerToolRing: string;
   /** Batch progress fill — bright cream so it reads on green tiles. */
   progressFill: string;
+  /** A hauler's carried load. The world palette's production language is
+   * already spoken for — red/orange/green for building health and state,
+   * purple for the output-full stall, cream for tools and progress,
+   * blue-violet for interaction (accent) — so cyan, the one hue nothing
+   * else claims, is deliberate: a load dot can never be mistaken for any of
+   * them, including the cream tool ring it sits flush against on a tooled
+   * hauler. */
+  carriedLoad: string;
   /** Interactive accent — the selection ring and the valid-ghost tint. */
   accent: string;
   /** Danger — the blocked-ghost tint (the same resolved red the
@@ -70,10 +78,14 @@ export function resolveWorldTheme(read: VarReader): WorldTheme {
       producing: green,
       waitingForInput: pick(read, '--color-orange', '#e5a63a'),
       unstaffed: '#8f8f8f',
+      // Purple, deliberately outside the green/orange production language: this
+      // building is not short of anything, it has nowhere to put what it made.
+      outputFull: pick(read, '--color-purple', '#8f6fbf'),
     },
     workerColors: Array.from({ length: WORKER_BUCKETS }, (_, i) => mixHex(red, green, i / (WORKER_BUCKETS - 1))),
     workerToolRing: '#f2ecdd',
     progressFill: '#f5efdc',
+    carriedLoad: pick(read, '--color-cyan', '#4bbfd4'),
     accent: pick(read, '--interactive-accent', '#7c8cf0'),
     danger: red,
   };

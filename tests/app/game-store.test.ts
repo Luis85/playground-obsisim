@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import { useGameStore } from '../../src/app/stores/game-store';
 import type { EngineStatus } from '../../src/shared/snapshot';
-import { makeSnapshot, stockedWith } from './fixtures';
+import { makeSnapshot, stockedWith, makeBuilding, makeWorker } from './fixtures';
 
 // wheat is edible ONLY in this mock: the hardcoded getter ignores it (test
 // fails), the catalog-driven getter counts it (test passes). Without this the
@@ -132,7 +132,7 @@ describe('useGameStore', () => {
     const store = useGameStore();
     const base = {
       col: 0, row: 0, workers: 0, workerSlots: 2, progress: 0, batchActive: false,
-      progressPct: 0, tooledWorkers: 0, workPower: 0,
+      progressPct: 0, tooledWorkers: 0, workPower: 0, buffered: 0,
     };
     store.ingest(makeSnapshot({
       buildings: [
@@ -162,5 +162,27 @@ describe('useGameStore', () => {
 
   it('affordableDefs is all-false before the first snapshot', () => {
     expect(useGameStore().affordableDefs.forester).toBe(false);
+  });
+
+  it('counts haulers, waiting units, and stalled buildings', () => {
+    const store = useGameStore();
+    store.ingest(makeSnapshot({
+      buildings: [
+        makeBuilding(1, { buffered: 12, state: 'outputFull' }),
+        makeBuilding(2, { buffered: 3, state: 'producing' }),
+        makeBuilding(3, { buffered: 0, state: 'unstaffed' }),
+      ],
+      workers: [makeWorker(1, { hauling: true }), makeWorker(2, { hauling: true }), makeWorker(3, {})],
+    }), { paused: false, speed: 1, error: null });
+    expect(store.haulerCount).toBe(2);
+    expect(store.unitsWaiting).toBe(15);
+    expect(store.stalledBuildings).toBe(1);
+  });
+
+  it('reports zeroes before the first snapshot', () => {
+    const store = useGameStore();
+    expect(store.haulerCount).toBe(0);
+    expect(store.unitsWaiting).toBe(0);
+    expect(store.stalledBuildings).toBe(0);
   });
 });

@@ -31,11 +31,14 @@ export function makeBuilding(id: number, overrides: Partial<BuildingSnapshot> = 
   return {
     id, defId: 'farm', col: 4 + 2 * ((id - 1) % 5), row: 1 + 2 * (Math.floor((id - 1) / 5) % 8),
     workers: 0, workerSlots: 4, state: 'unstaffed',
-    progress: 0, batchActive: false, progressPct: 0, tooledWorkers: 0, workPower: 0,
+    progress: 0, batchActive: false, progressPct: 0, tooledWorkers: 0, workPower: 0, buffered: 0,
     ...overrides,
   };
 }
 
 export function makeWorker(id: number, overrides: Partial<WorkerSnapshot> = {}): WorkerSnapshot {
-  return { id, hunger: 0, efficiency: 1, buildingId: null, toolTicks: 0, ...overrides };
+  return {
+    id, hunger: 0, efficiency: 1, buildingId: null, hauling: false, haulTargetId: null, carrying: 0, toolTicks: 0,
+    ...overrides,
+  };
 }

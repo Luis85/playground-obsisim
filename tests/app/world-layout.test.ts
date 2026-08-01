@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { layoutWorld, pickBuildingAt, TILE } from '../../src/app/world/layout';
+import { CAMP_COLS } from '../../src/shared/placement';
+import type { WorkerSnapshot } from '../../src/shared/snapshot';
 import { makeBuilding, makeSnapshot, makeWorker } from './fixtures';
 
 // The layout invariants the world view stands on (spec §2.3): determinism
@@ -272,5 +274,97 @@ describe('layoutWorld', () => {
       expect(w.y).toBeGreaterThan(0);
       expect(w.y).toBeLessThan(layout.rows);
     }
+  });
+});
+
+describe('hauler placement', () => {
+  const haulSnapshot = (overrides: Partial<WorkerSnapshot>) => makeSnapshot({
+    buildings: [makeBuilding(1, { defId: 'forester', col: 8, row: 4 })],
+    workers: [makeWorker(20, { hauling: true, ...overrides })],
+  });
+
+  it('stands an outbound hauler at the building it is walking to', () => {
+    const layout = layoutWorld(haulSnapshot({ haulTargetId: 1 }));
+    const hauler = layout.workers.find((w) => w.id === 20)!;
+    const cell = layout.buildings.find((b) => b.id === 1)!;
+    expect(hauler.at).toBe(1);
+    expect(hauler.x).toBeCloseTo(cell.col + 0.5);
+    expect(hauler.y).toBeGreaterThan(cell.row + 0.5); // on the doorstep, not in the crew's spots
+  });
+
+  it('sends a returning hauler back to the camp band', () => {
+    const layout = layoutWorld(haulSnapshot({ haulTargetId: null, carrying: 6 }));
+    const hauler = layout.workers.find((w) => w.id === 20)!;
+    expect(hauler.at).toBeNull();
+    expect(hauler.x).toBeLessThan(CAMP_COLS);
+    expect(hauler.carrying).toBe(true);
+  });
+
+  it('keeps a hauler at the doorstep of its target while the crew hold their own distinct spots', () => {
+    const building = makeBuilding(1, { defId: 'forester', col: 8, row: 4, workerSlots: 2 });
+    // The doorstep is a pure function of the building's cell (see haulerSpot):
+    // derive its exact coordinates from a layout with only the hauler present,
+    // rather than hardcoding the cell's offset here.
+    const haulerAlone = layoutWorld(makeSnapshot({
+      buildings: [building],
+      workers: [makeWorker(20, { hauling: true, haulTargetId: 1 })],
+    }));
+    const doorstep = haulerAlone.workers.find((w) => w.id === 20)!;
+
+    const layout = layoutWorld(makeSnapshot({
+      buildings: [building],
+      workers: [
+        makeWorker(1, { buildingId: 1 }),
+        makeWorker(2, { buildingId: 1 }),
+        makeWorker(20, { hauling: true, haulTargetId: 1 }),
+      ],
+    }));
+
+    const hauler = layout.workers.find((w) => w.id === 20)!;
+    expect(hauler.x).toBeCloseTo(doorstep.x); // exactly the doorstep, crew or no crew
+    expect(hauler.y).toBeCloseTo(doorstep.y);
+
+    const crewSpots = new Set(
+      layout.workers.filter((w) => w.id !== 20).map((w) => `${w.x.toFixed(2)},${w.y.toFixed(2)}`),
+    );
+    expect(crewSpots.size).toBe(2); // the crew occupy their own distinct spots
+    expect(crewSpots.has(`${hauler.x.toFixed(2)},${hauler.y.toFixed(2)}`)).toBe(false); // ...and the hauler stands apart from all of them
+  });
+
+  it('parks an outbound hauler at the camp only once its target has vanished (present-target control)', () => {
+    const present = layoutWorld(haulSnapshot({ haulTargetId: 1 }));
+    const stillOutbound = present.workers.find((w) => w.id === 20)!;
+    const cell = present.buildings.find((b) => b.id === 1)!;
+    expect(stillOutbound.at).toBe(1); // control: a standing target keeps the hauler at its doorstep...
+    expect(stillOutbound.y).toBeGreaterThan(cell.row + 0.5); // ...not camped
+
+    const vanished = layoutWorld(haulSnapshot({ haulTargetId: 99 }));
+    expect(vanished.workers.find((w) => w.id === 20)!.at).toBeNull(); // only the vanished target falls back to camp
+  });
+
+  it('a former hauler joining the crew at its old target never keeps the hauler sentinel slot', () => {
+    // Cross-frame regression for heldSlots' `if (w.slot === HAULER_SLOT) continue;`
+    // guard: a hauler's placement carries the sentinel slot (-1). Without the
+    // guard, allocateSlots would look up that sentinel by id and hand it right
+    // back once the same worker becomes real crew at the same building.
+    const building = makeBuilding(1, { defId: 'forester', col: 8, row: 4, workerSlots: 4 });
+    const before = layoutWorld(makeSnapshot({
+      buildings: [building],
+      workers: [makeWorker(20, { hauling: true, haulTargetId: 1 })],
+    }));
+    const wasHauler = before.workers.find((w) => w.id === 20)!;
+    expect(wasHauler.at).toBe(1); // sanity: this frame is the doorstep case, its placement carries the sentinel
+
+    const after = layoutWorld(makeSnapshot({
+      buildings: [building],
+      workers: [makeWorker(20, { buildingId: 1 })], // same id, now genuine crew at the same building
+    }), before);
+
+    const crew = after.workers.find((w) => w.id === 20)!;
+    const cell = after.buildings.find((b) => b.id === 1)!;
+    expect(crew.slot).toBeGreaterThanOrEqual(0); // a real crew slot, never the hauler sentinel (-1)
+    expect(crew.x).toBeGreaterThan(cell.col); // a crew spot inside the cell (the sentinel collapses x to cell.col)
+    expect(crew.x).toBeLessThan(cell.col + 1);
+    expect(crew.y).toBeLessThan(wasHauler.y); // on the crew row, above the doorstep line it stood on a moment ago
   });
 });

@@ -32,6 +32,7 @@ export interface PlacedWorker {
   slot: number;
   efficiency: number;
   tooled: boolean;
+  carrying: boolean;
 }
 
 export interface WorldLayout {
@@ -49,6 +50,7 @@ interface Placement { at: number | null; slot: number; spot: Spot; }
 
 const CAMP_ANCHOR: Spot = { x: CAMP_COL0 + 1, y: 0.75 };
 const CAMP_MIN_SPOTS = 6;
+const HAULER_SLOT = -1;
 
 function byId(a: { id: number }, b: { id: number }): number {
   return a.id - b.id;
@@ -70,6 +72,7 @@ function placeBuildings(snapshot: Snapshot): Map<number, PlacedBuilding> {
 function heldSlots(previous?: WorldLayout): Map<number | null, Map<number, number>> {
   const held = new Map<number | null, Map<number, number>>();
   for (const w of previous?.workers ?? []) {
+    if (w.slot === HAULER_SLOT) continue;
     const post = held.get(w.at) ?? new Map<number, number>();
     post.set(w.id, w.slot);
     held.set(w.at, post);
@@ -189,6 +192,34 @@ function campSpot(slot: number, rows: number): Spot {
   return { x: CAMP_COL0 + 2 * vanDerCorput(slot - capacity + 1), y: rows - 0.75 };
 }
 
+/**
+ * Where a hauler stands while it is at a building: on the doorstep, below the
+ * crew's spots. Deliberately outside the slot machinery — a hauler is a
+ * visitor, not staff, and must never displace a worker's remembered slot.
+ */
+function haulerSpot(cell: PlacedBuilding): Spot {
+  return { x: cell.col + 0.5, y: cell.row + 1.05 };
+}
+
+/**
+ * Outbound haulers stand at their target; returning and idle ones fall
+ * through to the camp allocation below. Successive layouts therefore hand
+ * the renderer a moving target, and its existing walk animation does the
+ * rest — the dot carries the goods across the map on its own.
+ *
+ * Its own function (not inlined in layoutWorld) purely to keep that
+ * orchestrator's complexity within the project's gate — the logic is
+ * unchanged from a plain loop over `sorted`.
+ */
+function placeHaulers(sorted: WorkerSnapshot[], cellById: Map<number, PlacedBuilding>, placements: Map<number, Placement>): void {
+  for (const w of sorted) {
+    if (!w.hauling || w.haulTargetId === null) continue;
+    const cell = cellById.get(w.haulTargetId);
+    if (cell === undefined) continue; // target demolished: the camp claims them
+    placements.set(w.id, { at: w.haulTargetId, slot: HAULER_SLOT, spot: haulerSpot(cell) });
+  }
+}
+
 export function layoutWorld(snapshot: Snapshot, previous?: WorldLayout): WorldLayout {
   const { cols, rows } = snapshot.map;
   const cellById = placeBuildings(snapshot);
@@ -211,6 +242,8 @@ export function layoutWorld(snapshot: Snapshot, previous?: WorldLayout): WorldLa
     }
   }
 
+  placeHaulers(sorted, cellById, placements);
+
   const idle = sorted.filter((w) => !placements.has(w.id));
   const campSlots = allocateSlots(idle, CAMP_MIN_SPOTS, held.get(null));
   for (const [id, slot] of campSlots) {
@@ -219,7 +252,10 @@ export function layoutWorld(snapshot: Snapshot, previous?: WorldLayout): WorldLa
 
   const workers: PlacedWorker[] = sorted.map((w) => {
     const p = placements.get(w.id)!;
-    return { id: w.id, x: p.spot.x, y: p.spot.y, at: p.at, slot: p.slot, efficiency: w.efficiency, tooled: w.toolTicks > 0 };
+    return {
+      id: w.id, x: p.spot.x, y: p.spot.y, at: p.at, slot: p.slot,
+      efficiency: w.efficiency, tooled: w.toolTicks > 0, carrying: w.carrying > 0,
+    };
   });
   return { tile: TILE, cols, rows, camp: CAMP_ANCHOR, buildings: [...cellById.values()], workers };
 }

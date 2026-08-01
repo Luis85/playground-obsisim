@@ -33,7 +33,7 @@ describe('decideLoad', () => {
     const decision = decideLoad(v1);
     expect(decision.kind).toBe('restore');
     if (decision.kind !== 'restore') return;
-    expect(decision.save.version).toBe(2);
+    expect(decision.save.version).toBe(3);
     expect(decision.save.map).toEqual({ cols: 24, rows: 16 });
     expect(decision.save.buildings.map((b) => [b.col, b.row])).toEqual([[4, 1], [6, 1]]);
   });
@@ -49,7 +49,7 @@ describe('decideLoad', () => {
 
   it('routes a structurally valid save with an unknown building id to backup', () => {
     const save = initialSave();
-    save.buildings = [{ id: 99, defId: 'notABuilding' as never, progress: 0, batchActive: false, col: 4, row: 1 }];
+    save.buildings = [{ id: 99, defId: 'notABuilding' as never, progress: 0, batchActive: false, col: 4, row: 1, buffer: {} }];
     save.nextEntityId = 100;
     expect(decideLoad(save)).toEqual({ kind: 'backup' });
   });

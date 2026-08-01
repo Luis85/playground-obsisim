@@ -1,4 +1,4 @@
-import type { BuildingDef, BuildingDefId } from '../../shared/content-types';
+import type { BuildingDef, BuildingDefId, RecipeDef } from '../../shared/content-types';
 
 export const BUILDINGS: Record<BuildingDefId, BuildingDef> = {
   gatherersHut: {
@@ -32,3 +32,10 @@ export const BUILDINGS: Record<BuildingDefId, BuildingDef> = {
 };
 
 export const BUILDING_IDS = Object.keys(BUILDINGS) as readonly BuildingDefId[];
+
+/** Units one batch of a recipe adds to a building's output buffer. */
+export function batchOutputUnits(recipe: RecipeDef): number {
+  let units = 0;
+  for (const amount of Object.values(recipe.outputs)) units += amount;
+  return units;
+}

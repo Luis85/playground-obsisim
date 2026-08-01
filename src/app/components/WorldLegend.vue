@@ -26,6 +26,8 @@ onMounted(() => {
       <span><i class="obsisim-chip" :style="{ borderColor: theme.accent }" /> selected</span>
       <span><i class="obsisim-chip is-ghost" :style="{ background: theme.accent }" /> ghost: buildable</span>
       <span><i class="obsisim-chip is-ghost" :style="{ background: theme.danger }" /> ghost: blocked</span>
+      <span><i class="obsisim-chip" :style="{ borderColor: theme.stateRing.outputFull }" /> output full</span>
+      <span><i class="obsisim-chip is-round" :style="{ background: theme.carriedLoad }" /> carrying</span>
       <span>⛺ idle camp</span>
     </template>
   </div>

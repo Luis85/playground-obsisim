@@ -1,5 +1,5 @@
 import { Notice, Plugin } from 'obsidian';
-import type { SaveGameV2 } from './shared/save';
+import type { SaveGameV3 } from './shared/save';
 import { decideLoad } from './engine/world';
 import { GameView, VIEW_TYPE_OBSISIM } from './view/game-view';
 
@@ -63,11 +63,11 @@ export default class ObsiSimPlugin extends Plugin {
     return write;
   }
 
-  saveSave(save: SaveGameV2): Promise<void> {
+  saveSave(save: SaveGameV3): Promise<void> {
     return this.enqueueDataWrite((data) => ({ ...data, save }));
   }
 
-  async loadSave(): Promise<SaveGameV2 | null> {
+  async loadSave(): Promise<SaveGameV3 | null> {
     // wait out any in-flight write (e.g. a closing view's save) before reading
     await this.saveQueue;
     const data = ((await this.loadData()) as PluginData | null) ?? {};

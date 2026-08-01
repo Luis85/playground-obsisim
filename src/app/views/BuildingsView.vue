@@ -19,12 +19,13 @@ const store = useGameStore();
     <h3>Buildings</h3>
     <table class="obsisim-table">
       <thead>
-        <tr><th>Building</th><th>Tile</th><th>Workers</th><th>State</th><th>Batch</th><th>Work power</th><th>Tools</th><th /></tr>
+        <tr><th>Building</th><th>Tile</th><th>Waiting</th><th>Workers</th><th>State</th><th>Batch</th><th>Work power</th><th>Tools</th><th /></tr>
       </thead>
       <tbody>
-        <tr v-for="b in store.snapshot.buildings" :key="b.id">
+        <tr v-for="b in store.snapshot.buildings" :key="b.id" :data-test="`building-row-${b.id}`">
           <td>{{ BUILDINGS[b.defId].name }}</td>
           <td>({{ b.col }}, {{ b.row }})</td>
+          <td :data-test="`waiting-${b.id}`">{{ b.buffered }}</td>
           <td>
             <button :data-test="`unassign-${b.id}`" :disabled="b.workers === 0" @click="engine.dispatch({ type: 'unassignWorker', buildingId: b.id })">−</button>
             {{ b.workers }} / {{ b.workerSlots }}
@@ -42,7 +43,7 @@ const store = useGameStore();
           </td>
         </tr>
         <tr v-if="store.snapshot.buildings.length === 0">
-          <td colspan="8">
+          <td colspan="9">
             No buildings yet. Start with a Forester or Gatherer's Hut (10 wood each) from the
             list below, then assign your idle workers with <strong>+</strong>.
           </td>

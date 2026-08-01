@@ -9,6 +9,15 @@ import { BUILDINGS, CHAINS, RESOURCES } from '../../engine/content';
 // the template stays flat interpolation.
 const store = useGameStore();
 
+// One sentence, because a number nobody can interpret is not a diagnostic:
+// this is the answer to "my production fell and I did not change anything".
+const haulPressure = computed(() => {
+  if (store.unitsWaiting === 0) return 'Hauling is keeping up: nothing is waiting at a building.';
+  const haulers = `${store.haulerCount} hauler${store.haulerCount === 1 ? '' : 's'}`;
+  const stalled = `${store.stalledBuildings} stalled`;
+  return `${store.unitsWaiting} units waiting for collection — ${stalled} — ${haulers} on duty.`;
+});
+
 const chains = computed(() => {
   const snapshot = store.snapshot;
   if (!snapshot) return [];
@@ -39,6 +48,13 @@ const chains = computed(() => {
 
 <template>
   <div v-if="store.snapshot">
+    <p
+      class="obsisim-haul-pressure"
+      data-test="haul-pressure"
+      :class="{ 'obsisim-negative': store.stalledBuildings > 0 }"
+    >
+      {{ haulPressure }}
+    </p>
     <section v-for="chain in chains" :key="chain.name">
       <h3>{{ chain.name }} chain</h3>
       <table class="obsisim-table">

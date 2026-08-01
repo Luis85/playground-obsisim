@@ -1,11 +1,11 @@
 import type { IRuntimeWorld } from 'sim-ecs';
-import type { BuildingDefId } from '../shared/content-types';
+import type { BuildingDefId, ResourceId } from '../shared/content-types';
 import type { SavedBuilding, SavedWorker } from '../shared/save';
 import type { BuildingSnapshot, BuildingState, WorkerSnapshot } from '../shared/snapshot';
-import { workerWorkPower } from './content/balance';
-import { BUILDINGS } from './content/buildings';
+import { BALANCE, workerWorkPower } from './content/balance';
+import { batchOutputUnits, BUILDINGS } from './content/buildings';
 import {
-  Building, Efficiency, Hunger, JobAssignment, Position, Production, ToolCoverage, Worker, WorkerSlots,
+  Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, ToolCoverage, Worker, WorkerSlots,
 } from './components';
 
 /**
@@ -20,6 +20,10 @@ export interface WorkerFacts {
   hunger: number;
   efficiency: number;
   buildingId: number | null;
+  hauling: boolean;
+  haulTargetId: number | null;
+  carrying: number;
+  carryingResource: ResourceId | null;
   toolTicks: number;
 }
 
@@ -31,6 +35,8 @@ export interface BuildingFacts {
   workerSlots: number;
   progress: number;
   batchActive: boolean;
+  buffered: number;
+  buffer: Partial<Record<ResourceId, number>>;
 }
 
 export interface EntitySections {
@@ -58,14 +64,24 @@ export function buildEntitySections(workers: readonly WorkerFacts[], buildings: 
   }
 
   const workerSnaps: WorkerSnapshot[] = workers
-    .map((w) => ({ id: w.id, hunger: w.hunger, efficiency: w.efficiency, buildingId: w.buildingId, toolTicks: w.toolTicks }))
+    .map((w) => ({
+      id: w.id, hunger: w.hunger, efficiency: w.efficiency, buildingId: w.buildingId, hauling: w.hauling,
+      haulTargetId: w.haulTargetId, carrying: w.carrying, toolTicks: w.toolTicks,
+    }))
     .sort((a, b) => a.id - b.id);
 
   const buildingSnaps: BuildingSnapshot[] = buildings
     .map((b) => {
       const def = BUILDINGS[b.defId];
       const staffed = staffCount.get(b.id) ?? 0;
-      const state: BuildingState = staffed === 0 ? 'unstaffed' : b.batchActive ? 'producing' : 'waitingForInput';
+      // A staffed building that cannot bank another batch is stalled on output,
+      // whether or not its current batch has finished — the player's remedy is
+      // the same either way: send a hauler. Staffing still takes precedence,
+      // since an unstaffed building is not waiting on transport.
+      const outputBlocked = BALANCE.outputBufferCap - b.buffered < batchOutputUnits(def.recipe);
+      const state: BuildingState = staffed === 0
+        ? 'unstaffed'
+        : outputBlocked ? 'outputFull' : b.batchActive ? 'producing' : 'waitingForInput';
       return {
         id: b.id,
         defId: b.defId,
@@ -78,6 +94,7 @@ export function buildEntitySections(workers: readonly WorkerFacts[], buildings: 
         progressPct: Math.min(100, Math.round((b.progress / def.recipe.ticksPerBatch) * 100)),
         tooledWorkers: tooledByBuilding.get(b.id) ?? 0,
         workPower: powerByBuilding.get(b.id) ?? 0,
+        buffered: b.buffered,
       };
     })
     .sort((a, b) => a.id - b.id);
@@ -86,7 +103,9 @@ export function buildEntitySections(workers: readonly WorkerFacts[], buildings: 
     workers: workerSnaps,
     buildings: buildingSnaps,
     population: workerSnaps.length,
-    idleWorkers: workerSnaps.filter((w) => w.buildingId === null).length,
+    // Idle, on-a-building, and hauling are mutually exclusive states: a
+    // hauler's buildingId is null too, so idle must also exclude hauling.
+    idleWorkers: workerSnaps.filter((w) => w.buildingId === null && !w.hauling).length,
   };
 }
 
@@ -102,18 +121,26 @@ export function buildEntitySections(workers: readonly WorkerFacts[], buildings: 
  * entity exists and maps SavedWorker/SavedBuilding instead.
  */
 export function workerFactsOf(
-  worker: Worker, hunger: Hunger, job: JobAssignment, efficiency: Efficiency, coverage: ToolCoverage,
+  worker: Worker, hunger: Hunger, job: JobAssignment, efficiency: Efficiency, coverage: ToolCoverage, trip: HaulTrip,
 ): WorkerFacts {
   return {
     id: worker.id,
     hunger: hunger.value,
     efficiency: efficiency.value,
     buildingId: job.buildingId,
+    hauling: job.hauling,
+    // Only an outbound hauler has somewhere to be: a returning one is walking
+    // to the camp, which the layout places without needing a target.
+    haulTargetId: trip.phase === 'outbound' ? trip.targetId : null,
+    carrying: trip.amount,
+    carryingResource: trip.resource,
     toolTicks: coverage.remainingTicks,
   };
 }
 
-export function buildingFactsOf(building: Building, slots: WorkerSlots, production: Production, position: Position): BuildingFacts {
+export function buildingFactsOf(
+  building: Building, slots: WorkerSlots, production: Production, position: Position, buffer: OutputBuffer,
+): BuildingFacts {
   return {
     id: building.id,
     defId: building.defId,
@@ -122,6 +149,8 @@ export function buildingFactsOf(building: Building, slots: WorkerSlots, producti
     workerSlots: slots.max,
     progress: production.progress,
     batchActive: production.batchActive,
+    buffered: buffer.total(),
+    buffer: Object.fromEntries(buffer.amounts) as Partial<Record<ResourceId, number>>,
   };
 }
 
@@ -134,11 +163,17 @@ export function buildingFactsOf(building: Building, slots: WorkerSlots, producti
  * whitelist buried inside the serializer.
  */
 export function savedWorkerOf(facts: WorkerFacts): SavedWorker {
-  return { id: facts.id, hunger: facts.hunger, buildingId: facts.buildingId, toolTicks: facts.toolTicks };
+  return {
+    id: facts.id, hunger: facts.hunger, buildingId: facts.buildingId,
+    toolTicks: facts.toolTicks, hauling: facts.hauling,
+  };
 }
 
 export function savedBuildingOf(facts: BuildingFacts): SavedBuilding {
-  return { id: facts.id, defId: facts.defId, col: facts.col, row: facts.row, progress: facts.progress, batchActive: facts.batchActive };
+  return {
+    id: facts.id, defId: facts.defId, col: facts.col, row: facts.row,
+    progress: facts.progress, batchActive: facts.batchActive, buffer: facts.buffer,
+  };
 }
 
 export interface EntityFacts {
@@ -157,7 +192,13 @@ export function gatherEntityFacts(world: IRuntimeWorld): EntityFacts {
   for (const entity of world.getEntities()) {
     const building = entity.getComponent(Building);
     if (building) {
-      buildings.push(buildingFactsOf(building, entity.getComponent(WorkerSlots)!, entity.getComponent(Production)!, entity.getComponent(Position)!));
+      buildings.push(buildingFactsOf(
+        building,
+        entity.getComponent(WorkerSlots)!,
+        entity.getComponent(Production)!,
+        entity.getComponent(Position)!,
+        entity.getComponent(OutputBuffer)!,
+      ));
       continue;
     }
     const worker = entity.getComponent(Worker);
@@ -168,6 +209,7 @@ export function gatherEntityFacts(world: IRuntimeWorld): EntityFacts {
         entity.getComponent(JobAssignment)!,
         entity.getComponent(Efficiency)!,
         entity.getComponent(ToolCoverage)!,
+        entity.getComponent(HaulTrip)!,
       ));
     }
   }

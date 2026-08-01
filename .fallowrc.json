@@ -29,6 +29,8 @@
   ],
   "usedClassMembers": [
     "setSpeed",
-    "dirty"
+    "dirty",
+    "take",
+    "fullestResource"
   ]
 }

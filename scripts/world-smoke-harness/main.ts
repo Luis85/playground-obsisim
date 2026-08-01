@@ -22,13 +22,16 @@ window.addEventListener('unhandledrejection', (event) => window.__errors.push(St
 function building(id: number, defId: BuildingSnapshot['defId'], col: number, row: number, overrides: Partial<BuildingSnapshot> = {}): BuildingSnapshot {
   return {
     id, defId, col, row, workers: 0, workerSlots: 2, state: 'unstaffed',
-    progress: 0, batchActive: false, progressPct: 0, tooledWorkers: 0, workPower: 0,
+    progress: 0, batchActive: false, progressPct: 0, tooledWorkers: 0, workPower: 0, buffered: 0,
     ...overrides,
   };
 }
 
 function worker(id: number, overrides: Partial<WorkerSnapshot> = {}): WorkerSnapshot {
-  return { id, hunger: 0, efficiency: 1, buildingId: null, toolTicks: 0, ...overrides };
+  return {
+    id, hunger: 0, efficiency: 1, buildingId: null, hauling: false, haulTargetId: null, carrying: 0, toolTicks: 0,
+    ...overrides,
+  };
 }
 
 function snap(tick: number, buildings: BuildingSnapshot[], workers: WorkerSnapshot[]): Snapshot {
@@ -68,6 +71,16 @@ const phases: Array<() => void> = [
   () => renderer.sync(snap(4,
     [building(1, 'forester', 4, 1, { workers: 2, state: 'producing', batchActive: true, progressPct: 90 }), building(2, 'farm', 6, 1, { workers: 1, state: 'producing', batchActive: true, progressPct: 10 }), building(3, 'sawmill', 14, 7)],
     growWorkers())),
+  // hauler walking out to a backed-up building, then the same hauler home
+  // with a load: two snapshots is all the renderer needs to animate a trip.
+  // The returning hauler is also tooled, so this frame is the one place the
+  // load marker and the tool ring are drawn on the same worker.
+  () => renderer.sync(snap(5,
+    [building(1, 'forester', 4, 1, { buffered: 12, state: 'outputFull' }), building(2, 'farm', 6, 1)],
+    [worker(10, { buildingId: 1 }), worker(11, { buildingId: 1 }), worker(12, { hauling: true, haulTargetId: 1 })])),
+  () => renderer.sync(snap(6,
+    [building(1, 'forester', 4, 1, { buffered: 6 }), building(2, 'farm', 6, 1)],
+    [worker(10, { buildingId: 1 }), worker(11, { buildingId: 1 }), worker(12, { hauling: true, carrying: 6, toolTicks: 100 })])),
   () => {
     renderer.setGhost({ defId: 'bakery', col: 10, row: 5, valid: true });
     renderer.setSelection(1);

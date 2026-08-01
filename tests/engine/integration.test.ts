@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { SimClock, SnapshotStore } from '../../src/engine/resources';
 import { createColonyWorld, initialSave } from '../../src/engine/world';
 import { enqueue as dispatch } from './fixtures';
-import type { SaveGameV2 } from '../../src/shared/save';
+import type { SaveGameV3 } from '../../src/shared/save';
 
 async function run(world: Awaited<ReturnType<typeof createColonyWorld>>, ticks: number) {
   const clock = world.getResource(SimClock);
@@ -12,12 +12,19 @@ async function run(world: Awaited<ReturnType<typeof createColonyWorld>>, ticks: 
   }
 }
 
-/** Rich fixture: enough stock + idle workers to build the full economy at once. */
-function richSave(): SaveGameV2 {
+/**
+ * Rich fixture: enough stock + idle workers to build the full economy at
+ * once. 13 staff the two production chains below; the remaining 5 haul —
+ * without them the chain stalls at each building's OutputBuffer exactly as
+ * tests/engine/systems/haul-system.test.ts pins in isolation, since a
+ * downstream building's input is paid from the Stockpile, never straight
+ * from an upstream building's buffer.
+ */
+function richSave(): SaveGameV3 {
   const save = initialSave();
   save.stockpile = { wood: 500, planks: 200, berries: 200 };
-  save.workers = Array.from({ length: 14 }, (_, i) => ({ id: i + 1, hunger: 0, buildingId: null, toolTicks: 0 }));
-  save.nextEntityId = 15;
+  save.workers = Array.from({ length: 18 }, (_, i) => ({ id: i + 1, hunger: 0, buildingId: null, toolTicks: 0, hauling: false }));
+  save.nextEntityId = 19;
   return save;
 }
 
@@ -52,6 +59,15 @@ describe('full colony integration', () => {
       { type: 'assignWorker', buildingId: byDef.sawmill },
       { type: 'assignWorker', buildingId: byDef.workshop },
       { type: 'assignWorker', buildingId: byDef.workshop },
+      // The 5 remaining idle workers haul: without them wheat, flour and
+      // bread all sit in their makers' OutputBuffers forever (Task 2), and
+      // this test would fail exactly as the raw-stage version it replaces
+      // asserted it must.
+      { type: 'assignHauler' },
+      { type: 'assignHauler' },
+      { type: 'assignHauler' },
+      { type: 'assignHauler' },
+      { type: 'assignHauler' },
     );
     await run(world, 400);
 
@@ -59,7 +75,8 @@ describe('full colony integration', () => {
     expect(final.stockpile.bread.stock).toBeGreaterThan(0);
     expect(final.stockpile.tools.productionRate).toBeGreaterThan(0);
     expect(final.stockpile.bread.productionRate).toBeGreaterThan(0);
-    // wheat must not accumulate unboundedly (2 farm workers vs 2 mill workers)
+    // wheat must not accumulate unboundedly (2 farm workers vs 2 mill workers,
+    // fed by haulers rather than a direct stockpile write)
     expect(final.stockpile.wheat.stock).toBeLessThan(50);
     // everyone stays fed on the safety net + bread
     expect(final.workers.every((w) => w.efficiency > 0.5)).toBe(true);

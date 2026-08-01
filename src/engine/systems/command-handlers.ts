@@ -1,11 +1,13 @@
 import type { IEntity } from 'sim-ecs';
 import type { Command } from '../../shared/commands';
 import type { ResourceId } from '../../shared/content-types';
+import { haulTicks } from '../../shared/haul';
 import { autoPlacePosition, isTileBuildable, type TileRef } from '../../shared/placement';
 import { BALANCE } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
+import { RESOURCES, RESOURCE_IDS } from '../content/resources';
 import {
-  Building, Efficiency, Hunger, JobAssignment, Position, Production, ToolCoverage, Worker, WorkerSlots,
+  Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, ToolCoverage, Worker, WorkerSlots,
 } from '../components';
 import type { IdCounter, NoticeBoard, RemovalLedger, SimClock, Stockpile, WorldMap } from '../resources';
 
@@ -21,10 +23,12 @@ export interface BuildingRow {
   building: Building;
   slots: WorkerSlots;
   position: Position;
+  buffer: OutputBuffer;
 }
 
 export interface WorkerRow {
   job: JobAssignment;
+  trip: HaulTrip;
 }
 
 /**
@@ -104,6 +108,7 @@ export function handleConstructBuilding(ctx: CommandContext, command: Extract<Co
     new WorkerSlots(def.workerSlots),
     new Production(),
     new Position(at.col, at.row),
+    new OutputBuffer(),
   );
   ctx.notices.succeed(`Built a ${def.name}.`);
 }
@@ -120,7 +125,7 @@ export function handleRecruitWorker(ctx: CommandContext): void {
   }
   ctx.clock.lastRecruitTick = ctx.clock.tick;
   const id = ctx.ids.take();
-  ctx.spawn(new Worker(id), new Hunger(), new JobAssignment(), new Efficiency(), new ToolCoverage());
+  ctx.spawn(new Worker(id), new Hunger(), new JobAssignment(), new Efficiency(), new ToolCoverage(), new HaulTrip());
   ctx.notices.succeed(`Recruited worker #${id}.`);
 }
 
@@ -134,7 +139,8 @@ export function handleAssignWorker(ctx: CommandContext, command: Extract<Command
   let idle: JobAssignment | null = null;
   for (const { job } of ctx.workers) {
     if (job.buildingId === command.buildingId) assigned++;
-    else if (job.buildingId === null && idle === null) idle = job;
+    // A hauler is staffed work, not spare capacity — never poach it.
+    else if (job.buildingId === null && !job.hauling && idle === null) idle = job;
   }
   if (assigned >= found.slots.max) {
     ctx.notices.reject('No free worker slots at this building.');
@@ -168,6 +174,20 @@ export function handleUnassignWorker(ctx: CommandContext, command: Extract<Comma
   ctx.notices.succeed(`Unassigned a worker from ${buildingName(ctx, command.buildingId)}.`);
 }
 
+/** What a demolished building's buffer held, worded for the success notice:
+ * resource names from the same catalog `BUILDINGS` comes from, in catalog
+ * order — the determinism rule `OutputBuffer.fullestResource` also uses — and
+ * comma-separated. Empty when the buffer held nothing; the caller decides
+ * whether that is worth a clause of its own. */
+function bufferLossText(amounts: ReadonlyMap<ResourceId, number>): string {
+  const parts: string[] = [];
+  for (const id of RESOURCE_IDS) {
+    const amount = amounts.get(id) ?? 0;
+    if (amount > 0) parts.push(`${amount} ${RESOURCES[id].name}`);
+  }
+  return parts.join(', ');
+}
+
 export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Command, { type: 'demolishBuilding' }>): void {
   const found = findBuilding(ctx, command.buildingId);
   if (found === null) {
@@ -182,13 +202,39 @@ export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Com
   for (const [resource, amount] of Object.entries(def.cost)) {
     ctx.stockpile.add(resource as ResourceId, amount);
   }
-  for (const { job } of ctx.workers) {
+  // Whatever was waiting in the buffer dies with the building — decided in
+  // OBS-4-07, against refunding it: a building left full of uncollected goods
+  // should be expensive to bulldoze, since that is exactly the pressure
+  // haulers exist to relieve, and a player who wants the goods kept already
+  // has the non-destructive moveBuilding. The notice below names the loss
+  // instead of hiding it. Read here, before the clear, purely to word that
+  // notice — the stockpile loop above is untouched either way. Emptying the
+  // buffer HERE rather than letting the entity carry it off at the post-step
+  // sync is load-bearing for an unrelated reason: HaulSystem runs later in
+  // this same tick and still sees the not-yet-removed entity, so a buffer
+  // left full would have it dispatch a hauler at a building that is already
+  // gone.
+  const lost = bufferLossText(found.buffer.amounts);
+  found.buffer.amounts.clear();
+  for (const { job, trip } of ctx.workers) {
     if (job.buildingId === command.buildingId) job.buildingId = null;
+    // Spec §2.8: the trip cancels now, riding the same-tick demolishedIds
+    // machinery, rather than lazily when the hauler reaches a tile with nothing
+    // on it — up to 13 ticks later, all of them spent booked to a building the
+    // snapshot no longer contains. Outbound only: a returning hauler is carrying
+    // those goods to the camp, which did not move, and resetting it would
+    // destroy the load (mirrors handleMoveBuilding's guard below).
+    if (trip.phase === 'outbound' && trip.targetId === command.buildingId) trip.reset();
   }
   ctx.remove(found.entity);
   ctx.demolishedIds.add(command.buildingId);
   ctx.removals.dirty = true;
-  ctx.notices.succeed(`Demolished the ${def.name} — cost refunded.`);
+  // A zero-units clause would be noise on the common case, so the empty
+  // buffer keeps the plain wording rather than gaining an empty ", lost."
+  const notice = lost === ''
+    ? `Demolished the ${def.name} — cost refunded.`
+    : `Demolished the ${def.name} — cost refunded, ${lost} lost.`;
+  ctx.notices.succeed(notice);
 }
 
 export function handleMoveBuilding(ctx: CommandContext, command: Extract<Command, { type: 'moveBuilding' }>): void {
@@ -209,5 +255,43 @@ export function handleMoveBuilding(ctx: CommandContext, command: Extract<Command
   }
   found.position.col = to.col;
   found.position.row = to.row;
+  // Haulers already walking to this building now have a different journey:
+  // recompute from the new tile so the ticks charged match the line the dot
+  // visibly travels. A returning hauler is unaffected — it walks to the camp,
+  // which did not move.
+  for (const { trip } of ctx.workers) {
+    if (trip.phase === 'outbound' && trip.targetId === command.buildingId) {
+      trip.ticksLeft = haulTicks(to.col, to.row, BALANCE.haulTilesPerTick);
+    }
+  }
   ctx.notices.succeed(`Moved the ${BUILDINGS[found.building.defId].name}.`);
+}
+
+export function handleAssignHauler(ctx: CommandContext): void {
+  // The first idle worker, matching handleAssignWorker's selection rule. A
+  // worker already on a building is never poached: the player staffed it.
+  const idle = ctx.workers.find(({ job }) => job.buildingId === null && !job.hauling);
+  if (idle === undefined) {
+    ctx.notices.reject('No idle workers available.');
+    return;
+  }
+  idle.job.hauling = true;
+  ctx.notices.succeed('Assigned a hauler.');
+}
+
+export function handleUnassignHauler(ctx: CommandContext): void {
+  const hauler = ctx.workers.find(({ job }) => job.hauling);
+  if (hauler === undefined) {
+    ctx.notices.reject('No hauler to unassign.');
+    return;
+  }
+  hauler.job.hauling = false;
+  // Anything already in hand goes to the store: those goods left the building
+  // and must land somewhere. Only a returning hauler carries — an outbound one
+  // is empty — so this is exactly the mid-return case.
+  if (hauler.trip.resource !== null && hauler.trip.amount > 0) {
+    ctx.stockpile.add(hauler.trip.resource, hauler.trip.amount);
+  }
+  hauler.trip.reset();
+  ctx.notices.succeed('Unassigned a hauler.');
 }

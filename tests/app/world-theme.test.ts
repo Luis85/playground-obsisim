@@ -12,6 +12,23 @@ import { BUILDING_IDS } from '../../src/engine/content/buildings';
 const HEX = /^#[0-9a-f]{6}$/i;
 const none = () => '';
 
+/** Parses a 6-digit hex color into its RGB channel bytes. */
+function toRgb(hex: string): [number, number, number] {
+  return [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
+}
+
+/** The smallest per-channel gap between two colors. Plain !== is too weak a
+ * distinctness check: workerToolRing (#f2ecdd) and progressFill (#f5efdc)
+ * were already unequal strings, only 1-3 RGB units apart per channel — and
+ * that near-collision is exactly what let a carried load vanish into a
+ * tooled worker's ring. Requiring a real minimum per-channel gap catches a
+ * future palette edit that quietly closes the distance again. */
+function minChannelDistance(a: string, b: string): number {
+  const [ar, ag, ab] = toRgb(a);
+  const [br, bg, bb] = toRgb(b);
+  return Math.min(Math.abs(ar - br), Math.abs(ag - bg), Math.abs(ab - bb));
+}
+
 describe('resolveWorldTheme', () => {
   it('uses a CSS variable when it resolves to a hex color', () => {
     const theme = resolveWorldTheme((name) => (name === '--color-green' ? ' #11aa55 ' : ''));
@@ -55,6 +72,20 @@ describe('resolveWorldTheme', () => {
     const themed = resolveWorldTheme((name) => (name === '--color-red' ? '#aa1122' : ''));
     expect(themed.danger).toBe('#aa1122');
     expect(themed.workerColors[0]).toBe('#aa1122'); // same source as starving-worker red
+  });
+
+  it('gives the output-full stall its own ring, distinct from every other state', () => {
+    const theme = resolveWorldTheme(() => '');
+    expect(theme.stateRing.outputFull).toBe('#8f6fbf');
+    const rings = Object.values(theme.stateRing);
+    expect(new Set(rings).size).toBe(rings.length);
+  });
+
+  it('gives a carried load its own colour, meaningfully distinct from the tool ring and the progress fill', () => {
+    const theme = resolveWorldTheme(none);
+    expect(theme.carriedLoad).toBe('#4bbfd4');
+    expect(minChannelDistance(theme.carriedLoad, theme.workerToolRing)).toBeGreaterThan(3);
+    expect(minChannelDistance(theme.carriedLoad, theme.progressFill)).toBeGreaterThan(3);
   });
 });
 

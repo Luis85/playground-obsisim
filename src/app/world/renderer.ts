@@ -343,7 +343,7 @@ class WorldScene {
     const actor = new Actor({ pos: target, z: 3 });
     this.engine.currentScene.add(actor);
     const load = new Actor({ pos: vec(0, -WORKER_RADIUS - 3), z: 3 });
-    load.graphics.use(new Circle({ radius: 3, color: Color.fromHex(this.theme.progressFill) }));
+    load.graphics.use(new Circle({ radius: 3, color: Color.fromHex(this.theme.carriedLoad) }));
     load.graphics.visible = false;
     actor.addChild(load);
     const bundle = { actor, target, load };

@@ -209,6 +209,27 @@ describe('WorldView', () => {
     expect(legend.text()).toContain('ghost: blocked');
     expect(legend.text()).toContain('output full');
     expect(legend.text()).toContain('carrying');
+
+    // Every entry's swatch is a separate child element, sibling to the label
+    // text — never the label's own element. "output full" and "carrying"
+    // once broke this by putting the label INSIDE the chip-classed element,
+    // which (given .obsisim-chip's fixed 12x12 size and the flex legend-span
+    // rule) rendered as a bare box with overflowing text and no visible
+    // swatch. Checked across every entry, not just those two, so increment 5
+    // cannot reintroduce the same collapse.
+    const entries = legend.findAll('span');
+    expect(entries.length).toBeGreaterThanOrEqual(13);
+    let withSwatch = 0;
+    for (const entry of entries) {
+      const ownsChipClass = entry.classes().includes('obsisim-chip');
+      const swatch = entry.find('.obsisim-chip');
+      if (!ownsChipClass && !swatch.exists()) continue; // "idle camp": a literal glyph, no encoded color
+      expect(ownsChipClass).toBe(false); // the label's own span must never double as the chip
+      expect(swatch.exists()).toBe(true); // the swatch must be a distinct child element
+      expect(swatch.text()).toBe(''); // …carrying no label text of its own
+      withSwatch += 1;
+    }
+    expect(withSwatch).toBeGreaterThanOrEqual(12);
   });
 
   it('falls back when the renderer reports an async fatal failure', async () => {

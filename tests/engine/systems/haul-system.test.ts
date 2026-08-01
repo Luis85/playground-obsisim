@@ -1,14 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import type { IEntity } from 'sim-ecs';
-import { Building, HaulTrip, OutputBuffer } from '../../../src/engine/components';
+import type { IEntity, IRuntimeWorld } from 'sim-ecs';
+import { Building, HaulTrip, JobAssignment, OutputBuffer, Worker } from '../../../src/engine/components';
 import { IdCounter, Stockpile } from '../../../src/engine/resources';
 import { BALANCE } from '../../../src/engine/content/balance';
 import { HaulSystem } from '../../../src/engine/systems/haul-system';
 import { CommandSystem } from '../../../src/engine/systems/command-system';
 import { enqueue } from '../fixtures';
 import {
-  buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spawnWorker, type TColonySystemFactory,
+  buildColonyPrepWorld, createColonyWorld, getPrepResource, initialSave, spawnBuilding, spawnWorker, type TColonySystemFactory,
 } from '../../../src/engine/world';
+import { buildSaveFromWorld } from '../../../src/engine/game-engine';
 
 interface BuildingSpec { col: number; row: number; wood: number; id?: number }
 
@@ -33,6 +34,35 @@ async function setup(specs: readonly BuildingSpec[], haulerCount: number, extraS
 
 const tripOf = (hauler: IEntity) => hauler.getComponent(HaulTrip)!;
 const bufferOf = (building: IEntity) => building.getComponent(OutputBuffer)!;
+
+/**
+ * Every hauler's trip, every building's remaining buffer, and the stockpile,
+ * as one plain structure — what two independently-built worlds get compared
+ * by (spec criterion 5). Sorted by id so the same hauler/building lands at
+ * the same array index in both snapshots regardless of entity-iteration
+ * order, which is what makes a position-wise toEqual meaningful.
+ */
+function haulStateOf(world: IRuntimeWorld) {
+  const entities = [...world.getEntities()];
+  const haulers = entities
+    .filter((e) => e.getComponent(JobAssignment)?.hauling)
+    .map((e) => {
+      const trip = e.getComponent(HaulTrip)!;
+      return {
+        workerId: e.getComponent(Worker)!.id,
+        targetId: trip.targetId,
+        phase: trip.phase,
+        ticksLeft: trip.ticksLeft,
+        amount: trip.amount,
+      };
+    })
+    .sort((a, b) => a.workerId - b.workerId);
+  const buildings = entities
+    .filter((e) => e.getComponent(Building) !== undefined)
+    .map((e) => ({ buildingId: e.getComponent(Building)!.id, remaining: e.getComponent(OutputBuffer)!.total() }))
+    .sort((a, b) => a.buildingId - b.buildingId);
+  return { haulers, buildings, stockpile: world.getResource(Stockpile).toJSON() };
+}
 
 describe('HaulSystem', () => {
   it('walks out, loads a full carry, walks back, and banks it in the store', async () => {
@@ -85,6 +115,23 @@ describe('HaulSystem', () => {
     expect(tripOf(haulers[0]).targetId).toBe(buildings[1].getComponent(Building)!.id);
   });
 
+  it('the same hauler serves a near building far faster than a far one', async () => {
+    // (3,0) is 1 tile from camp -> 1 tick each way; (23,15) is the default
+    // map's far corner -> 13 ticks each way (see BALANCE.haulTilesPerTick doc).
+    // Both start with a full buffer so neither stalls for a reason unrelated
+    // to distance. At 10 ticks the near building has banked its whole 12-unit
+    // buffer (two 6-unit trips, done by tick 6); the far one, 13 ticks each
+    // way, hasn't completed its first trip yet (not due until tick 27).
+    const near = await setup([{ col: 3, row: 0, wood: BALANCE.outputBufferCap }], 1);
+    const far = await setup([{ col: 23, row: 15, wood: BALANCE.outputBufferCap }], 1);
+    const TICKS = 10;
+    await near.step(TICKS);
+    await far.step(TICKS);
+    expect(near.stockpile.get('wood')).toBe(12);
+    expect(far.stockpile.get('wood')).toBe(0);
+    expect(near.stockpile.get('wood')).toBeGreaterThan(far.stockpile.get('wood'));
+  });
+
   it('dispatches identically regardless of entity order — same world, same claim', async () => {
     // both 3 tiles from camp, both holding 4: the lowest id must win either way
     const forward = await setup([{ id: 10, col: 5, row: 0, wood: 4 }, { id: 11, col: 2, row: 3, wood: 4 }], 1);
@@ -93,6 +140,43 @@ describe('HaulSystem', () => {
     await reversed.step(1);
     expect(tripOf(forward.haulers[0]).targetId).toBe(10);
     expect(tripOf(reversed.haulers[0]).targetId).toBe(10);
+  });
+
+  it('a save decides the same way twice — same claims, same stockpile, same buffers', async () => {
+    // Three distinct backlogs (2/9/6 wood) at three distances (1/4/11 ticks),
+    // two haulers: every dispatch below is decided by backlog alone (2 < 6 <
+    // 9, no ties), so the comparator's ordering does the work, not the id
+    // fallback (already covered by the entity-order test above).
+    const midRun = await setup(
+      [{ col: 3, row: 0, wood: 2 }, { col: 8, row: 3, wood: 9 }, { col: 20, row: 10, wood: 6 }],
+      2,
+    );
+    // Mid-run, not a fresh colony: by tick 5 one hauler has picked up the mid
+    // building's backlog and is walking home carrying it (Task 6 will bank
+    // that load straight into the save's stockpile), and the other is still
+    // outbound to the far building. Neither buffer nor trip state is trivial.
+    await midRun.step(5);
+    const save = buildSaveFromWorld(midRun.world);
+
+    // Two INDEPENDENT worlds from that one save — the save/load half criterion
+    // 5 requires, as opposed to the entity-order test's single shared world.
+    const worldA = await createColonyWorld(save);
+    const worldB = await createColonyWorld(save);
+    const RUN_TICKS = 20;
+    for (let i = 0; i < RUN_TICKS; i++) {
+      await worldA.step();
+      await worldB.step();
+    }
+
+    const stateA = haulStateOf(worldA);
+    const stateB = haulStateOf(worldB);
+
+    // Prove this isn't trivially true: the run actually did something. (See
+    // the task report for the concrete observed state at this point.)
+    expect(stateA.haulers.some((h) => h.phase === 'returning' || h.amount > 0)).toBe(true);
+    expect(stateA.stockpile.wood ?? 0).toBeGreaterThan(0);
+
+    expect(stateA).toEqual(stateB);
   });
 
   it('leaves haulers idle when nothing is waiting', async () => {

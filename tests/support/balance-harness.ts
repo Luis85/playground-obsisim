@@ -6,6 +6,7 @@ import { BUILDINGS } from '../../src/engine/content/buildings';
 import { Building } from '../../src/engine/components';
 import { IdCounter, SimClock, SnapshotStore, Stockpile } from '../../src/engine/resources';
 import { ALL_SYSTEMS, buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spawnWorker } from '../../src/engine/world';
+import { enqueue } from '../engine/fixtures';
 
 /**
  * A balance experiment, reproducible from this descriptor alone: one building
@@ -25,6 +26,8 @@ export interface Scenario {
   ticks: number;
   /** The output resource to measure. */
   resource: ResourceId;
+  /** Optionally relocate the building mid-run, to measure what downtime costs. */
+  moveTo?: { col: number; row: number; atTick: number };
 }
 
 export interface BalanceResult {
@@ -34,11 +37,13 @@ export interface BalanceResult {
   delivered: number;
   /** Ticks the building spent in `outputFull`. */
   stalledTicks: number;
+  /** Ticks the building spent out of action after a move. */
+  relocatingTicks: number;
   /** Hauler-ticks spent at the camp with no trip (over-provisioning). */
   haulerIdleTicks: number;
   /** Units still waiting at the building when the run ended. */
   finalBuffer: number;
-  /** One-way trip length in ticks, for reference. */
+  /** One-way trip length in ticks from the scenario's STARTING tile, for reference. */
   legTicks: number;
   /** Units the crew could produce with hauling never a constraint. */
   ceiling: number;
@@ -63,15 +68,20 @@ export async function runScenario(scenario: Scenario): Promise<BalanceResult> {
   const world = await prep.prepareRun();
 
   let stalledTicks = 0;
+  let relocatingTicks = 0;
   let haulerIdleTicks = 0;
   const before = world.getResource(Stockpile).get(resource);
 
   for (let t = 0; t < ticks; t++) {
     world.getResource(SimClock).tick++;
+    if (scenario.moveTo && t === scenario.moveTo.atTick) {
+      enqueue(world, { type: 'moveBuilding', buildingId, to: { col: scenario.moveTo.col, row: scenario.moveTo.row } });
+    }
     await world.step();
     const snapshot = world.getResource(SnapshotStore).latest!;
     const building = snapshot.buildings.find((b) => b.id === buildingId);
     if (building?.state === 'outputFull') stalledTicks++;
+    if (building?.state === 'relocating') relocatingTicks++;
     haulerIdleTicks += snapshot.workers.filter((w) => w.hauling && w.haulPhase === 'idle').length;
   }
 
@@ -89,6 +99,7 @@ export async function runScenario(scenario: Scenario): Promise<BalanceResult> {
     made,
     delivered,
     stalledTicks,
+    relocatingTicks,
     haulerIdleTicks,
     finalBuffer,
     legTicks: haulTicks(col, row, BALANCE.haulTilesPerTick),

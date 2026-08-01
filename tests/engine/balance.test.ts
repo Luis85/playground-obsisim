@@ -15,6 +15,11 @@ const TICKS = 600;
 const forester = (col: number, row: number, haulers: number) =>
   runScenario({ defId: 'forester', col, row, crew: 2, haulers, ticks: TICKS, resource: 'wood' });
 
+// 200 ticks, not TICKS: a relocation is a one-off event, and a 600-tick run
+// dilutes it below the noise of the surrounding steady state.
+const relocating = (col: number, row: number, moveTo?: { col: number; row: number; atTick: number }) =>
+  runScenario({ defId: 'forester', col, row, crew: 2, haulers: 2, ticks: 200, resource: 'wood', moveTo });
+
 const share = (r: { delivered: number; ceiling: number }) => r.delivered / r.ceiling;
 
 describe('haul balance gradient', () => {
@@ -69,4 +74,36 @@ describe('haul balance gradient', () => {
     }
     console.log(lines.join('\n'));
   }, 600000);
+
+  it('relocation downtime costs output even when the move changes nothing else', async () => {
+    // (10,0) and (3,7) are BOTH leg 4 from the camp, so relocating between them
+    // changes nothing about haulage — the only difference is that the building
+    // stops working. Distance-neutrality is asserted below, not trusted to this
+    // comment. Without this control the `made` comparison would be satisfied by
+    // the destination simply being further away, and would stay green with
+    // relocation costing no production at all.
+    const from = await relocating(10, 0);
+    const to = await relocating(3, 7);
+    const moved = await relocating(10, 0, { col: 3, row: 7, atTick: 50 });
+
+    expect(from.legTicks).toBe(to.legTicks); // the move is distance-neutral, by measurement
+
+    // hypot(7,7) = 9.9 tiles at relocationTilesPerTick 1 = 10 ticks charged.
+    // ProductionSystem runs after CommandSystem, so the countdown ticks down in
+    // the same step the command lands and 9 snapshots report `relocating`.
+    // Exact, unlike this file's other assertions: this number is a function of
+    // two tile coordinates and the constant under test, and nothing else.
+    expect(moved.relocatingTicks).toBe(9);
+
+    expect(moved.made).toBeLessThan(from.made); // costs output against the origin
+    expect(moved.made).toBeLessThan(to.made);   //   ...and against the destination
+  }, 180000);
+
+  it('a far-corner relocation costs a measurable share of a run', async () => {
+    // (8,4) -> (23,15) is hypot(15,11) = 18.6 tiles: a plausible "I put this in
+    // the wrong place" correction, not a contrived worst case.
+    const moved = await relocating(8, 4, { col: 23, row: 15, atTick: 50 });
+    expect(moved.relocatingTicks).toBeGreaterThan(15);
+    expect(moved.relocatingTicks).toBeLessThan(25);
+  }, 120000);
 });

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { SimClock, SnapshotStore } from '../../src/engine/resources';
 import { createColonyWorld, initialSave } from '../../src/engine/world';
 import { enqueue as dispatch } from './fixtures';
-import type { SaveGameV2 } from '../../src/shared/save';
+import type { SaveGameV3 } from '../../src/shared/save';
 
 async function run(world: Awaited<ReturnType<typeof createColonyWorld>>, ticks: number) {
   const clock = world.getResource(SimClock);
@@ -20,10 +20,10 @@ async function run(world: Awaited<ReturnType<typeof createColonyWorld>>, ticks: 
  * downstream building's input is paid from the Stockpile, never straight
  * from an upstream building's buffer.
  */
-function richSave(): SaveGameV2 {
+function richSave(): SaveGameV3 {
   const save = initialSave();
   save.stockpile = { wood: 500, planks: 200, berries: 200 };
-  save.workers = Array.from({ length: 18 }, (_, i) => ({ id: i + 1, hunger: 0, buildingId: null, toolTicks: 0 }));
+  save.workers = Array.from({ length: 18 }, (_, i) => ({ id: i + 1, hunger: 0, buildingId: null, toolTicks: 0, hauling: false }));
   save.nextEntityId = 19;
   return save;
 }

@@ -30,14 +30,14 @@ export const MAX_SAVED_COUNTER = Number.MAX_SAFE_INTEGER - 2 ** 32;
  *
  * Both producers (`buildSaveFromWorld`, `initialSave`) use this constant rather
  * than a literal, which makes the bump self-policing: because
- * `SaveGameV2.version` is the literal type `2`, raising this to 3 fails
- * typecheck AT those producers (`Type '3' is not assignable to type '2'`) until
+ * `SaveGameV3.version` is the literal type `3`, raising this to 4 fails
+ * typecheck AT those producers (`Type '4' is not assignable to type '3'`) until
  * the save type is updated too. That is deliberate — with hardcoded literals,
- * bumping the constant would have pointed the loader at v3 while autosaves and
- * fresh colonies kept claiming v2, and a v2-labelled save carrying v3 fields
+ * bumping the constant would have pointed the loader at v4 while autosaves and
+ * fresh colonies kept claiming v3, and a v3-labelled save carrying v4 fields
  * would then be migrated a second time on load.
  */
-export const LATEST_SAVE_VERSION = 2;
+export const LATEST_SAVE_VERSION = 3;
 
 /** The v1 building record — frozen legacy shape, pre-spatial. */
 export interface SavedBuildingV1 {
@@ -47,13 +47,20 @@ export interface SavedBuildingV1 {
   batchActive: boolean;
 }
 
-/** The current building record: v1 plus the tile it stands on (save v2). */
-export interface SavedBuilding extends SavedBuildingV1 {
+/** The v2 building record — frozen legacy shape, pre-logistics. */
+export interface SavedBuildingV2 extends SavedBuildingV1 {
   col: number;
   row: number;
 }
 
-export interface SavedWorker {
+/** The current building record: v2 plus the goods waiting at it (save v3). */
+export interface SavedBuilding extends SavedBuildingV2 {
+  /** Output-buffer contents; `{}` when the building is empty. */
+  buffer: Partial<Record<ResourceId, number>>;
+}
+
+/** The pre-v3 worker record — frozen legacy shape, before hauling existed. */
+export interface SavedWorkerV2 {
   id: number;
   hunger: number;
   /** Building id this worker is assigned to, or null when idle. */
@@ -62,13 +69,22 @@ export interface SavedWorker {
   toolTicks: number;
 }
 
+export interface SavedWorker {
+  id: number;
+  hunger: number;
+  buildingId: number | null;
+  toolTicks: number;
+  /** True when this worker is assigned to hauling (save v3). */
+  hauling: boolean;
+}
+
 export interface SaveGameV1 {
   version: 1;
   tick: number;
   lastRecruitTick: number;
   stockpile: Partial<Record<ResourceId, number>>;
   buildings: SavedBuildingV1[];
-  workers: SavedWorker[];
+  workers: SavedWorkerV2[];
   nextEntityId: number;
 }
 
@@ -78,6 +94,17 @@ export interface SaveGameV2 {
   lastRecruitTick: number;
   stockpile: Partial<Record<ResourceId, number>>;
   /** World dimensions in tiles — persisted so a later increment can grow it. */
+  map: WorldMapSize;
+  buildings: SavedBuildingV2[];
+  workers: SavedWorkerV2[];
+  nextEntityId: number;
+}
+
+export interface SaveGameV3 {
+  version: 3;
+  tick: number;
+  lastRecruitTick: number;
+  stockpile: Partial<Record<ResourceId, number>>;
   map: WorldMapSize;
   buildings: SavedBuilding[];
   workers: SavedWorker[];
@@ -171,5 +198,24 @@ export function isSaveGameV2(data: unknown): data is SaveGameV2 {
     isCommonSaveShape(save) &&
     isMapShape(save.map) &&
     (save.buildings as unknown[]).every(hasSavedPosition)
+  );
+}
+
+function isBufferShape(buffer: unknown): boolean {
+  if (typeof buffer !== 'object' || buffer === null || Array.isArray(buffer)) return false;
+  // Structural only: catalog membership and the cap are cross-field truths
+  // that live in isLoadableSave, beside the id and position checks.
+  return Object.values(buffer).every((amount) => Number.isSafeInteger(amount) && (amount as number) >= 0);
+}
+
+export function isSaveGameV3(data: unknown): data is SaveGameV3 {
+  if (typeof data !== 'object' || data === null) return false;
+  const save = data as Record<string, unknown>;
+  return (
+    save.version === 3 &&
+    isCommonSaveShape(save) &&
+    isMapShape(save.map) &&
+    (save.buildings as unknown[]).every((b) => hasSavedPosition(b) && isBufferShape((b as SavedBuilding).buffer)) &&
+    (save.workers as unknown[]).every((w) => typeof (w as SavedWorker).hauling === 'boolean')
   );
 }

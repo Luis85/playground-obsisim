@@ -1,5 +1,5 @@
-import type { SaveGameV1, SaveGameV2 } from './save';
-import { isSaveGameV1, isSaveGameV2, LATEST_SAVE_VERSION } from './save';
+import type { SaveGameV1, SaveGameV2, SaveGameV3 } from './save';
+import { isSaveGameV1, isSaveGameV2, isSaveGameV3, LATEST_SAVE_VERSION } from './save';
 import { autoPlaceSequence, mapThatFits } from './placement';
 
 /**
@@ -27,7 +27,7 @@ export interface MigrationStep {
  */
 export type SaveGuards = Partial<Record<number, (data: unknown) => boolean>>;
 
-const SAVE_GUARDS: SaveGuards = { 1: isSaveGameV1, 2: isSaveGameV2 };
+const SAVE_GUARDS: SaveGuards = { 1: isSaveGameV1, 2: isSaveGameV2, 3: isSaveGameV3 };
 
 /**
  * v1 -> v2: space arrives. Every building gets the position increment 2's
@@ -62,10 +62,30 @@ const migrateV1toV2: MigrationStep = {
   },
 };
 
+/**
+ * v2 -> v3: logistics arrives. A v2 colony is exactly a v3 colony whose
+ * buildings hold nothing and whose workers all work rather than haul, so this
+ * is a shape fill with no geometry and no content — the import discipline of
+ * this file is untouched.
+ */
+const migrateV2toV3: MigrationStep = {
+  from: 2,
+  to: 3,
+  migrate: (save) => {
+    const v2 = save as SaveGameV2; // the runner guard-validated this shape
+    return {
+      ...v2,
+      version: 3,
+      buildings: v2.buildings.map((b) => ({ ...b, buffer: {} })),
+      workers: v2.workers.map((w) => ({ ...w, hauling: false })),
+    };
+  },
+};
+
 /** The registration tables this module owns, edited in place when a version
  * lands. Deliberately not exported: tests inject fakes through
  * migrateSaveToLatest's parameters instead. */
-const SAVE_MIGRATIONS: readonly MigrationStep[] = [migrateV1toV2];
+const SAVE_MIGRATIONS: readonly MigrationStep[] = [migrateV1toV2, migrateV2toV3];
 
 export function readSaveVersion(data: unknown): number | null {
   if (typeof data !== 'object' || data === null) return null;
@@ -147,7 +167,7 @@ export function migrateSaveToLatest(
   guards: SaveGuards = SAVE_GUARDS,
   steps: readonly MigrationStep[] = SAVE_MIGRATIONS,
   target: number = LATEST_SAVE_VERSION,
-): SaveGameV2 | null {
+): SaveGameV3 | null {
   const version = readSaveVersion(data);
   if (version === null || version > target) return null; // a save from a NEWER build is not downgradable
   if (!passesGuard(guards[version], data)) return null;  // validate at the version it claims
@@ -160,5 +180,5 @@ export function migrateSaveToLatest(
   // same value. Kept so a future change to runSteps or to the early-return
   // above doesn't silently stop being caught here.
   if (migrated === null || !passesGuard(guards[target], migrated)) return null;
-  return migrated as SaveGameV2;
+  return migrated as SaveGameV3;
 }

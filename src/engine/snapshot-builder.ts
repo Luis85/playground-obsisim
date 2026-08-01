@@ -36,6 +36,7 @@ export interface BuildingFacts {
   progress: number;
   batchActive: boolean;
   buffered: number;
+  buffer: Partial<Record<ResourceId, number>>;
 }
 
 export interface EntitySections {
@@ -149,6 +150,7 @@ export function buildingFactsOf(
     progress: production.progress,
     batchActive: production.batchActive,
     buffered: buffer.total(),
+    buffer: Object.fromEntries(buffer.amounts) as Partial<Record<ResourceId, number>>,
   };
 }
 
@@ -161,11 +163,17 @@ export function buildingFactsOf(
  * whitelist buried inside the serializer.
  */
 export function savedWorkerOf(facts: WorkerFacts): SavedWorker {
-  return { id: facts.id, hunger: facts.hunger, buildingId: facts.buildingId, toolTicks: facts.toolTicks };
+  return {
+    id: facts.id, hunger: facts.hunger, buildingId: facts.buildingId,
+    toolTicks: facts.toolTicks, hauling: facts.hauling,
+  };
 }
 
 export function savedBuildingOf(facts: BuildingFacts): SavedBuilding {
-  return { id: facts.id, defId: facts.defId, col: facts.col, row: facts.row, progress: facts.progress, batchActive: facts.batchActive };
+  return {
+    id: facts.id, defId: facts.defId, col: facts.col, row: facts.row,
+    progress: facts.progress, batchActive: facts.batchActive, buffer: facts.buffer,
+  };
 }
 
 export interface EntityFacts {

@@ -10,9 +10,9 @@ import { SnapshotSystem } from '../../../src/engine/systems/snapshot-system';
 import { enqueue } from '../fixtures';
 import { buildColonyPrepWorld, COMPONENT_TYPES, getPrepResource, initialSave, spawnWorker } from '../../../src/engine/world';
 import type { Command } from '../../../src/shared/commands';
-import type { SaveGameV2 } from '../../../src/shared/save';
+import type { SaveGameV3 } from '../../../src/shared/save';
 
-async function setup(save: SaveGameV2 = initialSave()) {
+async function setup(save: SaveGameV3 = initialSave()) {
   const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, HaulSystem, SnapshotSystem] });
   const world = await prep.prepareRun();
   // mirror GameEngine.stepOnce: the engine owns time, bumping the clock before each step.
@@ -212,7 +212,7 @@ describe('CommandSystem', () => {
     let id = 10;
     for (let row = 0; row < 16; row++) {
       for (let col = 3; col < 24; col++) {
-        save.buildings.push({ id: id++, defId: 'forester', progress: 0, batchActive: false, col, row });
+        save.buildings.push({ id: id++, defId: 'forester', progress: 0, batchActive: false, col, row, buffer: {} });
       }
     }
     save.nextEntityId = id;

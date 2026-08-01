@@ -1,7 +1,7 @@
 import type { IRuntimeWorld } from 'sim-ecs';
 import type { Command } from '../shared/commands';
 import type { EngineStatus, Snapshot } from '../shared/snapshot';
-import type { SaveGameV2 } from '../shared/save';
+import type { SaveGameV3 } from '../shared/save';
 import { LATEST_SAVE_VERSION } from '../shared/save';
 import { BALANCE } from './content/balance';
 import { CommandQueue, IdCounter, RemovalLedger, SimClock, SnapshotStore, Stockpile, WorldMap } from './resources';
@@ -10,16 +10,24 @@ import { createColonyWorld, initialSave, refreshEntitySections } from './world';
 
 export type UpdateListener = (snapshot: Snapshot | null, status: EngineStatus) => void;
 
-export function buildSaveFromWorld(world: IRuntimeWorld): SaveGameV2 {
+export function buildSaveFromWorld(world: IRuntimeWorld): SaveGameV3 {
   const clock = world.getResource(SimClock);
   const facts = gatherEntityFacts(world);
+  const stockpile = world.getResource(Stockpile).toJSON();
+  // A hauler caught mid-trip banks its load here rather than persisting trip
+  // state: conservation stays exact, and HaulTrip stays out of the save format
+  // and its guards entirely. The live world is deliberately NOT mutated — this
+  // is a snapshot, and the running colony still delivers that load normally.
+  for (const worker of facts.workers) {
+    if (worker.carryingResource === null || worker.carrying <= 0) continue;
+    stockpile[worker.carryingResource] = (stockpile[worker.carryingResource] ?? 0) + worker.carrying;
+  }
   return {
     version: LATEST_SAVE_VERSION,
     tick: clock.tick,
     lastRecruitTick: clock.lastRecruitTick,
-    stockpile: world.getResource(Stockpile).toJSON(),
+    stockpile,
     map: { cols: world.getResource(WorldMap).cols, rows: world.getResource(WorldMap).rows },
-    // sorted so a save is byte-stable regardless of entity iteration order
     buildings: facts.buildings.map(savedBuildingOf).sort((a, b) => a.id - b.id),
     workers: facts.workers.map(savedWorkerOf).sort((a, b) => a.id - b.id),
     nextEntityId: world.getResource(IdCounter).peek(),
@@ -34,11 +42,11 @@ export class GameEngine {
   private stepping = false;
   private inFlight: Promise<void> | null = null;
   private readonly updateListeners: UpdateListener[] = [];
-  private autosaveListener: ((save: SaveGameV2) => void) | null = null;
+  private autosaveListener: ((save: SaveGameV3) => void) | null = null;
 
   private constructor(private world: IRuntimeWorld) {}
 
-  static async create(save?: SaveGameV2 | null): Promise<GameEngine> {
+  static async create(save?: SaveGameV3 | null): Promise<GameEngine> {
     return new GameEngine(await createColonyWorld(save ?? initialSave()));
   }
 
@@ -55,7 +63,7 @@ export class GameEngine {
     listener(this.snapshot, this.status);
   }
 
-  onAutosave(listener: (save: SaveGameV2) => void): void {
+  onAutosave(listener: (save: SaveGameV3) => void): void {
     this.autosaveListener = listener;
   }
 
@@ -153,7 +161,7 @@ export class GameEngine {
     this.publish();
   }
 
-  serialize(): SaveGameV2 {
+  serialize(): SaveGameV3 {
     // live ECS state, never the snapshot — see buildSaveFromWorld
     return buildSaveFromWorld(this.world);
   }

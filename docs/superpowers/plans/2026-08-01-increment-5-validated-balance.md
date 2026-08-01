@@ -586,7 +586,7 @@ If `ceiling` is off, check `perBatch` against `BUILDINGS.forester.recipe` (`outp
 # destroy the implementation you just wrote (this bit Task 1).
 SP=/tmp/obsisim-mutation && mkdir -p $SP
 cp tests/support/balance-harness.ts "$SP/$(basename tests/support/balance-harness.ts)"
-sed -i 's|  made = delivered + finalBuffer;|  made = delivered;|' tests/support/balance-harness.ts
+sed -i 's|  const made = delivered + finalBuffer;|  const made = delivered;|' tests/support/balance-harness.ts
 npx vitest run tests/support/balance-harness.test.ts   # expect the made/delivered test to FAIL
 cp "$SP/$(basename tests/support/balance-harness.ts)" tests/support/balance-harness.ts
 ```

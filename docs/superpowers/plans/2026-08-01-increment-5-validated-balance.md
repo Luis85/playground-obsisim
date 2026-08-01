@@ -1100,8 +1100,15 @@ it('reports a relocating building as relocating, with its remaining ticks', asyn
   save.stockpile = {};
   const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
   const ids = getPrepResource(prep, IdCounter);
-  // Staffed AND relocating: 'relocating' must win, because it is the reason
-  // nothing is happening — an unstaffed or output-full label would misdirect.
+  // Staffed AND relocating: 'relocating' must win over the batch-state labels.
+  //
+  // NOTE (added after review): this fixture does NOT establish priority over
+  // `unstaffed` or `outputFull` — it staffs the building and leaves the buffer
+  // empty, so `staffed !== 0` and `outputBlocked === false` whatever the
+  // relocating branch does. It can only prove 'relocating' beats
+  // 'waitingForInput'. Cases that genuinely compete (relocating + no workers;
+  // relocating + a full buffer) are required and were added in the fix wave.
+  // A fixture that does not make the rival branch true proves nothing.
   const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 5, row: 4, relocatingTicks: 7 });
   const buildingId = building.getComponent(Building)!.id;
   spawnWorker(prep, ids, { buildingId });

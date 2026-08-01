@@ -1081,6 +1081,7 @@ remaining downtime rather than accumulating it."
 - Modify: `src/engine/snapshot-builder.ts` (`BuildingFacts`, `buildingFactsOf`, state selection)
 - Modify: `src/engine/systems/snapshot-system.ts` (query `Relocation`)
 - Modify: `src/engine/world.ts` (`gatherEntityFacts` / `buildInitialSnapshot`)
+- Modify: `src/engine/spawn.ts` (re-export `clampedRelocation` — see Step 5)
 - Modify: `src/app/labels.ts`
 - Test: `tests/engine/systems/snapshot-system.test.ts`
 
@@ -1193,7 +1194,12 @@ In `src/engine/world.ts`'s `buildInitialSnapshot`, add to the `buildingFacts` li
       relocatingTicks: clampedRelocation(saved.relocatingTicks ?? 0),
 ```
 
-(import `clampedRelocation` from `./spawn`).
+**`clampedRelocation` is currently module-private in `src/engine/spawn.ts`** —
+Task 5 exported it as this plan originally said, the project's dead-code ratchet
+flagged it (nothing consumed it yet), and making it private was the correct fix.
+**This task is its first consumer**, so add the `export` keyword back to it now
+and import it from `./spawn`. The ratchet will be satisfied because the import
+below is a real consumer.
 
 So this compiles without a cast, add the field to `SavedBuilding` in
 `src/shared/save.ts` **as optional** in this task:

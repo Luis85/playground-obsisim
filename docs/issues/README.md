@@ -39,7 +39,6 @@ folder being tidy.
 
 | id | severity | title |
 | --- | --- | --- |
-| OBS-4-01 | important | [The maintainability floor averages over tests](2026-08-01-maintainability-floor-measures-the-wrong-population.md) |
 | OBS-4-02 | important | [Every component must be attached in two spawn sites](2026-08-01-every-component-needs-two-spawn-sites.md) |
 | OBS-4-06 | important | [The Economy view's "Prod/t" column now reports deliveries](2026-08-01-prod-per-tick-column-now-reports-deliveries.md) |
 | OBS-4-09 | important | [The hauler dot animates at a fixed speed unrelated to the trip](2026-08-01-hauler-animation-outruns-the-simulated-trip.md) |
@@ -47,16 +46,16 @@ folder being tidy.
 | OBS-4-05 | minor | [Parallel agents share one git index](2026-08-01-parallel-agents-share-one-git-index.md) |
 | OBS-4-08 | minor | [Unassigning a hauler picks an arbitrary one](2026-08-01-unassign-hauler-picks-an-arbitrary-hauler.md) |
 
-Four of these are worth taking before increment 5 adds to them: **OBS-4-01**
-because the gate will keep going red once per increment until its shape changes,
-**OBS-4-02** because the same class of bug has already bitten twice, and
-**OBS-4-06** and **OBS-4-09** because they are the two a player would actually
-notice — a column that contradicts itself, and a hauler that turns round in open
-ground before reaching the building it was sent to.
+Three of these are worth taking before increment 5 adds to them: **OBS-4-02**
+because the same class of bug has already bitten twice, and **OBS-4-06** and
+**OBS-4-09** because they are the two a player would actually notice — a column
+that contradicts itself, and a hauler that turns round in open ground before
+reaching the building it was sent to.
 
 ## Resolved — increment 4
 
 | id | severity | title |
 | --- | --- | --- |
+| OBS-4-01 | important | [The maintainability floor averages over tests](2026-08-01-maintainability-floor-measures-the-wrong-population.md) |
 | OBS-4-03 | minor | [Two haul tests run systems in the reverse of production order](2026-08-01-haul-system-tests-run-systems-in-the-wrong-order.md) |
 | OBS-4-07 | important | [Demolition destroys the output buffer](2026-08-01-demolition-destroys-the-output-buffer.md) |

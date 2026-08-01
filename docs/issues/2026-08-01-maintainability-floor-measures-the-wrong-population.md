@@ -1,11 +1,12 @@
 ---
 id: OBS-4-01
 title: The maintainability floor averages over tests, so it falls whenever an increment adds them
-status: open
+status: resolved
 severity: important
 area: build-ci
 increment: 4
 created: 2026-08-01
+resolved: 2026-08-01
 source: increment-4 Task 16 (maintainability recovery)
 affects:
   - scripts/check-quality.mjs
@@ -96,3 +97,69 @@ Two candidates, either of which measures something a ratchet can actually hold:
 
 Whichever is chosen, the floor should be documented as a property of a specific
 population, not as "the codebase's maintainability".
+
+## Resolution
+
+Chosen: **floor the worst single `src/` file, and report the means without
+gating them.** `scripts/check-quality.mjs` now locks
+`worstSrcFileMaintainability` at **82.1** (`src/app/views/WorldView.vue`); the
+`maintainability` key is gone from the baseline, and the gate fails on a
+baseline carrying keys it no longer reads, so the old key cannot linger there
+looking locked.
+
+### The evidence table above was wrong, and the correction strengthens the case
+
+The "src/ only — 48 files — 90.99" row was not `src/`. It was *everything that
+isn't a test*, which includes six `scripts/**` build scripts. Re-measured per
+zone:
+
+| population | files | mean MI | worst MI |
+| --- | --- | --- | --- |
+| `src/` | 41 | **90.02** | 82.1 |
+| `tests/` | 30 | 89.68 | 85.0 |
+| `scripts/` | 6 | 96.35 | 89.6 |
+| everything (the gated mean) | 78 | 90.46 | 82.1 |
+
+So `src/` and `tests/` are only 0.34 apart, not the 1.3 this note claimed — the
+gap was mostly `scripts/` inflating the "source" figure. The real finding is
+worse than the one recorded: the **gated mean sat above both populations that
+matter**, held up by six trivial build scripts. Any new file of real code,
+source or test, pulled it down. The gate did not fall because increment 4 added
+tests; it fell because increment 4 added *code*.
+
+### Why the min, and what it gives up
+
+A min does not move when files are added, so decomposition stops being
+penalised — the save-guard extraction increment 4 reverted would pass today. It
+is immune to the test population by construction rather than by luck, since its
+population is `src/`. And it states something a ratchet can hold: no source
+file may rot below 82.1.
+
+What it gives up is broad drift — every file sliding at once would not trip a
+min. So `src`, `tests` and overall means are printed on every run against their
+locked values and never gated, which keeps drift visible without putting a
+number back on the ratchet that falls whenever the repo grows.
+
+### Two things found while fixing it
+
+- **The first draft of the new gate tripped the ratchet it was editing.** A
+  five-branch `delta` helper hit CRAP 30 and pushed `complexFunctions` 0 → 1.
+  Worth recording because the cause is general: fallow scores CRAP per
+  *function*, and `scripts/**` has no test coverage, so any branchy helper
+  extracted there scores badly. The comparison logic stays at module scope
+  deliberately.
+- **`--update` would lock a regression without complaint** — it measured and
+  wrote, so it turned that red gate green silently, which is exactly what "never
+  `--update` a baseline to make a gate pass" forbids. It now refuses to write a
+  loosened value without an explicit `--update --allow-regression`, and refuses
+  pinned-at-zero breaches even then. The rule is a machine check now, not
+  discipline.
+
+### Coverage
+
+`tests/scripts/check-quality.test.ts` (14 tests) runs the gate as a subprocess
+against synthetic fallow reports. All five mutations were confirmed to fail the
+suite before the code was kept: flooring the overall mean instead of the worst
+file (4 tests fail), taking the min over all files instead of `src/` (1),
+dropping the empty-`src/` guard (1), letting `--update` lock regressions (1),
+and dropping the unknown-baseline-key check (1).

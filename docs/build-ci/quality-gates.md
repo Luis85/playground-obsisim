@@ -16,7 +16,7 @@ day CI turns on.
 | CSS `!important` ratchet | `npm run check:css` | `lint` | New `!important` uses in `styles.css` without a justified, shrink-only baseline entry |
 | Quality ratchet | `npm run check:quality` | `quality` | Dead code, circular/re-export cycles, architecture boundary violations, clone groups, complexity hotspots — via `fallow` |
 | Typecheck | `npm run typecheck` | `typecheck` | Type errors across `.ts` and `.vue` (via `vue-tsc`, which also type-checks `<script setup>` blocks `tsc` alone cannot see) |
-| Tests | `npm test` | `test` | Behavioral regressions (88+ unit/component tests) |
+| Tests | `npm test` | `test` | Behavioral regressions across the engine, shared law, store, components, and the quality gate itself |
 | Coverage floors | `npm run test:coverage` | `coverage` | Undertested engine/shared/store code — hard statement/branch/function/line floors |
 | Build + artifact smoke | `npm run build && npm run check:artifacts` | `build` | Broken bundling, missing/empty/oversized plugin artifacts, `package.json`/`manifest.json` version desync, missing `minAppVersion` |
 
@@ -55,8 +55,10 @@ compared against a fresh measurement on every run.
   exactly 0 on every run — there is no baseline value to bump; a nonzero
   reading always fails. Raising the cap is an architecture decision (ADR
   territory), not something a baseline file can authorize.
-- **Floors** (fallow's `maintainability`) may only go up from their locked
-  value.
+- **Floors** (`worstSrcFileMaintainability` — the maintainability index of the
+  single worst `src/` file) may only go up from their locked value. This is a
+  floor on *one file*, not an average; see
+  [The maintainability floor is the worst src/ file](#the-maintainability-floor-is-the-worst-src-file).
 - A stale baseline entry (one that's now unnecessary, or a file that no
   longer exists) fails the gate too — this keeps the baseline file itself
   from silently accumulating dead entries.
@@ -69,6 +71,15 @@ npm run check:loc -- --update      # scripts/loc-baseline.json
 npm run check:css -- --update      # scripts/css-important-baseline.json
 npm run check:quality -- --update  # scripts/quality-baseline.json
 ```
+
+`check:quality --update` **refuses to lock a value that loosens the ratchet.**
+It measures and writes, so on its own it would happily turn a red gate green —
+which is precisely the failure mode the rule "never `--update` a baseline to
+make a gate pass" exists to prevent, and leaving that rule to discipline alone
+was not working. A deliberate loosening needs `--update --allow-regression`
+*and* a note in this document saying why. Pinned-at-zero breaches have no
+escape hatch at all: raising those is an ADR decision, so `--update` fails on
+them even with `--allow-regression`.
 
 ### Locked baseline values (this repo, at Task 18 adoption)
 
@@ -87,17 +98,26 @@ npm run check:quality -- --update  # scripts/quality-baseline.json
 ```
 
 That block is a snapshot of what was locked **at Task 18 adoption**, kept as
-history — it is not the current baseline. `maintainability` has moved since (to
-90.6 and then back to 90.5; see the next section for why). `scripts/quality-baseline.json`
-is always the authority for today's values.
+history — it is not the current baseline. The `maintainability` key no longer
+exists: it moved to 90.6, back to 90.5, and was then replaced outright in
+increment 5 by `worstSrcFileMaintainability` (see
+[The maintainability floor is the worst src/ file](#the-maintainability-floor-is-the-worst-src-file)).
+`scripts/quality-baseline.json` is always the authority for today's values, and
+the gate now fails on a baseline carrying keys it does not read, so a renamed
+metric cannot sit there looking locked while being ignored.
 
 `scripts/loc-baseline.json` and `scripts/css-important-baseline.json` are
 both locked **empty** (`"files": {}`) — no file in the plan-mandated code
 exceeded 500 nonblank lines, and `styles.css` uses zero `!important`.
 
-### The `maintainability` floor is rounded — do not ratchet it on noise
+### History: the `maintainability` mean floor, and why rounding bit it
 
-`fallow` reports `maintainability` to one decimal, and the gate compares the
+> This section and the next describe the **mean floor that no longer exists**.
+> They are kept because the formula analysis in them is still correct and still
+> governs how MI behaves. For the gate as it stands, skip to
+> [The maintainability floor is the worst `src/` file](#the-maintainability-floor-is-the-worst-src-file).
+
+`fallow` reported `maintainability` to one decimal, and the gate compared the
 **rounded** value. During Increment 1.5 that turned a rounding artifact into a
 false regression, and the sequence is worth knowing before touching this number:
 
@@ -178,12 +198,73 @@ available were to strip *all* branching from `src/shared/save.ts` (+8.8),
 command dispatcher whose branches are its job). Gutting two or three of the
 worst files is not refactoring, and every alternative was metric-gaming.
 
-The floor was therefore re-based to the measured **90.5**. The gate's shape is
-tracked as a defect, not accepted as correct — see
-`docs/issues/` for the proposal to floor source files only, or to floor the
-worst single file rather than the mean. Until that lands, expect this number to
-need re-basing roughly once per increment, and re-base it on measurement rather
-than defending it with padding.
+The floor was therefore re-based to the measured **90.5**, and the gate's shape
+was tracked as a defect rather than accepted as correct (OBS-4-01). Increment 5
+replaced it; the section below is the resolution, and supersedes the re-basing
+advice this section used to end with.
+
+### The maintainability floor is the worst `src/` file
+
+`check:quality` floors **`worstSrcFileMaintainability`** — the maintainability
+index of the single lowest-scoring file under `src/`. It is not an average of
+anything. Locked at **82.1** (`src/app/views/WorldView.vue`).
+
+The mean it replaced was measured over all 78 analysed files, and re-measuring
+that population properly is what settled the argument. The per-zone numbers at
+the time of the change:
+
+| population | files | mean MI | worst MI |
+| --- | --- | --- | --- |
+| `src/` | 41 | 90.02 | 82.1 |
+| `tests/` | 30 | 89.68 | 85.0 |
+| `scripts/` | 6 | 96.35 | 89.6 |
+| everything (the old gate) | 78 | 90.46 | 82.1 |
+
+Note what that table says: the old gated mean, 90.46, sat **above both the
+`src/` and `tests/` means**, propped up by six trivial build scripts averaging
+96.35. So the problem was worse than "tests drag it down" — *almost any new
+real file*, source or test, dragged it down, because almost any real file
+scores below a number inflated by `check-loc.mjs`. An increment could not add
+code without the gate falling. That is the opposite of a ratchet, and it is why
+the floor had to be re-based twice and why increment 4 reverted a sound
+extraction to defend it.
+
+A floor on the worst single file fixes all three of the pathologies recorded
+above:
+
+1. **It does not move when files are added.** A new module, test, or script
+   that scores above the floor is invisible to the gate. Decomposition stops
+   being penalised — the extraction increment 4 reverted would pass today.
+2. **It is a claim a ratchet can actually hold**: no file in `src/` may rot
+   below 82.1. Tightening it means genuinely improving the worst file.
+3. **It is immune to the test population by construction**, not by luck. The
+   floor's population is `src/`, so a dense table-driven test scoring below any
+   source file is simply not the gate's business.
+
+What it gives up is broad drift: every file sliding a few points at once would
+not trip a min. So the three means are **printed on every run against their
+locked values and never gated** —
+
+```
+maintainability floor: worst src/ file is 82.1 (src/app/views/WorldView.vue), floor 82.1
+  not gated — src mean 90.02 (was 90.02), tests mean 89.68 (was 89.68), overall mean 90.46 (was 90.46)
+  closest to the floor — 82.1 src/app/views/WorldView.vue, 82.5 src/engine/world.ts, 84.8 src/engine/systems/command-handlers.ts
+```
+
+— which keeps drift visible without putting a number back on the ratchet that
+falls every time the repo grows. If those means start sliding, that is a
+conversation, not a build failure.
+
+Everything the previous section says about the MI *formula* still holds and
+still matters: there is no length term, splitting a file does not raise its
+score, and comments are lines so deleting them lowers it. **Padding comments to
+buy points remains forbidden.** The change here is only to what gets gated.
+
+`tests/scripts/check-quality.test.ts` covers the gate itself — that the floor
+does not move when twenty below-mean test files are added, that it does not
+move when a module is extracted, that a test file below the src floor is
+ignored, that a rotting or newly-added source file below the floor fails, and
+that an empty `src/` population is a hard failure rather than a vacuous pass.
 
 Getting `complexFunctions` and `criticalComplexity` to 0 required real
 refactoring, not tuning: `CommandSystem`'s run function (cognitive

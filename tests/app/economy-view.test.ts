@@ -132,6 +132,21 @@ describe('EconomyView', () => {
     expect(pressure.text()).toContain('keeping up');
     expect(pressure.classes()).not.toContain('obsisim-negative');
   });
+
+  it('shows made and delivered side by side, so the gap reads as a backlog', async () => {
+    const snapshot = makeSnapshot({
+      buildings: [{ ...baseBuilding, id: 1, defId: 'forester', workers: 2, buffered: 12, state: 'producing' }],
+    });
+    // Deliberately distinct: 0.67 made, 0 delivered, 0.25 consumed, 4 stock — so
+    // a column bound to the wrong field changes the assertion rather than
+    // coinciding with it.
+    snapshot.stockpile.wood = { stock: 4, deliveredRate: 0, madeRate: 0.67, consumptionRate: 0.25, netFlow: -0.25, stockValue: 0 };
+    const wrapper = mountWith(EconomyView, snapshot);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-test="made-heading"]').text()).toBe('Made/t');
+    expect(wrapper.find('[data-test="made-forester"]').text()).toBe('0.67');
+    expect(wrapper.find('[data-test="delivered-forester"]').text()).toBe('0.00');
+  });
 });
 
 describe('DashboardView', () => {

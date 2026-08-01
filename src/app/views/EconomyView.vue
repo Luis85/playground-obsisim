@@ -35,6 +35,9 @@ const chains = computed(() => {
         status: status.label,
         starved: status.starved,
         output: RESOURCES[step.output].name,
+        // The gap between made and delivered is this stage's haul backlog —
+        // the per-stage diagnostic the aggregate pressure line cannot give.
+        made: stats.madeRate.toFixed(2),
         // Store inflow, not gross output: since increment 4 goods reach the
         // stockpile when a hauler delivers them, not when they are made. The
         // column is headed "Delivered/t" for that reason — a fully staffed
@@ -65,7 +68,7 @@ const chains = computed(() => {
       <h3>{{ chain.name }} chain</h3>
       <table class="obsisim-table">
         <thead>
-          <tr><th>Stage</th><th>Buildings (staffed)</th><th>Status</th><th>Output</th><th data-test="inflow-heading">Delivered/t</th><th>Cons/t</th><th>Stock</th><th>Empties in</th></tr>
+          <tr><th>Stage</th><th>Buildings (staffed)</th><th>Status</th><th>Output</th><th data-test="made-heading">Made/t</th><th data-test="inflow-heading">Delivered/t</th><th>Cons/t</th><th>Stock</th><th>Empties in</th></tr>
         </thead>
         <tbody>
           <tr v-for="row in chain.steps" :key="row.building" :class="{ 'obsisim-starved': row.starved }">
@@ -73,6 +76,7 @@ const chains = computed(() => {
             <td>{{ row.crew }}</td>
             <td :data-test="`status-${row.building}`">{{ row.status }}</td>
             <td>{{ row.output }}</td>
+            <td :data-test="`made-${row.building}`">{{ row.made }}</td>
             <td :data-test="`delivered-${row.building}`">{{ row.delivered }}</td>
             <td>{{ row.cons }}</td>
             <td>{{ row.stock }}</td>

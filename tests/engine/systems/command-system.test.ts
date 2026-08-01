@@ -693,4 +693,23 @@ describe('CommandSystem', () => {
     await dispatch({ type: 'demolishBuilding', buildingId: snapshot().buildings[0].id });
     expect(world.getResource(Stockpile).get('wood')).toBe(before);
   });
+
+  it('demolition refund does not count as a hauler delivery', async () => {
+    // Stockpile.add unconditionally records into producedThisTick, which
+    // StatsSystem publishes as deliveredRate. Routing the refund through
+    // add() would inflate Delivered/t for a resource no hauler touched, and
+    // could push it above Made/t — undermining the gap-is-haul-backlog
+    // reading the Made/t + Delivered/t pairing (OBS-4-06) depends on.
+    // refund() must bank the same amount without ever touching
+    // producedThisTick. Both halves matter: the refund amount is existing
+    // behaviour that must not regress, and the zeroed producedThisTick is
+    // the fix.
+    const { world, tick, dispatch, snapshot } = await setup();
+    const before = world.getResource(Stockpile).get('wood');
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
+    await tick();
+    await dispatch({ type: 'demolishBuilding', buildingId: snapshot().buildings[0].id });
+    expect(world.getResource(Stockpile).get('wood')).toBe(before); // full refund, unchanged
+    expect(world.getResource(Stockpile).producedThisTick.get('wood') ?? 0).toBe(0); // not a delivery
+  });
 });

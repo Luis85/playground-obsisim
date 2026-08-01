@@ -62,7 +62,15 @@ export interface BalanceResult {
   finalBuffer: number;
   /** One-way trip length in ticks from the scenario's STARTING tile, for reference. */
   legTicks: number;
-  /** Units the crew could produce with hauling never a constraint. */
+  /**
+   * Units the crew could produce with hauling never a constraint, assuming
+   * baseline work power of 1 per fed, untooled crew member. A `workshop`
+   * scenario breaks that assumption: recipe inputs are seeded, so it can
+   * produce and deliver its own `tools`, which EfficiencySystem then spends
+   * to grant its own crew the 1.5x tool multiplier — work power this figure
+   * never counted. For that one case, `ceiling` is a lower bound, not a
+   * ceiling.
+   */
   ceiling: number;
 }
 

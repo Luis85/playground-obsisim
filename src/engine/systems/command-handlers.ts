@@ -194,12 +194,12 @@ export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Com
     return;
   }
   const def = BUILDINGS[found.building.defId];
-  // Full refund — flagged balance knob (increment 5 owns tuning). add() is
-  // the one write path, so the refund shows in production stats; that is
-  // deliberate visibility, not an accounting bug. Active batch progress is
-  // simply lost with the entity.
+  // Full refund — flagged balance knob (increment 5 owns tuning). refund(),
+  // not add(): the building was never hauled to, so this must not inflate
+  // the Economy view's Delivered/t (Stockpile.refund's doc comment says why).
+  // Active batch progress is simply lost with the entity.
   for (const [resource, amount] of Object.entries(def.cost)) {
-    ctx.stockpile.add(resource as ResourceId, amount);
+    ctx.stockpile.refund(resource as ResourceId, amount);
   }
   // Whatever was waiting in the buffer dies with the building — decided in
   // OBS-4-07, against refunding it: a building left full of uncollected goods

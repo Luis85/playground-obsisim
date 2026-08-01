@@ -21,15 +21,37 @@ export class Stockpile {
   }
 
   /**
-   * Saturates at MAX_SAVED_COUNTER (like IdCounter): production onto a stock
+   * Saturates at MAX_SAVED_COUNTER (like IdCounter): banking onto a stock
    * sitting at the save-format ceiling must not write an amount the load
-   * guard would reject on the next reopen. Organically unreachable (~9e15),
-   * and stats record only what was actually banked.
+   * guard would reject on the next reopen. Organically unreachable (~9e15).
+   * Shared by `add` and `refund` — the two differ only in whether the bank
+   * counts as a delivery, never in how the amount is clamped.
    */
-  add(id: ResourceId, amount: number): void {
+  private bank(id: ResourceId, amount: number): number {
     const banked = Math.min(amount, MAX_SAVED_COUNTER - this.get(id));
     this.amounts.set(id, this.get(id) + banked);
+    return banked;
+  }
+
+  /**
+   * Banks resources a hauler actually carried in, recording into
+   * `producedThisTick` — stats record only what was actually banked, never
+   * the pre-saturation amount.
+   */
+  add(id: ResourceId, amount: number): void {
+    const banked = this.bank(id, amount);
     this.producedThisTick.set(id, (this.producedThisTick.get(id) ?? 0) + banked);
+  }
+
+  /**
+   * Banks resources without recording a delivery. `producedThisTick` is what
+   * `StatsSystem` publishes as `deliveredRate`, so anything banked that a
+   * hauler did not carry — a demolition's construction-cost refund, for
+   * instance — must go through here rather than through `add`, or it
+   * inflates the Economy view's Delivered/t for a resource nobody hauled.
+   */
+  refund(id: ResourceId, amount: number): void {
+    this.bank(id, amount);
   }
 
   canAfford(cost: CostMap): boolean {

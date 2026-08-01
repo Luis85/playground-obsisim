@@ -20,6 +20,21 @@ describe('Stockpile', () => {
     expect(stock.producedThisTick.get('wood')).toBe(2);
   });
 
+  it('refund banks an amount without recording a delivery', () => {
+    const stock = new Stockpile({ wood: 5 });
+    stock.refund('wood', 3);
+    expect(stock.get('wood')).toBe(8);
+    expect(stock.producedThisTick.size).toBe(0); // unlike add, never touches delivery stats
+  });
+
+  it('refund saturates at the save-format counter ceiling, same clamp as add', () => {
+    const ceiling = Number.MAX_SAFE_INTEGER - 2 ** 32; // == MAX_SAVED_COUNTER
+    const stock = new Stockpile({ wood: ceiling - 2 });
+    stock.refund('wood', 5);
+    expect(stock.get('wood')).toBe(ceiling); // never past the load guard's bound
+    expect(stock.producedThisTick.size).toBe(0);
+  });
+
   it('take is all-or-nothing per resource and tracks consumption', () => {
     const stock = new Stockpile({ bread: 1 });
     expect(stock.take('bread', 1)).toBe(true);

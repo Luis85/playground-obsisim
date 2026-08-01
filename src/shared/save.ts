@@ -252,7 +252,7 @@ export function isSaveGameV3(data: unknown): data is SaveGameV3 {
     save.version === 3 &&
     isCommonSaveShape(save) &&
     isMapShape(save.map) &&
-    (save.buildings as unknown[]).every((b) => hasSavedPosition(b) && isBufferShape((b as SavedBuilding).buffer)) &&
+    (save.buildings as unknown[]).every((b) => hasSavedPosition(b) && isBufferShape((b as SavedBuildingV3).buffer)) &&
     (save.workers as unknown[]).every((w) => typeof (w as SavedWorker).hauling === 'boolean')
   );
 }

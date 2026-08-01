@@ -280,5 +280,6 @@ describe('migrateSaveToLatest (v3 -> v4)', () => {
     expect(migrated.version).toBe(4);
     expect(migrated.buildings[0].relocatingTicks).toBe(0);
     expect(migrated.buildings[0].buffer).toEqual({ wood: 2 }); // everything else survives
+    expect(v3.buildings[0]).not.toHaveProperty('relocatingTicks'); // input untouched
   });
 });

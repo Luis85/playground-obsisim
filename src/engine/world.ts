@@ -329,11 +329,44 @@ export function spawnWorker(
   return attach(prep, workerComponents({ ...opts, id: opts.id ?? ids.take() }));
 }
 
+/**
+ * Systems must be scheduled in `ALL_SYSTEMS` order. Production always is — it
+ * passes `ALL_SYSTEMS` itself — but every test composes its own subset by hand,
+ * and two of them ran systems in the reverse of production order for a whole
+ * increment (OBS-4-03). That is not a harmless difference: it silently changes
+ * what a test proves, and it produced a real false positive, because a haul
+ * trip cancelled by a demolition is only observable when `CommandSystem` drains
+ * ahead of `HaulSystem` the way production runs them.
+ *
+ * Rather than reorder the offending harnesses and hope, this makes a wrong
+ * order impossible to express: a subset in the wrong relative order throws at
+ * setup, naming both systems. Systems not in `ALL_SYSTEMS` — test-only arrange
+ * systems like `stats-system.test.ts`'s `DepositWoodSystem` — are skipped
+ * rather than sorted, so a test can still stage state before the real systems
+ * run without this guessing where it meant to put them.
+ */
+function assertSystemOrder(systems: readonly TColonySystemFactory[]): void {
+  let previousRank = -1;
+  let previous = '';
+  for (const factory of systems) {
+    const rank = ALL_SYSTEMS.indexOf(factory);
+    if (rank === -1) continue; // test-only system: not ours to order
+    if (rank < previousRank) {
+      throw new Error(
+        `System order must match ALL_SYSTEMS: ${factory.name || 'system'} runs after ${previous || 'an earlier system'}, but production runs it before.`,
+      );
+    }
+    previousRank = rank;
+    previous = factory.name || previous;
+  }
+}
+
 export function buildColonyPrepWorld(
   options: { save?: SaveGameV3; systems?: readonly TColonySystemFactory[] } = {},
 ): IPreptimeWorld {
   const save = options.save ?? initialSave();
   const systems = options.systems ?? ALL_SYSTEMS;
+  assertSystemOrder(systems);
 
   let builder = buildWorld().withDefaultScheduling((root) => {
     for (const systemFactory of systems) {

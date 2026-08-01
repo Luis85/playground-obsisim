@@ -65,7 +65,31 @@ cancellation added in `5d92ff0` is *only* observable under the production
 order, because it is the tick's later `HaulSystem` run that would otherwise
 re-dispatch the hauler at the building just demolished.
 
-The stronger form (derive the list from `ALL_SYSTEMS` so a wrong order cannot
-be expressed) was not done: `systemsBefore` still takes a hand-written array,
-and the same latent hazard exists in any other test file that composes systems
-by hand. Worth doing when a third harness needs it.
+The stronger form was left undone at the time: `systemsBefore` still took a
+hand-written array, and the same latent hazard existed in any other test file
+that composes systems by hand.
+
+## Stronger form, done in increment 5
+
+Rather than change the eighteen call sites that pass a hand-written array,
+`buildColonyPrepWorld` — the one function all of them go through — now asserts
+the order itself. `assertSystemOrder` walks the given systems, ranks each by its
+index in `ALL_SYSTEMS`, and throws if any known system runs before one that
+production runs earlier, naming both. A wrong order is no longer merely
+discouraged; it fails at setup.
+
+Systems **not** in `ALL_SYSTEMS` are skipped rather than sorted, so a test-only
+arrange system — `stats-system.test.ts`'s `DepositWoodSystem`, which stages
+state ahead of the real systems — can still sit wherever the test needs it. That
+distinction is the subtle part: if an unknown system took a rank, every known
+system after it would look out of order.
+
+The guard passed against all 398 existing tests unchanged, which confirms the
+first half of this note's fix held: no harness is currently mis-ordered.
+
+Five tests in `tests/engine/world.test.ts` cover it, and three mutations fail
+them: removing the guard call, making it never throw, and giving unknown systems
+a rank instead of skipping them. The last mutation initially survived, because
+the test placed the test-only system last where nothing follows it; it now
+asserts all three positions, and the first — the shape `stats-system.test.ts`
+actually uses — is the one that discriminates.

@@ -5,7 +5,10 @@ import { Hunger, JobAssignment, ToolCoverage, Worker } from '../../src/engine/co
 import { IdCounter, SimClock, SnapshotStore, Stockpile } from '../../src/engine/resources';
 import type { IRuntimeWorld } from 'sim-ecs';
 import { GameEngine } from '../../src/engine/game-engine';
-import { buildColonyPrepWorld, createColonyWorld, getPrepResource, initialSave, isLoadableSave, prepareLoadedSave, refreshEntitySections } from '../../src/engine/world';
+import { ALL_SYSTEMS, buildColonyPrepWorld, createColonyWorld, getPrepResource, initialSave, isLoadableSave, prepareLoadedSave, refreshEntitySections } from '../../src/engine/world';
+import { CommandSystem } from '../../src/engine/systems/command-system';
+import { HaulSystem } from '../../src/engine/systems/haul-system';
+import { SnapshotSystem } from '../../src/engine/systems/snapshot-system';
 import { isSaveGameV3, MAX_SAVED_ENTITIES } from '../../src/shared/save';
 
 describe('initialSave', () => {
@@ -639,5 +642,40 @@ describe('live-world projections agree', () => {
     const factKeys = Object.keys(engine.snapshot!.buildings[0]).filter((k) => !derivedBuilding.includes(k));
     const savedKeys = Object.keys(engine.serialize().buildings[0]);
     expect(factKeys.filter((key) => !savedKeys.includes(key))).toEqual([]);
+  });
+});
+
+describe('buildColonyPrepWorld system order', () => {
+  // OBS-4-03's stronger form: two harnesses ran systems in the reverse of
+  // production order for a whole increment, which silently changed what they
+  // proved and produced a real false positive. Reordering them fixed the two
+  // known cases; this makes the wrong order impossible to express at all.
+  it('accepts a subset in ALL_SYSTEMS order', () => {
+    expect(() => buildColonyPrepWorld({ systems: [CommandSystem, HaulSystem, SnapshotSystem] })).not.toThrow();
+  });
+
+  it('rejects a subset in the reverse of production order, naming both systems', () => {
+    expect(() => buildColonyPrepWorld({ systems: [HaulSystem, CommandSystem] }))
+      .toThrow(/CommandSystem runs after HaulSystem/);
+  });
+
+  it('rejects an out-of-order pair even with correctly ordered systems around it', () => {
+    expect(() => buildColonyPrepWorld({ systems: [CommandSystem, SnapshotSystem, HaulSystem] }))
+      .toThrow(/must match ALL_SYSTEMS/);
+  });
+
+  it('lets a test-only system sit anywhere, since ALL_SYSTEMS says nothing about it', () => {
+    const arrange = () => CommandSystem(); // a factory that is not in ALL_SYSTEMS
+    // First is the shape stats-system.test.ts actually uses — an arrange system
+    // staging state ahead of the real ones — and is the case that distinguishes
+    // "skipped" from "sorted": if an unknown system took a rank, every known
+    // system after it would look out of order.
+    expect(() => buildColonyPrepWorld({ systems: [arrange, HaulSystem, SnapshotSystem] })).not.toThrow();
+    expect(() => buildColonyPrepWorld({ systems: [HaulSystem, arrange, SnapshotSystem] })).not.toThrow();
+    expect(() => buildColonyPrepWorld({ systems: [HaulSystem, SnapshotSystem, arrange] })).not.toThrow();
+  });
+
+  it('accepts ALL_SYSTEMS itself — the order production actually runs', () => {
+    expect(() => buildColonyPrepWorld({ systems: ALL_SYSTEMS })).not.toThrow();
   });
 });

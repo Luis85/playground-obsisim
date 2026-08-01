@@ -1,7 +1,10 @@
 <script setup lang="ts">
+import { inject } from 'vue';
+import { ENGINE_KEY } from '../engine-key';
 import { useGameStore } from '../stores/game-store';
 import { RESOURCES, RESOURCE_IDS } from '../../engine/content';
 
+const engine = inject(ENGINE_KEY)!;
 const store = useGameStore();
 const fmt = (n: number) => n.toFixed(2);
 </script>
@@ -12,6 +15,21 @@ const fmt = (n: number) => n.toFixed(2);
       <span>Colony wealth: <strong>{{ store.snapshot.colonyWealth.toFixed(0) }}</strong></span>
       <span>Population: <strong>{{ store.snapshot.population }}</strong> ({{ store.snapshot.idleWorkers }} idle)</span>
       <span>Buildings: <strong>{{ store.snapshot.buildings.length }}</strong></span>
+      <span class="obsisim-haulers">
+        Haulers: <strong data-test="hauler-count">{{ store.haulerCount }}</strong>
+        <button
+          data-test="unassign-hauler"
+          :disabled="store.haulerCount === 0"
+          title="Send a hauler back to the idle camp"
+          @click="engine.dispatch({ type: 'unassignHauler' })"
+        >−</button>
+        <button
+          data-test="assign-hauler"
+          :disabled="store.snapshot.idleWorkers === 0"
+          title="Put an idle worker on hauling duty"
+          @click="engine.dispatch({ type: 'assignHauler' })"
+        >+</button>
+      </span>
     </div>
     <table class="obsisim-table">
       <thead>

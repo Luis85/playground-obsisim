@@ -21,7 +21,8 @@ const jobNames = computed(() => {
 // '?' rather than throwing: jobNames only tracks buildings still in the
 // snapshot, so a stale buildingId (a building removed mid-tick) degrades to
 // an unknown label instead of crashing the whole table.
-function jobLabel(buildingId: number | null): string {
+function jobLabel(buildingId: number | null, hauling: boolean): string {
+  if (hauling) return 'Hauling';
   if (buildingId === null) return 'Idle';
   return jobNames.value.get(buildingId) ?? '?';
 }
@@ -68,7 +69,7 @@ function hungerClass(hunger: number): string {
       <tbody>
         <tr v-for="w in store.snapshot.workers" :key="w.id">
           <td>#{{ w.id }}</td>
-          <td>{{ jobLabel(w.buildingId) }}</td>
+          <td>{{ jobLabel(w.buildingId, w.hauling) }}</td>
           <td :data-test="`hunger-${w.id}`" :class="hungerClass(w.hunger)">{{ w.hunger }} / {{ BALANCE.hungerMax }}</td>
           <td>{{ (w.efficiency * 100).toFixed(0) }}%</td>
           <td>{{ toolLabel(w.toolTicks) }}</td>

@@ -4,6 +4,7 @@ import { mount } from '@vue/test-utils';
 import { createTestingPinia } from '@pinia/testing';
 import EconomyView from '../../src/app/views/EconomyView.vue';
 import DashboardView from '../../src/app/views/DashboardView.vue';
+import { ENGINE_KEY } from '../../src/app/engine-key';
 import { useGameStore } from '../../src/app/stores/game-store';
 import { makeSnapshot } from './fixtures';
 
@@ -12,7 +13,13 @@ import { makeSnapshot } from './fixtures';
 
 function mountWith(component: typeof EconomyView | typeof DashboardView, snapshot: ReturnType<typeof makeSnapshot>) {
   const wrapper = mount(component, {
-    global: { plugins: [createTestingPinia({ createSpy: vi.fn, stubActions: false })] },
+    global: {
+      plugins: [createTestingPinia({ createSpy: vi.fn, stubActions: false })],
+      // DashboardView injects ENGINE_KEY unconditionally (its hauler controls);
+      // EconomyView never reads it, so providing it here is a no-op for those
+      // cases but keeps the DashboardView case from warning on missing injection.
+      provide: { [ENGINE_KEY as symbol]: { dispatch: vi.fn() } },
+    },
   });
   useGameStore().ingest(snapshot, { paused: true, speed: 1, error: null });
   return wrapper;

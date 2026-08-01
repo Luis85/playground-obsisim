@@ -23,6 +23,11 @@
 
 .obsisim-summary { margin-left: auto; }
 
+.obsisim-haulers button {
+  margin-left: 0.25em;
+  min-width: 1.8em;
+}
+
 .obsisim-controls button.is-active {
   background-color: var(--interactive-accent);
   color: var(--text-on-accent);

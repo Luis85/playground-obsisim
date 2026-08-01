@@ -8,6 +8,7 @@ import { HaulSystem } from '../../../src/engine/systems/haul-system';
 import { HungerSystem } from '../../../src/engine/systems/hunger-system';
 import { SnapshotSystem } from '../../../src/engine/systems/snapshot-system';
 import { enqueue } from '../fixtures';
+import { buildSaveFromWorld } from '../../../src/engine/game-engine';
 import { buildColonyPrepWorld, COMPONENT_TYPES, getPrepResource, initialSave, spawnWorker } from '../../../src/engine/world';
 import type { Command } from '../../../src/shared/commands';
 import type { SaveGameV3 } from '../../../src/shared/save';
@@ -396,10 +397,17 @@ describe('CommandSystem', () => {
     }
     await dispatch({ type: 'assignHauler' });
     await tick(); await tick(); await tick(); await tick(); // out and loaded
+    const carrier = [...world.getEntities()].find((e) => (e.getComponent(HaulTrip)?.amount ?? 0) > 0)!;
     const before = world.getResource(Stockpile).get('wood');
     await dispatch({ type: 'unassignHauler' });
     expect(world.getResource(Stockpile).get('wood')).toBe(before + BALANCE.haulCarryCapacity);
     expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Unassigned a hauler.' }]);
+    // The trip must be reset, not merely handed off: buildSaveFromWorld banks a
+    // carried load into the save filtered on `carrying`, NOT on `hauling`, so a
+    // load left in hand here would be banked a second time on the next save —
+    // the same units twice.
+    expect(carrier.getComponent(HaulTrip)!).toMatchObject({ phase: 'idle', targetId: null, resource: null, amount: 0 });
+    expect(buildSaveFromWorld(world).stockpile.wood).toBe(before + BALANCE.haulCarryCapacity);
   });
 
   it('a move retargets the haulers already walking to that building', async () => {

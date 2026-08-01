@@ -642,7 +642,15 @@ describe('live-world projections agree', () => {
     // (see savedWorkerOf's comment re: efficiency), so — like workPower and
     // progressPct — it has no save slot of its own.
     const derivedBuilding = ['workers', 'workerSlots', 'state', 'progressPct', 'tooledWorkers', 'workPower', 'buffered'];
-    const factKeys = Object.keys(engine.snapshot!.buildings[0]).filter((k) => !derivedBuilding.includes(k));
+    // relocatingTicks is NOT derived like the fields above — it is a genuine
+    // save-format gap, left open on purpose. Increment 5 Task 6 publishes it
+    // through the snapshot but deliberately does not add it to savedBuildingOf
+    // (SavedBuilding.relocatingTicks is optional there, unwritten); see
+    // components.ts's Relocation docstring. Task 7 wires the write path,
+    // promotes the field to required, and removes this exclusion — until then
+    // a save/reload genuinely resets a mid-relocation building's countdown.
+    const pendingSaveFields = ['relocatingTicks'];
+    const factKeys = Object.keys(engine.snapshot!.buildings[0]).filter((k) => ![...derivedBuilding, ...pendingSaveFields].includes(k));
     const savedKeys = Object.keys(engine.serialize().buildings[0]);
     expect(factKeys.filter((key) => !savedKeys.includes(key))).toEqual([]);
   });

@@ -72,6 +72,9 @@ export interface SavedBuildingV2 extends SavedBuildingV1 {
 export interface SavedBuilding extends SavedBuildingV2 {
   /** Output-buffer contents; `{}` when the building is empty. */
   buffer: Partial<Record<ResourceId, number>>;
+  /** Ticks still out of action after a move. Optional here; save v4 (Task 7)
+   * makes it required and migrates existing records. */
+  relocatingTicks?: number;
 }
 
 /** The pre-v3 worker record — frozen legacy shape, before hauling existed. */

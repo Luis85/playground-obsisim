@@ -127,6 +127,25 @@ describe('SnapshotSystem', () => {
     expect(hauler()).toMatchObject({ haulTargetId: null, haulPhase: 'idle', haulTicksLeft: 0, carrying: 0 });
   });
 
+  it('reports a relocating building as relocating, with its remaining ticks', async () => {
+    const save = initialSave();
+    save.workers = [];
+    save.stockpile = {};
+    const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
+    const ids = getPrepResource(prep, IdCounter);
+    // Staffed AND relocating: 'relocating' must win, because it is the reason
+    // nothing is happening — an unstaffed or output-full label would misdirect.
+    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 5, row: 4, relocatingTicks: 7 });
+    const buildingId = building.getComponent(Building)!.id;
+    spawnWorker(prep, ids, { buildingId });
+    const world = await prep.prepareRun();
+    await world.step();
+
+    const snap = world.getResource(SnapshotStore).latest!.buildings[0];
+    expect(snap.state).toBe('relocating');
+    expect(snap.relocatingTicks).toBe(7);
+  });
+
   it('clears notices after snapshotting them', async () => {
     const prep = buildColonyPrepWorld({ save: initialSave(), systems: [SnapshotSystem] });
     getPrepResource(prep, NoticeBoard).reject('once');

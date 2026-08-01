@@ -50,12 +50,14 @@ export function clampedToolTicks(toolTicks: number): number {
 
 /**
  * A saved relocation countdown, clamped to what current balance can produce.
- * Not exported like its siblings above: `buildInitialSnapshot` has nothing to
- * clamp it for until a future increment adds `relocatingTicks` to the save
- * format and the snapshot. Kept as its own function rather than inlined, so
- * promoting it is a one-word `export` when that lands.
+ * Exported (promoted back from module-private) because `buildInitialSnapshot`
+ * in world.ts now needs it: the seeded snapshot's `relocatingTicks` fact must
+ * be clamped the same way `buildingComponents` below clamps the live
+ * `Relocation` component, or the two would disagree about a saved building
+ * that outlived a balance retune (same principle as clampedProgress,
+ * clampedHunger and clampedToolTicks above).
  */
-function clampedRelocation(ticksLeft: number): number {
+export function clampedRelocation(ticksLeft: number): number {
   return Math.max(0, Math.min(ticksLeft, BALANCE.maxRelocationTicks));
 }
 

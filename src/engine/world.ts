@@ -15,7 +15,7 @@ import {
 } from './components';
 import { isBuffersValid, isBuildingsValid, isIdsValid, isPositionsValid, isStockpileValid, isWorkersValid } from './save-guard';
 import {
-  buildingComponents, clampedBuffer, clampedHunger, clampedProgress, clampedToolTicks, workerComponents,
+  buildingComponents, clampedBuffer, clampedHunger, clampedProgress, clampedRelocation, clampedToolTicks, workerComponents,
 } from './spawn';
 import {
   CommandQueue, IdCounter, NoticeBoard, ProductionLedger, RemovalLedger, SimClock, SnapshotStore, StatsHistory, Stockpile, WorldMap,
@@ -341,6 +341,7 @@ function buildInitialSnapshot(save: SaveGameV3): Snapshot {
       batchActive: saved.batchActive,
       buffered: buffer.total(),
       buffer: Object.fromEntries(buffer.amounts) as Partial<Record<ResourceId, number>>,
+      relocatingTicks: clampedRelocation(saved.relocatingTicks ?? 0),
     };
   });
   const { workers, buildings, population, idleWorkers } = buildEntitySections(workerFacts, buildingFacts);

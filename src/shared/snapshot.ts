@@ -2,7 +2,7 @@ import type { BuildingDefId, ResourceId } from './content-types';
 import type { HaulPhase } from './haul';
 import type { WorldMapSize } from './placement';
 
-export type BuildingState = 'producing' | 'waitingForInput' | 'unstaffed' | 'outputFull';
+export type BuildingState = 'producing' | 'waitingForInput' | 'unstaffed' | 'outputFull' | 'relocating';
 
 export type NoticeKind = 'success' | 'rejection';
 
@@ -32,6 +32,8 @@ export interface BuildingSnapshot {
   workPower: number;
   /** Units waiting in this building's output buffer for a hauler. */
   buffered: number;
+  /** Ticks until a moved building can work again (0 when not relocating). */
+  relocatingTicks: number;
 }
 
 export interface WorkerSnapshot {

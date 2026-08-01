@@ -132,7 +132,7 @@ describe('useGameStore', () => {
     const store = useGameStore();
     const base = {
       col: 0, row: 0, workers: 0, workerSlots: 2, progress: 0, batchActive: false,
-      progressPct: 0, tooledWorkers: 0, workPower: 0, buffered: 0,
+      progressPct: 0, tooledWorkers: 0, workPower: 0, buffered: 0, relocatingTicks: 0,
     };
     store.ingest(makeSnapshot({
       buildings: [

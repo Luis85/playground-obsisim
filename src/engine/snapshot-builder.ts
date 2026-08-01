@@ -6,7 +6,8 @@ import type { BuildingSnapshot, BuildingState, WorkerSnapshot } from '../shared/
 import { BALANCE, workerWorkPower } from './content/balance';
 import { batchOutputUnits, BUILDINGS } from './content/buildings';
 import {
-  Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, ToolCoverage, Worker, WorkerSlots,
+  Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Worker,
+  WorkerSlots,
 } from './components';
 
 /**
@@ -40,6 +41,7 @@ export interface BuildingFacts {
   batchActive: boolean;
   buffered: number;
   buffer: Partial<Record<ResourceId, number>>;
+  relocatingTicks: number;
 }
 
 export interface EntitySections {
@@ -83,9 +85,13 @@ export function buildEntitySections(workers: readonly WorkerFacts[], buildings: 
       // the same either way: send a hauler. Staffing still takes precedence,
       // since an unstaffed building is not waiting on transport.
       const outputBlocked = BALANCE.outputBufferCap - b.buffered < batchOutputUnits(def.recipe);
-      const state: BuildingState = staffed === 0
-        ? 'unstaffed'
-        : outputBlocked ? 'outputFull' : b.batchActive ? 'producing' : 'waitingForInput';
+      // Relocating first: it is the reason nothing is happening, and an
+      // unstaffed/output-full label would send the player after the wrong fix.
+      const state: BuildingState = b.relocatingTicks > 0
+        ? 'relocating'
+        : staffed === 0
+          ? 'unstaffed'
+          : outputBlocked ? 'outputFull' : b.batchActive ? 'producing' : 'waitingForInput';
       return {
         id: b.id,
         defId: b.defId,
@@ -99,6 +105,7 @@ export function buildEntitySections(workers: readonly WorkerFacts[], buildings: 
         tooledWorkers: tooledByBuilding.get(b.id) ?? 0,
         workPower: powerByBuilding.get(b.id) ?? 0,
         buffered: b.buffered,
+        relocatingTicks: b.relocatingTicks,
       };
     })
     .sort((a, b) => a.id - b.id);
@@ -147,7 +154,7 @@ export function workerFactsOf(
 }
 
 export function buildingFactsOf(
-  building: Building, slots: WorkerSlots, production: Production, position: Position, buffer: OutputBuffer,
+  building: Building, slots: WorkerSlots, production: Production, position: Position, buffer: OutputBuffer, relocation: Relocation,
 ): BuildingFacts {
   return {
     id: building.id,
@@ -159,6 +166,7 @@ export function buildingFactsOf(
     batchActive: production.batchActive,
     buffered: buffer.total(),
     buffer: Object.fromEntries(buffer.amounts) as Partial<Record<ResourceId, number>>,
+    relocatingTicks: relocation.ticksLeft,
   };
 }
 
@@ -206,6 +214,7 @@ export function gatherEntityFacts(world: IRuntimeWorld): EntityFacts {
         entity.getComponent(Production)!,
         entity.getComponent(Position)!,
         entity.getComponent(OutputBuffer)!,
+        entity.getComponent(Relocation)!,
       ));
       continue;
     }

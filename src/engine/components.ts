@@ -97,9 +97,15 @@ export class OutputBuffer {
 export type { HaulPhase };
 
 /**
- * Ticks a building is still out of action after being moved. Runtime state that
- * IS saved (unlike HaulTrip): it is a penalty already incurred, so leaving it
- * out of the save would let save-and-reload cancel it.
+ * Ticks a building is still out of action after being moved. Unlike HaulTrip,
+ * this is MEANT to survive a save — it is a penalty already incurred, and
+ * dropping it would let save-and-reload cancel it for free — but the save
+ * format does not round-trip it yet. `buildingComponents` already restores it
+ * from `SavedBuilding.relocatingTicks` (optional as of increment 5 Task 6) and
+ * the snapshot now exposes the countdown to the UI, but nothing yet WRITES it
+ * into a save (`savedBuildingOf` does not carry it), so today a save/reload
+ * still resets a mid-relocation building to 0. Task 7 closes that gap: a
+ * required save field, the v4 migration, and the load guard.
  */
 export class Relocation {
   constructor(public ticksLeft = 0) {}

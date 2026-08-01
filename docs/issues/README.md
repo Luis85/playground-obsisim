@@ -35,6 +35,12 @@ When an issue is resolved, set `status: resolved`, add `resolved: <date>` and a
 line naming the commit. Keep the note — the reasoning is worth more than the
 folder being tidy.
 
+## Open — increment 5 (validated balance)
+
+| id | severity | title |
+| --- | --- | --- |
+| OBS-5-01 | minor | [Moving a building desyncs the dot of a hauler already returning from it](2026-08-01-moving-a-building-desyncs-a-returning-haulers-dot.md) |
+
 ## Open — increment 4 (logistics)
 
 | id | severity | title |

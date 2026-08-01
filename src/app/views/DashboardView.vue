@@ -40,7 +40,7 @@ const fmt = (n: number) => n.toFixed(2);
           <td>{{ RESOURCES[id].name }}</td>
           <td>{{ RESOURCES[id].tier }}</td>
           <td>{{ store.snapshot.stockpile[id].stock }}</td>
-          <td>{{ fmt(store.snapshot.stockpile[id].productionRate) }}</td>
+          <td>{{ fmt(store.snapshot.stockpile[id].deliveredRate) }}</td>
           <td>{{ fmt(store.snapshot.stockpile[id].consumptionRate) }}</td>
           <td :class="store.snapshot.stockpile[id].netFlow >= 0 ? 'obsisim-positive' : 'obsisim-negative'">
             {{ fmt(store.snapshot.stockpile[id].netFlow) }}

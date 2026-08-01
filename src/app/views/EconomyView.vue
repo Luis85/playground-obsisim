@@ -41,7 +41,7 @@ const chains = computed(() => {
         // building with no haulers reads "producing" and 0.00 at the same
         // time, and under the old "Prod/t" heading that was a contradiction
         // rather than the haul backlog it actually is (OBS-4-06).
-        delivered: stats.productionRate.toFixed(2),
+        delivered: stats.deliveredRate.toFixed(2),
         cons: stats.consumptionRate.toFixed(2),
         stock: stats.stock,
         outputId: step.output,

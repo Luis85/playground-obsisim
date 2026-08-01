@@ -61,8 +61,18 @@ export interface WorkerSnapshot {
 
 export interface ResourceStats {
   stock: number;
-  productionRate: number;
+  /**
+   * Store inflow per tick. Since increment 4 goods reach the stockpile when a
+   * hauler delivers them, not when they are made — the field is named for that
+   * (it was `productionRate`, which described neither quantity once haulers
+   * existed; see OBS-4-06).
+   */
+  deliveredRate: number;
+  /** Units banked into output buffers per tick — gross production. */
+  madeRate: number;
   consumptionRate: number;
+  /** `deliveredRate - consumptionRate`: the STORE's net movement, which is what
+   * a runway is computed from. Goods waiting in a buffer are not in the store. */
   netFlow: number;
   stockValue: number;
 }

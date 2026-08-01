@@ -16,7 +16,7 @@ import {
   buildingComponents, clampedBuffer, clampedHunger, clampedProgress, clampedToolTicks, workerComponents,
 } from './spawn';
 import {
-  CommandQueue, IdCounter, NoticeBoard, RemovalLedger, SimClock, SnapshotStore, StatsHistory, Stockpile, WorldMap,
+  CommandQueue, IdCounter, NoticeBoard, ProductionLedger, RemovalLedger, SimClock, SnapshotStore, StatsHistory, Stockpile, WorldMap,
 } from './resources';
 import type { BuildingFacts, WorkerFacts } from './snapshot-builder';
 import { buildEntitySections, gatherEntityFacts } from './snapshot-builder';
@@ -393,6 +393,7 @@ export function buildColonyPrepWorld(
     new NoticeBoard(),
     ids,
     new StatsHistory(),
+    new ProductionLedger(),
     store,
     new WorldMap(save.map.cols, save.map.rows),
     new RemovalLedger(),
@@ -462,7 +463,7 @@ function buildInitialSnapshot(save: SaveGameV3): Snapshot {
     const stock = save.stockpile[resourceId] ?? 0;
     const stockValue = stock * RESOURCES[resourceId].value;
     colonyWealth += stockValue;
-    stockpile[resourceId] = { stock, productionRate: 0, consumptionRate: 0, netFlow: 0, stockValue };
+    stockpile[resourceId] = { stock, deliveredRate: 0, madeRate: 0, consumptionRate: 0, netFlow: 0, stockValue };
   }
   return {
     tick: Math.min(save.tick, MAX_SAVED_COUNTER), // same clamp as the spawned clock

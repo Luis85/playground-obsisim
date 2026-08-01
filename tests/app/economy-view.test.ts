@@ -45,7 +45,7 @@ describe('EconomyView', () => {
     const snapshot = makeSnapshot({
       buildings: [{ ...baseBuilding, id: 1, defId: 'bakery', workers: 1, state: 'producing' }],
     });
-    snapshot.stockpile.bread = { stock: 6, productionRate: 0, consumptionRate: 0.5, netFlow: -0.5, stockValue: 0 };
+    snapshot.stockpile.bread = { stock: 6, deliveredRate: 0, madeRate: 0, consumptionRate: 0.5, netFlow: -0.5, stockValue: 0 };
     const wrapper = mountWith(EconomyView, snapshot);
     await wrapper.vm.$nextTick();
     expect(wrapper.find('[data-test="runway-bread"]').text()).toBe('~12t');
@@ -114,7 +114,7 @@ describe('EconomyView', () => {
     // three rates are deliberately distinct — 0 delivered against 0.50
     // consumed and 4 in stock — so the column binding to consumptionRate or
     // to stock would change this assertion rather than coincide with it.
-    snapshot.stockpile.wood = { stock: 4, productionRate: 0, consumptionRate: 0.5, netFlow: -0.5, stockValue: 0 };
+    snapshot.stockpile.wood = { stock: 4, deliveredRate: 0, madeRate: 0, consumptionRate: 0.5, netFlow: -0.5, stockValue: 0 };
     const wrapper = mountWith(EconomyView, snapshot);
     await wrapper.vm.$nextTick();
     expect(wrapper.find('[data-test="status-forester"]').text()).toBe('ok');
@@ -137,8 +137,8 @@ describe('EconomyView', () => {
 describe('DashboardView', () => {
   it('shows runway for draining resources and an em dash otherwise', async () => {
     const snapshot = makeSnapshot();
-    snapshot.stockpile.wheat = { stock: 10, productionRate: 0, consumptionRate: 1, netFlow: -1, stockValue: 0 };
-    snapshot.stockpile.wood = { stock: 5, productionRate: 1, consumptionRate: 0, netFlow: 1, stockValue: 0 };
+    snapshot.stockpile.wheat = { stock: 10, deliveredRate: 0, madeRate: 0, consumptionRate: 1, netFlow: -1, stockValue: 0 };
+    snapshot.stockpile.wood = { stock: 5, deliveredRate: 1, madeRate: 0, consumptionRate: 0, netFlow: 1, stockValue: 0 };
     const wrapper = mountWith(DashboardView, snapshot);
     await wrapper.vm.$nextTick();
     expect(wrapper.find('[data-test="runway-wheat"]').text()).toBe('~10t');

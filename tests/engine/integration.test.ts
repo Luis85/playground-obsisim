@@ -73,8 +73,8 @@ describe('full colony integration', () => {
 
     const final = snapshot();
     expect(final.stockpile.bread.stock).toBeGreaterThan(0);
-    expect(final.stockpile.tools.productionRate).toBeGreaterThan(0);
-    expect(final.stockpile.bread.productionRate).toBeGreaterThan(0);
+    expect(final.stockpile.tools.deliveredRate).toBeGreaterThan(0);
+    expect(final.stockpile.bread.deliveredRate).toBeGreaterThan(0);
     // wheat must not accumulate unboundedly (2 farm workers vs 2 mill workers,
     // fed by haulers rather than a direct stockpile write)
     expect(final.stockpile.wheat.stock).toBeLessThan(50);

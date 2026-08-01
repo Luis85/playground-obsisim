@@ -65,6 +65,24 @@ export class Stockpile {
   }
 }
 
+/**
+ * Units banked into output buffers this tick — gross production, as opposed to
+ * the Stockpile's `producedThisTick`, which since increment 4 records only what
+ * a hauler actually delivered. Kept apart from Stockpile because they are
+ * genuinely different quantities: the gap between them IS the haul backlog.
+ */
+export class ProductionLedger {
+  readonly madeThisTick = new Map<ResourceId, number>();
+
+  add(id: ResourceId, amount: number): void {
+    this.madeThisTick.set(id, (this.madeThisTick.get(id) ?? 0) + amount);
+  }
+
+  reset(): void {
+    this.madeThisTick.clear();
+  }
+}
+
 export class SimClock {
   tick = 0;
   lastRecruitTick = -BALANCE.recruitCooldownTicks; // first recruit available immediately
@@ -163,25 +181,38 @@ export class IdCounter {
 interface StatsFrame {
   produced: ReadonlyMap<ResourceId, number>;
   consumed: ReadonlyMap<ResourceId, number>;
+  made: ReadonlyMap<ResourceId, number>;
 }
 
 export class StatsHistory {
   private readonly frames: StatsFrame[] = [];
 
-  record(produced: ReadonlyMap<ResourceId, number>, consumed: ReadonlyMap<ResourceId, number>): void {
-    this.frames.push({ produced: new Map(produced), consumed: new Map(consumed) });
+  record(
+    produced: ReadonlyMap<ResourceId, number>,
+    consumed: ReadonlyMap<ResourceId, number>,
+    made: ReadonlyMap<ResourceId, number>,
+  ): void {
+    this.frames.push({ produced: new Map(produced), consumed: new Map(consumed), made: new Map(made) });
     if (this.frames.length > BALANCE.statsWindowTicks) this.frames.shift();
   }
 
-  rates(id: ResourceId): { production: number; consumption: number } {
-    if (this.frames.length === 0) return { production: 0, consumption: 0 };
-    let produced = 0;
+  /**
+   * `delivered` is store inflow (what `produced` has meant since increment 4);
+   * `made` is what buildings banked into their own buffers. Named for what they
+   * measure — the old `production` described neither once haulers existed.
+   */
+  rates(id: ResourceId): { delivered: number; consumed: number; made: number } {
+    if (this.frames.length === 0) return { delivered: 0, consumed: 0, made: 0 };
+    let delivered = 0;
     let consumed = 0;
+    let made = 0;
     for (const frame of this.frames) {
-      produced += frame.produced.get(id) ?? 0;
+      delivered += frame.produced.get(id) ?? 0;
       consumed += frame.consumed.get(id) ?? 0;
+      made += frame.made.get(id) ?? 0;
     }
-    return { production: produced / this.frames.length, consumption: consumed / this.frames.length };
+    const n = this.frames.length;
+    return { delivered: delivered / n, consumed: consumed / n, made: made / n };
   }
 }
 

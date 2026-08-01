@@ -44,14 +44,15 @@ export const SnapshotSystem = () => createSystem({
     let colonyWealth = 0;
     for (const id of RESOURCE_IDS) {
       const stock = stockpile.get(id);
-      const { production, consumption } = stats.rates(id);
+      const { delivered, consumed, made } = stats.rates(id);
       const stockValue = stock * RESOURCES[id].value;
       colonyWealth += stockValue;
       stockpileStats[id] = {
         stock,
-        productionRate: production,
-        consumptionRate: consumption,
-        netFlow: production - consumption,
+        deliveredRate: delivered,
+        madeRate: made,
+        consumptionRate: consumed,
+        netFlow: delivered - consumed,
         stockValue,
       };
     }

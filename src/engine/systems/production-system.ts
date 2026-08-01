@@ -3,7 +3,7 @@ import type { RecipeDef, ResourceId } from '../../shared/content-types';
 import { BALANCE, workerWorkPower } from '../content/balance';
 import { batchOutputUnits, BUILDINGS } from '../content/buildings';
 import { Building, Efficiency, JobAssignment, OutputBuffer, Production, ToolCoverage } from '../components';
-import { Stockpile } from '../resources';
+import { ProductionLedger, Stockpile } from '../resources';
 
 /**
  * Try to start a new batch when idle. Checked BEFORE paying inputs: a
@@ -23,7 +23,9 @@ function startBatch(production: Production, buffer: OutputBuffer, stockpile: Sto
  * Bank every batch this tick's accumulated progress completes, chaining
  * straight into the next one when inputs and buffer room allow.
  */
-function completeBatches(production: Production, buffer: OutputBuffer, stockpile: Stockpile, recipe: RecipeDef, perBatch: number): void {
+function completeBatches(
+  production: Production, buffer: OutputBuffer, stockpile: Stockpile, recipe: RecipeDef, perBatch: number, ledger: ProductionLedger,
+): void {
   while (production.batchActive && production.progress >= recipe.ticksPerBatch) {
     // A batch completes only with room for ALL of its outputs. Otherwise the
     // building holds one finished batch at full progress — the outputFull
@@ -35,6 +37,7 @@ function completeBatches(production: Production, buffer: OutputBuffer, stockpile
     }
     for (const [id, amount] of Object.entries(recipe.outputs)) {
       buffer.add(id as ResourceId, amount);
+      ledger.add(id as ResourceId, amount); // gross production, before any hauling
     }
     // carry the remainder into the next batch (no throughput loss for
     // high-power buildings); chain by paying the next batch's inputs
@@ -46,13 +49,14 @@ function completeBatches(production: Production, buffer: OutputBuffer, stockpile
 
 export const ProductionSystem = () => createSystem({
   stockpile: WriteResource(Stockpile),
+  ledger: WriteResource(ProductionLedger),
   buildings: queryComponents({
     building: Read(Building), production: Write(Production), buffer: Write(OutputBuffer),
   }),
   workers: queryComponents({ job: Read(JobAssignment), efficiency: Read(Efficiency), coverage: Read(ToolCoverage) }),
 })
   .withName('ProductionSystem')
-  .withRunFunction(({ stockpile, buildings, workers }) => {
+  .withRunFunction(({ stockpile, ledger, buildings, workers }) => {
     const powerByBuilding = new Map<number, number>();
     for (const { job, efficiency, coverage } of workers.iter()) {
       if (job.buildingId === null) continue;
@@ -67,7 +71,7 @@ export const ProductionSystem = () => createSystem({
       startBatch(production, buffer, stockpile, recipe, perBatch);
       if (!production.batchActive) return;
       production.progress += workPower;
-      completeBatches(production, buffer, stockpile, recipe, perBatch);
+      completeBatches(production, buffer, stockpile, recipe, perBatch, ledger);
     };
 
     for (const { building, production, buffer } of buildings.iter()) {

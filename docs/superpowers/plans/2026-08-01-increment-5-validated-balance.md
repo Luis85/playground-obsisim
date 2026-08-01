@@ -606,6 +606,7 @@ Create `tests/engine/balance.test.ts`:
 
 ```ts
 import { describe, expect, it } from 'vitest';
+import { BALANCE } from '../../src/engine/content/balance';
 import { runScenario } from '../support/balance-harness';
 
 // The measured shape of increment 4's haul constants, pinned so a later change
@@ -657,7 +658,6 @@ describe('haul balance gradient', () => {
   it('a full buffer is cleared by exactly two hauler trips', async () => {
     // outputBufferCap 12, haulCarryCapacity 6 — the claim increment 4 made for
     // these two constants together, stated as a ratio rather than as magnitudes.
-    const { BALANCE } = await import('../../src/engine/content/balance');
     expect(BALANCE.outputBufferCap / BALANCE.haulCarryCapacity).toBe(2);
   });
 
@@ -896,7 +896,10 @@ it('haulers still collect from a relocating building', async () => {
   await dispatch({ type: 'assignHauler' });
   // Move it far enough that the downtime outlasts the whole haul round trip.
   await dispatch({ type: 'moveBuilding', buildingId, to: { col: 20, row: 14 } });
-  expect(snapshot().buildings[0].state).toBe('relocating');
+  const relocating = [...world.getEntities()]
+    .find((e) => e.getComponent(Building)?.id === buildingId)!
+    .getComponent(Relocation)!;
+  expect(relocating.ticksLeft).toBeGreaterThan(10); // genuinely out of action for the whole trip
 
   const before = world.getResource(Stockpile).get('wood');
   for (let i = 0; i < 40; i++) await tick();
@@ -905,9 +908,9 @@ it('haulers still collect from a relocating building', async () => {
 });
 ```
 
-Note this test asserts `state === 'relocating'`, which only exists after Task 6.
-If executing Task 5 alone, assert on the `Relocation` component's `ticksLeft`
-instead and tighten it to the state check in Task 6.
+This asserts on the `Relocation` component rather than on
+`BuildingSnapshot.state`, because the `'relocating'` state does not exist until
+Task 6. Task 6 tightens it.
 
 Add `Relocation` to that file's import from `../../../src/engine/components`.
 
@@ -1163,7 +1166,19 @@ In `src/engine/world.ts`'s `buildInitialSnapshot`, add to the `buildingFacts` li
       relocatingTicks: clampedRelocation(saved.relocatingTicks ?? 0),
 ```
 
-(import `clampedRelocation` from `./spawn`). `saved.relocatingTicks` does not exist on `SavedBuilding` until Task 7 — use `?? 0` and TypeScript will accept it once Task 7 lands; for now cast: `(saved as { relocatingTicks?: number }).relocatingTicks ?? 0`. **Remove the cast in Task 7.**
+(import `clampedRelocation` from `./spawn`).
+
+So this compiles without a cast, add the field to `SavedBuilding` in
+`src/shared/save.ts` **as optional** in this task:
+
+```ts
+  /** Ticks still out of action after a move. Optional here; save v4 (Task 7)
+   * makes it required and migrates existing records. */
+  relocatingTicks?: number;
+```
+
+Task 7 promotes it to required on `SaveGameV4`'s record. Nothing else about the
+save format changes in this task — no version bump, no migration, no guard.
 
 Also update `gatherEntityFacts` in `src/engine/snapshot-builder.ts` — find its `buildingFactsOf(...)` call and add the `Relocation` component read the same way.
 
@@ -1204,7 +1219,7 @@ happening, and either other label would send the player after the wrong fix."
 - Modify: `src/shared/save.ts` (`SaveGameV4`, `SavedBuilding`, guard, `LATEST_SAVE_VERSION`)
 - Modify: `src/shared/save-migration.ts` (v3→v4)
 - Modify: `src/engine/snapshot-builder.ts` (`savedBuildingOf`)
-- Modify: `src/engine/world.ts` (remove the Task 6 cast; `isLoadableSave`)
+- Modify: `src/engine/world.ts` (`isLoadableSave`; `SaveGameV3` -> `SaveGameV4`)
 - Test: `tests/shared/save-migration.test.ts`, `tests/engine/world.test.ts`
 
 **Interfaces:**
@@ -1243,7 +1258,8 @@ In `src/shared/save.ts`:
 export const LATEST_SAVE_VERSION = 4;
 ```
 
-Rename the current `SavedBuilding` to `SavedBuildingV3` (keep it as the frozen legacy shape), and add:
+Rename the current `SavedBuilding` to `SavedBuildingV3` (keep it as the frozen
+legacy shape — and drop the optional `relocatingTicks?` Task 6 added to it), and add:
 
 ```ts
 /** The current building record: v3 plus the relocation countdown (save v4). */
@@ -1323,7 +1339,7 @@ export function savedBuildingOf(facts: BuildingFacts): SavedBuilding {
 }
 ```
 
-In `src/engine/world.ts`: change every `SaveGameV3` type reference to `SaveGameV4`, change `isSaveGameV3` to `isSaveGameV4` in `isLoadableSave`, remove the Task 6 cast (`saved.relocatingTicks` is now typed), and add the structural check to `isLoadableSave`'s building walk:
+In `src/engine/world.ts`: change every `SaveGameV3` type reference to `SaveGameV4`, change `isSaveGameV3` to `isSaveGameV4` in `isLoadableSave`, and add the structural check to `isLoadableSave`'s building walk:
 
 ```ts
     // Structural/identity, not balance: a negative or fractional countdown is a
@@ -1754,5 +1770,5 @@ git push -u origin claude/excalibur-game-engine-r4qy0v
 
 - **Push back rather than guess.** Roughly half of increment 4's task briefs contained an error — a helper that did not exist, a wrong expected value, a parameter that would have corrupted eight call sites. Implementers caught them only because they were told to. If a brief here disagrees with the code, the code wins: say so.
 - **The `SaveGameV3` → `SaveGameV4` rename in Task 7 has the widest blast radius.** Let `npm run typecheck` enumerate the sites; do not hunt them by hand.
-- **Task 6 Step 5 leaves a deliberate cast** (`(saved as { relocatingTicks?: number })`) that Task 7 removes. If you are executing Task 7, check it is gone.
+- **Task 6 adds `relocatingTicks?` to `SavedBuilding` as OPTIONAL**; Task 7 promotes it to required on the v4 record and drops it from the frozen `SavedBuildingV3`. Neither task needs a cast.
 - **Timeouts:** balance scenarios run hundreds of ticks through the full system set. The explicit `60000`/`120000` timeouts in Tasks 4 and 10 are required — vitest's 5s default will fail them.

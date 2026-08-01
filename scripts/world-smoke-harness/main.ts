@@ -22,7 +22,7 @@ window.addEventListener('unhandledrejection', (event) => window.__errors.push(St
 function building(id: number, defId: BuildingSnapshot['defId'], col: number, row: number, overrides: Partial<BuildingSnapshot> = {}): BuildingSnapshot {
   return {
     id, defId, col, row, workers: 0, workerSlots: 2, state: 'unstaffed',
-    progress: 0, batchActive: false, progressPct: 0, tooledWorkers: 0, workPower: 0, buffered: 0,
+    progress: 0, batchActive: false, progressPct: 0, tooledWorkers: 0, workPower: 0, buffered: 0, relocatingTicks: 0,
     ...overrides,
   };
 }
@@ -67,8 +67,8 @@ const growWorkers = () => [worker(10, { buildingId: 1, toolTicks: 100 }), worker
  * colony reset by design (see renderer.ts), which would wipe the scene between
  * phases instead of animating through it.
  */
-const haulScene = (tick: number, hauler: Partial<WorkerSnapshot>) => snap(tick,
-  [building(1, 'forester', 4, 1, { buffered: 12, state: 'outputFull' }), building(2, 'farm', 6, 1)],
+const haulScene = (tick: number, hauler: Partial<WorkerSnapshot>, forester: Partial<BuildingSnapshot> = {}) => snap(tick,
+  [building(1, 'forester', 4, 1, { buffered: 12, state: 'outputFull', ...forester }), building(2, 'farm', 6, 1)],
   [worker(10, { buildingId: 1 }), worker(11, { buildingId: 1 }), worker(12, { toolTicks: 100, ...hauler })]);
 
 // Phase script, advanced from the runner. Worker 12 walks in phase 1; the
@@ -100,6 +100,9 @@ const phases: Array<() => void> = [
   () => renderer.sync(haulScene(6, { hauling: true, haulTargetId: 1, haulPhase: 'outbound', haulTicksLeft: 0 })), // 7: arrived at the building
   () => renderer.sync(haulScene(7, { hauling: true, haulTargetId: 1, haulPhase: 'returning', haulTicksLeft: 1 })), // 8: half way home — a genuinely interpolated point, neither endpoint
   () => renderer.sync(haulScene(8, { hauling: true, haulTargetId: 1, haulPhase: 'returning', haulTicksLeft: 1, carrying: 6 })), // 9: same point, now loaded
+  // ONE change from the previous phase: building 1 flips to relocating. Its
+  // ring colour must differ, and nothing else in the scene moves.
+  () => renderer.sync(haulScene(9, { hauling: true, haulTargetId: 1, haulPhase: 'returning', haulTicksLeft: 1, carrying: 6 }, { state: 'relocating', relocatingTicks: 6 })),
   () => {
     renderer.setGhost({ defId: 'bakery', col: 10, row: 5, valid: true });
     renderer.setSelection(1);

@@ -138,23 +138,28 @@ await wait(400);
 const carrying = await shot();
 check('the load marker is drawn on a carrying hauler (only `carrying` differs)', !carrying.equals(homeEmpty));
 
+await step(10); // ONLY change: building 1 becomes relocating
+await wait(400);
+const relocating = await shot();
+check('a relocating building is drawn differently (only its state differs)', !relocating.equals(carrying));
+
 const preGhost = await shot();
-await step(10); // ghost + selection on
+await step(11); // ghost + selection on
 await wait(300);
 const ghostOn = await shot();
 check('setGhost + setSelection draw over the scene', !ghostOn.equals(preGhost));
 
-await step(11); // same tile, invalid tint
+await step(12); // same tile, invalid tint
 await wait(300);
 const ghostInvalid = await shot();
 check('an invalid ghost reads differently from a valid one', !ghostInvalid.equals(ghostOn));
 
-await step(12); // both cleared
+await step(13); // both cleared
 await wait(300);
 const ghostOff = await shot();
 check('clearing ghost and selection restores the scene', ghostOff.equals(preGhost));
 
-await step(13); // colony reset: tick regresses, ids recycle
+await step(14); // colony reset: tick regresses, ids recycle
 await wait(400);
 const afterReset = await page.evaluate(() => window.__probe());
 check(
@@ -162,7 +167,7 @@ check(
   afterReset.building === 0 && afterReset.worker > 0,
 );
 
-await step(14); // same-tick reset: a new snapshot at the same tick is a new timeline
+await step(15); // same-tick reset: a new snapshot at the same tick is a new timeline
 await wait(400);
 const afterSameTickReset = await page.evaluate(() => window.__probe());
 check(
@@ -173,7 +178,7 @@ check(
   afterSameTickReset.building === 0 && afterSameTickReset.worker > 0,
 );
 
-await step(15); // dispose()
+await step(16); // dispose()
 await wait(300);
 check('dispose() raises no errors', pageErrors.length === 0);
 

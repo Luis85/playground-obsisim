@@ -2355,18 +2355,25 @@ This is the diagnostic the spec insists ships with the mechanic rather than afte
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `tests/app/economy-view.test.ts`:
+Add these **inside the existing `describe('EconomyView', …)` block** in
+`tests/app/economy-view.test.ts` — the file has a second
+`describe('DashboardView', …)` after it, so appending at the end of the file
+would file them under the wrong suite. Extend the import to
+`import { makeBuilding, makeSnapshot, makeWorker } from './fixtures';` (only
+`makeSnapshot` is imported today).
+
+The file's helper is `mountWith(component, snapshot)`, which mounts **and**
+ingests — there is no `mountEconomy`, and no separate `ingest` call is needed:
 
 ```ts
   it('states the haul backlog and how many buildings it has stopped', async () => {
-    const wrapper = mountEconomy();
-    useGameStore().ingest(makeSnapshot({
+    const wrapper = mountWith(EconomyView, makeSnapshot({
       buildings: [
         makeBuilding(1, { buffered: 12, state: 'outputFull' }),
         makeBuilding(2, { buffered: 6, state: 'producing' }),
       ],
       workers: [makeWorker(1, { hauling: true })],
-    }), { paused: false, speed: 1, error: null });
+    }));
     await wrapper.vm.$nextTick();
     const haul = wrapper.find('[data-test="haul-pressure"]').text();
     expect(haul).toContain('18');
@@ -2375,8 +2382,7 @@ Append to `tests/app/economy-view.test.ts`:
   });
 
   it('says the colony is keeping up when nothing waits', async () => {
-    const wrapper = mountEconomy();
-    useGameStore().ingest(makeSnapshot({ buildings: [makeBuilding(1, { buffered: 0 })] }), { paused: false, speed: 1, error: null });
+    const wrapper = mountWith(EconomyView, makeSnapshot({ buildings: [makeBuilding(1, { buffered: 0 })] }));
     await wrapper.vm.$nextTick();
     expect(wrapper.find('[data-test="haul-pressure"]').text()).toContain('keeping up');
   });
@@ -2402,7 +2408,10 @@ const haulPressure = computed(() => {
 });
 ```
 
-template, above the chain table:
+template — directly inside `<div v-if="store.snapshot">` and **before** the
+`<section v-for="chain in chains">`. It is one sentence for the whole view;
+putting it inside the `v-for` would render a duplicate per chain (and the
+tests would still pass, because `find()` returns only the first match):
 
 ```html
     <p
@@ -2450,30 +2459,49 @@ Neither file is covered by vitest or `tsconfig`, so a signature slip here surfac
 
 - [ ] **Step 1: Extend the harness fixtures**
 
-`scripts/world-smoke-harness/main.ts` — `building()` gains `buffered = 0` (positional, after `row`), passed into the snapshot object; `worker()` gains `hauling`, `haulTargetId`, `carrying` in its overrides object with defaults `false`, `null`, `0`; `snap()` is unchanged.
+`scripts/world-smoke-harness/main.ts` — both fixture helpers gain their new
+fields **in the base object literal only**. Do not add a positional
+parameter: `building()`'s current signature is
+`building(id, defId, col, row, overrides = {})`, and every existing call site
+passes its overrides object in the 5th position. Inserting a positional
+`buffered` there would silently bind those objects to `buffered` and drop
+`workers`/`state`/`progressPct` from eight fixtures — and because this file
+is outside `tsconfig` and outside vitest, nothing would catch it.
 
-Append two phases to the end of the `phases` array (the current final phase is `dispose()` — insert before it and renumber the runner accordingly):
+- `building()`: add `buffered: 0` to the returned literal, beside `workPower: 0`.
+- `worker()`: add `hauling: false, haulTargetId: null, carrying: 0` to the
+  returned literal, beside `buildingId: null`.
+- `snap()` is unchanged.
+
+Insert two phases into the `phases` array **immediately after the `snap(4)`
+sawmill-move phase and before the `setGhost` phase** — they become indices 6
+and 7, and every later phase shifts by two.
 
 ```ts
   // hauler walking out to a backed-up building, then the same hauler home
-  // with a load: two snapshots is all the renderer needs to animate a trip
+  // with a load: two snapshots is all the renderer needs to animate a trip.
+  // The returning hauler is also tooled, so this frame is the one place the
+  // load marker and the tool ring are drawn on the same worker.
   () => renderer.sync(snap(5,
-    [building(1, 'forester', 4, 1, 12), building(2, 'farm', 6, 1)],
+    [building(1, 'forester', 4, 1, { buffered: 12, state: 'outputFull' }), building(2, 'farm', 6, 1)],
     [worker(10, { buildingId: 1 }), worker(11, { buildingId: 1 }), worker(12, { hauling: true, haulTargetId: 1 })])),
   () => renderer.sync(snap(6,
-    [building(1, 'forester', 4, 1, 6), building(2, 'farm', 6, 1)],
-    [worker(10, { buildingId: 1 }), worker(11, { buildingId: 1 }), worker(12, { hauling: true, carrying: 6 })])),
+    [building(1, 'forester', 4, 1, { buffered: 6 }), building(2, 'farm', 6, 1)],
+    [worker(10, { buildingId: 1 }), worker(11, { buildingId: 1 }), worker(12, { hauling: true, carrying: 6, toolTicks: 100 })])),
 ```
 
 - [ ] **Step 2: Assert the cycle in the runner**
 
-`scripts/world-smoke.mjs` — after the existing colony phases and before the reset phases, with every later `step(n)` index shifted by two:
+`scripts/world-smoke.mjs` — immediately after the `moved` check (the
+workerless sawmill move, `step(5)`) and before the ghost phases. `moved` is
+the shot taken just before, so it is the tight baseline for "this phase
+changed the scene":
 
 ```js
 await step(6); // hauler walks out to the backed-up forester
 await wait(400);
 const outbound = await shot();
-check('a hauler walking out changes the scene', !outbound.equals(resumed));
+check('a hauler walking out changes the scene', !outbound.equals(moved));
 
 await step(7); // same hauler, home with a load
 await wait(2500); // the walk back settles
@@ -2481,10 +2509,44 @@ const delivered = await shot();
 check('the hauler returns to camp carrying its load', !delivered.equals(outbound));
 ```
 
+Then renumber every later `step(n)` in the runner, and its trailing comment,
+by +2. The complete mapping — there are six, and missing one silently fires
+the wrong phase:
+
+| current | becomes | phase |
+| --- | --- | --- |
+| `step(6)` | `step(8)` | ghost + selection on |
+| `step(7)` | `step(9)` | invalid ghost tint |
+| `step(8)` | `step(10)` | ghost + selection cleared |
+| `step(9)` | `step(11)` | colony reset |
+| `step(10)` | `step(12)` | same-tick reset |
+| `step(11)` | `step(13)` | `dispose()` |
+
 - [ ] **Step 3: Run the smoke test**
 
 Run: `npm run smoke:world`
 Expected: `world-smoke: all green`, with the two new checks listed. (Chromium lives at `/opt/pw-browsers/chromium`; `npm install --no-save playwright-core` if the runner reports it missing.)
+
+- [ ] **Step 3b: Look at the delivering frame**
+
+Task 8's review routed one question here that no assertion can answer: the
+load marker is a radius-3 dot centred at `y = -(WORKER_RADIUS + 3)`, so its
+lower edge lands on the worker circle's top edge — exactly where the tool
+ring's 2px stroke sits. The `step(7)` fixture puts both on worker 12 on
+purpose.
+
+Save that frame and look at it. Add a temporary write beside the `delivered`
+shot:
+
+```js
+await page.screenshot({ path: '/tmp/haul-delivering.png', clip: { x: 0, y: 0, width: 800, height: 520 } });
+```
+
+Open the PNG and judge: is the carried load still legible as a distinct dot,
+or does the tool ring swallow it? Report what you see in your report file
+with your verdict. Then **remove that temporary line** before committing —
+the smoke runner must not leave files behind. Do not change any visual
+constants; if the two do collide, say so and leave it for the final review.
 
 - [ ] **Step 4: Commit**
 
@@ -2502,10 +2564,18 @@ git commit -m "test(world): the browser smoke test watches a haul cycle"
 
 - [ ] **Step 1: Document the increment**
 
-Add after the Increment 3 section, and amend Increment 3's last bullet to note that positions became meaningful in increment 4:
+Add after the Increment 3 section — note the README's increment headings are
+`##`, not `###`, and are title-cased (`## Increment 3 — Building Placement`),
+so match that.
+
+Also amend Increment 3's **positions** bullet — the third one, beginning
+"Positions are sim truth on a fixed 24×16 map" — to say that those positions
+stopped being merely cosmetic in increment 4, because haul distance is now
+priced off them. (Increment 3's *last* bullet is about table parity and is not
+the one to touch.)
 
 ```markdown
-### Increment 4 — logistics
+## Increment 4 — Logistics
 
 - Goods stop teleporting: a building banks what it makes in its own output
   buffer and stalls (**Output full**) when that buffer fills
@@ -2519,7 +2589,13 @@ Add after the Increment 3 section, and amend Increment 3's last bullet to note t
   themselves, with empty buffers and nobody hauling yet
 ```
 
-Add the spec and plan to the documentation list.
+Add the spec and plan to the Documentation list, in the same style as the
+entries already there:
+
+```markdown
+- Increment 4 spec: `docs/superpowers/specs/2026-07-31-increment-4-logistics.md`
+- Increment 4 plan: `docs/superpowers/plans/2026-07-31-increment-4-logistics.md`
+```
 
 - [ ] **Step 2: Full gate battery**
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BALANCE } from '../../src/engine/content/balance';
+import { RESOURCE_IDS } from '../../src/engine/content/resources';
 import { Hunger, JobAssignment, ToolCoverage, Worker } from '../../src/engine/components';
 import { IdCounter, SimClock, SnapshotStore, Stockpile } from '../../src/engine/resources';
 import type { IRuntimeWorld } from 'sim-ecs';
@@ -299,14 +300,21 @@ describe('isLoadableSave', () => {
     expect(isLoadableSave(tiny)).toBe(false);
   });
 
-  it('rejects a buffer holding more than the cap', () => {
+  // outputBufferCap is a tunable balance number (spec 4.5): a save written
+  // under a larger cap — or one increment 5 orphans by tuning the cap down —
+  // must still load. spawnBuilding clamps the buffer to the CURRENT cap
+  // instead of the guard refusing the save (see clampedBuffer in world.ts).
+  it('clamps a buffer holding more than the cap at load, instead of rejecting the save', async () => {
     const save = initialSave();
     save.buildings.push({
       id: 4, defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1,
       buffer: { wood: BALANCE.outputBufferCap + 1 },
     });
     save.nextEntityId = 5;
-    expect(isLoadableSave(save)).toBe(false);
+    expect(isLoadableSave(save)).toBe(true);
+
+    const world = await createColonyWorld(save);
+    expect(world.getResource(SnapshotStore).latest!.buildings[0].buffered).toBe(BALANCE.outputBufferCap);
   });
 
   it('rejects a buffer naming a resource the catalog does not have', () => {
@@ -319,10 +327,10 @@ describe('isLoadableSave', () => {
     expect(isLoadableSave(save)).toBe(false);
   });
 
-  // A negative amount sums under the cap and names a real catalog resource, so
-  // isBuffersValid's cross-field check (catalog membership + cap sum) alone
-  // would accept it: only isBufferShape's own per-amount structural check
-  // (Number.isSafeInteger(amount) && amount >= 0) catches this one.
+  // A negative amount names a real catalog resource, so isBuffersValid's
+  // catalog-membership check alone would accept it: only isBufferShape's own
+  // per-amount structural check (Number.isSafeInteger(amount) && amount >= 0)
+  // catches this one.
   it('rejects a buffer holding a negative amount', () => {
     const save = initialSave();
     save.buildings.push({
@@ -341,6 +349,49 @@ describe('isLoadableSave', () => {
     save.nextEntityId = 5;
     const world = await createColonyWorld(save);
     expect(world.getResource(SnapshotStore).latest!.buildings[0].buffered).toBe(5);
+  });
+
+  it('clamps a multi-resource over-cap buffer deterministically, trimming in catalog order', async () => {
+    const cap = BALANCE.outputBufferCap;
+    const [first, second, third] = RESOURCE_IDS;
+    const save = initialSave();
+    save.buildings.push({
+      id: 4, defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1,
+      // `first` fits whole; `second` only partially (whatever room is left);
+      // `third` has no room at all left and must be dropped entirely.
+      buffer: { [first]: cap - 1, [second]: cap, [third]: cap },
+    });
+    save.nextEntityId = 5;
+    expect(isLoadableSave(save)).toBe(true);
+
+    const engine = await GameEngine.create(save);
+    const buffer = engine.serialize().buildings[0].buffer;
+
+    expect(buffer[first]).toBe(cap - 1);
+    expect(buffer[second]).toBe(1); // room left after `first`: cap - (cap - 1)
+    expect(Object.hasOwn(buffer, third)).toBe(false); // no room left: absent, not zero
+
+    const kept = Object.values(buffer) as number[];
+    expect(kept.reduce((sum, amount) => sum + amount, 0)).toBe(cap); // total is exactly the cap
+    for (const amount of kept) {
+      expect(Number.isInteger(amount)).toBe(true);
+      expect(amount).toBeGreaterThan(0); // never negative, never fractional, never a stray zero entry
+    }
+  });
+
+  it('re-serializing a clamped over-cap load produces a save isLoadableSave still accepts (no ping-pong)', async () => {
+    const save = initialSave();
+    save.buildings.push({
+      id: 4, defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1,
+      buffer: { wood: BALANCE.outputBufferCap + 5 },
+    });
+    save.nextEntityId = 5;
+    expect(isLoadableSave(save)).toBe(true);
+
+    const engine = await GameEngine.create(save);
+    const written = engine.serialize();
+    expect(written.buildings[0].buffer.wood).toBe(BALANCE.outputBufferCap); // clamped, not the original over-cap amount
+    expect(isLoadableSave(written)).toBe(true);
   });
 });
 

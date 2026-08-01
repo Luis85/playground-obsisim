@@ -191,19 +191,15 @@ function isPositionsValid(data: SaveGameV3): boolean {
 }
 
 /**
- * Buffer contents are cross-field truths like positions: catalog membership and
- * the cap need the content catalog and BALANCE, which the structural guard in
- * src/shared/ cannot see.
+ * Buffer contents are a cross-field truth like positions: catalog membership
+ * needs the content catalog, which the structural guard in src/shared/ cannot
+ * see. The cap is NOT checked here — see spawnBuilding, which clamps an
+ * over-cap buffer at load exactly as it clamps saved batch progress.
  */
 function isBuffersValid(data: SaveGameV3): boolean {
-  return data.buildings.every((b) => {
-    let total = 0;
-    for (const [id, amount] of Object.entries(b.buffer)) {
-      if (!Object.hasOwn(RESOURCES, id)) return false;
-      total += amount as number;
-    }
-    return total <= BALANCE.outputBufferCap;
-  });
+  return data.buildings.every(
+    (b) => Object.keys(b.buffer).every((id) => Object.hasOwn(RESOURCES, id)),
+  );
 }
 
 /**
@@ -284,6 +280,27 @@ export function decideLoad(data: unknown): LoadDecision {
   return save !== null ? { kind: 'restore', save } : { kind: 'backup' };
 }
 
+/**
+ * Balance-coupled clamp (spec 4.5), the same treatment `progress` gets above:
+ * a buffer written under a larger cap loads trimmed to the CURRENT cap instead
+ * of orphaning the save. Trimming walks the catalog in order so the result is
+ * deterministic.
+ */
+function clampedBuffer(saved: Partial<Record<ResourceId, number>>): Map<ResourceId, number> {
+  const buffer = new Map<ResourceId, number>();
+  let total = 0;
+  for (const id of RESOURCE_IDS) {
+    const amount = saved[id] ?? 0;
+    if (amount <= 0) continue;
+    const room = BALANCE.outputBufferCap - total;
+    if (room <= 0) break;
+    const kept = Math.min(amount, room);
+    buffer.set(id, kept);
+    total += kept;
+  }
+  return buffer;
+}
+
 export function spawnBuilding(
   prep: IPreptimeWorld,
   ids: IdCounter,
@@ -301,7 +318,7 @@ export function spawnBuilding(
     .with(new WorkerSlots(def.workerSlots))
     .with(new Production(progress, saved.batchActive))
     .with(new Position(saved.col, saved.row))
-    .with(new OutputBuffer(new Map(Object.entries(saved.buffer ?? {}) as [ResourceId, number][])))
+    .with(new OutputBuffer(clampedBuffer(saved.buffer ?? {})))
     .build();
 }
 
@@ -403,18 +420,22 @@ function buildInitialSnapshot(save: SaveGameV3): Snapshot {
       toolTicks,
     };
   });
-  const buildingFacts: BuildingFacts[] = save.buildings.map((saved) => ({
-    id: saved.id,
-    defId: saved.defId,
-    col: saved.col, row: saved.row,
-    workerSlots: BUILDINGS[saved.defId].workerSlots,
-    // same balance-coupled clamp as spawnBuilding, so the seeded snapshot
-    // matches the spawned world
-    progress: Math.min(saved.progress, BUILDINGS[saved.defId].recipe.ticksPerBatch),
-    batchActive: saved.batchActive,
-    buffered: Object.values(saved.buffer).reduce<number>((sum, amount) => sum + (amount ?? 0), 0),
-    buffer: saved.buffer,
-  }));
+  const buildingFacts: BuildingFacts[] = save.buildings.map((saved) => {
+    // same balance-coupled clamp as spawnBuilding, so the seeded snapshot's
+    // buffered total matches the buffer the spawned entity actually holds
+    // (an over-cap saved buffer trims to the cap here too, not just in the world)
+    const buffer = new OutputBuffer(clampedBuffer(saved.buffer));
+    return {
+      id: saved.id,
+      defId: saved.defId,
+      col: saved.col, row: saved.row,
+      workerSlots: BUILDINGS[saved.defId].workerSlots,
+      progress: Math.min(saved.progress, BUILDINGS[saved.defId].recipe.ticksPerBatch),
+      batchActive: saved.batchActive,
+      buffered: buffer.total(),
+      buffer: Object.fromEntries(buffer.amounts) as Partial<Record<ResourceId, number>>,
+    };
+  });
   const { workers, buildings, population, idleWorkers } = buildEntitySections(workerFacts, buildingFacts);
   const stockpile = {} as Record<ResourceId, ResourceStats>;
   let colonyWealth = 0;

@@ -37,6 +37,16 @@ describe('isLoadableSave', () => {
     expect(isLoadableSave(save)).toBe(false);
   });
 
+  it('rejects a worker holding both a valid buildingId and hauling: true (one worker, two jobs)', () => {
+    const save = initialSave();
+    const building = { id: 4, defId: 'forester' as const, progress: 0, batchActive: false, col: 4, row: 1, buffer: {} };
+    save.buildings.push(building);
+    save.nextEntityId = 5;
+    save.workers[0].buildingId = building.id; // a real building — the membership check alone would accept this
+    save.workers[0].hauling = true;
+    expect(isLoadableSave(save)).toBe(false);
+  });
+
   it('rejects non-numeric, NaN, or negative stockpile amounts', () => {
     const bad = initialSave();
     (bad.stockpile as Record<string, unknown>).wood = 'lots';

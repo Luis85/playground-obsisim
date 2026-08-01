@@ -145,6 +145,13 @@ function isWorkerRecordValid(w: SaveGameV3['workers'][number], buildingIds: Read
   if (!(w.hunger >= 0 && Number.isFinite(w.hunger))) return false;
   if (!Number.isSafeInteger(w.toolTicks) || w.toolTicks < 0 || w.toolTicks > MAX_SAVED_COUNTER) return false;
   if (w.buildingId === null) return true;
+  // A worker is staffed XOR hauling, never both — handleAssignWorker refuses to
+  // poach a hauler and handleAssignHauler refuses to poach a staffed worker, so
+  // no version of the engine could ever write both onto one record. That makes
+  // this an identity violation like the membership check below (a record no
+  // playthrough could produce), not a balance-coupled value to clamp: there is
+  // no "current" amount of double-staffing to grandfather down to.
+  if (w.hauling) return false;
   return buildingIds.has(w.buildingId);
 }
 

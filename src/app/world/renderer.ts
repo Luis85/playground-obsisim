@@ -281,14 +281,20 @@ class WorldScene {
    * is instantaneous in the simulation, so its walk is pure decoration and any
    * plausible pace will do — WORKER_SPEED. A haul leg has a *simulated*
    * duration, and the layout advances the dot one tick's worth per sync, so the
-   * dot must cover exactly that step before the next sync lands or it drifts
-   * behind its own trip and reverses in open ground (OBS-4-09). Dividing the
-   * step by the measured tick gives that pace at any game speed, including
-   * after the player changes speed mid-walk: the next sync simply re-derives it.
+   * dot must cover the actor's actual remaining distance before the next sync
+   * lands or it drifts behind its own trip and reverses in open ground
+   * (OBS-4-09). That remaining distance is measured from `bundle.actor.pos`
+   * (where the dot really is), not from the previous layout target: those two
+   * only coincide when the last leg finished exactly on time, and a delayed
+   * frame, a hidden tab, or a mid-walk speed change leaves the actor short of
+   * it, understating the distance and carrying the lag into the next tick.
+   * Dividing that distance by the measured tick gives the pace at any game
+   * speed, including after the player changes speed mid-walk: the next sync
+   * simply re-derives it.
    */
   private walkWorker(bundle: WorkerBundle, target: Vector, travelling: boolean): void {
     if (bundle.target.equals(target)) return;
-    const step = target.distance(bundle.target);
+    const step = target.distance(bundle.actor.pos);
     bundle.target = target;
     bundle.actor.actions.clearActions();
     bundle.actor.actions.moveTo(target, travelling ? step / (this.tickMs / 1000) : WORKER_SPEED);

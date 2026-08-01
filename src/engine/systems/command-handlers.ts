@@ -277,8 +277,32 @@ export function handleAssignHauler(ctx: CommandContext): void {
   ctx.notices.succeed('Assigned a hauler.');
 }
 
+/**
+ * Which hauler the `−` button takes off duty. Spec §2.3 fixes the *dispatch*
+ * order but said nothing about removal, so this used to take the first hauler in
+ * entity-iteration order — which could interrupt a loaded worker most of the way
+ * home while an idle one stood at the camp (OBS-4-08).
+ *
+ * Cheapest trip to throw away first: an idle hauler wastes nothing, an outbound
+ * one wastes only the walk out (it carries nothing yet), and a returning one
+ * wastes the walk it has already done — so among those, take the one closest to
+ * home, whose remaining walk is smallest. Ties break by the same
+ * entity-iteration order as before, which keeps the choice deterministic.
+ */
+export function cheapestHaulerToRelease(workers: WorkerRow[]): WorkerRow | undefined {
+  const haulers = workers.filter(({ job }) => job.hauling);
+  const cost = ({ trip }: WorkerRow) => (trip.phase === 'idle' ? 0 : trip.phase === 'outbound' ? 1 : 2);
+  return haulers.reduce<WorkerRow | undefined>((best, hauler) => {
+    if (best === undefined) return hauler;
+    if (cost(hauler) !== cost(best)) return cost(hauler) < cost(best) ? hauler : best;
+    // Same phase: prefer the one with the least walking left to lose. Strict <
+    // keeps the earlier worker on a tie, preserving iteration order.
+    return hauler.trip.ticksLeft < best.trip.ticksLeft ? hauler : best;
+  }, undefined);
+}
+
 export function handleUnassignHauler(ctx: CommandContext): void {
-  const hauler = ctx.workers.find(({ job }) => job.hauling);
+  const hauler = cheapestHaulerToRelease(ctx.workers);
   if (hauler === undefined) {
     ctx.notices.reject('No hauler to unassign.');
     return;

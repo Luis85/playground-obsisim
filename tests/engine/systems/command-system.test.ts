@@ -442,6 +442,42 @@ describe('CommandSystem', () => {
     expect(buildSaveFromWorld(world).stockpile.wood).toBe(before + BALANCE.haulCarryCapacity);
   });
 
+  // OBS-4-08: the old rule took the first hauler in entity-iteration order, so
+  // pressing `−` could interrupt a loaded worker most of the way home while an
+  // idle one stood at the camp. No goods were lost — the load is banked — but
+  // the walk already done was thrown away for nothing.
+  it('unassigning releases an idle hauler rather than one carrying a load home', async () => {
+    const { world, tick, dispatch, snapshot } = await setup();
+    // The far corner: 13 ticks each way, so the return leg is long enough that
+    // the two dispatches below cannot finish it out from under the assertion.
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 23, row: 15 } });
+    await tick();
+    const buildingId = snapshot().buildings[0].id;
+    for (const entity of world.getEntities()) {
+      // Exactly one load: the first hauler empties the buffer, so the second has
+      // nothing to fetch and stays idle at the camp instead of going outbound.
+      if (entity.getComponent(Building)?.id === buildingId) {
+        entity.getComponent(OutputBuffer)!.add('wood', BALANCE.haulCarryCapacity);
+      }
+    }
+    await dispatch({ type: 'assignHauler' });
+    const loaded = () => [...world.getEntities()].find((e) => (e.getComponent(HaulTrip)?.amount ?? 0) > 0);
+    for (let i = 0; i < 20 && loaded() === undefined; i++) await tick();
+    const carrier = loaded()!;
+    expect(carrier.getComponent(HaulTrip)!.phase).toBe('returning'); // precondition, not the assertion
+    await dispatch({ type: 'assignHauler' });
+
+    const carriedBefore = carrier.getComponent(HaulTrip)!.amount;
+    const stockBefore = world.getResource(Stockpile).get('wood');
+    await dispatch({ type: 'unassignHauler' });
+    expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Unassigned a hauler.' }]);
+    // The idle one went. The loaded trip is untouched: still returning, still
+    // holding its load, and nothing banked early.
+    expect(carrier.getComponent(HaulTrip)!).toMatchObject({ phase: 'returning', amount: carriedBefore });
+    expect(world.getResource(Stockpile).get('wood')).toBe(stockBefore);
+    expect(snapshot().workers.filter((w) => w.hauling)).toHaveLength(1);
+  });
+
   it('a move retargets the haulers already walking to that building', async () => {
     const { world, tick, dispatch, snapshot } = await setup();
     // The far corner of the default map: BALANCE.haulTilesPerTick's own comment

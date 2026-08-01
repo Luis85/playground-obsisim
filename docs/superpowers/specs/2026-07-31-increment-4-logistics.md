@@ -103,6 +103,16 @@ carts and vehicles, and balance tuning beyond the documented starting values
     nobody is idle: `No idle workers available.` (the existing wording, reused).
   - `unassignHauler` — returns one hauler to idle. Success:
     `Unassigned a hauler.` Rejection: `No hauler to unassign.`
+    **Which hauler** (added in increment 5, OBS-4-08 — this rule was left
+    unstated in increment 4 and the code took whichever came first in entity
+    order, which could interrupt a loaded worker most of the way home while an
+    idle one stood at the camp): release the cheapest trip to throw away —
+    an `idle` hauler first, then `outbound` (it carries nothing, so only the
+    walk out is lost), then `returning`. Within a phase, the one with the
+    fewest `ticksLeft`, whose remaining walk is smallest. Ties break by entity
+    order, so the choice stays deterministic. Note this is deliberately *not*
+    the inverse of the dispatch rule below: dispatch asks who can do the most
+    good, removal asks whose work is cheapest to discard.
 - A hauler's trip lives in a runtime-only `HaulTrip` component present on every
   worker (idle for non-haulers): target building id, phase, ticks remaining,
   and the single resource plus amount being carried. **`HaulTrip` never enters

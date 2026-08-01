@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BALANCE } from '../../src/engine/content/balance';
 import { RESOURCE_IDS } from '../../src/engine/content/resources';
-import { Hunger, JobAssignment, ToolCoverage, Worker } from '../../src/engine/components';
+import { Building, Hunger, JobAssignment, Relocation, ToolCoverage, Worker } from '../../src/engine/components';
 import { IdCounter, SimClock, SnapshotStore, Stockpile } from '../../src/engine/resources';
 import type { IRuntimeWorld } from 'sim-ecs';
 import { GameEngine } from '../../src/engine/game-engine';
@@ -464,6 +464,39 @@ describe('createColonyWorld', () => {
     )!;
     expect(spawnedWorker.getComponent(Hunger)!.value).toBeLessThanOrEqual(BALANCE.hungerMax);
     expect(spawnedWorker.getComponent(ToolCoverage)!.remainingTicks).toBeLessThanOrEqual(BALANCE.toolDurationTicks);
+  });
+
+  it('clamps oversized relocatingTicks to current balance at load, agreeing with the live spawned component (spec 4.5)', async () => {
+    // isBuildingsValid does not bounds-check relocatingTicks at all today
+    // (that is Task 7's job) — clampedRelocation is the only defense, so a
+    // save written under a larger maxRelocationTicks must still load and
+    // clamp rather than being structurally rejected.
+    const save = initialSave();
+    save.buildings.push({
+      id: 4, defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, buffer: {},
+      relocatingTicks: BALANCE.maxRelocationTicks + 500,
+    });
+    save.nextEntityId = 5;
+    expect(isLoadableSave(save)).toBe(true);
+
+    // Deliberately no world.step(): buildInitialSnapshot's own clamp is what
+    // this proves. Stepping would let SnapshotSystem's live-query path
+    // overwrite the seeded value first, leaving the load-time clamp
+    // unexercised — exactly the gap this test closes.
+    const world = await createColonyWorld(save);
+    const seeded = world.getResource(SnapshotStore).latest!;
+    const seededBuilding = seeded.buildings.find((b) => b.id === 4)!;
+    expect(seededBuilding.relocatingTicks).toBeLessThanOrEqual(BALANCE.maxRelocationTicks);
+
+    const prep = buildColonyPrepWorld({ save });
+    const spawnedBuilding = [...prep.getEntities()].find(
+      (e) => e.hasComponent(Building) && e.getComponent(Building)!.id === 4,
+    )!;
+    // Cross-check the live spawned component's exact value, not just its own
+    // bound: proves the seeded snapshot and buildingComponents' Relocation
+    // — the two independent clampedRelocation call sites — agree on the
+    // actual number, not merely that both separately stayed under the cap.
+    expect(spawnedBuilding.getComponent(Relocation)!.ticksLeft).toBe(seededBuilding.relocatingTicks);
   });
 
   it('grandfathers overstaffed buildings from a save (spec 4.5: slots retuned down must not orphan saves)', async () => {

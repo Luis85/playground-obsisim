@@ -133,8 +133,11 @@ describe('SnapshotSystem', () => {
     save.stockpile = {};
     const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
     const ids = getPrepResource(prep, IdCounter);
-    // Staffed AND relocating: 'relocating' must win, because it is the reason
-    // nothing is happening — an unstaffed or output-full label would misdirect.
+    // Staffed AND relocating: proves relocating beats 'waitingForInput' (an
+    // idle-but-staffed building — staffed !== 0 and outputBlocked === false
+    // regardless of the relocating branch here). It does NOT exercise
+    // priority over 'unstaffed'/'outputFull' — see the dedicated precedence
+    // test below, whose fixtures genuinely satisfy those rival branches.
     const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 5, row: 4, relocatingTicks: 7 });
     const buildingId = building.getComponent(Building)!.id;
     spawnWorker(prep, ids, { buildingId });
@@ -144,6 +147,37 @@ describe('SnapshotSystem', () => {
     const snap = world.getResource(SnapshotStore).latest!.buildings[0];
     expect(snap.state).toBe('relocating');
     expect(snap.relocatingTicks).toBe(7);
+  });
+
+  it('pins relocating precedence over unstaffed AND over outputFull, not just waitingForInput', async () => {
+    // The test above only proves relocating beats 'waitingForInput': its
+    // fixture assigns a worker and leaves the buffer empty, so staffed !== 0
+    // and outputBlocked === false no matter where the relocating check sits.
+    // These two fixtures instead genuinely satisfy the rival branch's own
+    // condition, so a reordered priority actually flips the result.
+    const save = initialSave();
+    save.workers = [];
+    const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
+    const ids = getPrepResource(prep, IdCounter);
+
+    // Relocating AND genuinely unstaffed (no worker ever assigned): if the
+    // staffed === 0 check ran before relocatingTicks > 0, this would read
+    // 'unstaffed' instead.
+    spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 5 });
+
+    // Relocating AND genuinely output-full (staffed, buffer sitting at the
+    // real cap so outputBlocked is actually true): if the outputBlocked check
+    // ran before relocatingTicks > 0, this would read 'outputFull' instead.
+    const relocatingFull = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1, relocatingTicks: 5 });
+    relocatingFull.getComponent(OutputBuffer)!.add('wood', BALANCE.outputBufferCap);
+    spawnWorker(prep, ids, { buildingId: relocatingFull.getComponent(Building)!.id });
+
+    const world = await prep.prepareRun();
+    await world.step();
+    const snapshot = world.getResource(SnapshotStore).latest!;
+
+    expect(snapshot.buildings[0].state).toBe('relocating'); // rival condition: staffed === 0
+    expect(snapshot.buildings[1].state).toBe('relocating'); // rival condition: outputBlocked === true
   });
 
   it('clears notices after snapshotting them', async () => {

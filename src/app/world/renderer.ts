@@ -1,5 +1,5 @@
 import {
-  Actor, BaseAlign, Circle, Color, DisplayMode, Engine, Font, GraphicsGroup,
+  Actor, BaseAlign, Circle, Color, DisplayMode, Engine, Font,
   Rectangle, Text, TextAlign, TileMap, vec, type Vector,
 } from 'excalibur';
 import type { Snapshot } from '../../shared/snapshot';
@@ -8,6 +8,7 @@ import {
   layoutWorld, pickBuildingAt, TILE,
   type PlacedBuilding, type PlacedWorker, type WorldLayout, type WorldPick,
 } from './layout';
+import { BUILDING_SIZE, GraphicCache, WORKER_RADIUS } from './graphics-cache';
 import { efficiencyBucket, resolveWorldTheme, type WorldTheme } from './theme';
 
 // The Excalibur end of the renderer seam: the only module that imports
@@ -18,10 +19,8 @@ import { efficiencyBucket, resolveWorldTheme, type WorldTheme } from './theme';
 // (`npm run smoke:world`): boot-and-draw, walking, clock stop/start,
 // pick() through the live camera, and clean dispose.
 
-const WORKER_RADIUS = 7;
 const WORKER_PICK_RADIUS = 11; // SCREEN px hover tolerance, world-converted per live zoom
 const WORKER_SPEED = 90; // px/s walk speed toward a new post
-const BUILDING_SIZE = TILE - 4;
 const BAR_WIDTH = TILE * 0.8;
 const BAR_HEIGHT = 5;
 
@@ -30,67 +29,6 @@ const BAR_HEIGHT = 5;
 // (z 3), the placement ghost on top of everything (z 4).
 interface BuildingBundle { root: Actor; bar: Actor; track: Actor; }
 interface WorkerBundle { actor: Actor; target: Vector; load: Actor; }
-
-/**
- * Building and worker looks are shared, lazily-built graphics: seven defs x
- * three states and five efficiency buckets x tooled-or-not. Actors swap
- * between cached variants instead of re-rasterizing anything per entity.
- */
-class GraphicCache {
-  private buildings = new Map<string, GraphicsGroup>();
-  private workers = new Map<string, Circle>();
-
-  constructor(private theme: WorldTheme) {}
-
-  building(b: PlacedBuilding): GraphicsGroup {
-    const key = `${b.defId}/${b.state}`;
-    let group = this.buildings.get(key);
-    if (!group) {
-      // useAnchor: false — members are placed by explicit offset from the
-      // actor position; negative offsets center the rect, the glyph's own
-      // Center/Middle alignment centers it, and useBounds keeps the text's
-      // odd glyph bounds out of the group's bounding box (culling).
-      group = new GraphicsGroup({
-        useAnchor: false,
-        members: [
-          {
-            graphic: new Rectangle({
-              width: BUILDING_SIZE, height: BUILDING_SIZE,
-              color: Color.fromHex(this.theme.buildingFill[b.defId]),
-              strokeColor: Color.fromHex(this.theme.stateRing[b.state]), lineWidth: 3,
-            }),
-            offset: vec(-BUILDING_SIZE / 2, -BUILDING_SIZE / 2),
-          },
-          {
-            graphic: new Text({
-              text: this.theme.buildingGlyph[b.defId],
-              font: new Font({ family: 'sans-serif', size: 26, textAlign: TextAlign.Center, baseAlign: BaseAlign.Middle }),
-            }),
-            offset: vec(0, 0),
-            useBounds: false,
-          },
-        ],
-      });
-      this.buildings.set(key, group);
-    }
-    return group;
-  }
-
-  worker(bucket: number, tooled: boolean): Circle {
-    const key = `${bucket}/${tooled}`;
-    let circle = this.workers.get(key);
-    if (!circle) {
-      circle = new Circle({
-        radius: WORKER_RADIUS,
-        color: Color.fromHex(this.theme.workerColors[bucket]),
-        strokeColor: tooled ? Color.fromHex(this.theme.workerToolRing) : undefined,
-        lineWidth: tooled ? 2 : 0,
-      });
-      this.workers.set(key, circle);
-    }
-    return circle;
-  }
-}
 
 /**
  * Owns the scene contents: diffs each layout against the live actors by
@@ -106,7 +44,6 @@ class WorldScene {
   private cache: GraphicCache;
   private lastLayout: WorldLayout | null = null;
   private ghost: Actor | null = null;
-  private ghostLooks = new Map<string, GraphicsGroup>();
   private selectionRing: Actor | null = null;
   private selectedId: number | null = null;
 
@@ -182,42 +119,7 @@ class WorldScene {
       this.engine.currentScene.add(this.ghost);
     }
     this.ghost.pos = vec((ghost.col + 0.5) * TILE, (ghost.row + 0.5) * TILE);
-    this.ghost.graphics.use(this.ghostLook(ghost));
-  }
-
-  /** Ghost looks are cached per (def, validity), like building looks. */
-  private ghostLook(ghost: GhostPreview): GraphicsGroup {
-    const key = `${ghost.defId}/${ghost.valid}`;
-    let group = this.ghostLooks.get(key);
-    if (!group) {
-      group = new GraphicsGroup({
-        useAnchor: false,
-        members: [
-          {
-            // Fill IS the feedback: accent when buildable, danger when not —
-            // exactly the WorldLegend's ghost chips (spec: "accent-tinted
-            // when valid"). The def's own color would read as an ordinary
-            // translucent building; the glyph still says WHAT is placed.
-            graphic: new Rectangle({
-              width: BUILDING_SIZE, height: BUILDING_SIZE,
-              color: Color.fromHex(ghost.valid ? this.theme.accent : this.theme.danger),
-              strokeColor: Color.fromHex(ghost.valid ? this.theme.accent : this.theme.danger), lineWidth: 3,
-            }),
-            offset: vec(-BUILDING_SIZE / 2, -BUILDING_SIZE / 2),
-          },
-          {
-            graphic: new Text({
-              text: this.theme.buildingGlyph[ghost.defId],
-              font: new Font({ family: 'sans-serif', size: 26, textAlign: TextAlign.Center, baseAlign: BaseAlign.Middle }),
-            }),
-            offset: vec(0, 0),
-            useBounds: false,
-          },
-        ],
-      });
-      this.ghostLooks.set(key, group);
-    }
-    return group;
+    this.ghost.graphics.use(this.cache.ghost(ghost));
   }
 
   setSelection(buildingId: number | null): void {

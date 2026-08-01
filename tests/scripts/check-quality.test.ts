@@ -64,9 +64,14 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-function run(fileScores: FileScore[], opts: { overrides?: Record<string, number>; baseline?: unknown; args?: string[] } = {}) {
+function run(
+  fileScores: FileScore[],
+  opts: { overrides?: Record<string, number>; baseline?: unknown; args?: string[]; skipBaseline?: boolean } = {},
+) {
   writeFileSync(join(dir, 'reports.json'), JSON.stringify(report(fileScores, opts.overrides ?? {})));
-  writeFileSync(join(dir, 'scripts', 'quality-baseline.json'), JSON.stringify(opts.baseline ?? BASELINE, null, 2));
+  if (!opts.skipBaseline) {
+    writeFileSync(join(dir, 'scripts', 'quality-baseline.json'), JSON.stringify(opts.baseline ?? BASELINE, null, 2));
+  }
   const result = spawnSync('node', [GATE, ...(opts.args ?? [])], {
     cwd: dir,
     encoding: 'utf8',
@@ -211,5 +216,61 @@ describe('check:quality --update', () => {
     const locked = lockedBaseline();
     expect(locked.worstSrcFileMaintainability).toBe(82.5);
     expect(locked.reported.srcMean).toBeCloseTo(87.17, 2);
+  });
+
+  // A baseline missing a gated key poisons every comparison against it with
+  // undefined (current[key] > undefined and current[key] < undefined are both
+  // false), so --update would otherwise see no regression and silently re-lock
+  // whatever the current number is — defeating the ratchet with no
+  // --allow-regression in sight. Refuse instead, same as a plain run would.
+  it('refuses to re-lock a baseline missing a gated key, leaving the file unchanged', () => {
+    const partial = { ...BASELINE };
+    delete (partial as Partial<typeof BASELINE>).complexFunctions;
+    const { code, err } = run([...SRC, ...TESTS, ...SCRIPTS], {
+      baseline: partial,
+      args: ['--update'],
+    });
+    expect(code).toBe(1);
+    expect(err).toContain('missing gated entries: complexFunctions');
+    // The property that matters: the file on disk was never touched.
+    expect(lockedBaseline()).toEqual(partial);
+  });
+
+  it('re-locks a baseline missing a gated key when --allow-regression is passed', () => {
+    const partial = { ...BASELINE };
+    delete (partial as Partial<typeof BASELINE>).complexFunctions;
+    const { code } = run([...SRC, ...TESTS, ...SCRIPTS], {
+      baseline: partial,
+      args: ['--update', '--allow-regression'],
+    });
+    expect(code).toBe(0);
+    expect(lockedBaseline().complexFunctions).toBe(0);
+  });
+
+  // Same malformed-baseline refusal applies to a stale key the gate no longer
+  // reads, not just a missing one — --update should not silently drop it
+  // without the operator acknowledging the baseline was off.
+  it('refuses to re-lock a baseline with a key the gate does not read', () => {
+    const stale = { ...BASELINE, maintainability: 90.5 };
+    const { code, err } = run([...SRC, ...TESTS, ...SCRIPTS], {
+      baseline: stale,
+      args: ['--update'],
+    });
+    expect(code).toBe(1);
+    expect(err).toContain('does not read: maintainability');
+    expect(lockedBaseline()).toEqual(stale);
+  });
+
+  // Guards the first-lock path: with no baseline file at all, hasBaseline is
+  // false, schemaErrors stays empty, and --update must still be able to
+  // create one from nothing.
+  it('still succeeds on the very first --update, when no baseline file exists yet', () => {
+    const { code, out } = run([...SRC, ...TESTS, ...SCRIPTS], {
+      args: ['--update'],
+      skipBaseline: true,
+    });
+    expect(code).toBe(0);
+    expect(out).toContain('quality baseline locked');
+    expect(lockedBaseline().worstSrcFileMaintainability).toBe(82.1);
   });
 });

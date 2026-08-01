@@ -89,6 +89,21 @@ const GATED = [...PINNED_AT_ZERO, ...SHRINK_ONLY, ...FLOORS];
 const hasBaseline = existsSync(BASELINE_PATH);
 const baseline = hasBaseline ? JSON.parse(readFileSync(BASELINE_PATH, 'utf8')) : {};
 
+// Validated BEFORE the --update branch: a baseline missing a gated entry has
+// no value to compare against, so every comparison against it below silently
+// passes (current[key] > undefined and current[key] < undefined are both
+// false) and --update would re-lock whatever the current number happens to
+// be, with no regression ever detected. Only meaningful once a baseline
+// already exists — the first --update creates one from nothing.
+const known = new Set([...GATED, 'reported']);
+const schemaErrors = [];
+if (hasBaseline) {
+  const unknown = Object.keys(baseline).filter((key) => !known.has(key));
+  if (unknown.length) schemaErrors.push(`baseline has entries the gate does not read: ${unknown.join(', ')}`);
+  const missing = GATED.filter((key) => !(key in baseline));
+  if (missing.length) schemaErrors.push(`baseline is missing gated entries: ${missing.join(', ')} (re-lock with --update --allow-regression)`);
+}
+
 const failures = [];
 const improvements = [];
 const regressions = [];
@@ -110,6 +125,12 @@ for (const key of FLOORS) {
 if (update) {
   // --update locks whatever it measures, so on its own it will happily write a
   // regression into the baseline and turn a red gate green. Refuse by default.
+  if (schemaErrors.length && !allowRegression) {
+    console.error(
+      `Refusing to re-lock a malformed baseline:\n${schemaErrors.map((f) => `  - ${f}`).join('\n')}\nA missing gated entry has no value to compare against, so the ratchet cannot see a regression in it. Re-run with --allow-regression and record why in docs/build-ci/quality-gates.md.`,
+    );
+    process.exit(1);
+  }
   if (pinnedBreaches.length) {
     console.error(
       `Refusing to lock a baseline with pinned-at-zero breaches (no --allow-regression escape: raising these is an ADR decision, not a baseline edit):\n${pinnedBreaches.map((f) => `  - ${f}`).join('\n')}`,
@@ -133,14 +154,9 @@ if (!hasBaseline) {
   process.exit(1);
 }
 
-// Keeps the baseline file from silently carrying entries the gate no longer
-// reads — a renamed metric would otherwise look locked while being ignored.
-const known = new Set([...GATED, 'reported']);
-const unknown = Object.keys(baseline).filter((key) => !known.has(key));
-if (unknown.length) failures.push(`baseline has entries the gate does not read: ${unknown.join(', ')}`);
-const missing = GATED.filter((key) => !(key in baseline));
-if (missing.length) failures.push(`baseline is missing gated entries: ${missing.join(', ')} (re-lock with --update)`);
-failures.push(...pinnedBreaches, ...regressions);
+// schemaErrors was computed above (before the --update branch) so both paths
+// see the same malformed-baseline check.
+failures.push(...schemaErrors, ...pinnedBreaches, ...regressions);
 
 const was = baseline.reported ?? {};
 console.log(

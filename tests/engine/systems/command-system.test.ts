@@ -12,9 +12,9 @@ import { enqueue } from '../fixtures';
 import { buildSaveFromWorld } from '../../../src/engine/game-engine';
 import { buildColonyPrepWorld, COMPONENT_TYPES, getPrepResource, initialSave, spawnWorker } from '../../../src/engine/world';
 import type { Command } from '../../../src/shared/commands';
-import type { SaveGameV3 } from '../../../src/shared/save';
+import type { SaveGameV4 } from '../../../src/shared/save';
 
-async function setup(save: SaveGameV3 = initialSave()) {
+async function setup(save: SaveGameV4 = initialSave()) {
   const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, HaulSystem, SnapshotSystem] });
   const world = await prep.prepareRun();
   // mirror GameEngine.stepOnce: the engine owns time, bumping the clock before each step.
@@ -34,7 +34,7 @@ async function setup(save: SaveGameV3 = initialSave()) {
 // Relocation downtime is enforced by ProductionSystem, which the shared setup()
 // deliberately omits. Order matches ALL_SYSTEMS (buildColonyPrepWorld throws
 // otherwise).
-async function setupWithProduction(save: SaveGameV3 = initialSave()) {
+async function setupWithProduction(save: SaveGameV4 = initialSave()) {
   const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, ProductionSystem, HaulSystem, SnapshotSystem] });
   const world = await prep.prepareRun();
   const tick = async () => {
@@ -232,7 +232,7 @@ describe('CommandSystem', () => {
     let id = 10;
     for (let row = 0; row < 16; row++) {
       for (let col = 3; col < 24; col++) {
-        save.buildings.push({ id: id++, defId: 'forester', progress: 0, batchActive: false, col, row, buffer: {} });
+        save.buildings.push({ id: id++, defId: 'forester', progress: 0, batchActive: false, col, row, buffer: {}, relocatingTicks: 0 });
       }
     }
     save.nextEntityId = id;
@@ -570,9 +570,9 @@ describe('CommandSystem', () => {
   // path only, so buildings constructed during play had no buffer at all, and
   // nothing in the suite would have noticed.
   it('a constructed building carries the same components as a restored one', async () => {
-    const save: SaveGameV3 = {
+    const save: SaveGameV4 = {
       ...initialSave(),
-      buildings: [{ id: 10, defId: 'forester', col: 6, row: 3, progress: 0, batchActive: false, buffer: {} }],
+      buildings: [{ id: 10, defId: 'forester', col: 6, row: 3, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 }],
       nextEntityId: 11, // strictly past every id above, or the load guard refuses the save
     };
     const { world, tick, dispatch } = await setup(save);

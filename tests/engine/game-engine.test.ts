@@ -15,7 +15,7 @@ import { HaulTrip } from '../../src/engine/components';
 import { Stockpile } from '../../src/engine/resources';
 
 const refreshMock = vi.mocked(worldModule.refreshEntitySections);
-import type { SaveGameV3 } from '../../src/shared/save';
+import type { SaveGameV4 } from '../../src/shared/save';
 import { MAX_SAVED_COUNTER } from '../../src/shared/save';
 
 async function steps(engine: GameEngine, n: number) {
@@ -23,7 +23,7 @@ async function steps(engine: GameEngine, n: number) {
 }
 
 /** Deterministic scripted session used by both determinism tests. */
-async function scriptedRun(ticks: number, save?: SaveGameV3): Promise<GameEngine> {
+async function scriptedRun(ticks: number, save?: SaveGameV4): Promise<GameEngine> {
   const engine = await GameEngine.create(save ?? null);
   if (!save) {
     engine.dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
@@ -89,8 +89,8 @@ describe('GameEngine', () => {
     await steps(engine, 99);
     engine.dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
     await engine.stepOnce(); // tick 100 -> autosave fires
-    const save: SaveGameV3 = autosave.mock.calls[0][0];
-    expect(save.buildings).toEqual([{ id: 4, defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, buffer: {} }]);
+    const save: SaveGameV4 = autosave.mock.calls[0][0];
+    expect(save.buildings).toEqual([{ id: 4, defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, buffer: {}, relocatingTicks: 0 }]);
     expect(save.stockpile.wood).toBe(20); // cost paid AND building present
   });
 
@@ -139,7 +139,7 @@ describe('GameEngine', () => {
     engine.dispatch({ type: 'constructBuilding', buildingDefId: 'forester' }); // paused: no tick runs
     await engine.flush(); // runs one final tick to process the queue
     const save = engine.serialize();
-    expect(save.buildings).toEqual([{ id: 4, defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, buffer: {} }]);
+    expect(save.buildings).toEqual([{ id: 4, defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, buffer: {}, relocatingTicks: 0 }]);
     expect(save.stockpile.wood).toBe(20); // cost paid AND building present
     await engine.flush(); // empty queue: no extra tick
     expect(engine.serialize().tick).toBe(1);
@@ -152,8 +152,8 @@ describe('GameEngine', () => {
   it('serializes entities in ascending id order regardless of spawn order', async () => {
     const save = initialSave();
     save.buildings = [
-      { id: 5, defId: 'sawmill', progress: 0, batchActive: false, col: 6, row: 1, buffer: {} },
-      { id: 4, defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, buffer: {} },
+      { id: 5, defId: 'sawmill', progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0 },
+      { id: 4, defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, buffer: {}, relocatingTicks: 0 },
     ];
     save.workers = [3, 1, 2].map((id) => ({ id, hunger: 0, buildingId: null, toolTicks: 0, hauling: false }));
     save.nextEntityId = 6;

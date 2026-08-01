@@ -45,14 +45,14 @@ export const MAX_SAVED_COUNTER = Number.MAX_SAFE_INTEGER - 2 ** 32;
  *
  * Both producers (`buildSaveFromWorld`, `initialSave`) use this constant rather
  * than a literal, which makes the bump self-policing: because
- * `SaveGameV3.version` is the literal type `3`, raising this to 4 fails
- * typecheck AT those producers (`Type '4' is not assignable to type '3'`) until
+ * `SaveGameV4.version` is the literal type `4`, raising this to 5 fails
+ * typecheck AT those producers (`Type '5' is not assignable to type '4'`) until
  * the save type is updated too. That is deliberate — with hardcoded literals,
- * bumping the constant would have pointed the loader at v4 while autosaves and
- * fresh colonies kept claiming v3, and a v3-labelled save carrying v4 fields
+ * bumping the constant would have pointed the loader at v5 while autosaves and
+ * fresh colonies kept claiming v4, and a v4-labelled save carrying v5 fields
  * would then be migrated a second time on load.
  */
-export const LATEST_SAVE_VERSION = 3;
+export const LATEST_SAVE_VERSION = 4;
 
 /** The v1 building record — frozen legacy shape, pre-spatial. */
 export interface SavedBuildingV1 {
@@ -68,13 +68,16 @@ export interface SavedBuildingV2 extends SavedBuildingV1 {
   row: number;
 }
 
-/** The current building record: v2 plus the goods waiting at it (save v3). */
-export interface SavedBuilding extends SavedBuildingV2 {
+/** The v3 building record — frozen legacy shape, pre-relocation. */
+export interface SavedBuildingV3 extends SavedBuildingV2 {
   /** Output-buffer contents; `{}` when the building is empty. */
   buffer: Partial<Record<ResourceId, number>>;
-  /** Ticks still out of action after a move. Optional here; save v4 (Task 7)
-   * makes it required and migrates existing records. */
-  relocatingTicks?: number;
+}
+
+/** The current building record: v3 plus the relocation countdown (save v4). */
+export interface SavedBuilding extends SavedBuildingV3 {
+  /** Ticks the building is still out of action after a move; 0 normally. */
+  relocatingTicks: number;
 }
 
 /** The pre-v3 worker record — frozen legacy shape, before hauling existed. */
@@ -120,6 +123,17 @@ export interface SaveGameV2 {
 
 export interface SaveGameV3 {
   version: 3;
+  tick: number;
+  lastRecruitTick: number;
+  stockpile: Partial<Record<ResourceId, number>>;
+  map: WorldMapSize;
+  buildings: SavedBuildingV3[];
+  workers: SavedWorker[];
+  nextEntityId: number;
+}
+
+export interface SaveGameV4 {
+  version: 4;
   tick: number;
   lastRecruitTick: number;
   stockpile: Partial<Record<ResourceId, number>>;
@@ -239,6 +253,21 @@ export function isSaveGameV3(data: unknown): data is SaveGameV3 {
     isCommonSaveShape(save) &&
     isMapShape(save.map) &&
     (save.buildings as unknown[]).every((b) => hasSavedPosition(b) && isBufferShape((b as SavedBuilding).buffer)) &&
+    (save.workers as unknown[]).every((w) => typeof (w as SavedWorker).hauling === 'boolean')
+  );
+}
+
+export function isSaveGameV4(data: unknown): data is SaveGameV4 {
+  if (typeof data !== 'object' || data === null) return false;
+  const save = data as Record<string, unknown>;
+  return (
+    save.version === 4 &&
+    isCommonSaveShape(save) &&
+    isMapShape(save.map) &&
+    (save.buildings as unknown[]).every(
+      (b) => hasSavedPosition(b) && isBufferShape((b as SavedBuilding).buffer)
+        && Number.isFinite((b as SavedBuilding).relocatingTicks),
+    ) &&
     (save.workers as unknown[]).every((w) => typeof (w as SavedWorker).hauling === 'boolean')
   );
 }

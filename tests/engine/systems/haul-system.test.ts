@@ -28,7 +28,7 @@ async function setup(specs: readonly BuildingSpec[], haulerCount: number, system
   const ids = getPrepResource(prep, IdCounter);
   const buildings: IEntity[] = specs.map((spec) => {
     const entity = spawnBuilding(prep, ids, {
-      id: spec.id, defId: 'forester', progress: 0, batchActive: false, col: spec.col, row: spec.row,
+      id: spec.id, defId: 'forester', progress: 0, batchActive: false, col: spec.col, row: spec.row, relocatingTicks: 0,
     });
     if (spec.wood > 0) entity.getComponent(OutputBuffer)!.add('wood', spec.wood);
     return entity;
@@ -225,7 +225,7 @@ describe('HaulSystem', () => {
     save.stockpile = {};
     const prep = buildColonyPrepWorld({ save, systems: [HaulSystem] });
     const ids = getPrepResource(prep, IdCounter);
-    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1 });
+    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 0 });
     building.getComponent(OutputBuffer)!.add('wood', 9);
     const idle = spawnWorker(prep, ids, {});
     const world = await prep.prepareRun();
@@ -300,7 +300,7 @@ describe('HaulSystem lifecycle', () => {
     save.stockpile = {};
     const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, HaulSystem] });
     const ids = getPrepResource(prep, IdCounter);
-    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 5, row: 4 });
+    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 5, row: 4, relocatingTicks: 0 });
     building.getComponent(OutputBuffer)!.add('wood', BALANCE.haulCarryCapacity); // exactly one load, no more
     const first = spawnWorker(prep, ids, { hauling: true });
     const second = spawnWorker(prep, ids, {}); // idle for now; promoted next tick
@@ -324,7 +324,7 @@ describe('HaulSystem lifecycle', () => {
     // restore that carried one across timelines, fails here.
     const save = initialSave();
     save.workers = save.workers.map((worker) => ({ ...worker, hauling: true }));
-    save.buildings = [{ id: 10, defId: 'forester', progress: 0, batchActive: false, col: 5, row: 4, buffer: { wood: 9 } }];
+    save.buildings = [{ id: 10, defId: 'forester', progress: 0, batchActive: false, col: 5, row: 4, buffer: { wood: 9 }, relocatingTicks: 0 }];
     save.nextEntityId = 11;
     const world = await createColonyWorld(save);
 

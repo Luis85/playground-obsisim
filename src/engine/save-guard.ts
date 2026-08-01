@@ -1,4 +1,4 @@
-import type { SaveGameV3 } from '../shared/save';
+import type { SaveGameV4 } from '../shared/save';
 import { MAX_SAVED_COUNTER } from '../shared/save';
 import { CAMP_COLS, isInsideMap } from '../shared/placement';
 import { BUILDINGS } from './content/buildings';
@@ -25,7 +25,7 @@ import { RESOURCES, RESOURCE_IDS } from './content/resources';
 // save): Stockpile.add saturates at that same ceiling, and buildSaveFromWorld's
 // deposit-on-save loop saturates identically, so the engine never banks an
 // amount this guard would refuse.
-export function isStockpileValid(stockpile: SaveGameV3['stockpile']): boolean {
+export function isStockpileValid(stockpile: SaveGameV4['stockpile']): boolean {
   // Key-count cap FIRST (same principle as MAX_SAVED_ENTITIES): a valid
   // stockpile has at most one key per catalog resource, and Object.entries
   // on an adversarially huge object would materialize every entry before
@@ -40,7 +40,7 @@ export function isStockpileValid(stockpile: SaveGameV3['stockpile']): boolean {
   );
 }
 
-export function isBuildingsValid(buildings: SaveGameV3['buildings']): boolean {
+export function isBuildingsValid(buildings: SaveGameV4['buildings']): boolean {
   return buildings.every((b) => {
     if (!Object.hasOwn(BUILDINGS, b.defId)) return false;
     if (b.batchActive) {
@@ -55,7 +55,7 @@ export function isBuildingsValid(buildings: SaveGameV3['buildings']): boolean {
   });
 }
 
-function isWorkerRecordValid(w: SaveGameV3['workers'][number], buildingIds: ReadonlySet<number>): boolean {
+function isWorkerRecordValid(w: SaveGameV4['workers'][number], buildingIds: ReadonlySet<number>): boolean {
   // Upper bounds intentionally NOT checked against current BALANCE.hungerMax /
   // toolDurationTicks: those are clamped to current balance at spawn instead
   // (see spawnWorker), so a save written under a higher balance value still loads.
@@ -72,7 +72,7 @@ function isWorkerRecordValid(w: SaveGameV3['workers'][number], buildingIds: Read
   return buildingIds.has(w.buildingId);
 }
 
-export function isWorkersValid(data: SaveGameV3): boolean {
+export function isWorkersValid(data: SaveGameV4): boolean {
   const buildingIds = new Set(data.buildings.map((b) => b.id));
   return data.workers.every((w) => isWorkerRecordValid(w, buildingIds));
 }
@@ -83,7 +83,7 @@ export function isWorkersValid(data: SaveGameV3): boolean {
 // The MAX_SAVED_COUNTER ceiling cannot ping-pong (accepted save -> play ->
 // rejected save): IdCounter saturates at that same ceiling, refusing entity
 // creation instead of writing a counter the guard would refuse to load.
-export function isIdsValid(data: SaveGameV3): boolean {
+export function isIdsValid(data: SaveGameV4): boolean {
   const allIds = [...data.buildings.map((b) => b.id), ...data.workers.map((w) => w.id)];
   // SAFE integers: past 2^53, ++ stops incrementing and ids would collide
   if (!allIds.every((id) => Number.isSafeInteger(id) && id > 0)) return false;
@@ -103,7 +103,7 @@ export function isIdsValid(data: SaveGameV3): boolean {
  * 10,000-building hand-edited save (the flooded-save principle: cheap
  * checks before expensive walks).
  */
-export function isPositionsValid(data: SaveGameV3): boolean {
+export function isPositionsValid(data: SaveGameV4): boolean {
   const tiles = new Set<string>();
   for (const b of data.buildings) {
     if (!isInsideMap(data.map, b.col, b.row) || b.col < CAMP_COLS) return false;
@@ -120,7 +120,7 @@ export function isPositionsValid(data: SaveGameV3): boolean {
  * see. The cap is NOT checked here — see spawnBuilding, which clamps an
  * over-cap buffer at load exactly as it clamps saved batch progress.
  */
-export function isBuffersValid(data: SaveGameV3): boolean {
+export function isBuffersValid(data: SaveGameV4): boolean {
   return data.buildings.every((b) => {
     const ids = Object.keys(b.buffer);
     // Key-count cap FIRST (same principle as isStockpileValid above): a valid

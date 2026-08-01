@@ -1,8 +1,8 @@
 import { buildWorld } from 'sim-ecs';
 import type { IEntity, IPreptimeWorld, IRuntimeWorld } from 'sim-ecs';
-import { isSaveGameV3, LATEST_SAVE_VERSION, MAX_SAVED_COUNTER } from '../shared/save';
+import { isSaveGameV4, LATEST_SAVE_VERSION, MAX_SAVED_COUNTER } from '../shared/save';
 import { migrateSaveToLatest } from '../shared/save-migration';
-import type { SaveGameV3, SavedBuilding } from '../shared/save';
+import type { SaveGameV4, SavedBuilding } from '../shared/save';
 import type { ResourceId } from '../shared/content-types';
 import type { ResourceStats, Snapshot } from '../shared/snapshot';
 import { DEFAULT_MAP } from '../shared/placement';
@@ -86,7 +86,7 @@ export const COMPONENT_TYPES: (new (...args: any[]) => object)[] = [
   Relocation,
 ];
 
-export function initialSave(): SaveGameV3 {
+export function initialSave(): SaveGameV4 {
   return {
     version: LATEST_SAVE_VERSION,
     tick: 0,
@@ -106,7 +106,7 @@ export function initialSave(): SaveGameV3 {
 }
 
 /**
- * Structural validity (isSaveGameV3) plus referential integrity against the content
+ * Structural validity (isSaveGameV4) plus referential integrity against the content
  * catalog, for a save that is ALREADY at the current version. This is the internal
  * current-version validator, not the shell's entry point: it has no idea how to
  * migrate an older save, so calling it directly on unmigrated data would crash
@@ -124,8 +124,8 @@ export function initialSave(): SaveGameV3 {
  * grandfathered at load (see spawnWorker) so retuning balance down never
  * orphans a previously valid save.
  */
-export function isLoadableSave(data: unknown): data is SaveGameV3 {
-  if (!isSaveGameV3(data)) return false;
+export function isLoadableSave(data: unknown): data is SaveGameV4 {
+  if (!isSaveGameV4(data)) return false;
   // SAFE integers: a fractional tick would desync every modulo-based cadence
   // (autosave, recruit cooldown) forever; past 2^53, ++ stops incrementing.
   // No upper REJECT bound: any hard accept-bound would orphan a save that
@@ -144,6 +144,11 @@ export function isLoadableSave(data: unknown): data is SaveGameV3 {
   ) return false;
   if (!isStockpileValid(data.stockpile)) return false;
   if (!isBuildingsValid(data.buildings)) return false;
+  // Structural/identity, not balance: a negative or fractional countdown is a
+  // record no version of the engine could write. Magnitude is CLAMPED at
+  // spawn instead (clampedRelocation), so a save written under a slower
+  // relocationTilesPerTick still loads.
+  if (data.buildings.some((b) => !Number.isSafeInteger(b.relocatingTicks) || b.relocatingTicks < 0)) return false;
   if (!isIdsValid(data)) return false;
   if (!isPositionsValid(data)) return false;
   if (!isBuffersValid(data)) return false;
@@ -157,14 +162,14 @@ export function isLoadableSave(data: unknown): data is SaveGameV3 {
  * 7.2). Kept here rather than in src/shared/ because isLoadableSave needs the
  * content catalog, while the migration chain is pure structure.
  */
-export function prepareLoadedSave(data: unknown): SaveGameV3 | null {
+export function prepareLoadedSave(data: unknown): SaveGameV4 | null {
   const migrated = migrateSaveToLatest(data);
   return migrated !== null && isLoadableSave(migrated) ? migrated : null;
 }
 
 /** The three things the shell can do after reading data.json's `save` field. */
 export type LoadDecision =
-  | { kind: 'restore'; save: SaveGameV3 }
+  | { kind: 'restore'; save: SaveGameV4 }
   | { kind: 'backup' }
   | { kind: 'fresh' };
 
@@ -249,7 +254,7 @@ function assertSystemOrder(systems: readonly TColonySystemFactory[]): void {
 }
 
 export function buildColonyPrepWorld(
-  options: { save?: SaveGameV3; systems?: readonly TColonySystemFactory[] } = {},
+  options: { save?: SaveGameV4; systems?: readonly TColonySystemFactory[] } = {},
 ): IPreptimeWorld {
   const save = options.save ?? initialSave();
   const systems = options.systems ?? ALL_SYSTEMS;
@@ -310,7 +315,7 @@ export function buildColonyPrepWorld(
   return prep;
 }
 
-function buildInitialSnapshot(save: SaveGameV3): Snapshot {
+function buildInitialSnapshot(save: SaveGameV4): Snapshot {
   const workerFacts: WorkerFacts[] = save.workers.map((saved) => {
     // The same clamps workerComponents applies, so the seeded snapshot matches
     // the entities buildColonyPrepWorld actually spawns (see src/engine/spawn.ts).
@@ -409,6 +414,6 @@ export function refreshEntitySections(world: IRuntimeWorld): void {
 // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type -- mirrors sim-ecs's TExecutionFunction callback type exactly
 const runSynchronously = (callback: Function): void => (callback as () => void)();
 
-export async function createColonyWorld(save?: SaveGameV3): Promise<IRuntimeWorld> {
+export async function createColonyWorld(save?: SaveGameV4): Promise<IRuntimeWorld> {
   return buildColonyPrepWorld({ save }).prepareRun({ executionFunction: runSynchronously });
 }

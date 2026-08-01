@@ -189,6 +189,7 @@ export function savedBuildingOf(facts: BuildingFacts): SavedBuilding {
   return {
     id: facts.id, defId: facts.defId, col: facts.col, row: facts.row,
     progress: facts.progress, batchActive: facts.batchActive, buffer: facts.buffer,
+    relocatingTicks: facts.relocatingTicks,
   };
 }
 

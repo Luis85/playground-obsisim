@@ -48,7 +48,7 @@ describe('StatsSystem', () => {
     save.stockpile = {};
     const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
     const ids = getPrepResource(prep, IdCounter);
-    const b = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 5, row: 4 });
+    const b = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 5, row: 4, relocatingTicks: 0 });
     const bid = b.getComponent(Building)!.id;
     spawnWorker(prep, ids, { buildingId: bid });
     spawnWorker(prep, ids, { buildingId: bid });

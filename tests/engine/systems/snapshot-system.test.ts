@@ -13,7 +13,7 @@ describe('SnapshotSystem', () => {
     save.stockpile = { wood: 10, bread: 2 };
     const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
     const ids = getPrepResource(prep, IdCounter);
-    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 1.5, batchActive: true, col: 4, row: 1 });
+    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 1.5, batchActive: true, col: 4, row: 1, relocatingTicks: 0 });
     const buildingId = building.getComponent(Building)!.id;
     spawnWorker(prep, ids, { buildingId, hunger: 20, toolTicks: 10 });
     spawnWorker(prep, ids); // idle
@@ -46,8 +46,8 @@ describe('SnapshotSystem', () => {
     save.workers = [];
     const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
     const ids = getPrepResource(prep, IdCounter);
-    spawnBuilding(prep, ids, { defId: 'mill', progress: 0, batchActive: false, col: 4, row: 1 });
-    const staffed = spawnBuilding(prep, ids, { defId: 'mill', progress: 0, batchActive: false, col: 6, row: 1 });
+    spawnBuilding(prep, ids, { defId: 'mill', progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 0 });
+    const staffed = spawnBuilding(prep, ids, { defId: 'mill', progress: 0, batchActive: false, col: 6, row: 1, relocatingTicks: 0 });
     spawnWorker(prep, ids, { buildingId: staffed.getComponent(Building)!.id });
     const world = await prep.prepareRun();
     await world.step();
@@ -62,11 +62,11 @@ describe('SnapshotSystem', () => {
     const ids = getPrepResource(prep, IdCounter);
 
     // Unstaffed building with full buffer: should report 'unstaffed', not 'outputFull'
-    const unstaffedFull = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1 });
+    const unstaffedFull = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 0 });
     unstaffedFull.getComponent(OutputBuffer)!.add('wood', BALANCE.outputBufferCap);
 
     // Staffed building with full buffer: should report 'outputFull'
-    const staffedFull = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1 });
+    const staffedFull = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1, relocatingTicks: 0 });
     staffedFull.getComponent(OutputBuffer)!.add('wood', BALANCE.outputBufferCap);
     spawnWorker(prep, ids, { buildingId: staffedFull.getComponent(Building)!.id });
 
@@ -95,7 +95,7 @@ describe('SnapshotSystem', () => {
     const prep = buildColonyPrepWorld({ save, systems: [HaulSystem, SnapshotSystem] });
     const ids = getPrepResource(prep, IdCounter);
     // (5,4) is 5 tiles from the camp -> 3 ticks each way
-    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 5, row: 4 });
+    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 5, row: 4, relocatingTicks: 0 });
     building.getComponent(OutputBuffer)!.add('wood', 9);
     const buildingId = building.getComponent(Building)!.id;
     spawnWorker(prep, ids, { hauling: true });

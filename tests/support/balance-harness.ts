@@ -1,5 +1,5 @@
 import type { BuildingDefId, ResourceId } from '../../src/shared/content-types';
-import type { SaveGameV3 } from '../../src/shared/save';
+import type { SaveGameV4 } from '../../src/shared/save';
 import { haulTicks } from '../../src/shared/haul';
 import { BALANCE } from '../../src/engine/content/balance';
 import { BUILDINGS } from '../../src/engine/content/buildings';
@@ -53,10 +53,10 @@ const FED = 1_000_000;
 
 export async function runScenario(scenario: Scenario): Promise<BalanceResult> {
   const { defId, col, row, crew, haulers, ticks, resource } = scenario;
-  const save: SaveGameV3 = { ...initialSave(), workers: [], stockpile: { berries: FED }, nextEntityId: 1 };
+  const save: SaveGameV4 = { ...initialSave(), workers: [], stockpile: { berries: FED }, nextEntityId: 1 };
   const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
   const ids = getPrepResource(prep, IdCounter);
-  const entity = spawnBuilding(prep, ids, { defId, progress: 0, batchActive: false, col, row });
+  const entity = spawnBuilding(prep, ids, { defId, progress: 0, batchActive: false, col, row, relocatingTicks: 0 });
   const buildingId = entity.getComponent(Building)!.id;
   for (let i = 0; i < crew; i++) spawnWorker(prep, ids, { buildingId });
   for (let i = 0; i < haulers; i++) spawnWorker(prep, ids, { hauling: true });

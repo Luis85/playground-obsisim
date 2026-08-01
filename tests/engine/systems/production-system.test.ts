@@ -15,7 +15,7 @@ async function setup(defId: BuildingDefId, stock: Partial<Record<ResourceId, num
   save.stockpile = stock;
   const prep = buildColonyPrepWorld({ save, systems: [ProductionSystem] });
   const ids = getPrepResource(prep, IdCounter);
-  const building: IEntity = spawnBuilding(prep, ids, { defId, progress: 0, batchActive: false, col: 4, row: 1 });
+  const building: IEntity = spawnBuilding(prep, ids, { defId, progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 0 });
   const buildingId = building.getComponent(Building)!.id;
   for (let i = 0; i < workerCount; i++) spawnWorker(prep, ids, { buildingId, toolTicks: workerToolTicks });
   const world = await prep.prepareRun();
@@ -70,7 +70,7 @@ describe('ProductionSystem', () => {
     const prep = buildColonyPrepWorld({ save, systems: [ProductionSystem] });
     const ids = getPrepResource(prep, IdCounter);
     // one covered worker (1.5) + one bare worker (1.0) = 2.5 power/tick, forester batch is 3
-    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1 });
+    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 0 });
     const buildingId = building.getComponent(Building)!.id;
     spawnWorker(prep, ids, { buildingId, toolTicks: 1000 });
     spawnWorker(prep, ids, { buildingId });
@@ -107,7 +107,7 @@ describe('ProductionSystem', () => {
     save.workers = [];
     const prep = buildColonyPrepWorld({ save, systems: [ProductionSystem, SnapshotSystem] });
     const ids = getPrepResource(prep, IdCounter);
-    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1 });
+    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 0 });
     const buildingId = building.getComponent(Building)!.id;
     spawnWorker(prep, ids, { buildingId, toolTicks: 1000 }); // exercises the tooled branch
     spawnWorker(prep, ids, { buildingId }); // and the untooled one

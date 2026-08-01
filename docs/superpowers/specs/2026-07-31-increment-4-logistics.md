@@ -281,7 +281,7 @@ Documented as starting points, tuned in increment 5:
 | --- | --- | --- |
 | `outputBufferCap` | 12 | ~18 ticks of a two-worker forester before stalling — long enough to be forgiving, short enough that neglect bites. |
 | `haulCarryCapacity` | 6 | Two trips clear a full buffer. |
-| `haulTilesPerTick` | 2 | A building beside the camp is a 1-tick walk; the far corner is ~13. **Corrected in increment 5:** the "one hauler roughly sustains one far producer" half of this claim was wrong — measured, a far producer needs THREE. One hauler serves to leg ~4, two to leg 8, three at leg 13; the "or several near ones" half holds. The gradient is sound; the claim was not. See `tests/engine/balance.test.ts`. |
+| `haulTilesPerTick` | 2 | A building beside the camp is a 1-tick walk; the far corner is ~13. **Corrected in increment 5:** the "one hauler roughly sustains one far producer" half of this claim was wrong — measured, one hauler serves a single producer only to leg ~4; leg 8 needs two and leg 13 needs three. The "or several near ones" half remains **untested** — the balance harness runs one building per scenario, so nothing here measures haulers shared across buildings. The gradient is sound; the far-producer claim was not. See `tests/engine/balance.test.ts`. |
 | `CAMP_TILE` | `{ col: 2, row: 0 }` | The tent's existing tile-space anchor, so sim cost and drawn distance agree. |
 
 The gradient these produce is the point: near buildings are cheap to serve, far

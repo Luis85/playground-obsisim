@@ -88,12 +88,16 @@ describe('haul balance gradient', () => {
 
     expect(from.legTicks).toBe(to.legTicks); // the move is distance-neutral, by measurement
 
-    // hypot(7,7) = 9.9 tiles at relocationTilesPerTick 1 = 10 ticks charged.
-    // ProductionSystem runs after CommandSystem, so the countdown ticks down in
-    // the same step the command lands and 9 snapshots report `relocating`.
+    // hypot(7,7) = 9.9 tiles at relocationTilesPerTick 1 = 10 ticks charged, and
+    // 10 ticks of skipped work measured. The harness counts ticks the building
+    // could not WORK rather than snapshots reporting `relocating` — those differ
+    // by one, since ProductionSystem skips the tick that lands the move before
+    // any snapshot shows it, and skips again on the tick the countdown reaches
+    // zero. So this equals relocationTicks() by construction, including a
+    // one-tile nudge, which the snapshot count reported as 0.
     // Exact, unlike this file's other assertions: this number is a function of
     // two tile coordinates and the constant under test, and nothing else.
-    expect(moved.relocatingTicks).toBe(9);
+    expect(moved.relocatingTicks).toBe(10);
 
     expect(moved.made).toBeLessThan(from.made); // costs output against the origin
     expect(moved.made).toBeLessThan(to.made);   //   ...and against the destination

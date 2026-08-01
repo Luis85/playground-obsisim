@@ -260,7 +260,7 @@ found their gradient sound and only their documented justification wrong.
 | `outputBufferCap` | 12 | Validated: ~18 ticks of a 2-worker forester before stalling, matching its original claim. |
 | `haulCarryCapacity` | 6 | Validated: two trips clear a full buffer. |
 | `haulTilesPerTick` | 2 | Validated as a *gradient* — 1 hauler to leg ≈4, 2 by leg 8, 3 by leg 13. Its original one-hauler-per-far-producer claim was wrong and is corrected. |
-| `relocationTilesPerTick` | 1 | **Measured.** Half the hauler rate. Held distance-constant — two leg-4 tiles 9.9 apart — 10 ticks out of action cost 7 of a 200-tick run's 133 units, matching 10 ticks × ⅔ units per tick almost exactly. The loss is stable across run lengths (6 of 266 over 400 ticks) because both runs share the same history apart from the move. A far-corner move costs 18 ticks out of action; its effect on output is *not* quoted here, because a mover and a building that started far apart have different histories and the comparison's sign flips with run length. |
+| `relocationTilesPerTick` | 1 | **Measured.** Half the hauler rate. Held distance-constant — two leg-4 tiles 9.9 apart — 10 ticks out of action cost 7 of a 200-tick run's 133 units, matching 10 ticks × ⅔ units per tick almost exactly. The loss is stable across run lengths (6 of 266 over 400 ticks) because both runs share the same history apart from the move. A far-corner move costs 19 ticks out of action; its effect on output is *not* quoted here, because a mover and a building that started far apart have different histories and the comparison's sign flips with run length. |
 
 Every figure above comes from one configuration — a forester with a crew of 2
 and 2 haulers over a 200-tick run — reproducible via `npm run balance:report`

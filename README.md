@@ -33,9 +33,23 @@ simulated production chains — in tables and, since Increment 2, a live
   intact) or demolish it (confirmed, full cost refund, workers walk home)
 - Positions are sim truth on a fixed 24×16 map (camp band on the left),
   persisted as save v2 — old saves migrate onto exactly the layout
-  increment 2 derived
+  increment 2 derived; they stopped being merely cosmetic in Increment 4,
+  once haul distance was priced off them
 - Tables keep full economic parity: construct auto-places on the legacy
   pattern, a Tile column and Demolish per row — no-WebGL play stays whole
+
+## Increment 4 — Logistics
+
+- Goods stop teleporting: a building banks what it makes in its own output
+  buffer and stalls (**Output full**) when that buffer fills
+- Haulers are a staffed role — assign them on the Dashboard — who walk to the
+  fullest building, load up, and carry goods back to the camp store
+- Distance is now a real cost: a building beside the camp is a one-tick walk,
+  the far corner is thirteen, so where you build changes what you get
+- The Economy view names the backlog — units waiting, buildings stalled,
+  haulers on duty — so a production drop is never a mystery
+- Save v3 persists buffers and hauler assignments; v2 colonies load as
+  themselves, with empty buffers and nobody hauling yet
 
 ## Development
 
@@ -59,6 +73,8 @@ simulated production chains — in tables and, since Increment 2, a live
 - Increment 2 plan: `docs/superpowers/plans/2026-07-30-increment-2-excalibur-world-view.md`
 - Increment 3 spec: `docs/superpowers/specs/2026-07-30-increment-3-building-placement.md`
 - Increment 3 plan: `docs/superpowers/plans/2026-07-30-increment-3-building-placement.md`
+- Increment 4 spec: `docs/superpowers/specs/2026-07-31-increment-4-logistics.md`
+- Increment 4 plan: `docs/superpowers/plans/2026-07-31-increment-4-logistics.md`
 
 ## Architecture (one paragraph)
 

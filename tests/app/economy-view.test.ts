@@ -6,7 +6,7 @@ import EconomyView from '../../src/app/views/EconomyView.vue';
 import DashboardView from '../../src/app/views/DashboardView.vue';
 import { ENGINE_KEY } from '../../src/app/engine-key';
 import { useGameStore } from '../../src/app/stores/game-store';
-import { makeSnapshot } from './fixtures';
+import { makeBuilding, makeSnapshot, makeWorker } from './fixtures';
 
 // The economy-reading affordances: per-stage bottleneck status in the chain
 // view, and the "Empties in" runway derived from net flow.
@@ -49,6 +49,27 @@ describe('EconomyView', () => {
     const wrapper = mountWith(EconomyView, snapshot);
     await wrapper.vm.$nextTick();
     expect(wrapper.find('[data-test="runway-bread"]').text()).toBe('~12t');
+  });
+
+  it('states the haul backlog and how many buildings it has stopped', async () => {
+    const wrapper = mountWith(EconomyView, makeSnapshot({
+      buildings: [
+        makeBuilding(1, { buffered: 12, state: 'outputFull' }),
+        makeBuilding(2, { buffered: 6, state: 'producing' }),
+      ],
+      workers: [makeWorker(1, { hauling: true })],
+    }));
+    await wrapper.vm.$nextTick();
+    const haul = wrapper.find('[data-test="haul-pressure"]').text();
+    expect(haul).toContain('18');
+    expect(haul).toContain('1 stalled');
+    expect(haul).toContain('1 hauler');
+  });
+
+  it('says the colony is keeping up when nothing waits', async () => {
+    const wrapper = mountWith(EconomyView, makeSnapshot({ buildings: [makeBuilding(1, { buffered: 0 })] }));
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-test="haul-pressure"]').text()).toContain('keeping up');
   });
 });
 

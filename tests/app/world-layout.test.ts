@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { layoutWorld, pickBuildingAt, TILE } from '../../src/app/world/layout';
+import { CAMP_COLS } from '../../src/shared/placement';
+import type { WorkerSnapshot } from '../../src/shared/snapshot';
 import { makeBuilding, makeSnapshot, makeWorker } from './fixtures';
 
 // The layout invariants the world view stands on (spec §2.3): determinism
@@ -272,5 +274,47 @@ describe('layoutWorld', () => {
       expect(w.y).toBeGreaterThan(0);
       expect(w.y).toBeLessThan(layout.rows);
     }
+  });
+});
+
+describe('hauler placement', () => {
+  const haulSnapshot = (overrides: Partial<WorkerSnapshot>) => makeSnapshot({
+    buildings: [makeBuilding(1, { defId: 'forester', col: 8, row: 4 })],
+    workers: [makeWorker(20, { hauling: true, ...overrides })],
+  });
+
+  it('stands an outbound hauler at the building it is walking to', () => {
+    const layout = layoutWorld(haulSnapshot({ haulTargetId: 1 }));
+    const hauler = layout.workers.find((w) => w.id === 20)!;
+    const cell = layout.buildings.find((b) => b.id === 1)!;
+    expect(hauler.at).toBe(1);
+    expect(hauler.x).toBeCloseTo(cell.col + 0.5);
+    expect(hauler.y).toBeGreaterThan(cell.row + 0.5); // on the doorstep, not in the crew's spots
+  });
+
+  it('sends a returning hauler back to the camp band', () => {
+    const layout = layoutWorld(haulSnapshot({ haulTargetId: null, carrying: 6 }));
+    const hauler = layout.workers.find((w) => w.id === 20)!;
+    expect(hauler.at).toBeNull();
+    expect(hauler.x).toBeLessThan(CAMP_COLS);
+    expect(hauler.carrying).toBe(true);
+  });
+
+  it('keeps a hauler out of the building crew spots', () => {
+    const layout = layoutWorld(makeSnapshot({
+      buildings: [makeBuilding(1, { defId: 'forester', col: 8, row: 4, workerSlots: 2 })],
+      workers: [
+        makeWorker(1, { buildingId: 1 }),
+        makeWorker(2, { buildingId: 1 }),
+        makeWorker(20, { hauling: true, haulTargetId: 1 }),
+      ],
+    }));
+    const spots = layout.workers.map((w) => `${w.x.toFixed(2)},${w.y.toFixed(2)}`);
+    expect(new Set(spots).size).toBe(3); // nobody standing inside anybody else
+  });
+
+  it('parks an outbound hauler at the camp when its target vanished', () => {
+    const layout = layoutWorld(haulSnapshot({ haulTargetId: 99 }));
+    expect(layout.workers.find((w) => w.id === 20)!.at).toBeNull();
   });
 });

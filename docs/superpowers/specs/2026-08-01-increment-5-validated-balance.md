@@ -260,7 +260,7 @@ found their gradient sound and only their documented justification wrong.
 | `outputBufferCap` | 12 | Validated: ~18 ticks of a 2-worker forester before stalling, matching its original claim. |
 | `haulCarryCapacity` | 6 | Validated: two trips clear a full buffer. |
 | `haulTilesPerTick` | 2 | Validated as a *gradient* — 1 hauler to leg ≈4, 2 by leg 8, 3 by leg 13. Its original one-hauler-per-far-producer claim was wrong and is corrected. |
-| `relocationTilesPerTick` | 1 | **Measured.** Half the hauler rate. A far-corner move (18.6 tiles) puts a building out of action for 18 ticks. Held distance-constant, a 9.9-tile move costs 3 units of a 200-tick run's output against controls at both endpoints — enough that clustering is a decision, not a reflex. |
+| `relocationTilesPerTick` | 1 | **Measured.** Half the hauler rate. Held distance-constant — two leg-4 tiles 9.9 apart — 10 ticks out of action cost 3 of a 200-tick run's 129 units. A far-corner move costs 18 ticks and lands at 87 units, *below* the 96 of a building that started in the far corner and never moved, despite the mover spending its first 50 ticks beside the camp. Downtime and the haul gradient compound, so a misplaced building is not cheaply undone. |
 
 The gradient these produce is the point, and it now bites: near buildings are
 cheap to serve, far ones demand real hauler investment, and — since relocation

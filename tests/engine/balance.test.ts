@@ -99,11 +99,22 @@ describe('haul balance gradient', () => {
     expect(moved.made).toBeLessThan(to.made);   //   ...and against the destination
   }, 180000);
 
-  it('a far-corner relocation costs a measurable share of a run', async () => {
+  it('a far-corner relocation costs more than starting far ever does', async () => {
     // (8,4) -> (23,15) is hypot(15,11) = 18.6 tiles: a plausible "I put this in
     // the wrong place" correction, not a contrived worst case.
+    const stayed = await relocating(8, 4);       // leg 4 all run
+    const settledFar = await relocating(23, 15); // leg 13 all run, never moves
     const moved = await relocating(8, 4, { col: 23, row: 15, atTick: 50 });
+
     expect(moved.relocatingTicks).toBeGreaterThan(15);
     expect(moved.relocatingTicks).toBeLessThan(25);
-  }, 120000);
+
+    // Distance alone predicts the OPPOSITE of what happens. The mover spends
+    // its first 50 ticks at the near tile, where `stayed` runs at full rate, so
+    // it should finish ahead of a building that sat in the far corner all run.
+    // It finishes behind: the downtime more than cancels a 50-tick head start.
+    // This is the comparison §4 of the spec cites.
+    expect(moved.made).toBeLessThan(settledFar.made);
+    expect(settledFar.made).toBeLessThan(stayed.made);
+  }, 180000);
 });

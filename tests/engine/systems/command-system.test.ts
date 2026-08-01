@@ -679,8 +679,12 @@ describe('CommandSystem', () => {
     // a balance knob and rejected it, because free relocation dominated it —
     // a player could dodge any refund penalty by moving instead of rebuilding.
     // Now that moving costs downtime the two acts are cleanly separated: moving
-    // costs time, removing is fully refunded. Pinned so the decision lives in
-    // code, not only in prose.
+    // costs time, removing is fully refunded.
+    //
+    // The NUMBER is already guarded by the two demolition tests above — both
+    // fail if the refund is halved. What this test adds is the REASON it is
+    // 100%, recorded at an assertion rather than only in a spec, so a future
+    // balance pass reaching for this knob finds the argument against it here.
     const { world, tick, dispatch, snapshot } = await setup();
     const before = world.getResource(Stockpile).get('wood');
     await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });

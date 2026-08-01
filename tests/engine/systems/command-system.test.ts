@@ -673,4 +673,20 @@ describe('CommandSystem', () => {
     expect(world.getResource(Stockpile).get('wood')).toBe(before + BALANCE.haulCarryCapacity);
     expect(snapshot().buildings[0].buffered).toBe(0); // the buffer genuinely drained
   });
+
+  it('demolition still refunds 100% of construction cost', async () => {
+    // A decision, not an accident: increment 5 considered cutting the refund as
+    // a balance knob and rejected it, because free relocation dominated it —
+    // a player could dodge any refund penalty by moving instead of rebuilding.
+    // Now that moving costs downtime the two acts are cleanly separated: moving
+    // costs time, removing is fully refunded. Pinned so the decision lives in
+    // code, not only in prose.
+    const { world, tick, dispatch, snapshot } = await setup();
+    const before = world.getResource(Stockpile).get('wood');
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
+    expect(world.getResource(Stockpile).get('wood')).toBe(before - 10); // forester costs 10 wood
+    await tick(); // the entity appears the tick after the command is handled
+    await dispatch({ type: 'demolishBuilding', buildingId: snapshot().buildings[0].id });
+    expect(world.getResource(Stockpile).get('wood')).toBe(before);
+  });
 });

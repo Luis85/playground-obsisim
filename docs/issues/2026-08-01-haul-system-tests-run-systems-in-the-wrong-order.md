@@ -1,11 +1,12 @@
 ---
 id: OBS-4-03
 title: Two haul tests run systems in the reverse of production order
-status: open
+status: resolved
 severity: minor
 area: tests
 increment: 4
 created: 2026-08-01
+resolved: 2026-08-01
 source: increment-4 Task 5 review (caught a real false positive from this pattern)
 affects:
   - tests/engine/systems/haul-system.test.ts
@@ -53,3 +54,18 @@ Better, remove the choice: have the test setup helper derive its system list
 from `ALL_SYSTEMS` (filtered to the systems under test, preserving that array's
 order) instead of accepting a hand-written array, so a harness cannot express an
 order production never runs.
+
+## Resolution (697bc86)
+
+The first half was done: the helper's parameter is now `systemsBefore` and it
+builds `[...systemsBefore, HaulSystem]`, so both demolition harnesses drain
+commands before haulers move. Both existing tests still pass under the new
+order, and the reorder immediately earned its keep — the eager trip
+cancellation added in `5d92ff0` is *only* observable under the production
+order, because it is the tick's later `HaulSystem` run that would otherwise
+re-dispatch the hauler at the building just demolished.
+
+The stronger form (derive the list from `ALL_SYSTEMS` so a wrong order cannot
+be expressed) was not done: `systemsBefore` still takes a hand-written array,
+and the same latent hazard exists in any other test file that composes systems
+by hand. Worth doing when a third harness needs it.

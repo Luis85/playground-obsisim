@@ -51,12 +51,22 @@ The mitigations are real: the selection panel shows `Waiting: N` directly beside
 a two-step Demolish button, and the buildings table has a `Waiting` column. A
 player who looks can see what they are about to lose.
 
+## Note (5d92ff0)
+
+Still open, and still destroyed — but the destruction is now an explicit
+`found.buffer.amounts.clear()` in `handleDemolishBuilding` rather than an
+implicit consequence of the entity going away at the post-step sync. That was
+needed for an unrelated reason (`HaulSystem` runs later in the same tick and
+still sees the not-yet-removed building, so a full buffer had it dispatch a
+hauler at a building already gone). Whichever option below is chosen, the
+refund goes **above** that clear, not in place of it.
+
 ## Options
 
 - **Refund the buffer along with the cost.** `handleDemolishBuilding` already
-  loops `ctx.stockpile.add` for the construction cost; adding the buffer's
-  contents is about three lines. Most forgiving, and consistent with "demolition
-  is fully refunded".
+  loops `ctx.stockpile.add` for the construction cost, and now holds a live
+  `found.buffer`; adding the buffer's contents is about three lines. Most
+  forgiving, and consistent with "demolition is fully refunded".
 - **Keep destroying it, and say so.** Change the notice to name the loss —
   `Demolished the {name} — cost refunded, N units lost.` Cheapest honest fix,
   and arguably better game design: a building full of uncollected goods *should*

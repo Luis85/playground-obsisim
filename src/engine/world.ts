@@ -197,9 +197,15 @@ function isPositionsValid(data: SaveGameV3): boolean {
  * over-cap buffer at load exactly as it clamps saved batch progress.
  */
 function isBuffersValid(data: SaveGameV3): boolean {
-  return data.buildings.every(
-    (b) => Object.keys(b.buffer).every((id) => Object.hasOwn(RESOURCES, id)),
-  );
+  return data.buildings.every((b) => {
+    const ids = Object.keys(b.buffer);
+    // Key-count cap FIRST (same principle as isStockpileValid above): a valid
+    // buffer has at most one key per catalog resource, and the membership walk
+    // below would otherwise run once per key of an adversarially wide object —
+    // multiplied by up to MAX_SAVED_ENTITIES buildings.
+    if (ids.length > RESOURCE_IDS.length) return false;
+    return ids.every((id) => Object.hasOwn(RESOURCES, id));
+  });
 }
 
 /**

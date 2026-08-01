@@ -10,6 +10,21 @@ import { MAX_MAP, MIN_MAP, type WorldMapSize } from './placement';
 export const MAX_SAVED_ENTITIES = 10_000;
 
 /**
+ * Hard ceiling on distinct resources named in one building's output buffer,
+ * checked BEFORE the per-amount walk for the same reason MAX_SAVED_ENTITIES is
+ * checked before the per-record one: `Object.values` on an adversarially wide
+ * object materializes every value before the first check could reject, and
+ * MAX_SAVED_ENTITIES buildings multiply it.
+ *
+ * Deliberately generous rather than exact — the resource catalog lives in
+ * engine content, which src/shared may not import, so the tight bound
+ * (one key per catalog resource) belongs to isLoadableSave's isBuffersValid.
+ * This one only has to be small enough to stop a flood and large enough that
+ * no plausible catalog reaches it.
+ */
+const MAX_BUFFER_KEYS = 64;
+
+/**
  * Counters keep incrementing after load, so a save sitting AT the safe-integer
  * ceiling would stop advancing precisely on its next ++. Require generous
  * headroom: ~4 billion post-load increments (~17 years of play at 8 ticks/s).
@@ -203,6 +218,11 @@ export function isSaveGameV2(data: unknown): data is SaveGameV2 {
 
 function isBufferShape(buffer: unknown): boolean {
   if (typeof buffer !== 'object' || buffer === null || Array.isArray(buffer)) return false;
+  // Key-count cap FIRST (same principle as MAX_SAVED_ENTITIES): a valid buffer
+  // names at most one resource per catalog entry, and Object.values on an
+  // adversarially wide object would materialize every value before the
+  // per-amount check below could reject.
+  if (Object.keys(buffer).length > MAX_BUFFER_KEYS) return false;
   // Structural only: catalog membership and the cap are cross-field truths
   // that live in isLoadableSave, beside the id and position checks.
   return Object.values(buffer).every((amount) => Number.isSafeInteger(amount) && (amount as number) >= 0);

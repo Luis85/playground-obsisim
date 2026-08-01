@@ -6,7 +6,7 @@ import { IdCounter, SimClock, SnapshotStore, Stockpile } from '../../src/engine/
 import type { IRuntimeWorld } from 'sim-ecs';
 import { GameEngine } from '../../src/engine/game-engine';
 import { buildColonyPrepWorld, createColonyWorld, getPrepResource, initialSave, isLoadableSave, prepareLoadedSave, refreshEntitySections } from '../../src/engine/world';
-import { MAX_SAVED_ENTITIES } from '../../src/shared/save';
+import { isSaveGameV3, MAX_SAVED_ENTITIES } from '../../src/shared/save';
 
 describe('initialSave', () => {
   it('matches the spec starting state', () => {
@@ -324,6 +324,26 @@ describe('isLoadableSave', () => {
       buffer: { unobtainium: 1 } as never,
     });
     save.nextEntityId = 5;
+    expect(isLoadableSave(save)).toBe(false);
+  });
+
+  // Both buffer guards cap key count BEFORE walking the object, the same
+  // flooded-save principle isStockpileValid states: Object.keys/Object.values
+  // on an adversarially wide buffer materializes every entry before the first
+  // per-entry check could reject it, multiplied by up to MAX_SAVED_ENTITIES
+  // buildings. isLoadableSave's catalog walk refuses this save either way — the
+  // structural guard is what refuses it cheaply, which is why the assertion is
+  // on isSaveGameV3 and not only on isLoadableSave.
+  it('rejects a buffer naming more resources than exist, at the structural guard', () => {
+    const buffer: Record<string, number> = {};
+    for (let i = 0; i < 1000; i++) buffer[`filler${i}`] = 1; // every amount structurally valid
+    const save = initialSave();
+    save.buildings.push({
+      id: 4, defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1,
+      buffer: buffer as never,
+    });
+    save.nextEntityId = 5;
+    expect(isSaveGameV3(save)).toBe(false);
     expect(isLoadableSave(save)).toBe(false);
   });
 

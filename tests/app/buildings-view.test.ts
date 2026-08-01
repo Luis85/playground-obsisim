@@ -6,12 +6,16 @@ import BuildingsView from '../../src/app/views/BuildingsView.vue';
 import { ENGINE_KEY } from '../../src/app/engine-key';
 import { useGameStore } from '../../src/app/stores/game-store';
 import { makeBuilding, makeSnapshot } from './fixtures';
-import type { BuildingState } from '../../src/shared/snapshot';
+import type { BuildingState, BuildingSnapshot } from '../../src/shared/snapshot';
 
 // A single 1/2-staffed Forester, with the caller choosing the wood stock (to
 // drive the construct-button's affordable/disabled state) and the building's
 // reported state (to drive the humanized-label assertions below).
-function mountView(stock: { wood?: number } = {}, state: BuildingState = 'producing') {
+function mountView(
+  stock: { wood?: number } = {},
+  state: BuildingState = 'producing',
+  building: Partial<BuildingSnapshot> = {},
+) {
   const engine = { dispatch: vi.fn() };
   const wrapper = mount(BuildingsView, {
     global: {
@@ -20,7 +24,7 @@ function mountView(stock: { wood?: number } = {}, state: BuildingState = 'produc
     },
   });
   const snapshot = makeSnapshot({
-    buildings: [makeBuilding(7, { defId: 'forester', workers: 1, workerSlots: 2, state, progress: 1, batchActive: true, progressPct: 33, workPower: 1, col: 5, row: 2 })],
+    buildings: [makeBuilding(7, { defId: 'forester', workers: 1, workerSlots: 2, state, progress: 1, batchActive: true, progressPct: 33, workPower: 1, col: 5, row: 2, ...building })],
     idleWorkers: 2,
   });
   snapshot.stockpile.wood.stock = stock.wood ?? 0;
@@ -46,7 +50,7 @@ describe('BuildingsView', () => {
 
     useGameStore().ingest(makeSnapshot({ buildings: [] }), { paused: true, speed: 1, error: null });
     await waiting.wrapper.vm.$nextTick();
-    const cell = waiting.wrapper.get('td[colspan="8"]');
+    const cell = waiting.wrapper.get('td[colspan="9"]');
     expect(cell.text()).toContain('Forester');
     expect(cell.text()).toMatch(/Gatherer.?s Hut/);
     expect(cell.text()).toContain('10 wood each');
@@ -93,5 +97,12 @@ describe('BuildingsView', () => {
     expect(engine.dispatch).not.toHaveBeenCalledWith({ type: 'demolishBuilding', buildingId: 7 });
     await demolish.trigger('click');
     expect(engine.dispatch).toHaveBeenCalledWith({ type: 'demolishBuilding', buildingId: 7 });
+  });
+
+  it('shows waiting units and names the output-full stall', async () => {
+    const { wrapper } = mountView({}, 'outputFull', { buffered: 12 });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-test="waiting-7"]').text()).toBe('12');
+    expect(wrapper.text()).toContain('Output full');
   });
 });

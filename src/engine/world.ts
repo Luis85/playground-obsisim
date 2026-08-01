@@ -104,8 +104,10 @@ export function initialSave(): SaveGameV3 {
 // Safe-integer amounts only: organic stockpiles are integral, and an absurd
 // magnitude (e.g. 1e308) would turn stock-value/wealth arithmetic infinite.
 // The MAX_SAVED_COUNTER bound cannot ping-pong (accepted save -> one
-// production tick -> rejected save): Stockpile.add saturates at that same
-// ceiling, so the engine never banks an amount this guard would refuse.
+// production tick, or a save banking a hauler's mid-trip load -> rejected
+// save): Stockpile.add saturates at that same ceiling, and buildSaveFromWorld's
+// deposit-on-save loop saturates identically, so the engine never banks an
+// amount this guard would refuse.
 function isStockpileValid(stockpile: SaveGameV3['stockpile']): boolean {
   // Key-count cap FIRST (same principle as MAX_SAVED_ENTITIES): a valid
   // stockpile has at most one key per catalog resource, and Object.entries

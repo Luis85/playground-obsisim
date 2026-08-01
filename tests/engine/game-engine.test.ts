@@ -10,12 +10,13 @@ vi.mock('../../src/engine/world', async (importOriginal) => {
 
 import { buildSaveFromWorld, GameEngine } from '../../src/engine/game-engine';
 import * as worldModule from '../../src/engine/world';
-import { createColonyWorld, initialSave } from '../../src/engine/world';
+import { createColonyWorld, initialSave, isLoadableSave } from '../../src/engine/world';
 import { HaulTrip } from '../../src/engine/components';
 import { Stockpile } from '../../src/engine/resources';
 
 const refreshMock = vi.mocked(worldModule.refreshEntitySections);
 import type { SaveGameV3 } from '../../src/shared/save';
+import { MAX_SAVED_COUNTER } from '../../src/shared/save';
 
 async function steps(engine: GameEngine, n: number) {
   for (let i = 0; i < n; i++) await engine.stepOnce();
@@ -289,5 +290,29 @@ describe('GameEngine', () => {
     // that load normally, so the live world must be untouched.
     expect(world.getResource(Stockpile).get('wood')).toBe(before);
     expect(carried!.amount).toBe(4);
+  });
+
+  it('saturates deposit-on-save at the counter ceiling so an accepted save stays accepted', async () => {
+    const world = await createColonyWorld();
+    // Stockpile.add itself saturates, so this reaches the ceiling exactly
+    // regardless of the starting amount.
+    world.getResource(Stockpile).add('wood', MAX_SAVED_COUNTER);
+    for (const entity of world.getEntities()) {
+      const trip = entity.getComponent(HaulTrip);
+      if (trip !== undefined) {
+        trip.phase = 'returning';
+        trip.resource = 'wood';
+        trip.amount = 4;
+        break;
+      }
+    }
+
+    const save = buildSaveFromWorld(world);
+
+    // Raw addition would write MAX_SAVED_COUNTER + 4, one past isStockpileValid's
+    // bound — exactly the ping-pong (accepted save -> deposit-on-save -> rejected
+    // save) the load guard's comment says cannot happen.
+    expect(save.stockpile.wood).toBe(MAX_SAVED_COUNTER);
+    expect(isLoadableSave(save)).toBe(true);
   });
 });

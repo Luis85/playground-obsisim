@@ -319,6 +319,20 @@ describe('isLoadableSave', () => {
     expect(isLoadableSave(save)).toBe(false);
   });
 
+  // A negative amount sums under the cap and names a real catalog resource, so
+  // isBuffersValid's cross-field check (catalog membership + cap sum) alone
+  // would accept it: only isBufferShape's own per-amount structural check
+  // (Number.isSafeInteger(amount) && amount >= 0) catches this one.
+  it('rejects a buffer holding a negative amount', () => {
+    const save = initialSave();
+    save.buildings.push({
+      id: 4, defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1,
+      buffer: { wood: -5 },
+    });
+    save.nextEntityId = 5;
+    expect(isLoadableSave(save)).toBe(false);
+  });
+
   it('restores buffered goods into the building that held them', async () => {
     const save = initialSave();
     save.buildings.push({
@@ -457,7 +471,13 @@ describe('live-world projections agree', () => {
     });
   }
 
-  /** A colony with a staffed worker, live tool coverage, hunger history and batch progress. */
+  /**
+   * A colony with a staffed worker, a genuine hauler, live tool coverage,
+   * hunger history and batch progress. Both save-v3 additions need REAL state
+   * to be worth persisting: 60 ticks of unhauled forester production stalls
+   * its buffer at the output cap (produced, not hand-set), and dispatching
+   * assignHauler puts a second worker genuinely into job.hauling.
+   */
   async function busyColony() {
     const save = initialSave();
     save.stockpile = { wood: 100, tools: 10, berries: 50 };
@@ -466,6 +486,15 @@ describe('live-world projections agree', () => {
     await engine.stepOnce();
     engine.dispatch({ type: 'assignWorker', buildingId: engine.snapshot!.buildings[0].id });
     for (let i = 0; i < 60; i++) await engine.stepOnce();
+    // The forester's buffer is now stalled at the output cap (nowhere left to
+    // bank a finished batch). Assign a hauler and step ONCE more so hauling
+    // turns genuinely true on a real worker — but stop right there: dispatch()
+    // only points the trip at its target this tick, and load() (which would
+    // empty the buffer) is still two ticks away. The buffer this test group
+    // samples is therefore real, un-hauled production, not a pile a hauler
+    // already cleared.
+    engine.dispatch({ type: 'assignHauler' });
+    await engine.stepOnce();
     return engine;
   }
 
@@ -493,8 +522,26 @@ describe('live-world projections agree', () => {
   it('every persisted worker fact survives save -> restore', async () => {
     const engine = await busyColony();
     const before = persisted(engine.snapshot!.workers);
+    // Guard against vacuous coverage: busyColony's hauler must actually show up
+    // hauling here, or the comparison below would pass just as happily with
+    // hauling dropped entirely from the save (every worker reads false either way).
+    expect(before.some((w) => w.hauling)).toBe(true);
     const restored = await GameEngine.create(engine.serialize());
     expect(persisted(restored.snapshot!.workers)).toEqual(before);
+  });
+
+  it('a building keeps its buffered goods across save -> restore', async () => {
+    const engine = await busyColony();
+    // Ground truth from the live query path (buildingFactsOf), never from
+    // serialize() (savedBuildingOf) — comparing a save against itself would
+    // pass even if the save format dropped the buffer entirely.
+    const before = engine.snapshot!.buildings[0].buffered;
+    expect(before).toBeGreaterThan(0); // guard: otherwise this comparison is vacuous
+    const restored = await GameEngine.create(engine.serialize());
+    // buildInitialSnapshot recomputes `buffered` as the sum of restored
+    // SavedBuilding.buffer, so this agreeing on the value proves the buffer
+    // map itself round-tripped, not just its key.
+    expect(restored.snapshot!.buildings[0].buffered).toBe(before);
   });
 
   it('every non-derived building fact is represented in the save record', async () => {

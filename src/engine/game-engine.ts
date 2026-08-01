@@ -2,7 +2,7 @@ import type { IRuntimeWorld } from 'sim-ecs';
 import type { Command } from '../shared/commands';
 import type { EngineStatus, Snapshot } from '../shared/snapshot';
 import type { SaveGameV3 } from '../shared/save';
-import { LATEST_SAVE_VERSION } from '../shared/save';
+import { LATEST_SAVE_VERSION, MAX_SAVED_COUNTER } from '../shared/save';
 import { BALANCE } from './content/balance';
 import { CommandQueue, IdCounter, RemovalLedger, SimClock, SnapshotStore, Stockpile, WorldMap } from './resources';
 import { gatherEntityFacts, savedBuildingOf, savedWorkerOf } from './snapshot-builder';
@@ -18,9 +18,16 @@ export function buildSaveFromWorld(world: IRuntimeWorld): SaveGameV3 {
   // state: conservation stays exact, and HaulTrip stays out of the save format
   // and its guards entirely. The live world is deliberately NOT mutated — this
   // is a snapshot, and the running colony still delivers that load normally.
+  //
+  // Saturates at MAX_SAVED_COUNTER exactly like Stockpile.add: a save written
+  // from an accepted state must itself be accepted by isLoadableSave on the
+  // next load, and raw addition onto an at-ceiling stockpile would write one
+  // point past that bound — which sends a real colony down decideLoad's
+  // corrupt-backup path instead of restoring it.
   for (const worker of facts.workers) {
     if (worker.carryingResource === null || worker.carrying <= 0) continue;
-    stockpile[worker.carryingResource] = (stockpile[worker.carryingResource] ?? 0) + worker.carrying;
+    const current = stockpile[worker.carryingResource] ?? 0;
+    stockpile[worker.carryingResource] = current + Math.min(worker.carrying, MAX_SAVED_COUNTER - current);
   }
   return {
     version: LATEST_SAVE_VERSION,

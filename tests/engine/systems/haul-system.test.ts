@@ -3,6 +3,7 @@ import type { IEntity, IRuntimeWorld } from 'sim-ecs';
 import { Building, HaulTrip, JobAssignment, OutputBuffer, Worker } from '../../../src/engine/components';
 import { IdCounter, Stockpile } from '../../../src/engine/resources';
 import { BALANCE } from '../../../src/engine/content/balance';
+import { BUILDINGS } from '../../../src/engine/content/buildings';
 import { HaulSystem } from '../../../src/engine/systems/haul-system';
 import { CommandSystem } from '../../../src/engine/systems/command-system';
 import { enqueue } from '../fixtures';
@@ -13,11 +14,17 @@ import { buildSaveFromWorld } from '../../../src/engine/game-engine';
 
 interface BuildingSpec { col: number; row: number; wood: number; id?: number }
 
-async function setup(specs: readonly BuildingSpec[], haulerCount: number, extraSystems: readonly TColonySystemFactory[] = []) {
+/**
+ * `systemsBefore` runs AHEAD of HaulSystem, which is where ALL_SYSTEMS puts
+ * CommandSystem: a tick drains its commands first and only then moves haulers.
+ * The order is load-bearing for the demolition cases below — it is what makes
+ * "the tick the player pressed demolish" the tick the trip has to end on.
+ */
+async function setup(specs: readonly BuildingSpec[], haulerCount: number, systemsBefore: readonly TColonySystemFactory[] = []) {
   const save = initialSave();
   save.workers = [];
   save.stockpile = {};
-  const prep = buildColonyPrepWorld({ save, systems: [HaulSystem, ...extraSystems] });
+  const prep = buildColonyPrepWorld({ save, systems: [...systemsBefore, HaulSystem] });
   const ids = getPrepResource(prep, IdCounter);
   const buildings: IEntity[] = specs.map((spec) => {
     const entity = spawnBuilding(prep, ids, {
@@ -196,6 +203,22 @@ describe('HaulSystem', () => {
     expect(tripOf(haulers[0]).phase).toBe('idle');
   });
 
+  it('breaks a two-resource tie by catalog order, not by insertion order', async () => {
+    // Spec §2.3 names this a determinism rule: "the resource the building holds
+    // most of (ties by catalog order)". `wood` goes in first (setup, before the
+    // world is prepared) and `berries` second, so Map insertion order would
+    // pick wood — but berries comes first in RESOURCE_IDS and must win.
+    // (3,0) is 1 tile from camp: dispatch, load, deliver in three ticks.
+    const { buildings, haulers, step, stockpile } = await setup([{ col: 3, row: 0, wood: BALANCE.haulCarryCapacity }], 1);
+    bufferOf(buildings[0]).add('berries', BALANCE.haulCarryCapacity); // equal amounts, inserted second
+    expect([...bufferOf(buildings[0]).amounts.keys()]).toEqual(['wood', 'berries']); // the order the tie must NOT follow
+    await step(2);
+    expect(tripOf(haulers[0]).resource).toBe('berries');
+    await step(1);
+    expect(stockpile.get('berries')).toBe(BALANCE.haulCarryCapacity);
+    expect(stockpile.get('wood')).toBe(0); // still waiting at the building
+  });
+
   it('ignores workers who are not haulers', async () => {
     const save = initialSave();
     save.workers = [];
@@ -232,17 +255,62 @@ describe('HaulSystem lifecycle', () => {
     const { world, buildings, haulers, step, stockpile } = await setup([{ col: 5, row: 4, wood: 9 }], 1, [CommandSystem]);
     await step(4); // loaded, now returning
     expect(tripOf(haulers[0]).amount).toBe(BALANCE.haulCarryCapacity);
+    const before = stockpile.get('wood');
     enqueue(world, { type: 'demolishBuilding', buildingId: buildings[0].getComponent(Building)!.id });
-    await step(3);
-    // the refund lands in the stockpile too; the carried load is what matters
-    expect(stockpile.get('wood')).toBeGreaterThanOrEqual(BALANCE.haulCarryCapacity);
+    await step(1);
+    // The return leg is deliberately NOT cancelled: those units already left
+    // the building, and resetting the trip would delete them.
+    expect(tripOf(haulers[0])).toMatchObject({ phase: 'returning', amount: BALANCE.haulCarryCapacity });
+
+    await step(2); // walks the rest of the way home
+    // Exact sum, never >=: the forester's own refund is wood: 10, which alone
+    // clears haulCarryCapacity (6) — a >= assertion would hold with the deposit
+    // deleted from HaulSystem entirely.
+    expect(stockpile.get('wood')).toBe(before + BUILDINGS.forester.cost.wood! + BALANCE.haulCarryCapacity);
   });
 
-  it('a fresh colony starts with no trips in flight', async () => {
-    // The reset path builds a new world from initialSave, so buffers and trips
-    // are structurally empty — pinned here so a future "reuse the world" reset
-    // cannot quietly carry a hauler across timelines.
-    const { haulers } = await setup([{ col: 5, row: 4, wood: 0 }], 2);
-    expect(haulers.every((h) => tripOf(h).phase === 'idle' && tripOf(h).amount === 0)).toBe(true);
+  it('a hauler promoted a tick later respects the claim already walking', async () => {
+    // Spec §2.3: "unclaimed" subtracts what haulers already outbound will take.
+    // Same-tick claims are pinned elsewhere; this is the CROSS-tick half — the
+    // claim map is rebuilt from live components every tick rather than being
+    // remembered, so a hauler promoted mid-walk must see the first one's claim.
+    const save = initialSave();
+    save.workers = [];
+    save.stockpile = {};
+    const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, HaulSystem] });
+    const ids = getPrepResource(prep, IdCounter);
+    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 5, row: 4 });
+    building.getComponent(OutputBuffer)!.add('wood', BALANCE.haulCarryCapacity); // exactly one load, no more
+    const first = spawnWorker(prep, ids, { hauling: true });
+    const second = spawnWorker(prep, ids, {}); // idle for now; promoted next tick
+    const world = await prep.prepareRun();
+
+    await world.step(); // tick 1: the first hauler claims the whole buffer
+    expect(tripOf(first).phase).toBe('outbound');
+
+    enqueue(world, { type: 'assignHauler' });
+    await world.step(); // tick 2: promoted while the first is still walking
+    expect(tripOf(second)).toMatchObject({ phase: 'idle', targetId: null });
+    expect(tripOf(first).phase).toBe('outbound'); // still en route, claim intact
+  });
+
+  it('a colony restored from a save starts with no trips in flight', async () => {
+    // HaulTrip is runtime-only and never enters the save (spec §2.5): a hauler
+    // caught mid-trip banks its load at save time, and on load every worker
+    // respawns with a default-constructed trip and claims afresh. Driven through
+    // the real load path — a save whose workers ARE haulers, and a building with
+    // a backlog worth claiming — so an attempt to persist trip state, or a
+    // restore that carried one across timelines, fails here.
+    const save = initialSave();
+    save.workers = save.workers.map((worker) => ({ ...worker, hauling: true }));
+    save.buildings = [{ id: 10, defId: 'forester', progress: 0, batchActive: false, col: 5, row: 4, buffer: { wood: 9 } }];
+    save.nextEntityId = 11;
+    const world = await createColonyWorld(save);
+
+    const trips = [...world.getEntities()]
+      .filter((entity) => entity.getComponent(Worker) !== undefined)
+      .map((entity) => entity.getComponent(HaulTrip)!);
+    expect(trips).toHaveLength(save.workers.length);
+    expect(trips.every((t) => t.phase === 'idle' && t.targetId === null && t.ticksLeft === 0 && t.amount === 0)).toBe(true);
   });
 });

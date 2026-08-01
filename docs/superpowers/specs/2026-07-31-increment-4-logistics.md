@@ -156,9 +156,18 @@ nothing.
 - The migration chain gains its second real step, v2→v3: buffers empty,
   `hauling: false` — which is precisely what a v2 colony was. `LATEST_SAVE_VERSION`
   becomes 3 with the same self-policing literal type.
-- `isSaveGameV3` validates buffer shape structurally (known resource ids,
-  safe non-negative integers); `isLoadableSave` adds the cross-field truth:
-  a building's buffered total may not exceed `outputBufferCap`.
+- `isSaveGameV3` validates buffer shape structurally (safe non-negative
+  integer amounts); `isLoadableSave` adds the cross-field truth that needs the
+  catalog: every buffered resource id must exist.
+- **The cap is clamped at load, never rejected.** `outputBufferCap` is a
+  tunable balance number, and this project's standing rule (§4.5 of the
+  increment-1 spec, quoted in `isLoadableSave`'s own docstring) is that values
+  coupled to tunable numbers are clamped or grandfathered at load so retuning
+  balance down never orphans a previously valid save — the same treatment
+  `spawnBuilding` already gives saved batch progress. A save whose buffer
+  exceeds the current cap therefore loads with the buffer trimmed to the cap,
+  and the colony plays on. Rejecting it would mean a future cap reduction
+  routes real colonies to corrupt-backup.
 - **A hauler caught mid-trip deposits its load into the camp store at save
   time.** This is a deliberate simplification, not an oversight: conservation
   stays exact, `HaulTrip` stays out of the save format and out of the load

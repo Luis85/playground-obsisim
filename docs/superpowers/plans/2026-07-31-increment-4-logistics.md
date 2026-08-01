@@ -1621,23 +1621,51 @@ export function savedBuildingOf(facts: BuildingFacts): SavedBuilding {
 `src/engine/world.ts`:
 - every `SaveGameV2` reference becomes `SaveGameV3` (typecheck names all of them);
 - `initialSave()` workers gain `hauling: false`;
-- new cross-field validator, called from `isLoadableSave` after `isPositionsValid`:
+- new cross-field validator, called from `isLoadableSave` after `isPositionsValid`.
+  It checks catalog membership **only**. The cap is deliberately *not* a
+  rejection: `outputBufferCap` is a tunable balance number, and this file's own
+  `isLoadableSave` docstring states the rule — values coupled to tunable
+  numbers are clamped at load, never bounds-checked here, so retuning balance
+  down cannot orphan a previously valid save:
 
 ```ts
 /**
- * Buffer contents are cross-field truths like positions: catalog membership and
- * the cap need the content catalog and BALANCE, which the structural guard in
- * src/shared/ cannot see.
+ * Buffer contents are a cross-field truth like positions: catalog membership
+ * needs the content catalog, which the structural guard in src/shared/ cannot
+ * see. The cap is NOT checked here — see spawnBuilding, which clamps an
+ * over-cap buffer at load exactly as it clamps saved batch progress.
  */
 function isBuffersValid(data: SaveGameV3): boolean {
-  return data.buildings.every((b) => {
-    let total = 0;
-    for (const [id, amount] of Object.entries(b.buffer)) {
-      if (!Object.hasOwn(RESOURCES, id)) return false;
-      total += amount as number;
-    }
-    return total <= BALANCE.outputBufferCap;
-  });
+  return data.buildings.every(
+    (b) => Object.keys(b.buffer).every((id) => Object.hasOwn(RESOURCES, id)),
+  );
+}
+```
+
+and `spawnBuilding` clamps as it restores, dropping whole resources in catalog
+order once the cap is reached so the trimmed buffer stays a coherent map rather
+than a fractional one:
+
+```ts
+/**
+ * Balance-coupled clamp (spec 4.5), the same treatment `progress` gets above:
+ * a buffer written under a larger cap loads trimmed to the CURRENT cap instead
+ * of orphaning the save. Trimming walks the catalog in order so the result is
+ * deterministic.
+ */
+function clampedBuffer(saved: Partial<Record<ResourceId, number>>): Map<ResourceId, number> {
+  const buffer = new Map<ResourceId, number>();
+  let total = 0;
+  for (const id of RESOURCE_IDS) {
+    const amount = saved[id] ?? 0;
+    if (amount <= 0) continue;
+    const room = BALANCE.outputBufferCap - total;
+    if (room <= 0) break;
+    const kept = Math.min(amount, room);
+    buffer.set(id, kept);
+    total += kept;
+  }
+  return buffer;
 }
 ```
 

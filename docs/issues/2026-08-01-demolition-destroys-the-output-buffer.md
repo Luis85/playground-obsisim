@@ -13,7 +13,6 @@ affects:
 tags:
   - issue
   - game-design
-  - needs-decision
 ---
 
 # Demolition destroys the output buffer

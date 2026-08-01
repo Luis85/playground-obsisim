@@ -251,6 +251,27 @@ describe('HaulSystem lifecycle', () => {
     expect(stockpile.get('wood')).toBe(10);
   });
 
+  it('cancels an outbound trip on the tick its target is demolished, not on arrival', async () => {
+    // (20,10) is 11 ticks each way. Spec §2.8 wants the trip to cancel when the
+    // source goes, riding the same-tick demolishedIds machinery — not lazily on
+    // arrival ten ticks later. The difference is visible: a snapshot taken on
+    // the demolish tick still reports haulTargetId, the layout cannot find that
+    // tile and walks the dot home, and the simulation keeps the hauler booked
+    // for a building that no longer exists.
+    const { world, buildings, haulers, step } = await setup([{ col: 20, row: 10, wood: 9 }], 1, [CommandSystem]);
+    await step(1);
+    expect(tripOf(haulers[0])).toMatchObject({ phase: 'outbound', ticksLeft: 11 });
+
+    enqueue(world, { type: 'demolishBuilding', buildingId: buildings[0].getComponent(Building)!.id });
+    await step(1);
+    expect(tripOf(haulers[0])).toMatchObject({ phase: 'idle', targetId: null, ticksLeft: 0 });
+    // ...and it is not re-dispatched at the ghost in that same tick: sim-ecs
+    // defers the entity removal to the post-step sync, so HaulSystem still sees
+    // the demolished building (and its 9 units) when it runs after CommandSystem.
+    await step(1);
+    expect(tripOf(haulers[0]).phase).toBe('idle');
+  });
+
   it('a hauler already carrying delivers even if its source is gone', async () => {
     const { world, buildings, haulers, step, stockpile } = await setup([{ col: 5, row: 4, wood: 9 }], 1, [CommandSystem]);
     await step(4); // loaded, now returning

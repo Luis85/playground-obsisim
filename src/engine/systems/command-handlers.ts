@@ -22,6 +22,7 @@ export interface BuildingRow {
   building: Building;
   slots: WorkerSlots;
   position: Position;
+  buffer: OutputBuffer;
 }
 
 export interface WorkerRow {
@@ -186,8 +187,23 @@ export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Com
   for (const [resource, amount] of Object.entries(def.cost)) {
     ctx.stockpile.add(resource as ResourceId, amount);
   }
-  for (const { job } of ctx.workers) {
+  // Whatever was waiting in the buffer dies with the building — today's rule,
+  // logged as an open design decision (docs/issues, OBS-4-07); a future refund
+  // would add its stockpile.add above this line, not replace it. Emptying it
+  // HERE rather than letting the entity carry it off at the post-step sync is
+  // load-bearing: HaulSystem runs later in this same tick and still sees the
+  // not-yet-removed entity, so a buffer left full would have it dispatch a
+  // hauler at a building that is already gone.
+  found.buffer.amounts.clear();
+  for (const { job, trip } of ctx.workers) {
     if (job.buildingId === command.buildingId) job.buildingId = null;
+    // Spec §2.8: the trip cancels now, riding the same-tick demolishedIds
+    // machinery, rather than lazily when the hauler reaches a tile with nothing
+    // on it — up to 13 ticks later, all of them spent booked to a building the
+    // snapshot no longer contains. Outbound only: a returning hauler is carrying
+    // those goods to the camp, which did not move, and resetting it would
+    // destroy the load (mirrors handleMoveBuilding's guard below).
+    if (trip.phase === 'outbound' && trip.targetId === command.buildingId) trip.reset();
   }
   ctx.remove(found.entity);
   ctx.demolishedIds.add(command.buildingId);

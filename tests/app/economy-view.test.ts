@@ -52,24 +52,54 @@ describe('EconomyView', () => {
   });
 
   it('states the haul backlog and how many buildings it has stopped', async () => {
+    // Waiting (18), stalled (2), and haulers (3) are mutually distinct, so a
+    // getter swapped between the "stalled" and "haulers" slots — or a slot
+    // reordered in the template string — cannot hide behind matching numbers
+    // the way it could when stalledBuildings and haulerCount were both 1.
     const wrapper = mountWith(EconomyView, makeSnapshot({
       buildings: [
         makeBuilding(1, { buffered: 12, state: 'outputFull' }),
-        makeBuilding(2, { buffered: 6, state: 'producing' }),
+        makeBuilding(2, { buffered: 6, state: 'outputFull' }),
+        makeBuilding(3, { buffered: 0, state: 'producing' }),
+      ],
+      workers: [
+        makeWorker(1, { hauling: true }),
+        makeWorker(2, { hauling: true }),
+        makeWorker(3, { hauling: true }),
+      ],
+    }));
+    await wrapper.vm.$nextTick();
+    const pressure = wrapper.find('[data-test="haul-pressure"]');
+    const haul = pressure.text();
+    expect(haul).toContain('18');
+    expect(haul).toContain('2 stalled');
+    expect(haul).toContain('3 haulers on duty');
+    expect(pressure.classes()).toContain('obsisim-negative');
+  });
+
+  it('uses the singular "hauler" when exactly one is on duty', async () => {
+    // Waiting (7), stalled (2), and haulers (1) are again mutually distinct.
+    // toContain('1 hauler on duty') genuinely discriminates: the wrongly
+    // pluralized '1 haulers on duty' does not contain that substring, unlike
+    // a bare toContain('1 hauler'), which either string would satisfy.
+    const wrapper = mountWith(EconomyView, makeSnapshot({
+      buildings: [
+        makeBuilding(1, { buffered: 5, state: 'outputFull' }),
+        makeBuilding(2, { buffered: 2, state: 'outputFull' }),
       ],
       workers: [makeWorker(1, { hauling: true })],
     }));
     await wrapper.vm.$nextTick();
     const haul = wrapper.find('[data-test="haul-pressure"]').text();
-    expect(haul).toContain('18');
-    expect(haul).toContain('1 stalled');
-    expect(haul).toContain('1 hauler');
+    expect(haul).toContain('1 hauler on duty');
   });
 
   it('says the colony is keeping up when nothing waits', async () => {
     const wrapper = mountWith(EconomyView, makeSnapshot({ buildings: [makeBuilding(1, { buffered: 0 })] }));
     await wrapper.vm.$nextTick();
-    expect(wrapper.find('[data-test="haul-pressure"]').text()).toContain('keeping up');
+    const pressure = wrapper.find('[data-test="haul-pressure"]');
+    expect(pressure.text()).toContain('keeping up');
+    expect(pressure.classes()).not.toContain('obsisim-negative');
   });
 });
 

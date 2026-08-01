@@ -1,11 +1,12 @@
 ---
 id: OBS-4-07
 title: Demolishing a building destroys everything in its output buffer, under a notice that says "cost refunded"
-status: open
+status: resolved
 severity: important
 area: engine
 increment: 4
 created: 2026-08-01
+resolved: 2026-08-01
 source: increment-4 final whole-branch review (Important #4)
 affects:
   - src/engine/systems/command-handlers.ts
@@ -78,3 +79,33 @@ refund goes **above** that clear, not in place of it.
 Not decided here because it is a balance and game-feel call, not a correctness
 one. Whichever is chosen, the notice and the spec should stop disagreeing with
 the code.
+
+## Resolution (def3ba4)
+
+Decided: **keep destroying it, and say so** — the second option above, not the
+first. `handleDemolishBuilding`'s stockpile arithmetic did not move: the
+buffer still empties into nothing, the same as it always has, and the
+pinned `tests/engine/systems/haul-system.test.ts` assertion that a demolished
+forester with 9 buffered wood leaves the stockpile at exactly 10 still passes
+untouched. What changed is the success notice, which now names what the
+building's buffer held instead of a bare "cost refunded" that was only ever
+true of the construction cost — `Demolished the Forester — cost refunded, 9
+Wood lost.` An empty buffer keeps today's plain wording rather than gaining a
+noisy zero-units clause.
+
+The owner chose this over refunding the buffer for a game-design reason, not
+a correctness one: a building left full of uncollected goods *should* be
+expensive to bulldoze, since that is exactly the pressure haulers exist to
+relieve. Refunding it would erase that pressure entirely. The third,
+most-protective option (refuse demolition of a non-empty building, or force a
+distinct confirmation) was passed over too — the player already has a
+non-destructive way to keep a full buffer intact, `moveBuilding`, so a forced
+confirmation would only add friction to a choice with a working escape hatch
+already in the player's hands.
+
+Two tests in `tests/engine/systems/command-system.test.ts` pin the new
+behaviour: one demolishes a building with a buffered load and asserts both
+the new wording and that the stockpile lands on exactly the construction
+refund — the guard that this stayed a messaging fix and not a stockpile
+change — and one demolishes an empty building and asserts the notice is
+byte-identical to the old wording.

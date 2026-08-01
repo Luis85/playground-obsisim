@@ -117,3 +117,30 @@ delivered, 0.50 consumed, 4 in stock) after a first draft using all-zero rates
 survived a mutation that pointed the column at `consumptionRate`. All four
 mutations fail the suite now: either heading reverted to `Prod/t`, and the
 column bound to `consumptionRate` or to `stock`.
+
+## Superseded in increment 5: refunds no longer count as deliveries
+
+The "Why `Delivered/t` and not `To store/t`" section above argued that a
+demolition refund belongs in the column, because `Delivered/t` was honest
+about every way goods reach the store. Increment 5 reversed that, in
+`47a4803`: `Stockpile.refund` now banks the construction cost without
+recording into `producedThisTick`, so only goods a hauler actually carried
+count as delivered.
+
+The reversal is not a disagreement with the reasoning — it is that the
+reasoning's premise expired. That argument was made while `Delivered/t` stood
+alone, and the very next section of this note deferred `Made/t` to increment 5
+as "a feature, not a label fix". Increment 5 built it. With both columns
+present the gap between them *is* the haul backlog, which is the whole point
+of having added `Made/t`, and a refund can push `Delivered/t` above `Made/t` —
+a backlog below zero, which is not a state the colony can be in.
+
+The distinction now drawn is whether a hauler carried the goods, not whether
+they arrived. So the other two `stockpile.add` callers keep counting: a hauler
+depositing at the end of a leg, and a released hauler dropping the load it was
+already carrying. Both moved real goods along a real leg. A refund conjures
+them from a structure that no longer exists.
+
+Raised by a Codex review of PR #7 against `snapshot-system.ts`, which observed
+that delivered could exceed gross production. Recorded here rather than only
+in the commit, because this note is where the original decision lives.

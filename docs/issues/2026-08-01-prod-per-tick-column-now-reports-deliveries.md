@@ -1,15 +1,16 @@
 ---
 id: OBS-4-06
 title: The Economy view's "Prod/t" column now reports deliveries, not production
-status: open
+status: resolved
 severity: important
 area: app
 increment: 4
 created: 2026-08-01
+resolved: 2026-08-01
 source: increment-4 final review of spec §2.1's stated consequence
 affects:
   - src/app/views/EconomyView.vue
-  - src/engine/systems/snapshot-system.ts
+  - src/app/views/DashboardView.vue
 tags:
   - issue
   - ux
@@ -65,3 +66,54 @@ it currently is not.
 
 Do not "fix" this by reverting the flow-stat semantics. Store inflow is the
 right meaning; only the label is wrong.
+
+## Resolution
+
+Took the cheap fix: the column is now headed **`Delivered/t`** in both tables
+that show it — `EconomyView.vue`'s chain table and `DashboardView.vue`'s
+resource table. No engine or snapshot change; `stats.productionRate` still
+feeds it, because store inflow is still the right number.
+
+`DashboardView.vue` was not in this note's `affects` list but had the same
+`Prod/t` heading over the same field, so it was renamed too. A rename in one
+table only would have left the two views disagreeing about what the statistic
+is called.
+
+### The failure scenario named a label the Economy view does not have
+
+The scenario above says the `Status` column reads `producing`, then
+`Output full`. It does not: `stageStatuses` emits only `ok`, `unstaffed` and
+`⚠ starved`. `producing`/`outputFull` are the per-building `state`, shown in
+the Buildings table and the selection panel, not in the chain table.
+
+The contradiction is real, and slightly sharper than recorded — the row read
+`ok` beside `0.00`, so the table said the stage was *fine* and delivering
+nothing, with no indication the two facts were connected.
+
+### Why `Delivered/t` and not `To store/t`
+
+Store inflow is not exclusively hauler deliveries: `stockpile.add` is also
+called by the demolition refund and by unassigning a hauler who is carrying a
+load. Both are goods arriving at the store, so `Delivered/t` is honest about
+all three, and hauler delivery is the only one that occurs in steady play —
+the other two are one-off events inside a rolling window average.
+
+### Still open as a design question, deliberately
+
+The note's richer option — a `Made/t` column beside `Delivered/t`, so the haul
+backlog is visible per stage rather than only in the aggregate haul-pressure
+line — is **not** done here. It needs gross production plumbed through the
+snapshot, which does not exist today: goods are made into a building's
+`OutputBuffer` and nothing records that flow. That is a feature, not a label
+fix, and it is raised as a candidate for increment 5's scope rather than
+smuggled in under an issue note.
+
+### Coverage
+
+Three tests in `tests/app/economy-view.test.ts` — the heading in each table,
+and a fully staffed forester with a full buffer and no haulers reading `ok`
+against `0.00` delivered. The last one uses deliberately distinct values (0
+delivered, 0.50 consumed, 4 in stock) after a first draft using all-zero rates
+survived a mutation that pointed the column at `consumptionRate`. All four
+mutations fail the suite now: either heading reverted to `Prod/t`, and the
+column bound to `consumptionRate` or to `stock`.

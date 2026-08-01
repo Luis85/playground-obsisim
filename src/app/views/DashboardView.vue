@@ -33,7 +33,7 @@ const fmt = (n: number) => n.toFixed(2);
     </div>
     <table class="obsisim-table">
       <thead>
-        <tr><th>Resource</th><th>Tier</th><th>Stock</th><th>Prod/t</th><th>Cons/t</th><th>Net</th><th>Empties in</th><th>Value</th></tr>
+        <tr><th>Resource</th><th>Tier</th><th>Stock</th><th data-test="inflow-heading">Delivered/t</th><th>Cons/t</th><th>Net</th><th>Empties in</th><th>Value</th></tr>
       </thead>
       <tbody>
         <tr v-for="id in RESOURCE_IDS" :key="id">

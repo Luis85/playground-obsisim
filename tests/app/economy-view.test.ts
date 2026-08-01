@@ -94,6 +94,37 @@ describe('EconomyView', () => {
     expect(haul).toContain('1 hauler on duty');
   });
 
+  // OBS-4-06: the column is fed by stockpile inflow, which since increment 4
+  // means "a hauler delivered it", not "a building made it". Under the old
+  // "Prod/t" heading a fully staffed building with no haulers reported
+  // `producing` and 0.00 side by side, which reads as a contradiction rather
+  // than as the haul backlog it is.
+  it('heads the store-inflow column Delivered/t, not Prod/t', async () => {
+    const wrapper = mountWith(EconomyView, makeSnapshot({ buildings: [makeBuilding(1, { defId: 'forester' })] }));
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-test="inflow-heading"]').text()).toBe('Delivered/t');
+    expect(wrapper.text()).not.toContain('Prod/t');
+  });
+
+  it('shows a healthy but uncollected stage as ok with nothing delivered', async () => {
+    const snapshot = makeSnapshot({
+      buildings: [{ ...baseBuilding, id: 1, defId: 'forester', workers: 2, buffered: 12, state: 'producing' }],
+    });
+    // Made 12 units into the buffer, delivered none: no haulers on duty. The
+    // three rates are deliberately distinct — 0 delivered against 0.50
+    // consumed and 4 in stock — so the column binding to consumptionRate or
+    // to stock would change this assertion rather than coincide with it.
+    snapshot.stockpile.wood = { stock: 4, productionRate: 0, consumptionRate: 0.5, netFlow: -0.5, stockValue: 0 };
+    const wrapper = mountWith(EconomyView, snapshot);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-test="status-forester"]').text()).toBe('ok');
+    expect(wrapper.find('[data-test="delivered-forester"]').text()).toBe('0.00');
+    // "ok" beside 0.00 only reads as a backlog because the heading names
+    // delivery; under "Prod/t" the same row claimed the stage was fine and
+    // producing nothing at once.
+    expect(wrapper.find('[data-test="inflow-heading"]').text()).toBe('Delivered/t');
+  });
+
   it('says the colony is keeping up when nothing waits', async () => {
     const wrapper = mountWith(EconomyView, makeSnapshot({ buildings: [makeBuilding(1, { buffered: 0 })] }));
     await wrapper.vm.$nextTick();
@@ -112,5 +143,14 @@ describe('DashboardView', () => {
     await wrapper.vm.$nextTick();
     expect(wrapper.find('[data-test="runway-wheat"]').text()).toBe('~10t');
     expect(wrapper.find('[data-test="runway-wood"]').text()).toBe('—');
+  });
+
+  // Same column, same source, same rename — the two tables must not disagree
+  // about what the stockpile's inflow statistic is called (OBS-4-06).
+  it('heads the store-inflow column Delivered/t, not Prod/t', async () => {
+    const wrapper = mountWith(DashboardView, makeSnapshot());
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-test="inflow-heading"]').text()).toBe('Delivered/t');
+    expect(wrapper.text()).not.toContain('Prod/t');
   });
 });

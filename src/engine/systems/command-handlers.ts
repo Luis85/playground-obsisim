@@ -6,9 +6,8 @@ import { autoPlacePosition, isTileBuildable, type TileRef } from '../../shared/p
 import { BALANCE } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
 import { RESOURCES, RESOURCE_IDS } from '../content/resources';
-import {
-  Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, ToolCoverage, Worker, WorkerSlots,
-} from '../components';
+import { Building, HaulTrip, JobAssignment, OutputBuffer, Position, WorkerSlots } from '../components';
+import { buildingComponents, workerComponents } from '../spawn';
 import type { IdCounter, NoticeBoard, RemovalLedger, SimClock, Stockpile, WorldMap } from '../resources';
 
 // One small handler per command type (the complexity gate is why they live
@@ -103,13 +102,10 @@ export function handleConstructBuilding(ctx: CommandContext, command: Extract<Co
     return;
   }
   ctx.claimedTiles.push({ col: at.col, row: at.row });
-  ctx.spawn(
-    new Building(ctx.ids.take(), def.id),
-    new WorkerSlots(def.workerSlots),
-    new Production(),
-    new Position(at.col, at.row),
-    new OutputBuffer(),
-  );
+  // Component list shared with the save-restore path (src/engine/spawn.ts) so a
+  // building constructed in play cannot end up missing one — it already did,
+  // with OutputBuffer (OBS-4-02).
+  ctx.spawn(...buildingComponents({ id: ctx.ids.take(), defId: def.id, col: at.col, row: at.row }));
   ctx.notices.succeed(`Built a ${def.name}.`);
 }
 
@@ -125,7 +121,9 @@ export function handleRecruitWorker(ctx: CommandContext): void {
   }
   ctx.clock.lastRecruitTick = ctx.clock.tick;
   const id = ctx.ids.take();
-  ctx.spawn(new Worker(id), new Hunger(), new JobAssignment(), new Efficiency(), new ToolCoverage(), new HaulTrip());
+  // Same shared list as the restore path — a worker recruited in play once
+  // shipped without HaulTrip and vanished from snapshots entirely (OBS-4-02).
+  ctx.spawn(...workerComponents({ id }));
   ctx.notices.succeed(`Recruited worker #${id}.`);
 }
 

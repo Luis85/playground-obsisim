@@ -13,6 +13,9 @@ import {
   Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, ToolCoverage, Worker, WorkerSlots,
 } from './components';
 import {
+  buildingComponents, clampedBuffer, clampedHunger, clampedProgress, clampedToolTicks, workerComponents,
+} from './spawn';
+import {
   CommandQueue, IdCounter, NoticeBoard, RemovalLedger, SimClock, SnapshotStore, StatsHistory, Stockpile, WorldMap,
 } from './resources';
 import type { BuildingFacts, WorkerFacts } from './snapshot-builder';
@@ -294,67 +297,36 @@ export function decideLoad(data: unknown): LoadDecision {
 }
 
 /**
- * Balance-coupled clamp (spec 4.5), the same treatment `progress` gets above:
- * a buffer written under a larger cap loads trimmed to the CURRENT cap instead
- * of orphaning the save. Trimming walks the catalog in order so the result is
- * deterministic.
+ * Attach a component list built by src/engine/spawn.ts to a preptime entity.
+ * The runtime path uses `ctx.spawn(...components)` instead; that difference in
+ * mechanism is the only reason these two paths are still separate functions.
  */
-function clampedBuffer(saved: Partial<Record<ResourceId, number>>): Map<ResourceId, number> {
-  const buffer = new Map<ResourceId, number>();
-  let total = 0;
-  for (const id of RESOURCE_IDS) {
-    const amount = saved[id] ?? 0;
-    if (amount <= 0) continue;
-    const room = BALANCE.outputBufferCap - total;
-    if (room <= 0) break;
-    const kept = Math.min(amount, room);
-    buffer.set(id, kept);
-    total += kept;
-  }
-  return buffer;
+function attach(prep: IPreptimeWorld, components: object[]): IEntity {
+  let builder = prep.buildEntity();
+  for (const component of components) builder = builder.with(component);
+  return builder.build();
 }
 
+/**
+ * Restore a building from a save record. Which components it gets — and the
+ * balance-coupled clamps on progress and buffer — live in `buildingComponents`,
+ * shared with the live construct path so the two cannot drift (OBS-4-02).
+ */
 export function spawnBuilding(
   prep: IPreptimeWorld,
   ids: IdCounter,
   saved: Omit<SavedBuilding, 'id' | 'buffer'> & { id?: number; buffer?: Partial<Record<ResourceId, number>> },
 ): IEntity {
-  const def = BUILDINGS[saved.defId];
-  // Balance-coupled clamp (spec 4.5): progress from a save written under a
-  // larger recipe (or hand-edited to an absurd magnitude) clamps to the
-  // CURRENT batch size — the save still loads, at most one batch completes
-  // instantly, and the production loop can never spin on a huge remainder.
-  const progress = Math.min(saved.progress, def.recipe.ticksPerBatch);
-  return prep
-    .buildEntity()
-    .with(new Building(saved.id ?? ids.take(), saved.defId))
-    .with(new WorkerSlots(def.workerSlots))
-    .with(new Production(progress, saved.batchActive))
-    .with(new Position(saved.col, saved.row))
-    .with(new OutputBuffer(clampedBuffer(saved.buffer ?? {})))
-    .build();
+  return attach(prep, buildingComponents({ ...saved, id: saved.id ?? ids.take() }));
 }
 
+/** Restore a worker from a save record. See spawnBuilding on the shared list. */
 export function spawnWorker(
   prep: IPreptimeWorld,
   ids: IdCounter,
   opts: { id?: number; hunger?: number; buildingId?: number | null; hauling?: boolean; efficiency?: number; toolTicks?: number } = {},
 ): IEntity {
-  // Balance-coupled fields from old saves clamp to CURRENT balance here: a
-  // save written under a higher hungerMax/toolDurationTicks still loads
-  // (isLoadableSave no longer bounds-checks these against BALANCE), so the
-  // clamp is what actually keeps in-world values sane after a downward retune.
-  const hunger = Math.min(opts.hunger ?? 0, BALANCE.hungerMax);
-  const toolTicks = Math.min(opts.toolTicks ?? 0, BALANCE.toolDurationTicks);
-  return prep
-    .buildEntity()
-    .with(new Worker(opts.id ?? ids.take()))
-    .with(new Hunger(hunger))
-    .with(new JobAssignment(opts.buildingId ?? null, opts.hauling ?? false))
-    .with(new Efficiency(opts.efficiency ?? 1))
-    .with(new ToolCoverage(toolTicks))
-    .with(new HaulTrip())
-    .build();
+  return attach(prep, workerComponents({ ...opts, id: opts.id ?? ids.take() }));
 }
 
 export function buildColonyPrepWorld(
@@ -419,10 +391,10 @@ export function buildColonyPrepWorld(
 
 function buildInitialSnapshot(save: SaveGameV3): Snapshot {
   const workerFacts: WorkerFacts[] = save.workers.map((saved) => {
-    // Mirror spawnWorker's clamp so the seeded snapshot matches the entities
-    // buildColonyPrepWorld actually spawns (see spawnWorker for rationale).
-    const hunger = Math.min(saved.hunger, BALANCE.hungerMax);
-    const toolTicks = Math.min(saved.toolTicks, BALANCE.toolDurationTicks);
+    // The same clamps workerComponents applies, so the seeded snapshot matches
+    // the entities buildColonyPrepWorld actually spawns (see src/engine/spawn.ts).
+    const hunger = clampedHunger(saved.hunger);
+    const toolTicks = clampedToolTicks(saved.toolTicks);
     return {
       id: saved.id,
       hunger,
@@ -434,7 +406,7 @@ function buildInitialSnapshot(save: SaveGameV3): Snapshot {
     };
   });
   const buildingFacts: BuildingFacts[] = save.buildings.map((saved) => {
-    // same balance-coupled clamp as spawnBuilding, so the seeded snapshot's
+    // The same clamps buildingComponents applies, so the seeded snapshot's
     // buffered total matches the buffer the spawned entity actually holds
     // (an over-cap saved buffer trims to the cap here too, not just in the world)
     const buffer = new OutputBuffer(clampedBuffer(saved.buffer));
@@ -443,7 +415,7 @@ function buildInitialSnapshot(save: SaveGameV3): Snapshot {
       defId: saved.defId,
       col: saved.col, row: saved.row,
       workerSlots: BUILDINGS[saved.defId].workerSlots,
-      progress: Math.min(saved.progress, BUILDINGS[saved.defId].recipe.ticksPerBatch),
+      progress: clampedProgress(saved.defId, saved.progress),
       batchActive: saved.batchActive,
       buffered: buffer.total(),
       buffer: Object.fromEntries(buffer.amounts) as Partial<Record<ResourceId, number>>,

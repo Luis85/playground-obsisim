@@ -510,6 +510,34 @@ describe('CommandSystem', () => {
     expect(world.getResource(Stockpile).get('wood')).toBe(before + BALANCE.haulCarryCapacity); // still delivers in full
   });
 
+  // The buildings-side companion to the worker parity test below. OBS-4-02
+  // recorded its absence as an open gap: OutputBuffer was added to the restore
+  // path only, so buildings constructed during play had no buffer at all, and
+  // nothing in the suite would have noticed.
+  it('a constructed building carries the same components as a restored one', async () => {
+    const save: SaveGameV3 = {
+      ...initialSave(),
+      buildings: [{ id: 10, defId: 'forester', col: 6, row: 3, progress: 0, batchActive: false, buffer: {} }],
+      nextEntityId: 11, // strictly past every id above, or the load guard refuses the save
+    };
+    const { world, tick, dispatch } = await setup(save);
+    const restored = [...world.getEntities()].find((e) => e.getComponent(Building)?.id === 10)!;
+    const expected = COMPONENT_TYPES.filter((type) => restored.getComponent(type) !== undefined);
+    expect(expected.length).toBeGreaterThan(0); // guards against an empty comparison passing vacuously
+
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
+    await tick();
+    // id > 10 identifies the live-constructed one: the restored building holds
+    // exactly 10, and ids only ever increase.
+    const constructed = [...world.getEntities()]
+      .filter((e) => e.getComponent(Building) !== undefined)
+      .find((e) => e.getComponent(Building)!.id > 10)!;
+    expect(constructed, 'no building was constructed').toBeDefined();
+    for (const type of expected) {
+      expect(constructed.getComponent(type), `constructed building is missing ${type.name}`).toBeDefined();
+    }
+  });
+
   it('a recruited worker carries the same components as a restored one', async () => {
     const { world, tick, dispatch } = await setup();
     // The highest existing id, not just "the first worker found": entity

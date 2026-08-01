@@ -11,6 +11,7 @@ import { CommandSystem } from '../../src/engine/systems/command-system';
 import { HaulSystem } from '../../src/engine/systems/haul-system';
 import { SnapshotSystem } from '../../src/engine/systems/snapshot-system';
 import { isSaveGameV4, MAX_SAVED_ENTITIES } from '../../src/shared/save';
+import { MAX_MAP, relocationTicks } from '../../src/shared/placement';
 
 describe('initialSave', () => {
   it('matches the spec starting state', () => {
@@ -524,6 +525,33 @@ describe('createColonyWorld', () => {
     const world = await createColonyWorld(save);
     const written = buildSaveFromWorld(world);
     expect(written.buildings[0].relocatingTicks).toBe(9);
+    expect(isLoadableSave(written)).toBe(true);
+  });
+
+  it('a relocation countdown legal on the largest map survives save/load unchanged', async () => {
+    // isMapShape (src/shared/save.ts) accepts a map up to MAX_MAP, and
+    // mapThatFits (src/shared/placement.ts) grows a migrated v1 colony's map
+    // that large automatically, so this is not a hypothetical: MAX_MAP's
+    // diagonal is the largest relocation downtime a legal save can ever
+    // record. maxRelocationTicks must not clamp it away — that would cancel
+    // a penalty the engine genuinely charged (spec §2.4).
+    const save = initialSave();
+    save.map = { ...MAX_MAP };
+    const legalTicks = relocationTicks(Math.hypot(MAX_MAP.cols, MAX_MAP.rows), BALANCE.relocationTilesPerTick);
+    save.buildings.push({
+      id: 4, defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, buffer: {},
+      relocatingTicks: legalTicks,
+    });
+    save.nextEntityId = 5;
+    expect(isLoadableSave(save)).toBe(true);
+
+    const world = await createColonyWorld(save);
+    const seeded = world.getResource(SnapshotStore).latest!;
+    const seededBuilding = seeded.buildings.find((b) => b.id === 4)!;
+    expect(seededBuilding.relocatingTicks).toBe(legalTicks); // NOT clamped down
+
+    const written = buildSaveFromWorld(world);
+    expect(written.buildings.find((b) => b.id === 4)!.relocatingTicks).toBe(legalTicks);
     expect(isLoadableSave(written)).toBe(true);
   });
 

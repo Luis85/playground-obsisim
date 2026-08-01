@@ -1,4 +1,27 @@
 import type { ResourceId } from '../../shared/content-types';
+import { MAX_MAP } from '../../shared/placement';
+
+/** Building relocation speed — half the hauler rate, because carrying a
+ * building is harder than carrying goods. Extracted so maxRelocationTicks
+ * below can derive from it instead of repeating the magnitude by hand. */
+const RELOCATION_TILES_PER_TICK = 1;
+
+/**
+ * Clamp for a saved relocation countdown (spec 2.4), derived from the
+ * LARGEST legal map rather than the default one. `isMapShape`
+ * (src/shared/save.ts) accepts a map up to MAX_MAP, and `mapThatFits`
+ * (src/shared/placement.ts) grows a migrated v1 colony's map that large
+ * automatically, so MAX_MAP is reachable in ordinary play, not just a
+ * theoretical bound. A cap sized only for the default 24x16 map's ~28-tile
+ * diagonal truncates a real relocation penalty on a larger map at load —
+ * `clampedRelocation` (spawn.ts) would cancel downtime the engine genuinely
+ * charged, contradicting spec §2.4's save-and-reload guarantee. Deriving
+ * from MAX_MAP keeps this correct if MAX_MAP or the rate above ever change,
+ * instead of needing a second by-hand update the way the stale "30" (a
+ * comment about the 24x16 map, on a constant that has to cover every map
+ * size a save can legally carry) did.
+ */
+const MAX_RELOCATION_TICKS = Math.ceil(Math.hypot(MAX_MAP.cols, MAX_MAP.rows) / RELOCATION_TILES_PER_TICK);
 
 export const BALANCE = {
   hungerPerTick: 1,
@@ -19,12 +42,8 @@ export const BALANCE = {
   /** Hauler walking speed. A building beside the camp is a 1-tick walk; the far
    * corner of the default map is 13, so distance is a real investment. */
   haulTilesPerTick: 2,
-  /** Building relocation speed — half the hauler rate, because carrying a
-   * building is harder than carrying goods. */
-  relocationTilesPerTick: 1,
-  /** Clamp for a saved countdown (spec 4.5). The default 24x16 map's diagonal
-   * is ~28 tiles, so 30 covers any move the current balance can produce. */
-  maxRelocationTicks: 30,
+  relocationTilesPerTick: RELOCATION_TILES_PER_TICK,
+  maxRelocationTicks: MAX_RELOCATION_TICKS,
 } as const;
 
 /** Spec 3.5: fed = 1.0 up to the meal threshold, then linear down to 0.2 at max hunger. */

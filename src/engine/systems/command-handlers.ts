@@ -5,6 +5,7 @@ import { haulTicks } from '../../shared/haul';
 import { autoPlacePosition, isTileBuildable, type TileRef } from '../../shared/placement';
 import { BALANCE } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
+import { RESOURCES, RESOURCE_IDS } from '../content/resources';
 import {
   Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, ToolCoverage, Worker, WorkerSlots,
 } from '../components';
@@ -173,6 +174,20 @@ export function handleUnassignWorker(ctx: CommandContext, command: Extract<Comma
   ctx.notices.succeed(`Unassigned a worker from ${buildingName(ctx, command.buildingId)}.`);
 }
 
+/** What a demolished building's buffer held, worded for the success notice:
+ * resource names from the same catalog `BUILDINGS` comes from, in catalog
+ * order — the determinism rule `OutputBuffer.fullestResource` also uses — and
+ * comma-separated. Empty when the buffer held nothing; the caller decides
+ * whether that is worth a clause of its own. */
+function bufferLossText(amounts: ReadonlyMap<ResourceId, number>): string {
+  const parts: string[] = [];
+  for (const id of RESOURCE_IDS) {
+    const amount = amounts.get(id) ?? 0;
+    if (amount > 0) parts.push(`${amount} ${RESOURCES[id].name}`);
+  }
+  return parts.join(', ');
+}
+
 export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Command, { type: 'demolishBuilding' }>): void {
   const found = findBuilding(ctx, command.buildingId);
   if (found === null) {
@@ -187,13 +202,19 @@ export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Com
   for (const [resource, amount] of Object.entries(def.cost)) {
     ctx.stockpile.add(resource as ResourceId, amount);
   }
-  // Whatever was waiting in the buffer dies with the building — today's rule,
-  // logged as an open design decision (docs/issues, OBS-4-07); a future refund
-  // would add its stockpile.add above this line, not replace it. Emptying it
-  // HERE rather than letting the entity carry it off at the post-step sync is
-  // load-bearing: HaulSystem runs later in this same tick and still sees the
-  // not-yet-removed entity, so a buffer left full would have it dispatch a
-  // hauler at a building that is already gone.
+  // Whatever was waiting in the buffer dies with the building — decided in
+  // OBS-4-07, against refunding it: a building left full of uncollected goods
+  // should be expensive to bulldoze, since that is exactly the pressure
+  // haulers exist to relieve, and a player who wants the goods kept already
+  // has the non-destructive moveBuilding. The notice below names the loss
+  // instead of hiding it. Read here, before the clear, purely to word that
+  // notice — the stockpile loop above is untouched either way. Emptying the
+  // buffer HERE rather than letting the entity carry it off at the post-step
+  // sync is load-bearing for an unrelated reason: HaulSystem runs later in
+  // this same tick and still sees the not-yet-removed entity, so a buffer
+  // left full would have it dispatch a hauler at a building that is already
+  // gone.
+  const lost = bufferLossText(found.buffer.amounts);
   found.buffer.amounts.clear();
   for (const { job, trip } of ctx.workers) {
     if (job.buildingId === command.buildingId) job.buildingId = null;
@@ -208,7 +229,12 @@ export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Com
   ctx.remove(found.entity);
   ctx.demolishedIds.add(command.buildingId);
   ctx.removals.dirty = true;
-  ctx.notices.succeed(`Demolished the ${def.name} — cost refunded.`);
+  // A zero-units clause would be noise on the common case, so the empty
+  // buffer keeps the plain wording rather than gaining an empty ", lost."
+  const notice = lost === ''
+    ? `Demolished the ${def.name} — cost refunded.`
+    : `Demolished the ${def.name} — cost refunded, ${lost} lost.`;
+  ctx.notices.succeed(notice);
 }
 
 export function handleMoveBuilding(ctx: CommandContext, command: Extract<Command, { type: 'moveBuilding' }>): void {

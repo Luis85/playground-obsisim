@@ -237,6 +237,38 @@ describe('CommandSystem', () => {
     expect(snapshot().idleWorkers).toBe(3);
   });
 
+  it('demolishing a building with buffered goods names the loss; the refund stays exactly the construction cost', async () => {
+    // OBS-4-07, resolved: the buffer is destroyed either way (unchanged from
+    // the test above) — only the notice's wording is new. The stockpile
+    // assertion is the guard that this stayed a messaging fix: it must land on
+    // the exact same 30 as the empty-building case above, proving the 9
+    // buffered wood never reached the stockpile despite being named in the notice.
+    const { world, tick, dispatch, snapshot } = await setup();
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' }); // wood 30 -> 20
+    await tick();
+    const buildingId = snapshot().buildings[0].id;
+    for (const entity of world.getEntities()) {
+      const building = entity.getComponent(Building);
+      if (building?.id === buildingId) entity.getComponent(OutputBuffer)!.add('wood', 9);
+    }
+    await dispatch({ type: 'demolishBuilding', buildingId });
+    expect(snapshot().notices).toEqual([
+      { kind: 'success', message: 'Demolished the Forester — cost refunded, 9 Wood lost.' },
+    ]);
+    expect(world.getResource(Stockpile).get('wood')).toBe(30); // construction refund only, same as the empty case
+  });
+
+  it('demolishing an empty building leaves the notice byte-identical to today\'s wording', async () => {
+    // OBS-4-07: a zero-units clause would be noise on the common case, so an
+    // empty buffer must not grow a trailing ", lost." clause of any kind.
+    const { tick, dispatch, snapshot } = await setup();
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
+    await tick();
+    const buildingId = snapshot().buildings[0].id;
+    await dispatch({ type: 'demolishBuilding', buildingId });
+    expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Demolished the Forester — cost refunded.' }]);
+  });
+
   it('rejects demolishing a building that does not exist', async () => {
     const { dispatch, snapshot } = await setup();
     await dispatch({ type: 'demolishBuilding', buildingId: 999 });

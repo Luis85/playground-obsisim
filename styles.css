@@ -115,6 +115,10 @@
   opacity: 0.55;
 }
 
+.obsisim-chip.is-carrying {
+  border-style: dashed;
+}
+
 .obsisim-starved td {
   background-color: rgba(229, 166, 58, 0.08);
 }

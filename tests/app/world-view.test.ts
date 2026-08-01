@@ -207,6 +207,8 @@ describe('WorldView', () => {
     expect(legend.text()).toContain('selected');
     expect(legend.text()).toContain('ghost: buildable');
     expect(legend.text()).toContain('ghost: blocked');
+    expect(legend.text()).toContain('output full');
+    expect(legend.text()).toContain('carrying');
   });
 
   it('falls back when the renderer reports an async fatal failure', async () => {

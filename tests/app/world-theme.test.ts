@@ -56,6 +56,13 @@ describe('resolveWorldTheme', () => {
     expect(themed.danger).toBe('#aa1122');
     expect(themed.workerColors[0]).toBe('#aa1122'); // same source as starving-worker red
   });
+
+  it('gives the output-full stall its own ring, distinct from every other state', () => {
+    const theme = resolveWorldTheme(() => '');
+    expect(theme.stateRing.outputFull).toBe('#8f6fbf');
+    const rings = Object.values(theme.stateRing);
+    expect(new Set(rings).size).toBe(rings.length);
+  });
 });
 
 describe('efficiencyBucket', () => {

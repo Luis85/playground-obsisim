@@ -29,7 +29,7 @@ const BAR_HEIGHT = 5;
 // the camp tent (z 1), progress bars and the selection ring (z 2), workers
 // (z 3), the placement ghost on top of everything (z 4).
 interface BuildingBundle { root: Actor; bar: Actor; track: Actor; }
-interface WorkerBundle { actor: Actor; target: Vector; }
+interface WorkerBundle { actor: Actor; target: Vector; load: Actor; }
 
 /**
  * Building and worker looks are shared, lazily-built graphics: seven defs x
@@ -332,6 +332,9 @@ class WorldScene {
     const target = vec(w.x * TILE, w.y * TILE);
     const bundle = this.workers.get(w.id) ?? this.spawnWorker(w.id, target);
     bundle.actor.graphics.use(this.cache.worker(efficiencyBucket(w.efficiency), w.tooled));
+    // A carrying hauler reads as "loaded" at a glance, which is what makes the
+    // flow direction legible: dots going out are empty, dots coming back are not.
+    bundle.load.graphics.visible = w.carrying;
     this.walkWorker(bundle, target);
   }
 
@@ -339,7 +342,11 @@ class WorldScene {
   private spawnWorker(id: number, target: Vector): WorkerBundle {
     const actor = new Actor({ pos: target, z: 3 });
     this.engine.currentScene.add(actor);
-    const bundle = { actor, target };
+    const load = new Actor({ pos: vec(0, -WORKER_RADIUS - 3), z: 3 });
+    load.graphics.use(new Circle({ radius: 3, color: Color.fromHex(this.theme.progressFill) }));
+    load.graphics.visible = false;
+    actor.addChild(load);
+    const bundle = { actor, target, load };
     this.workers.set(id, bundle);
     return bundle;
   }

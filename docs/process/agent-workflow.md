@@ -52,10 +52,19 @@ tiebreak.
 
 **No vitest test may import `src/app/world/renderer.ts` or `graphics-cache.ts`.**
 Excalibur throws on import outside a browser. Their only coverage is
-`npm run smoke:world`, which is why that suite's strength is load-bearing — and
-why its whole-frame `!after.equals(before)` checks are weaker than they look
-(OBS-4-04). Prefer equality assertions and semantic probes; change one thing per
-fixture phase.
+`npm run smoke:world`, which is why that suite's strength is load-bearing.
+
+**Change one thing per fixture phase**, and say so in the phase's name when it
+must change several. Nearly every smoke check has the shape
+`!after.equals(before)`, so a phase that moves five things at once keeps the
+comparison true for reasons unrelated to the check's name. The haul phases did
+exactly that, and the check named "the hauler returns to camp carrying its load"
+would have stayed green with the load marker entirely absent — verified, not
+assumed (OBS-4-04). Splitting them into four single-change phases fixed it.
+
+Mutation-test smoke checks the same way as unit tests: disable the feature in
+`renderer.ts` or `layout.ts` and confirm the named check — and only that check —
+goes red.
 
 ## Briefs
 

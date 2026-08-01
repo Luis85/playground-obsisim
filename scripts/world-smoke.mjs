@@ -115,33 +115,46 @@ await wait(300); // no walk to wait out — the building snaps
 const moved = await shot();
 check('a moved building is drawn at its new tile (no worker motion to hide behind)', !moved.equals(preMove));
 
-await step(6); // hauler walks out to the backed-up forester
+// The haul phases change ONE thing each (see haulScene in the harness), so the
+// three checks below fail for the reason they name. They used to compare frames
+// across a phase that moved five things at once, and the load-marker check in
+// particular would have stayed green with the marker entirely absent (OBS-4-04).
+await step(6); // haul baseline: worker 12 idle at camp, already tooled
+await wait(2500); // let worker 12 walk back from its old post and settle
+const haulBase = await shot();
+
+await step(7); // ONLY change: worker 12 becomes a hauler bound for building 1
 await wait(400);
 const outbound = await shot();
-check('a hauler walking out changes the scene', !outbound.equals(moved));
+check('a hauler dispatched to a building changes the scene (worker 12 is the only difference)', !outbound.equals(haulBase));
 
-await step(7); // same hauler, home with a load
-await wait(2500); // the walk back settles
-const delivered = await shot();
-check('the hauler returns to camp carrying its load', !delivered.equals(outbound));
+await step(8); // ONLY change: the same hauler walks home, still empty
+await wait(2500); // the walk back settles, so the next frame differs only by the marker
+const homeEmpty = await shot();
+check('a hauler walking home differs from one walking out', !homeEmpty.equals(outbound));
+
+await step(9); // ONLY change: `carrying`, on a settled actor at the same tile
+await wait(400);
+const carrying = await shot();
+check('the load marker is drawn on a carrying hauler (only `carrying` differs)', !carrying.equals(homeEmpty));
 
 const preGhost = await shot();
-await step(8); // ghost + selection on
+await step(10); // ghost + selection on
 await wait(300);
 const ghostOn = await shot();
 check('setGhost + setSelection draw over the scene', !ghostOn.equals(preGhost));
 
-await step(9); // same tile, invalid tint
+await step(11); // same tile, invalid tint
 await wait(300);
 const ghostInvalid = await shot();
 check('an invalid ghost reads differently from a valid one', !ghostInvalid.equals(ghostOn));
 
-await step(10); // both cleared
+await step(12); // both cleared
 await wait(300);
 const ghostOff = await shot();
 check('clearing ghost and selection restores the scene', ghostOff.equals(preGhost));
 
-await step(11); // colony reset: tick regresses, ids recycle
+await step(13); // colony reset: tick regresses, ids recycle
 await wait(400);
 const afterReset = await page.evaluate(() => window.__probe());
 check(
@@ -149,7 +162,7 @@ check(
   afterReset.building === 0 && afterReset.worker > 0,
 );
 
-await step(12); // same-tick reset: a new snapshot at the same tick is a new timeline
+await step(14); // same-tick reset: a new snapshot at the same tick is a new timeline
 await wait(400);
 const afterSameTickReset = await page.evaluate(() => window.__probe());
 check(
@@ -160,7 +173,7 @@ check(
   afterSameTickReset.building === 0 && afterSameTickReset.worker > 0,
 );
 
-await step(13); // dispose()
+await step(15); // dispose()
 await wait(300);
 check('dispose() raises no errors', pageErrors.length === 0);
 

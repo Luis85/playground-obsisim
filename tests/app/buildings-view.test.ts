@@ -50,7 +50,7 @@ describe('BuildingsView', () => {
 
     useGameStore().ingest(makeSnapshot({ buildings: [] }), { paused: true, speed: 1, error: null });
     await waiting.wrapper.vm.$nextTick();
-    const cell = waiting.wrapper.get('td[colspan="9"]');
+    const cell = waiting.wrapper.get('td[colspan="10"]');
     expect(cell.text()).toContain('Forester');
     expect(cell.text()).toMatch(/Gatherer.?s Hut/);
     expect(cell.text()).toContain('10 wood each');
@@ -104,5 +104,17 @@ describe('BuildingsView', () => {
     await wrapper.vm.$nextTick();
     expect(wrapper.find('[data-test="waiting-7"]').text()).toBe('12');
     expect(wrapper.text()).toContain('Output full');
+  });
+
+  it('shows remaining downtime for a relocating building', async () => {
+    const { wrapper } = mountView({}, 'relocating', { relocatingTicks: 6 });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-test="downtime-7"]').text()).toBe('6t');
+  });
+
+  it('shows an em dash when a building is not relocating', async () => {
+    const { wrapper } = mountView({}, 'producing', { relocatingTicks: 0 });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-test="downtime-7"]').text()).toBe('—');
   });
 });

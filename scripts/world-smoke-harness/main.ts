@@ -22,14 +22,15 @@ window.addEventListener('unhandledrejection', (event) => window.__errors.push(St
 function building(id: number, defId: BuildingSnapshot['defId'], col: number, row: number, overrides: Partial<BuildingSnapshot> = {}): BuildingSnapshot {
   return {
     id, defId, col, row, workers: 0, workerSlots: 2, state: 'unstaffed',
-    progress: 0, batchActive: false, progressPct: 0, tooledWorkers: 0, workPower: 0, buffered: 0,
+    progress: 0, batchActive: false, progressPct: 0, tooledWorkers: 0, workPower: 0, buffered: 0, relocatingTicks: 0,
     ...overrides,
   };
 }
 
 function worker(id: number, overrides: Partial<WorkerSnapshot> = {}): WorkerSnapshot {
   return {
-    id, hunger: 0, efficiency: 1, buildingId: null, hauling: false, haulTargetId: null, carrying: 0, toolTicks: 0,
+    id, hunger: 0, efficiency: 1, buildingId: null, hauling: false,
+    haulTargetId: null, haulPhase: 'idle', haulTicksLeft: 0, carrying: 0, toolTicks: 0,
     ...overrides,
   };
 }
@@ -49,6 +50,26 @@ const renderer = createExcaliburWorldRenderer(document.getElementById('host')!);
 // them) — one helper expresses that identical-by-construction, instead of
 // two copies fallow's clone detector would otherwise flag as drift-prone.
 const growWorkers = () => [worker(10, { buildingId: 1, toolTicks: 100 }), worker(11, { buildingId: 1, efficiency: 0.3 }), worker(12, { buildingId: 2 }), worker(13)];
+
+/**
+ * The haul phases hold EVERYTHING constant except worker 12, so each haul check
+ * isolates exactly one change (OBS-4-04). They previously moved five things at
+ * once — a building removed, another reset to unstaffed, two worker overrides
+ * dropped, and worker 12 reassigned — which left `!after.equals(before)` true
+ * for reasons unrelated to hauling. The check named "the hauler returns to camp
+ * carrying its load" would have stayed green with the load marker absent.
+ *
+ * Worker 12 is tooled in every phase, so the tool ring and the load marker are
+ * still drawn on the same worker in the last one (the coverage the old fixture
+ * was after) without the ring being part of what changes.
+ *
+ * Ticks must strictly increase: a sync at the same or an earlier tick is a
+ * colony reset by design (see renderer.ts), which would wipe the scene between
+ * phases instead of animating through it.
+ */
+const haulScene = (tick: number, hauler: Partial<WorkerSnapshot>, forester: Partial<BuildingSnapshot> = {}) => snap(tick,
+  [building(1, 'forester', 4, 1, { buffered: 12, state: 'outputFull', ...forester }), building(2, 'farm', 6, 1)],
+  [worker(10, { buildingId: 1 }), worker(11, { buildingId: 1 }), worker(12, { toolTicks: 100, ...hauler })]);
 
 // Phase script, advanced from the runner. Worker 12 walks in phase 1; the
 // batch progresses in both; phase 4 adds a building and a tooled worker.
@@ -71,16 +92,17 @@ const phases: Array<() => void> = [
   () => renderer.sync(snap(4,
     [building(1, 'forester', 4, 1, { workers: 2, state: 'producing', batchActive: true, progressPct: 90 }), building(2, 'farm', 6, 1, { workers: 1, state: 'producing', batchActive: true, progressPct: 10 }), building(3, 'sawmill', 14, 7)],
     growWorkers())),
-  // hauler walking out to a backed-up building, then the same hauler home
-  // with a load: two snapshots is all the renderer needs to animate a trip.
-  // The returning hauler is also tooled, so this frame is the one place the
-  // load marker and the tool ring are drawn on the same worker.
-  () => renderer.sync(snap(5,
-    [building(1, 'forester', 4, 1, { buffered: 12, state: 'outputFull' }), building(2, 'farm', 6, 1)],
-    [worker(10, { buildingId: 1 }), worker(11, { buildingId: 1 }), worker(12, { hauling: true, haulTargetId: 1 })])),
-  () => renderer.sync(snap(6,
-    [building(1, 'forester', 4, 1, { buffered: 6 }), building(2, 'farm', 6, 1)],
-    [worker(10, { buildingId: 1 }), worker(11, { buildingId: 1 }), worker(12, { hauling: true, carrying: 6, toolTicks: 100 })])),
+  // Four haul phases, one change each — see haulScene above. Building 1 sits at
+  // (4,1), hypot(2,1) = 2.24 tiles from the camp, so each leg is
+  // ceil(2.24/2) = 2 ticks. The dot's position comes from haulTicksLeft
+  // (OBS-4-09), so these values are what move it, not elapsed wall-clock.
+  () => renderer.sync(haulScene(5, {})),                                                    // 6: baseline, idle at camp
+  () => renderer.sync(haulScene(6, { hauling: true, haulTargetId: 1, haulPhase: 'outbound', haulTicksLeft: 0 })), // 7: arrived at the building
+  () => renderer.sync(haulScene(7, { hauling: true, haulTargetId: 1, haulPhase: 'returning', haulTicksLeft: 1 })), // 8: half way home — a genuinely interpolated point, neither endpoint
+  () => renderer.sync(haulScene(8, { hauling: true, haulTargetId: 1, haulPhase: 'returning', haulTicksLeft: 1, carrying: 6 })), // 9: same point, now loaded
+  // ONE change from the previous phase: building 1 flips to relocating. Its
+  // ring colour must differ, and nothing else in the scene moves.
+  () => renderer.sync(haulScene(9, { hauling: true, haulTargetId: 1, haulPhase: 'returning', haulTicksLeft: 1, carrying: 6 }, { state: 'relocating', relocatingTicks: 6 })),
   () => {
     renderer.setGhost({ defId: 'bakery', col: 10, row: 5, valid: true });
     renderer.setSelection(1);

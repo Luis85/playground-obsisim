@@ -118,9 +118,9 @@ describe('useGameStore', () => {
   it('runways: ticks until a draining resource empties, absent otherwise', () => {
     const store = useGameStore();
     const snapshot = makeSnapshot();
-    snapshot.stockpile.wheat = { stock: 10, productionRate: 0, consumptionRate: 0.5, netFlow: -0.5, stockValue: 0 };
-    snapshot.stockpile.bread = { stock: 4, productionRate: 1, consumptionRate: 0.5, netFlow: 0.5, stockValue: 0 };
-    snapshot.stockpile.wood = { stock: 0, productionRate: 0, consumptionRate: 1, netFlow: -1, stockValue: 0 };
+    snapshot.stockpile.wheat = { stock: 10, deliveredRate: 0, madeRate: 0, consumptionRate: 0.5, netFlow: -0.5, stockValue: 0 };
+    snapshot.stockpile.bread = { stock: 4, deliveredRate: 1, madeRate: 0, consumptionRate: 0.5, netFlow: 0.5, stockValue: 0 };
+    snapshot.stockpile.wood = { stock: 0, deliveredRate: 0, madeRate: 0, consumptionRate: 1, netFlow: -1, stockValue: 0 };
     store.ingest(snapshot, status);
     expect(store.runways.wheat).toBe(20); // 10 / 0.5
     expect(store.runways.bread).toBeUndefined(); // growing, no runway
@@ -132,7 +132,7 @@ describe('useGameStore', () => {
     const store = useGameStore();
     const base = {
       col: 0, row: 0, workers: 0, workerSlots: 2, progress: 0, batchActive: false,
-      progressPct: 0, tooledWorkers: 0, workPower: 0, buffered: 0,
+      progressPct: 0, tooledWorkers: 0, workPower: 0, buffered: 0, relocatingTicks: 0,
     };
     store.ingest(makeSnapshot({
       buildings: [

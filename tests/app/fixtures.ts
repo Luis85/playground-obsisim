@@ -5,14 +5,14 @@ import type { BuildingSnapshot, WorkerSnapshot } from '../../src/shared/snapshot
 
 /**
  * A full stockpile with the given resources' `stock` set, everything else at
- * zero. Every RESOURCE_IDS entry is always present (with productionRate,
- * consumptionRate, netFlow, and stockValue all zeroed) so a test can index
- * any ResourceId on the result without an extra existence check — the real
- * Snapshot.stockpile is a complete Record too, never a sparse partial one.
+ * zero. Every RESOURCE_IDS entry is always present (with deliveredRate,
+ * madeRate, consumptionRate, netFlow, and stockValue all zeroed) so a test can
+ * index any ResourceId on the result without an extra existence check — the
+ * real Snapshot.stockpile is a complete Record too, never a sparse partial one.
  */
 export function stockedWith(stocks: Partial<Record<ResourceId, number>> = {}): Record<ResourceId, ResourceStats> {
   return Object.fromEntries(
-    RESOURCE_IDS.map((id) => [id, { stock: stocks[id] ?? 0, productionRate: 0, consumptionRate: 0, netFlow: 0, stockValue: 0 }]),
+    RESOURCE_IDS.map((id) => [id, { stock: stocks[id] ?? 0, deliveredRate: 0, madeRate: 0, consumptionRate: 0, netFlow: 0, stockValue: 0 }]),
   ) as Record<ResourceId, ResourceStats>;
 }
 
@@ -31,14 +31,15 @@ export function makeBuilding(id: number, overrides: Partial<BuildingSnapshot> = 
   return {
     id, defId: 'farm', col: 4 + 2 * ((id - 1) % 5), row: 1 + 2 * (Math.floor((id - 1) / 5) % 8),
     workers: 0, workerSlots: 4, state: 'unstaffed',
-    progress: 0, batchActive: false, progressPct: 0, tooledWorkers: 0, workPower: 0, buffered: 0,
+    progress: 0, batchActive: false, progressPct: 0, tooledWorkers: 0, workPower: 0, buffered: 0, relocatingTicks: 0,
     ...overrides,
   };
 }
 
 export function makeWorker(id: number, overrides: Partial<WorkerSnapshot> = {}): WorkerSnapshot {
   return {
-    id, hunger: 0, efficiency: 1, buildingId: null, hauling: false, haulTargetId: null, carrying: 0, toolTicks: 0,
+    id, hunger: 0, efficiency: 1, buildingId: null, hauling: false,
+    haulTargetId: null, haulPhase: 'idle', haulTicksLeft: 0, carrying: 0, toolTicks: 0,
     ...overrides,
   };
 }

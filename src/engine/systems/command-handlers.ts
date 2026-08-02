@@ -2,13 +2,12 @@ import type { IEntity } from 'sim-ecs';
 import type { Command } from '../../shared/commands';
 import type { ResourceId } from '../../shared/content-types';
 import { haulTicks } from '../../shared/haul';
-import { autoPlacePosition, isTileBuildable, type TileRef } from '../../shared/placement';
+import { autoPlacePosition, isTileBuildable, relocationTicks, type TileRef } from '../../shared/placement';
 import { BALANCE } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
 import { RESOURCES, RESOURCE_IDS } from '../content/resources';
-import {
-  Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, ToolCoverage, Worker, WorkerSlots,
-} from '../components';
+import { Building, HaulTrip, JobAssignment, OutputBuffer, Position, Relocation, WorkerSlots } from '../components';
+import { buildingComponents, workerComponents } from '../spawn';
 import type { IdCounter, NoticeBoard, RemovalLedger, SimClock, Stockpile, WorldMap } from '../resources';
 
 // One small handler per command type (the complexity gate is why they live
@@ -24,6 +23,7 @@ export interface BuildingRow {
   slots: WorkerSlots;
   position: Position;
   buffer: OutputBuffer;
+  relocation: Relocation;
 }
 
 export interface WorkerRow {
@@ -103,13 +103,10 @@ export function handleConstructBuilding(ctx: CommandContext, command: Extract<Co
     return;
   }
   ctx.claimedTiles.push({ col: at.col, row: at.row });
-  ctx.spawn(
-    new Building(ctx.ids.take(), def.id),
-    new WorkerSlots(def.workerSlots),
-    new Production(),
-    new Position(at.col, at.row),
-    new OutputBuffer(),
-  );
+  // Component list shared with the save-restore path (src/engine/spawn.ts) so a
+  // building constructed in play cannot end up missing one — it already did,
+  // with OutputBuffer (OBS-4-02).
+  ctx.spawn(...buildingComponents({ id: ctx.ids.take(), defId: def.id, col: at.col, row: at.row }));
   ctx.notices.succeed(`Built a ${def.name}.`);
 }
 
@@ -125,7 +122,9 @@ export function handleRecruitWorker(ctx: CommandContext): void {
   }
   ctx.clock.lastRecruitTick = ctx.clock.tick;
   const id = ctx.ids.take();
-  ctx.spawn(new Worker(id), new Hunger(), new JobAssignment(), new Efficiency(), new ToolCoverage(), new HaulTrip());
+  // Same shared list as the restore path — a worker recruited in play once
+  // shipped without HaulTrip and vanished from snapshots entirely (OBS-4-02).
+  ctx.spawn(...workerComponents({ id }));
   ctx.notices.succeed(`Recruited worker #${id}.`);
 }
 
@@ -195,12 +194,12 @@ export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Com
     return;
   }
   const def = BUILDINGS[found.building.defId];
-  // Full refund — flagged balance knob (increment 5 owns tuning). add() is
-  // the one write path, so the refund shows in production stats; that is
-  // deliberate visibility, not an accounting bug. Active batch progress is
-  // simply lost with the entity.
+  // Full refund — flagged balance knob (increment 5 owns tuning). refund(),
+  // not add(): the building was never hauled to, so this must not inflate
+  // the Economy view's Delivered/t (Stockpile.refund's doc comment says why).
+  // Active batch progress is simply lost with the entity.
   for (const [resource, amount] of Object.entries(def.cost)) {
-    ctx.stockpile.add(resource as ResourceId, amount);
+    ctx.stockpile.refund(resource as ResourceId, amount);
   }
   // Whatever was waiting in the buffer dies with the building — decided in
   // OBS-4-07, against refunding it: a building left full of uncollected goods
@@ -253,8 +252,16 @@ export function handleMoveBuilding(ctx: CommandContext, command: Extract<Command
     ctx.notices.reject('Cannot move there.');
     return;
   }
+  // Read BEFORE overwriting found.position: doing this after would measure a
+  // zero-distance move against the tile the building already occupies.
+  const moved = Math.hypot(to.col - found.position.col, to.row - found.position.row);
   found.position.col = to.col;
   found.position.row = to.row;
+  // Distance-scaled downtime: relocation used to be free and instant, which let
+  // a player cluster at the camp and never feel haul pressure. Replaces any
+  // remaining downtime rather than adding to it — accumulating would let a
+  // player trap a building by accident.
+  found.relocation.ticksLeft = relocationTicks(moved, BALANCE.relocationTilesPerTick);
   // Haulers already walking to this building now have a different journey:
   // recompute from the new tile so the ticks charged match the line the dot
   // visibly travels. A returning hauler is unaffected — it walks to the camp,
@@ -279,8 +286,32 @@ export function handleAssignHauler(ctx: CommandContext): void {
   ctx.notices.succeed('Assigned a hauler.');
 }
 
+/**
+ * Which hauler the `−` button takes off duty. Spec §2.3 fixes the *dispatch*
+ * order but said nothing about removal, so this used to take the first hauler in
+ * entity-iteration order — which could interrupt a loaded worker most of the way
+ * home while an idle one stood at the camp (OBS-4-08).
+ *
+ * Cheapest trip to throw away first: an idle hauler wastes nothing, an outbound
+ * one wastes only the walk out (it carries nothing yet), and a returning one
+ * wastes the walk it has already done — so among those, take the one closest to
+ * home, whose remaining walk is smallest. Ties break by the same
+ * entity-iteration order as before, which keeps the choice deterministic.
+ */
+export function cheapestHaulerToRelease(workers: WorkerRow[]): WorkerRow | undefined {
+  const haulers = workers.filter(({ job }) => job.hauling);
+  const cost = ({ trip }: WorkerRow) => (trip.phase === 'idle' ? 0 : trip.phase === 'outbound' ? 1 : 2);
+  return haulers.reduce<WorkerRow | undefined>((best, hauler) => {
+    if (best === undefined) return hauler;
+    if (cost(hauler) !== cost(best)) return cost(hauler) < cost(best) ? hauler : best;
+    // Same phase: prefer the one with the least walking left to lose. Strict <
+    // keeps the earlier worker on a tie, preserving iteration order.
+    return hauler.trip.ticksLeft < best.trip.ticksLeft ? hauler : best;
+  }, undefined);
+}
+
 export function handleUnassignHauler(ctx: CommandContext): void {
-  const hauler = ctx.workers.find(({ job }) => job.hauling);
+  const hauler = cheapestHaulerToRelease(ctx.workers);
   if (hauler === undefined) {
     ctx.notices.reject('No hauler to unassign.');
     return;

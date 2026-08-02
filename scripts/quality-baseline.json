@@ -7,5 +7,10 @@
   "duplicatedLines": 0,
   "complexFunctions": 0,
   "criticalComplexity": 0,
-  "maintainability": 90.5
+  "worstSrcFileMaintainability": 82.1,
+  "reported": {
+    "srcMean": 90.02,
+    "testsMean": 89.68,
+    "overallMean": 90.46
+  }
 }

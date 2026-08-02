@@ -1,11 +1,12 @@
 ---
 id: OBS-4-05
 title: Parallel agents share one git index, so explicit-path staging does not prevent collisions
-status: open
+status: resolved
 severity: minor
 area: process
 increment: 4
 created: 2026-08-01
+resolved: 2026-08-01
 source: increment-4, collision between the carried-load fix and Task 17
 affects:
   - .claude/skills/subagent-driven-development
@@ -63,3 +64,25 @@ narrows what you add; it does not narrow what you commit.
    the test suite.
 
 Option 1 should be adopted immediately; option 3 is the real fix.
+
+## Resolution
+
+Option 1 is adopted as the standing contract and now has a durable home:
+`docs/process/agent-workflow.md`. Every commit on the increment-5 branch used
+`git commit <path> -m …`, and the rule is written down with the `ff9e065`
+collision as its justification, so it survives the branch that learned it —
+which was the actual risk, since the instruction previously lived only in
+increment briefs.
+
+The doc also records the one wrinkle pathspec commits have: a **new** file must
+be `git add`-ed once before it can be named in a pathspec commit, which is a
+narrow re-opening of the same race. Doing that `git add` immediately before the
+commit, rather than at the start of the work, keeps the window to a moment.
+
+Option 3 (a `git worktree` per writing agent) is **not** done and remains the
+real fix — it removes the shared index and the shared tree together, and also
+stops a reviewer seeing another agent's half-finished edits. It is recorded as
+the thing to adopt the next time more than one agent writes concurrently.
+Increment 5's issue clearing was executed by a single writer, so the race could
+not arise and building worktree infrastructure for it would have been
+speculative.

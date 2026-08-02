@@ -1,11 +1,13 @@
 import type { IRuntimeWorld } from 'sim-ecs';
 import type { BuildingDefId, ResourceId } from '../shared/content-types';
+import type { HaulPhase } from '../shared/haul';
 import type { SavedBuilding, SavedWorker } from '../shared/save';
 import type { BuildingSnapshot, BuildingState, WorkerSnapshot } from '../shared/snapshot';
 import { BALANCE, workerWorkPower } from './content/balance';
 import { batchOutputUnits, BUILDINGS } from './content/buildings';
 import {
-  Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, ToolCoverage, Worker, WorkerSlots,
+  Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Worker,
+  WorkerSlots,
 } from './components';
 
 /**
@@ -22,6 +24,8 @@ export interface WorkerFacts {
   buildingId: number | null;
   hauling: boolean;
   haulTargetId: number | null;
+  haulPhase: HaulPhase;
+  haulTicksLeft: number;
   carrying: number;
   carryingResource: ResourceId | null;
   toolTicks: number;
@@ -37,6 +41,7 @@ export interface BuildingFacts {
   batchActive: boolean;
   buffered: number;
   buffer: Partial<Record<ResourceId, number>>;
+  relocatingTicks: number;
 }
 
 export interface EntitySections {
@@ -66,7 +71,8 @@ export function buildEntitySections(workers: readonly WorkerFacts[], buildings: 
   const workerSnaps: WorkerSnapshot[] = workers
     .map((w) => ({
       id: w.id, hunger: w.hunger, efficiency: w.efficiency, buildingId: w.buildingId, hauling: w.hauling,
-      haulTargetId: w.haulTargetId, carrying: w.carrying, toolTicks: w.toolTicks,
+      haulTargetId: w.haulTargetId, haulPhase: w.haulPhase, haulTicksLeft: w.haulTicksLeft,
+      carrying: w.carrying, toolTicks: w.toolTicks,
     }))
     .sort((a, b) => a.id - b.id);
 
@@ -79,9 +85,13 @@ export function buildEntitySections(workers: readonly WorkerFacts[], buildings: 
       // the same either way: send a hauler. Staffing still takes precedence,
       // since an unstaffed building is not waiting on transport.
       const outputBlocked = BALANCE.outputBufferCap - b.buffered < batchOutputUnits(def.recipe);
-      const state: BuildingState = staffed === 0
-        ? 'unstaffed'
-        : outputBlocked ? 'outputFull' : b.batchActive ? 'producing' : 'waitingForInput';
+      // Relocating first: it is the reason nothing is happening, and an
+      // unstaffed/output-full label would send the player after the wrong fix.
+      const state: BuildingState = b.relocatingTicks > 0
+        ? 'relocating'
+        : staffed === 0
+          ? 'unstaffed'
+          : outputBlocked ? 'outputFull' : b.batchActive ? 'producing' : 'waitingForInput';
       return {
         id: b.id,
         defId: b.defId,
@@ -95,6 +105,7 @@ export function buildEntitySections(workers: readonly WorkerFacts[], buildings: 
         tooledWorkers: tooledByBuilding.get(b.id) ?? 0,
         workPower: powerByBuilding.get(b.id) ?? 0,
         buffered: b.buffered,
+        relocatingTicks: b.relocatingTicks,
       };
     })
     .sort((a, b) => a.id - b.id);
@@ -129,9 +140,13 @@ export function workerFactsOf(
     efficiency: efficiency.value,
     buildingId: job.buildingId,
     hauling: job.hauling,
-    // Only an outbound hauler has somewhere to be: a returning one is walking
-    // to the camp, which the layout places without needing a target.
-    haulTargetId: trip.phase === 'outbound' ? trip.targetId : null,
+    // Published on BOTH legs now: the layout interpolates the dot along the
+    // camp<->building line, so a returning hauler still needs to know which
+    // building it is walking back from (OBS-4-09). `trip.targetId` survives the
+    // phase flip and is cleared only by trip.reset().
+    haulTargetId: trip.targetId,
+    haulPhase: trip.phase,
+    haulTicksLeft: trip.ticksLeft,
     carrying: trip.amount,
     carryingResource: trip.resource,
     toolTicks: coverage.remainingTicks,
@@ -139,7 +154,7 @@ export function workerFactsOf(
 }
 
 export function buildingFactsOf(
-  building: Building, slots: WorkerSlots, production: Production, position: Position, buffer: OutputBuffer,
+  building: Building, slots: WorkerSlots, production: Production, position: Position, buffer: OutputBuffer, relocation: Relocation,
 ): BuildingFacts {
   return {
     id: building.id,
@@ -151,6 +166,7 @@ export function buildingFactsOf(
     batchActive: production.batchActive,
     buffered: buffer.total(),
     buffer: Object.fromEntries(buffer.amounts) as Partial<Record<ResourceId, number>>,
+    relocatingTicks: relocation.ticksLeft,
   };
 }
 
@@ -173,6 +189,7 @@ export function savedBuildingOf(facts: BuildingFacts): SavedBuilding {
   return {
     id: facts.id, defId: facts.defId, col: facts.col, row: facts.row,
     progress: facts.progress, batchActive: facts.batchActive, buffer: facts.buffer,
+    relocatingTicks: facts.relocatingTicks,
   };
 }
 
@@ -198,6 +215,7 @@ export function gatherEntityFacts(world: IRuntimeWorld): EntityFacts {
         entity.getComponent(Production)!,
         entity.getComponent(Position)!,
         entity.getComponent(OutputBuffer)!,
+        entity.getComponent(Relocation)!,
       ));
       continue;
     }

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { SimClock, SnapshotStore } from '../../src/engine/resources';
 import { createColonyWorld, initialSave } from '../../src/engine/world';
 import { enqueue as dispatch } from './fixtures';
-import type { SaveGameV3 } from '../../src/shared/save';
+import type { SaveGameV4 } from '../../src/shared/save';
 
 async function run(world: Awaited<ReturnType<typeof createColonyWorld>>, ticks: number) {
   const clock = world.getResource(SimClock);
@@ -20,7 +20,7 @@ async function run(world: Awaited<ReturnType<typeof createColonyWorld>>, ticks: 
  * downstream building's input is paid from the Stockpile, never straight
  * from an upstream building's buffer.
  */
-function richSave(): SaveGameV3 {
+function richSave(): SaveGameV4 {
   const save = initialSave();
   save.stockpile = { wood: 500, planks: 200, berries: 200 };
   save.workers = Array.from({ length: 18 }, (_, i) => ({ id: i + 1, hunger: 0, buildingId: null, toolTicks: 0, hauling: false }));
@@ -73,8 +73,8 @@ describe('full colony integration', () => {
 
     const final = snapshot();
     expect(final.stockpile.bread.stock).toBeGreaterThan(0);
-    expect(final.stockpile.tools.productionRate).toBeGreaterThan(0);
-    expect(final.stockpile.bread.productionRate).toBeGreaterThan(0);
+    expect(final.stockpile.tools.deliveredRate).toBeGreaterThan(0);
+    expect(final.stockpile.bread.deliveredRate).toBeGreaterThan(0);
     // wheat must not accumulate unboundedly (2 farm workers vs 2 mill workers,
     // fed by haulers rather than a direct stockpile write)
     expect(final.stockpile.wheat.stock).toBeLessThan(50);

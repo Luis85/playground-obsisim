@@ -1,4 +1,5 @@
 import type { BuildingDefId, ResourceId } from '../shared/content-types';
+import type { HaulPhase } from '../shared/haul';
 
 export class Building {
   constructor(public id: number, public defId: BuildingDefId) {}
@@ -91,7 +92,23 @@ export class OutputBuffer {
   }
 }
 
-export type HaulPhase = 'idle' | 'outbound' | 'returning';
+// Defined in src/shared/haul.ts (the snapshot publishes it, and shared may
+// not import the engine); re-exported here so component consumers need one import.
+export type { HaulPhase };
+
+/**
+ * Ticks a building is still out of action after being moved. Unlike HaulTrip,
+ * this DOES survive a save (save v4) — it is a penalty already incurred, and
+ * dropping it would let save-and-reload cancel it for free. `savedBuildingOf`
+ * writes `SavedBuilding.relocatingTicks` (required since v4) and
+ * `buildingComponents` restores it on load. The load guard only rejects a
+ * negative or fractional countdown (a record no engine version could write);
+ * magnitude is clamped to current balance by `clampedRelocation` instead, so a
+ * save written under a slower `relocationTilesPerTick` still loads.
+ */
+export class Relocation {
+  constructor(public ticksLeft = 0) {}
+}
 
 /**
  * A hauler's current trip. Runtime-only: it never enters the save — a hauler

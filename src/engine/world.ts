@@ -1,19 +1,24 @@
 import { buildWorld } from 'sim-ecs';
 import type { IEntity, IPreptimeWorld, IRuntimeWorld } from 'sim-ecs';
-import { isSaveGameV3, LATEST_SAVE_VERSION, MAX_SAVED_COUNTER } from '../shared/save';
+import { isSaveGameV4, LATEST_SAVE_VERSION, MAX_SAVED_COUNTER } from '../shared/save';
 import { migrateSaveToLatest } from '../shared/save-migration';
-import type { SaveGameV3, SavedBuilding } from '../shared/save';
+import type { SaveGameV4, SavedBuilding } from '../shared/save';
 import type { ResourceId } from '../shared/content-types';
 import type { ResourceStats, Snapshot } from '../shared/snapshot';
-import { CAMP_COLS, DEFAULT_MAP, isInsideMap } from '../shared/placement';
+import { DEFAULT_MAP } from '../shared/placement';
 import { BALANCE, STARTING_STOCK, STARTING_WORKERS, workerEfficiency } from './content/balance';
 import { BUILDINGS } from './content/buildings';
 import { RESOURCES, RESOURCE_IDS } from './content/resources';
 import {
-  Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, ToolCoverage, Worker, WorkerSlots,
+  Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Worker,
+  WorkerSlots,
 } from './components';
+import { isBuffersValid, isBuildingsValid, isIdsValid, isPositionsValid, isStockpileValid, isWorkersValid } from './save-guard';
 import {
-  CommandQueue, IdCounter, NoticeBoard, RemovalLedger, SimClock, SnapshotStore, StatsHistory, Stockpile, WorldMap,
+  buildingComponents, clampedBuffer, clampedHunger, clampedProgress, clampedRelocation, clampedToolTicks, workerComponents,
+} from './spawn';
+import {
+  CommandQueue, IdCounter, NoticeBoard, ProductionLedger, RemovalLedger, SimClock, SnapshotStore, StatsHistory, Stockpile, WorldMap,
 } from './resources';
 import type { BuildingFacts, WorkerFacts } from './snapshot-builder';
 import { buildEntitySections, gatherEntityFacts } from './snapshot-builder';
@@ -78,9 +83,10 @@ export function getPrepResource<T extends object>(prep: IPreptimeWorld, type: ne
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors sim-ecs's own TTypeProto<T> constructor-parameter shape exactly
 export const COMPONENT_TYPES: (new (...args: any[]) => object)[] = [
   Building, WorkerSlots, Production, Worker, Hunger, JobAssignment, Efficiency, ToolCoverage, Position, OutputBuffer, HaulTrip,
+  Relocation,
 ];
 
-export function initialSave(): SaveGameV3 {
+export function initialSave(): SaveGameV4 {
   return {
     version: LATEST_SAVE_VERSION,
     tick: 0,
@@ -99,124 +105,8 @@ export function initialSave(): SaveGameV3 {
   };
 }
 
-// Object.hasOwn, never `in`: inherited keys like "toString" pass `in` and
-// then indexing the catalog throws inside the guard.
-// Safe-integer amounts only: organic stockpiles are integral, and an absurd
-// magnitude (e.g. 1e308) would turn stock-value/wealth arithmetic infinite.
-// The MAX_SAVED_COUNTER bound cannot ping-pong (accepted save -> one
-// production tick, or a save banking a hauler's mid-trip load -> rejected
-// save): Stockpile.add saturates at that same ceiling, and buildSaveFromWorld's
-// deposit-on-save loop saturates identically, so the engine never banks an
-// amount this guard would refuse.
-function isStockpileValid(stockpile: SaveGameV3['stockpile']): boolean {
-  // Key-count cap FIRST (same principle as MAX_SAVED_ENTITIES): a valid
-  // stockpile has at most one key per catalog resource, and Object.entries
-  // on an adversarially huge object would materialize every entry before
-  // the first per-entry check could reject.
-  if (Object.keys(stockpile).length > RESOURCE_IDS.length) return false;
-  return Object.entries(stockpile).every(
-    ([id, amount]) =>
-      Object.hasOwn(RESOURCES, id) &&
-      Number.isSafeInteger(amount) &&
-      (amount as number) >= 0 &&
-      (amount as number) <= MAX_SAVED_COUNTER,
-  );
-}
-
-function isBuildingsValid(buildings: SaveGameV3['buildings']): boolean {
-  return buildings.every((b) => {
-    if (!Object.hasOwn(BUILDINGS, b.defId)) return false;
-    if (b.batchActive) {
-      // Upper bound intentionally NOT checked against the current recipe's
-      // ticksPerBatch: a recipe retuned smaller after this save was written
-      // would otherwise orphan it. Magnitude is irrelevant here because
-      // spawnBuilding clamps active progress to the CURRENT batch size, so
-      // the production loop never has a huge remainder to grind through.
-      return b.progress >= 0 && Number.isFinite(b.progress);
-    }
-    return b.progress === 0; // stalled/idle buildings never bank progress (balance-independent engine invariant)
-  });
-}
-
-function isWorkerRecordValid(w: SaveGameV3['workers'][number], buildingIds: ReadonlySet<number>): boolean {
-  // Upper bounds intentionally NOT checked against current BALANCE.hungerMax /
-  // toolDurationTicks: those are clamped to current balance at spawn instead
-  // (see spawnWorker), so a save written under a higher balance value still loads.
-  if (!(w.hunger >= 0 && Number.isFinite(w.hunger))) return false;
-  if (!Number.isSafeInteger(w.toolTicks) || w.toolTicks < 0 || w.toolTicks > MAX_SAVED_COUNTER) return false;
-  if (w.buildingId === null) return true;
-  // A worker is staffed XOR hauling, never both — handleAssignWorker refuses to
-  // poach a hauler and handleAssignHauler refuses to poach a staffed worker, so
-  // no version of the engine could ever write both onto one record. That makes
-  // this an identity violation like the membership check below (a record no
-  // playthrough could produce), not a balance-coupled value to clamp: there is
-  // no "current" amount of double-staffing to grandfather down to.
-  if (w.hauling) return false;
-  return buildingIds.has(w.buildingId);
-}
-
-function isWorkersValid(data: SaveGameV3): boolean {
-  const buildingIds = new Set(data.buildings.map((b) => b.id));
-  return data.workers.every((w) => isWorkerRecordValid(w, buildingIds));
-}
-
-// Cross-array id validity: positive integers, unique across buildings AND
-// workers combined (they share one id space), and nextEntityId strictly past
-// every id already handed out so the restored IdCounter can never collide.
-// The MAX_SAVED_COUNTER ceiling cannot ping-pong (accepted save -> play ->
-// rejected save): IdCounter saturates at that same ceiling, refusing entity
-// creation instead of writing a counter the guard would refuse to load.
-function isIdsValid(data: SaveGameV3): boolean {
-  const allIds = [...data.buildings.map((b) => b.id), ...data.workers.map((w) => w.id)];
-  // SAFE integers: past 2^53, ++ stops incrementing and ids would collide
-  if (!allIds.every((id) => Number.isSafeInteger(id) && id > 0)) return false;
-  if (new Set(allIds).size !== allIds.length) return false;
-  if (
-    !Number.isSafeInteger(data.nextEntityId) ||
-    data.nextEntityId < 1 ||
-    data.nextEntityId > MAX_SAVED_COUNTER
-  ) return false;
-  return allIds.every((id) => id < data.nextEntityId);
-}
-
 /**
- * Position invariants are cross-field truths — they need the save's own map
- * — so they live here beside the id checks, not in the structural guard.
- * Set-based, not isTileBuildable-per-record: that would be O(n^2) on a
- * 10,000-building hand-edited save (the flooded-save principle: cheap
- * checks before expensive walks).
- */
-function isPositionsValid(data: SaveGameV3): boolean {
-  const tiles = new Set<string>();
-  for (const b of data.buildings) {
-    if (!isInsideMap(data.map, b.col, b.row) || b.col < CAMP_COLS) return false;
-    const key = `${b.col},${b.row}`;
-    if (tiles.has(key)) return false;
-    tiles.add(key);
-  }
-  return true;
-}
-
-/**
- * Buffer contents are a cross-field truth like positions: catalog membership
- * needs the content catalog, which the structural guard in src/shared/ cannot
- * see. The cap is NOT checked here — see spawnBuilding, which clamps an
- * over-cap buffer at load exactly as it clamps saved batch progress.
- */
-function isBuffersValid(data: SaveGameV3): boolean {
-  return data.buildings.every((b) => {
-    const ids = Object.keys(b.buffer);
-    // Key-count cap FIRST (same principle as isStockpileValid above): a valid
-    // buffer has at most one key per catalog resource, and the membership walk
-    // below would otherwise run once per key of an adversarially wide object —
-    // multiplied by up to MAX_SAVED_ENTITIES buildings.
-    if (ids.length > RESOURCE_IDS.length) return false;
-    return ids.every((id) => Object.hasOwn(RESOURCES, id));
-  });
-}
-
-/**
- * Structural validity (isSaveGameV3) plus referential integrity against the content
+ * Structural validity (isSaveGameV4) plus referential integrity against the content
  * catalog, for a save that is ALREADY at the current version. This is the internal
  * current-version validator, not the shell's entry point: it has no idea how to
  * migrate an older save, so calling it directly on unmigrated data would crash
@@ -234,8 +124,8 @@ function isBuffersValid(data: SaveGameV3): boolean {
  * grandfathered at load (see spawnWorker) so retuning balance down never
  * orphans a previously valid save.
  */
-export function isLoadableSave(data: unknown): data is SaveGameV3 {
-  if (!isSaveGameV3(data)) return false;
+export function isLoadableSave(data: unknown): data is SaveGameV4 {
+  if (!isSaveGameV4(data)) return false;
   // SAFE integers: a fractional tick would desync every modulo-based cadence
   // (autosave, recruit cooldown) forever; past 2^53, ++ stops incrementing.
   // No upper REJECT bound: any hard accept-bound would orphan a save that
@@ -254,6 +144,11 @@ export function isLoadableSave(data: unknown): data is SaveGameV3 {
   ) return false;
   if (!isStockpileValid(data.stockpile)) return false;
   if (!isBuildingsValid(data.buildings)) return false;
+  // Structural/identity, not balance: a negative or fractional countdown is a
+  // record no version of the engine could write. Magnitude is CLAMPED at
+  // spawn instead (clampedRelocation), so a save written under a slower
+  // relocationTilesPerTick still loads.
+  if (data.buildings.some((b) => !Number.isSafeInteger(b.relocatingTicks) || b.relocatingTicks < 0)) return false;
   if (!isIdsValid(data)) return false;
   if (!isPositionsValid(data)) return false;
   if (!isBuffersValid(data)) return false;
@@ -267,14 +162,14 @@ export function isLoadableSave(data: unknown): data is SaveGameV3 {
  * 7.2). Kept here rather than in src/shared/ because isLoadableSave needs the
  * content catalog, while the migration chain is pure structure.
  */
-export function prepareLoadedSave(data: unknown): SaveGameV3 | null {
+export function prepareLoadedSave(data: unknown): SaveGameV4 | null {
   const migrated = migrateSaveToLatest(data);
   return migrated !== null && isLoadableSave(migrated) ? migrated : null;
 }
 
 /** The three things the shell can do after reading data.json's `save` field. */
 export type LoadDecision =
-  | { kind: 'restore'; save: SaveGameV3 }
+  | { kind: 'restore'; save: SaveGameV4 }
   | { kind: 'backup' }
   | { kind: 'fresh' };
 
@@ -294,74 +189,76 @@ export function decideLoad(data: unknown): LoadDecision {
 }
 
 /**
- * Balance-coupled clamp (spec 4.5), the same treatment `progress` gets above:
- * a buffer written under a larger cap loads trimmed to the CURRENT cap instead
- * of orphaning the save. Trimming walks the catalog in order so the result is
- * deterministic.
+ * Attach a component list built by src/engine/spawn.ts to a preptime entity.
+ * The runtime path uses `ctx.spawn(...components)` instead; that difference in
+ * mechanism is the only reason these two paths are still separate functions.
  */
-function clampedBuffer(saved: Partial<Record<ResourceId, number>>): Map<ResourceId, number> {
-  const buffer = new Map<ResourceId, number>();
-  let total = 0;
-  for (const id of RESOURCE_IDS) {
-    const amount = saved[id] ?? 0;
-    if (amount <= 0) continue;
-    const room = BALANCE.outputBufferCap - total;
-    if (room <= 0) break;
-    const kept = Math.min(amount, room);
-    buffer.set(id, kept);
-    total += kept;
-  }
-  return buffer;
+function attach(prep: IPreptimeWorld, components: object[]): IEntity {
+  let builder = prep.buildEntity();
+  for (const component of components) builder = builder.with(component);
+  return builder.build();
 }
 
+/**
+ * Restore a building from a save record. Which components it gets — and the
+ * balance-coupled clamps on progress and buffer — live in `buildingComponents`,
+ * shared with the live construct path so the two cannot drift (OBS-4-02).
+ */
 export function spawnBuilding(
   prep: IPreptimeWorld,
   ids: IdCounter,
   saved: Omit<SavedBuilding, 'id' | 'buffer'> & { id?: number; buffer?: Partial<Record<ResourceId, number>> },
 ): IEntity {
-  const def = BUILDINGS[saved.defId];
-  // Balance-coupled clamp (spec 4.5): progress from a save written under a
-  // larger recipe (or hand-edited to an absurd magnitude) clamps to the
-  // CURRENT batch size — the save still loads, at most one batch completes
-  // instantly, and the production loop can never spin on a huge remainder.
-  const progress = Math.min(saved.progress, def.recipe.ticksPerBatch);
-  return prep
-    .buildEntity()
-    .with(new Building(saved.id ?? ids.take(), saved.defId))
-    .with(new WorkerSlots(def.workerSlots))
-    .with(new Production(progress, saved.batchActive))
-    .with(new Position(saved.col, saved.row))
-    .with(new OutputBuffer(clampedBuffer(saved.buffer ?? {})))
-    .build();
+  return attach(prep, buildingComponents({ ...saved, id: saved.id ?? ids.take() }));
 }
 
+/** Restore a worker from a save record. See spawnBuilding on the shared list. */
 export function spawnWorker(
   prep: IPreptimeWorld,
   ids: IdCounter,
   opts: { id?: number; hunger?: number; buildingId?: number | null; hauling?: boolean; efficiency?: number; toolTicks?: number } = {},
 ): IEntity {
-  // Balance-coupled fields from old saves clamp to CURRENT balance here: a
-  // save written under a higher hungerMax/toolDurationTicks still loads
-  // (isLoadableSave no longer bounds-checks these against BALANCE), so the
-  // clamp is what actually keeps in-world values sane after a downward retune.
-  const hunger = Math.min(opts.hunger ?? 0, BALANCE.hungerMax);
-  const toolTicks = Math.min(opts.toolTicks ?? 0, BALANCE.toolDurationTicks);
-  return prep
-    .buildEntity()
-    .with(new Worker(opts.id ?? ids.take()))
-    .with(new Hunger(hunger))
-    .with(new JobAssignment(opts.buildingId ?? null, opts.hauling ?? false))
-    .with(new Efficiency(opts.efficiency ?? 1))
-    .with(new ToolCoverage(toolTicks))
-    .with(new HaulTrip())
-    .build();
+  return attach(prep, workerComponents({ ...opts, id: opts.id ?? ids.take() }));
+}
+
+/**
+ * Systems must be scheduled in `ALL_SYSTEMS` order. Production always is — it
+ * passes `ALL_SYSTEMS` itself — but every test composes its own subset by hand,
+ * and two of them ran systems in the reverse of production order for a whole
+ * increment (OBS-4-03). That is not a harmless difference: it silently changes
+ * what a test proves, and it produced a real false positive, because a haul
+ * trip cancelled by a demolition is only observable when `CommandSystem` drains
+ * ahead of `HaulSystem` the way production runs them.
+ *
+ * Rather than reorder the offending harnesses and hope, this makes a wrong
+ * order impossible to express: a subset in the wrong relative order throws at
+ * setup, naming both systems. Systems not in `ALL_SYSTEMS` — test-only arrange
+ * systems like `stats-system.test.ts`'s `DepositWoodSystem` — are skipped
+ * rather than sorted, so a test can still stage state before the real systems
+ * run without this guessing where it meant to put them.
+ */
+function assertSystemOrder(systems: readonly TColonySystemFactory[]): void {
+  let previousRank = -1;
+  let previous = '';
+  for (const factory of systems) {
+    const rank = ALL_SYSTEMS.indexOf(factory);
+    if (rank === -1) continue; // test-only system: not ours to order
+    if (rank < previousRank) {
+      throw new Error(
+        `System order must match ALL_SYSTEMS: ${factory.name || 'system'} runs after ${previous || 'an earlier system'}, but production runs it before.`,
+      );
+    }
+    previousRank = rank;
+    previous = factory.name || previous;
+  }
 }
 
 export function buildColonyPrepWorld(
-  options: { save?: SaveGameV3; systems?: readonly TColonySystemFactory[] } = {},
+  options: { save?: SaveGameV4; systems?: readonly TColonySystemFactory[] } = {},
 ): IPreptimeWorld {
   const save = options.save ?? initialSave();
   const systems = options.systems ?? ALL_SYSTEMS;
+  assertSystemOrder(systems);
 
   let builder = buildWorld().withDefaultScheduling((root) => {
     for (const systemFactory of systems) {
@@ -388,6 +285,7 @@ export function buildColonyPrepWorld(
     new NoticeBoard(),
     ids,
     new StatsHistory(),
+    new ProductionLedger(),
     store,
     new WorldMap(save.map.cols, save.map.rows),
     new RemovalLedger(),
@@ -417,24 +315,25 @@ export function buildColonyPrepWorld(
   return prep;
 }
 
-function buildInitialSnapshot(save: SaveGameV3): Snapshot {
+function buildInitialSnapshot(save: SaveGameV4): Snapshot {
   const workerFacts: WorkerFacts[] = save.workers.map((saved) => {
-    // Mirror spawnWorker's clamp so the seeded snapshot matches the entities
-    // buildColonyPrepWorld actually spawns (see spawnWorker for rationale).
-    const hunger = Math.min(saved.hunger, BALANCE.hungerMax);
-    const toolTicks = Math.min(saved.toolTicks, BALANCE.toolDurationTicks);
+    // The same clamps workerComponents applies, so the seeded snapshot matches
+    // the entities buildColonyPrepWorld actually spawns (see src/engine/spawn.ts).
+    const hunger = clampedHunger(saved.hunger);
+    const toolTicks = clampedToolTicks(saved.toolTicks);
     return {
       id: saved.id,
       hunger,
       efficiency: workerEfficiency(hunger),
       buildingId: saved.buildingId,
       hauling: saved.hauling,
-      haulTargetId: null, carrying: 0, carryingResource: null, // a restored colony's haulers start at the camp
+      // a restored colony's haulers start at the camp: HaulTrip never enters the save
+      haulTargetId: null, haulPhase: 'idle' as const, haulTicksLeft: 0, carrying: 0, carryingResource: null,
       toolTicks,
     };
   });
   const buildingFacts: BuildingFacts[] = save.buildings.map((saved) => {
-    // same balance-coupled clamp as spawnBuilding, so the seeded snapshot's
+    // The same clamps buildingComponents applies, so the seeded snapshot's
     // buffered total matches the buffer the spawned entity actually holds
     // (an over-cap saved buffer trims to the cap here too, not just in the world)
     const buffer = new OutputBuffer(clampedBuffer(saved.buffer));
@@ -443,10 +342,11 @@ function buildInitialSnapshot(save: SaveGameV3): Snapshot {
       defId: saved.defId,
       col: saved.col, row: saved.row,
       workerSlots: BUILDINGS[saved.defId].workerSlots,
-      progress: Math.min(saved.progress, BUILDINGS[saved.defId].recipe.ticksPerBatch),
+      progress: clampedProgress(saved.defId, saved.progress),
       batchActive: saved.batchActive,
       buffered: buffer.total(),
       buffer: Object.fromEntries(buffer.amounts) as Partial<Record<ResourceId, number>>,
+      relocatingTicks: clampedRelocation(saved.relocatingTicks ?? 0),
     };
   });
   const { workers, buildings, population, idleWorkers } = buildEntitySections(workerFacts, buildingFacts);
@@ -456,7 +356,7 @@ function buildInitialSnapshot(save: SaveGameV3): Snapshot {
     const stock = save.stockpile[resourceId] ?? 0;
     const stockValue = stock * RESOURCES[resourceId].value;
     colonyWealth += stockValue;
-    stockpile[resourceId] = { stock, productionRate: 0, consumptionRate: 0, netFlow: 0, stockValue };
+    stockpile[resourceId] = { stock, deliveredRate: 0, madeRate: 0, consumptionRate: 0, netFlow: 0, stockValue };
   }
   return {
     tick: Math.min(save.tick, MAX_SAVED_COUNTER), // same clamp as the spawned clock
@@ -514,6 +414,6 @@ export function refreshEntitySections(world: IRuntimeWorld): void {
 // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type -- mirrors sim-ecs's TExecutionFunction callback type exactly
 const runSynchronously = (callback: Function): void => (callback as () => void)();
 
-export async function createColonyWorld(save?: SaveGameV3): Promise<IRuntimeWorld> {
+export async function createColonyWorld(save?: SaveGameV4): Promise<IRuntimeWorld> {
   return buildColonyPrepWorld({ save }).prepareRun({ executionFunction: runSynchronously });
 }

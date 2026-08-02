@@ -2,18 +2,19 @@ import { describe, expect, it } from 'vitest';
 import type { IRuntimeWorld } from 'sim-ecs';
 import { CommandQueue, IdCounter, MAX_PENDING_COMMANDS, SimClock, SnapshotStore, Stockpile } from '../../../src/engine/resources';
 import { BALANCE } from '../../../src/engine/content/balance';
-import { Building, HaulTrip, OutputBuffer, Worker } from '../../../src/engine/components';
+import { Building, HaulTrip, OutputBuffer, Relocation, Worker } from '../../../src/engine/components';
 import { CommandSystem } from '../../../src/engine/systems/command-system';
 import { HaulSystem } from '../../../src/engine/systems/haul-system';
 import { HungerSystem } from '../../../src/engine/systems/hunger-system';
+import { ProductionSystem } from '../../../src/engine/systems/production-system';
 import { SnapshotSystem } from '../../../src/engine/systems/snapshot-system';
 import { enqueue } from '../fixtures';
 import { buildSaveFromWorld } from '../../../src/engine/game-engine';
 import { buildColonyPrepWorld, COMPONENT_TYPES, getPrepResource, initialSave, spawnWorker } from '../../../src/engine/world';
 import type { Command } from '../../../src/shared/commands';
-import type { SaveGameV3 } from '../../../src/shared/save';
+import type { SaveGameV4 } from '../../../src/shared/save';
 
-async function setup(save: SaveGameV3 = initialSave()) {
+async function setup(save: SaveGameV4 = initialSave()) {
   const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, HaulSystem, SnapshotSystem] });
   const world = await prep.prepareRun();
   // mirror GameEngine.stepOnce: the engine owns time, bumping the clock before each step.
@@ -27,6 +28,24 @@ async function setup(save: SaveGameV3 = initialSave()) {
     await tick();
   };
   const snapshot = (w: IRuntimeWorld = world) => w.getResource(SnapshotStore).latest!;
+  return { world, tick, dispatch, snapshot };
+}
+
+// Relocation downtime is enforced by ProductionSystem, which the shared setup()
+// deliberately omits. Order matches ALL_SYSTEMS (buildColonyPrepWorld throws
+// otherwise).
+async function setupWithProduction(save: SaveGameV4 = initialSave()) {
+  const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, ProductionSystem, HaulSystem, SnapshotSystem] });
+  const world = await prep.prepareRun();
+  const tick = async () => {
+    world.getResource(SimClock).tick++;
+    await world.step();
+  };
+  const dispatch = async (...commands: Command[]) => {
+    enqueue(world, ...commands);
+    await tick();
+  };
+  const snapshot = () => world.getResource(SnapshotStore).latest!;
   return { world, tick, dispatch, snapshot };
 }
 
@@ -213,7 +232,7 @@ describe('CommandSystem', () => {
     let id = 10;
     for (let row = 0; row < 16; row++) {
       for (let col = 3; col < 24; col++) {
-        save.buildings.push({ id: id++, defId: 'forester', progress: 0, batchActive: false, col, row, buffer: {} });
+        save.buildings.push({ id: id++, defId: 'forester', progress: 0, batchActive: false, col, row, buffer: {}, relocatingTicks: 0 });
       }
     }
     save.nextEntityId = id;
@@ -442,6 +461,42 @@ describe('CommandSystem', () => {
     expect(buildSaveFromWorld(world).stockpile.wood).toBe(before + BALANCE.haulCarryCapacity);
   });
 
+  // OBS-4-08: the old rule took the first hauler in entity-iteration order, so
+  // pressing `−` could interrupt a loaded worker most of the way home while an
+  // idle one stood at the camp. No goods were lost — the load is banked — but
+  // the walk already done was thrown away for nothing.
+  it('unassigning releases an idle hauler rather than one carrying a load home', async () => {
+    const { world, tick, dispatch, snapshot } = await setup();
+    // The far corner: 13 ticks each way, so the return leg is long enough that
+    // the two dispatches below cannot finish it out from under the assertion.
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 23, row: 15 } });
+    await tick();
+    const buildingId = snapshot().buildings[0].id;
+    for (const entity of world.getEntities()) {
+      // Exactly one load: the first hauler empties the buffer, so the second has
+      // nothing to fetch and stays idle at the camp instead of going outbound.
+      if (entity.getComponent(Building)?.id === buildingId) {
+        entity.getComponent(OutputBuffer)!.add('wood', BALANCE.haulCarryCapacity);
+      }
+    }
+    await dispatch({ type: 'assignHauler' });
+    const loaded = () => [...world.getEntities()].find((e) => (e.getComponent(HaulTrip)?.amount ?? 0) > 0);
+    for (let i = 0; i < 20 && loaded() === undefined; i++) await tick();
+    const carrier = loaded()!;
+    expect(carrier.getComponent(HaulTrip)!.phase).toBe('returning'); // precondition, not the assertion
+    await dispatch({ type: 'assignHauler' });
+
+    const carriedBefore = carrier.getComponent(HaulTrip)!.amount;
+    const stockBefore = world.getResource(Stockpile).get('wood');
+    await dispatch({ type: 'unassignHauler' });
+    expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Unassigned a hauler.' }]);
+    // The idle one went. The loaded trip is untouched: still returning, still
+    // holding its load, and nothing banked early.
+    expect(carrier.getComponent(HaulTrip)!).toMatchObject({ phase: 'returning', amount: carriedBefore });
+    expect(world.getResource(Stockpile).get('wood')).toBe(stockBefore);
+    expect(snapshot().workers.filter((w) => w.hauling)).toHaveLength(1);
+  });
+
   it('a move retargets the haulers already walking to that building', async () => {
     const { world, tick, dispatch, snapshot } = await setup();
     // The far corner of the default map: BALANCE.haulTilesPerTick's own comment
@@ -510,6 +565,34 @@ describe('CommandSystem', () => {
     expect(world.getResource(Stockpile).get('wood')).toBe(before + BALANCE.haulCarryCapacity); // still delivers in full
   });
 
+  // The buildings-side companion to the worker parity test below. OBS-4-02
+  // recorded its absence as an open gap: OutputBuffer was added to the restore
+  // path only, so buildings constructed during play had no buffer at all, and
+  // nothing in the suite would have noticed.
+  it('a constructed building carries the same components as a restored one', async () => {
+    const save: SaveGameV4 = {
+      ...initialSave(),
+      buildings: [{ id: 10, defId: 'forester', col: 6, row: 3, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 }],
+      nextEntityId: 11, // strictly past every id above, or the load guard refuses the save
+    };
+    const { world, tick, dispatch } = await setup(save);
+    const restored = [...world.getEntities()].find((e) => e.getComponent(Building)?.id === 10)!;
+    const expected = COMPONENT_TYPES.filter((type) => restored.getComponent(type) !== undefined);
+    expect(expected.length).toBeGreaterThan(0); // guards against an empty comparison passing vacuously
+
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
+    await tick();
+    // id > 10 identifies the live-constructed one: the restored building holds
+    // exactly 10, and ids only ever increase.
+    const constructed = [...world.getEntities()]
+      .filter((e) => e.getComponent(Building) !== undefined)
+      .find((e) => e.getComponent(Building)!.id > 10)!;
+    expect(constructed, 'no building was constructed').toBeDefined();
+    for (const type of expected) {
+      expect(constructed.getComponent(type), `constructed building is missing ${type.name}`).toBeDefined();
+    }
+  });
+
   it('a recruited worker carries the same components as a restored one', async () => {
     const { world, tick, dispatch } = await setup();
     // The highest existing id, not just "the first worker found": entity
@@ -528,5 +611,105 @@ describe('CommandSystem', () => {
     for (const type of expected) {
       expect(recruited.getComponent(type), `recruited worker is missing ${type.name}`).toBeDefined();
     }
+  });
+
+  it('a moved building stops producing for a distance-scaled downtime', async () => {
+    const { tick, dispatch, snapshot } = await setupWithProduction();
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 5, row: 4 } });
+    await tick();
+    const buildingId = snapshot().buildings[0].id;
+    await dispatch({ type: 'assignWorker', buildingId });
+    await dispatch({ type: 'assignWorker', buildingId });
+    for (let i = 0; i < 10; i++) await tick(); // it is genuinely producing
+    const madeBefore = snapshot().buildings[0].buffered;
+    expect(madeBefore).toBeGreaterThan(0);
+
+    // (5,4) -> (15,4) is exactly 10 tiles; at 1 tile/tick that is 10 ticks.
+    await dispatch({ type: 'moveBuilding', buildingId, to: { col: 15, row: 4 } });
+    const paused = snapshot().buildings[0].buffered;
+    for (let i = 0; i < 9; i++) await tick();
+    expect(snapshot().buildings[0].buffered).toBe(paused); // nothing made while relocating
+
+    for (let i = 0; i < 6; i++) await tick(); // downtime over, work resumes
+    expect(snapshot().buildings[0].buffered).toBeGreaterThan(paused);
+  });
+
+  it('moving again replaces the remaining downtime rather than adding to it', async () => {
+    const { world, tick, dispatch, snapshot } = await setupWithProduction();
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 5, row: 4 } });
+    await tick();
+    const buildingId = snapshot().buildings[0].id;
+    await dispatch({ type: 'moveBuilding', buildingId, to: { col: 20, row: 14 } }); // long move
+    await dispatch({ type: 'moveBuilding', buildingId, to: { col: 21, row: 14 } }); // 1 tile: 1 tick
+    const relocation = [...world.getEntities()]
+      .find((e) => e.getComponent(Building)?.id === buildingId)!
+      .getComponent(Relocation)!;
+    expect(relocation.ticksLeft).toBeLessThanOrEqual(1);
+  });
+
+  it('haulers still collect from a relocating building', async () => {
+    // Acceptance criterion 3. Goods already in the buffer exist whether or not
+    // the crew is working, so only production pauses — a relocating building
+    // with a full buffer must still drain.
+    const { world, tick, dispatch, snapshot } = await setupWithProduction();
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 5, row: 4 } });
+    await tick();
+    const buildingId = snapshot().buildings[0].id;
+    for (const entity of world.getEntities()) {
+      if (entity.getComponent(Building)?.id === buildingId) {
+        entity.getComponent(OutputBuffer)!.add('wood', BALANCE.haulCarryCapacity);
+      }
+    }
+    await dispatch({ type: 'assignHauler' });
+    // Move it far enough that the downtime outlasts the whole haul round trip.
+    await dispatch({ type: 'moveBuilding', buildingId, to: { col: 20, row: 14 } });
+    const relocating = [...world.getEntities()]
+      .find((e) => e.getComponent(Building)?.id === buildingId)!
+      .getComponent(Relocation)!;
+    expect(relocating.ticksLeft).toBeGreaterThan(10); // genuinely out of action for the whole trip
+
+    const before = world.getResource(Stockpile).get('wood');
+    for (let i = 0; i < 40; i++) await tick();
+    expect(world.getResource(Stockpile).get('wood')).toBe(before + BALANCE.haulCarryCapacity);
+    expect(snapshot().buildings[0].buffered).toBe(0); // the buffer genuinely drained
+  });
+
+  it('demolition still refunds 100% of construction cost', async () => {
+    // A decision, not an accident: increment 5 considered cutting the refund as
+    // a balance knob and rejected it, because free relocation dominated it —
+    // a player could dodge any refund penalty by moving instead of rebuilding.
+    // Now that moving costs downtime the two acts are cleanly separated: moving
+    // costs time, removing is fully refunded.
+    //
+    // The NUMBER is already guarded by the two demolition tests above — both
+    // fail if the refund is halved. What this test adds is the REASON it is
+    // 100%, recorded at an assertion rather than only in a spec, so a future
+    // balance pass reaching for this knob finds the argument against it here.
+    const { world, tick, dispatch, snapshot } = await setup();
+    const before = world.getResource(Stockpile).get('wood');
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
+    expect(world.getResource(Stockpile).get('wood')).toBe(before - 10); // forester costs 10 wood
+    await tick(); // the entity appears the tick after the command is handled
+    await dispatch({ type: 'demolishBuilding', buildingId: snapshot().buildings[0].id });
+    expect(world.getResource(Stockpile).get('wood')).toBe(before);
+  });
+
+  it('demolition refund does not count as a hauler delivery', async () => {
+    // Stockpile.add unconditionally records into producedThisTick, which
+    // StatsSystem publishes as deliveredRate. Routing the refund through
+    // add() would inflate Delivered/t for a resource no hauler touched, and
+    // could push it above Made/t — undermining the gap-is-haul-backlog
+    // reading the Made/t + Delivered/t pairing (OBS-4-06) depends on.
+    // refund() must bank the same amount without ever touching
+    // producedThisTick. Both halves matter: the refund amount is existing
+    // behaviour that must not regress, and the zeroed producedThisTick is
+    // the fix.
+    const { world, tick, dispatch, snapshot } = await setup();
+    const before = world.getResource(Stockpile).get('wood');
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
+    await tick();
+    await dispatch({ type: 'demolishBuilding', buildingId: snapshot().buildings[0].id });
+    expect(world.getResource(Stockpile).get('wood')).toBe(before); // full refund, unchanged
+    expect(world.getResource(Stockpile).producedThisTick.get('wood') ?? 0).toBe(0); // not a delivery
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CommandQueue, IdCounter, MAX_PENDING_COMMANDS, NoticeBoard, StatsHistory, Stockpile } from '../../src/engine/resources';
+import { CommandQueue, IdCounter, MAX_PENDING_COMMANDS, NoticeBoard, ProductionLedger, StatsHistory, Stockpile } from '../../src/engine/resources';
 
 describe('Stockpile', () => {
   it('adds and reads amounts, tracking per-tick production', () => {
@@ -18,6 +18,21 @@ describe('Stockpile', () => {
     stock.add('wood', 1);
     expect(stock.get('wood')).toBe(ceiling);
     expect(stock.producedThisTick.get('wood')).toBe(2);
+  });
+
+  it('refund banks an amount without recording a delivery', () => {
+    const stock = new Stockpile({ wood: 5 });
+    stock.refund('wood', 3);
+    expect(stock.get('wood')).toBe(8);
+    expect(stock.producedThisTick.size).toBe(0); // unlike add, never touches delivery stats
+  });
+
+  it('refund saturates at the save-format counter ceiling, same clamp as add', () => {
+    const ceiling = Number.MAX_SAFE_INTEGER - 2 ** 32; // == MAX_SAVED_COUNTER
+    const stock = new Stockpile({ wood: ceiling - 2 });
+    stock.refund('wood', 5);
+    expect(stock.get('wood')).toBe(ceiling); // never past the load guard's bound
+    expect(stock.producedThisTick.size).toBe(0);
   });
 
   it('take is all-or-nothing per resource and tracks consumption', () => {
@@ -55,16 +70,36 @@ describe('Stockpile', () => {
   });
 });
 
+describe('ProductionLedger', () => {
+  it('accumulates per-resource amounts across multiple adds', () => {
+    const ledger = new ProductionLedger();
+    ledger.add('wood', 2);
+    ledger.add('wood', 3);
+    expect(ledger.madeThisTick.get('wood')).toBe(5);
+  });
+
+  it('reset clears the accumulated amounts', () => {
+    const ledger = new ProductionLedger();
+    ledger.add('wood', 2);
+    ledger.reset();
+    expect(ledger.madeThisTick.size).toBe(0);
+  });
+});
+
 describe('StatsHistory', () => {
-  it('averages production and consumption over recorded frames', () => {
+  it('averages delivered, consumed, and made over recorded frames', () => {
+    // Three distinct values per frame (not just delivered-vs-consumed) so a
+    // rates() that mixed up which map feeds which key — e.g. reporting made
+    // where delivered belongs — would fail this, not slip through matching
+    // numbers.
     const stats = new StatsHistory();
-    stats.record(new Map([['wood', 2]]), new Map());
-    stats.record(new Map(), new Map([['wood', 1]]));
-    expect(stats.rates('wood')).toEqual({ production: 1, consumption: 0.5 });
+    stats.record(new Map([['wood', 2]]), new Map(), new Map([['wood', 4]]));
+    stats.record(new Map(), new Map([['wood', 1]]), new Map([['wood', 2]]));
+    expect(stats.rates('wood')).toEqual({ delivered: 1, consumed: 0.5, made: 3 });
   });
 
   it('returns zero rates with no history', () => {
-    expect(new StatsHistory().rates('wood')).toEqual({ production: 0, consumption: 0 });
+    expect(new StatsHistory().rates('wood')).toEqual({ delivered: 0, consumed: 0, made: 0 });
   });
 });
 

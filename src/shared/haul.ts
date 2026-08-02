@@ -29,6 +29,33 @@ export function haulTicks(col: number, row: number, tilesPerTick: number): numbe
   return Math.max(1, Math.ceil(haulDistance(col, row) / tilesPerTick));
 }
 
+/**
+ * Where a hauler is in its round trip. Lives here, in shared law, rather than
+ * on the engine's `HaulTrip` component, because the snapshot publishes it and
+ * `src/shared/**` may not import the engine.
+ */
+export type HaulPhase = 'idle' | 'outbound' | 'returning';
+
+/**
+ * How far along a leg a hauler is, as 0 (just left) to 1 (arrived).
+ *
+ * The renderer needs this because the simulated trip has a duration and a
+ * fixed-speed walk animation does not: at 1x the sim moves a hauler 4 tiles/s
+ * while the dot managed 1.875, so the dot was still crossing open ground when
+ * the trip flipped legs and it turned round without ever reaching the building
+ * (OBS-4-09). Deriving the dot's position from the trip's own remaining ticks
+ * keeps the two clocks identical at every game speed by construction.
+ *
+ * `totalTicks` is the leg's full length — recomputed from the building's tile
+ * rather than stored, since `haulTicks` is deterministic. A leg that somehow
+ * reports more ticks left than its length clamps to 0 rather than running
+ * backwards past the camp.
+ */
+export function legProgress(ticksLeft: number, totalTicks: number): number {
+  if (totalTicks <= 0) return 1;
+  return Math.min(1, Math.max(0, (totalTicks - ticksLeft) / totalTicks));
+}
+
 /** What one building offers a hauler right now. */
 export interface HaulCandidate {
   buildingId: number;

@@ -51,6 +51,27 @@ simulated production chains — in tables and, since Increment 2, a live
 - Save v3 persists buffers and hauler assignments; v2 colonies load as
   themselves, with empty buffers and nobody hauling yet
 
+## Increment 5 — Validated Balance
+
+- A headless balance harness (`tests/support/balance-harness.ts`) runs a
+  scenario through the real engine and reports what a building made,
+  delivered, and lost to stalls or relocation; `npm run balance:report`
+  prints the full distance/hauler sweep for tuning by eye
+- The measured gradient: one hauler serves a building out to leg ~4, two by
+  leg 8, three by leg 13 (the far corner) — correcting increment 4's claim
+  that one hauler roughly sustains one far producer
+- Moving a building now costs distance-scaled ticks of downtime — at half
+  the hauler's tiles-per-tick, since carrying a building is harder than
+  carrying goods — instead of being instant and free; a `relocating` state
+  on the canvas and a downtime column in the Buildings table make it
+  visible. Free relocation used to let a player cluster everything at the
+  camp and never pay increment 4's haul gradient
+- The Economy view's `Prod/t` column actually reported deliveries, not
+  production (OBS-4-06); it's now two columns, `Made/t` and `Delivered/t`,
+  and the gap between them is the per-stage haul backlog
+- Save v4 adds the relocation countdown; the v1→v4 migration chain stays
+  intact
+
 ## Development
 
 - `npm install`
@@ -75,6 +96,8 @@ simulated production chains — in tables and, since Increment 2, a live
 - Increment 3 plan: `docs/superpowers/plans/2026-07-30-increment-3-building-placement.md`
 - Increment 4 spec: `docs/superpowers/specs/2026-07-31-increment-4-logistics.md`
 - Increment 4 plan: `docs/superpowers/plans/2026-07-31-increment-4-logistics.md`
+- Increment 5 spec: `docs/superpowers/specs/2026-08-01-increment-5-validated-balance.md`
+- Increment 5 plan: `docs/superpowers/plans/2026-08-01-increment-5-validated-balance.md`
 
 ## Architecture (one paragraph)
 

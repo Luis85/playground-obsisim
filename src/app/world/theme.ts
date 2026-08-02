@@ -81,6 +81,14 @@ export function resolveWorldTheme(read: VarReader): WorldTheme {
       // Purple, deliberately outside the green/orange production language: this
       // building is not short of anything, it has nowhere to put what it made.
       outputFull: pick(read, '--color-purple', '#8f6fbf'),
+      // Cyan-adjacent, matching the carried-load hue: both say "in transit".
+      // Required now (not deferred to the UI task that otherwise owns this
+      // file): tests/app/world-theme.test.ts already pins every stateRing
+      // entry pairwise-distinct, and graphics-cache indexes stateRing[b.state]
+      // unconditionally, so adding 'relocating' to BuildingState without a
+      // ring color here would fail that pre-existing test AND leave a real
+      // building genuinely in that state with an undefined ring at runtime.
+      relocating: pick(read, '--color-cyan', '#4bbfd4'),
     },
     workerColors: Array.from({ length: WORKER_BUCKETS }, (_, i) => mixHex(red, green, i / (WORKER_BUCKETS - 1))),
     workerToolRing: '#f2ecdd',

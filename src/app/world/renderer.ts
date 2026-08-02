@@ -20,7 +20,17 @@ import { efficiencyBucket, resolveWorldTheme, type WorldTheme } from './theme';
 // pick() through the live camera, and clean dispose.
 
 const WORKER_PICK_RADIUS = 11; // SCREEN px hover tolerance, world-converted per live zoom
-const WORKER_SPEED = 90; // px/s walk speed toward a new post
+const WORKER_SPEED = 90; // px/s walk speed toward a new post (cosmetic reassignment only)
+// Assumed gap before a second sync has been seen: BALANCE.baseTicksPerSecond is
+// 2, so one tick at 1x. Only ever used for a hauler's very first step.
+const DEFAULT_TICK_MS = 500;
+// The measured gap is clamped before it becomes a walking pace. A pause, a
+// hidden tab, or a stalled frame makes the next gap arbitrarily large, and an
+// unclamped reading would turn that into a dot crawling across the map for
+// minutes. The upper bound is one tick at the slowest speed the game offers;
+// the lower keeps a burst of syncs from asking for an effectively infinite pace.
+const MIN_TICK_MS = 50;
+const MAX_TICK_MS = 1000;
 const BAR_WIDTH = TILE * 0.8;
 const BAR_HEIGHT = 5;
 
@@ -41,6 +51,8 @@ class WorldScene {
   private camp: Actor | null = null;
   private buildings = new Map<number, BuildingBundle>();
   private workers = new Map<number, WorkerBundle>();
+  private lastSyncAt = 0;
+  private tickMs = DEFAULT_TICK_MS;
   private cache: GraphicCache;
   private lastLayout: WorldLayout | null = null;
   private ghost: Actor | null = null;
@@ -52,6 +64,14 @@ class WorldScene {
   }
 
   sync(layout: WorldLayout): void {
+    // Wall-clock gap since the previous sync — one simulated tick, whatever the
+    // game speed is. A hauler's dot must cover the step the layout just handed
+    // it within this window, or it falls behind its own trip (OBS-4-09).
+    // Measured rather than passed in, so the renderer needs no notion of speed.
+    const now = performance.now();
+    const gap = this.lastSyncAt === 0 ? DEFAULT_TICK_MS : now - this.lastSyncAt;
+    this.tickMs = Math.min(MAX_TICK_MS, Math.max(MIN_TICK_MS, gap));
+    this.lastSyncAt = now;
     this.lastLayout = layout;
     this.syncGround(layout);
     this.syncCamp(layout);
@@ -237,7 +257,7 @@ class WorldScene {
     // A carrying hauler reads as "loaded" at a glance, which is what makes the
     // flow direction legible: dots going out are empty, dots coming back are not.
     bundle.load.graphics.visible = w.carrying;
-    this.walkWorker(bundle, target);
+    this.walkWorker(bundle, target, w.travelling);
   }
 
   /** New workers appear in place — only reassignments walk (spec §2.4). */
@@ -256,12 +276,28 @@ class WorldScene {
   /**
    * The layout allocates slots with memory (layoutWorld's `previous`), so a
    * target only ever changes on a real reassignment — following it is safe.
+   *
+   * Two speeds, because the two motions mean different things. A reassignment
+   * is instantaneous in the simulation, so its walk is pure decoration and any
+   * plausible pace will do — WORKER_SPEED. A haul leg has a *simulated*
+   * duration, and the layout advances the dot one tick's worth per sync, so the
+   * dot must cover the actor's actual remaining distance before the next sync
+   * lands or it drifts behind its own trip and reverses in open ground
+   * (OBS-4-09). That remaining distance is measured from `bundle.actor.pos`
+   * (where the dot really is), not from the previous layout target: those two
+   * only coincide when the last leg finished exactly on time, and a delayed
+   * frame, a hidden tab, or a mid-walk speed change leaves the actor short of
+   * it, understating the distance and carrying the lag into the next tick.
+   * Dividing that distance by the measured tick gives the pace at any game
+   * speed, including after the player changes speed mid-walk: the next sync
+   * simply re-derives it.
    */
-  private walkWorker(bundle: WorkerBundle, target: Vector): void {
+  private walkWorker(bundle: WorkerBundle, target: Vector, travelling: boolean): void {
     if (bundle.target.equals(target)) return;
+    const step = target.distance(bundle.actor.pos);
     bundle.target = target;
     bundle.actor.actions.clearActions();
-    bundle.actor.actions.moveTo(target, WORKER_SPEED);
+    bundle.actor.actions.moveTo(target, travelling ? step / (this.tickMs / 1000) : WORKER_SPEED);
   }
 
   /** Frame the whole grid with a small margin, re-checked every sync.

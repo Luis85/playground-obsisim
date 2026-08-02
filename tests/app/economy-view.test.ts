@@ -27,7 +27,7 @@ function mountWith(component: typeof EconomyView | typeof DashboardView, snapsho
 
 const baseBuilding = {
   col: 0, row: 0, workers: 0, workerSlots: 2, progress: 0, batchActive: false,
-  progressPct: 0, tooledWorkers: 0, workPower: 0, buffered: 0,
+  progressPct: 0, tooledWorkers: 0, workPower: 0, buffered: 0, relocatingTicks: 0,
 };
 
 describe('EconomyView', () => {
@@ -45,7 +45,7 @@ describe('EconomyView', () => {
     const snapshot = makeSnapshot({
       buildings: [{ ...baseBuilding, id: 1, defId: 'bakery', workers: 1, state: 'producing' }],
     });
-    snapshot.stockpile.bread = { stock: 6, productionRate: 0, consumptionRate: 0.5, netFlow: -0.5, stockValue: 0 };
+    snapshot.stockpile.bread = { stock: 6, deliveredRate: 0, madeRate: 0, consumptionRate: 0.5, netFlow: -0.5, stockValue: 0 };
     const wrapper = mountWith(EconomyView, snapshot);
     await wrapper.vm.$nextTick();
     expect(wrapper.find('[data-test="runway-bread"]').text()).toBe('~12t');
@@ -94,6 +94,37 @@ describe('EconomyView', () => {
     expect(haul).toContain('1 hauler on duty');
   });
 
+  // OBS-4-06: the column is fed by stockpile inflow, which since increment 4
+  // means "a hauler delivered it", not "a building made it". Under the old
+  // "Prod/t" heading a fully staffed building with no haulers reported
+  // `producing` and 0.00 side by side, which reads as a contradiction rather
+  // than as the haul backlog it is.
+  it('heads the store-inflow column Delivered/t, not Prod/t', async () => {
+    const wrapper = mountWith(EconomyView, makeSnapshot({ buildings: [makeBuilding(1, { defId: 'forester' })] }));
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-test="inflow-heading"]').text()).toBe('Delivered/t');
+    expect(wrapper.text()).not.toContain('Prod/t');
+  });
+
+  it('shows a healthy but uncollected stage as ok with nothing delivered', async () => {
+    const snapshot = makeSnapshot({
+      buildings: [{ ...baseBuilding, id: 1, defId: 'forester', workers: 2, buffered: 12, state: 'producing' }],
+    });
+    // Made 12 units into the buffer, delivered none: no haulers on duty. The
+    // three rates are deliberately distinct — 0 delivered against 0.50
+    // consumed and 4 in stock — so the column binding to consumptionRate or
+    // to stock would change this assertion rather than coincide with it.
+    snapshot.stockpile.wood = { stock: 4, deliveredRate: 0, madeRate: 0, consumptionRate: 0.5, netFlow: -0.5, stockValue: 0 };
+    const wrapper = mountWith(EconomyView, snapshot);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-test="status-forester"]').text()).toBe('ok');
+    expect(wrapper.find('[data-test="delivered-forester"]').text()).toBe('0.00');
+    // "ok" beside 0.00 only reads as a backlog because the heading names
+    // delivery; under "Prod/t" the same row claimed the stage was fine and
+    // producing nothing at once.
+    expect(wrapper.find('[data-test="inflow-heading"]').text()).toBe('Delivered/t');
+  });
+
   it('says the colony is keeping up when nothing waits', async () => {
     const wrapper = mountWith(EconomyView, makeSnapshot({ buildings: [makeBuilding(1, { buffered: 0 })] }));
     await wrapper.vm.$nextTick();
@@ -101,16 +132,40 @@ describe('EconomyView', () => {
     expect(pressure.text()).toContain('keeping up');
     expect(pressure.classes()).not.toContain('obsisim-negative');
   });
+
+  it('shows made and delivered side by side, so the gap reads as a backlog', async () => {
+    const snapshot = makeSnapshot({
+      buildings: [{ ...baseBuilding, id: 1, defId: 'forester', workers: 2, buffered: 12, state: 'producing' }],
+    });
+    // Deliberately distinct: 0.67 made, 0 delivered, 0.25 consumed, 4 stock — so
+    // a column bound to the wrong field changes the assertion rather than
+    // coinciding with it.
+    snapshot.stockpile.wood = { stock: 4, deliveredRate: 0, madeRate: 0.67, consumptionRate: 0.25, netFlow: -0.25, stockValue: 0 };
+    const wrapper = mountWith(EconomyView, snapshot);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-test="made-heading"]').text()).toBe('Made/t');
+    expect(wrapper.find('[data-test="made-forester"]').text()).toBe('0.67');
+    expect(wrapper.find('[data-test="delivered-forester"]').text()).toBe('0.00');
+  });
 });
 
 describe('DashboardView', () => {
   it('shows runway for draining resources and an em dash otherwise', async () => {
     const snapshot = makeSnapshot();
-    snapshot.stockpile.wheat = { stock: 10, productionRate: 0, consumptionRate: 1, netFlow: -1, stockValue: 0 };
-    snapshot.stockpile.wood = { stock: 5, productionRate: 1, consumptionRate: 0, netFlow: 1, stockValue: 0 };
+    snapshot.stockpile.wheat = { stock: 10, deliveredRate: 0, madeRate: 0, consumptionRate: 1, netFlow: -1, stockValue: 0 };
+    snapshot.stockpile.wood = { stock: 5, deliveredRate: 1, madeRate: 0, consumptionRate: 0, netFlow: 1, stockValue: 0 };
     const wrapper = mountWith(DashboardView, snapshot);
     await wrapper.vm.$nextTick();
     expect(wrapper.find('[data-test="runway-wheat"]').text()).toBe('~10t');
     expect(wrapper.find('[data-test="runway-wood"]').text()).toBe('—');
+  });
+
+  // Same column, same source, same rename — the two tables must not disagree
+  // about what the stockpile's inflow statistic is called (OBS-4-06).
+  it('heads the store-inflow column Delivered/t, not Prod/t', async () => {
+    const wrapper = mountWith(DashboardView, makeSnapshot());
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-test="inflow-heading"]').text()).toBe('Delivered/t');
+    expect(wrapper.text()).not.toContain('Prod/t');
   });
 });

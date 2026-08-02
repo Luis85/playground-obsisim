@@ -103,6 +103,16 @@ carts and vehicles, and balance tuning beyond the documented starting values
     nobody is idle: `No idle workers available.` (the existing wording, reused).
   - `unassignHauler` — returns one hauler to idle. Success:
     `Unassigned a hauler.` Rejection: `No hauler to unassign.`
+    **Which hauler** (added in increment 5, OBS-4-08 — this rule was left
+    unstated in increment 4 and the code took whichever came first in entity
+    order, which could interrupt a loaded worker most of the way home while an
+    idle one stood at the camp): release the cheapest trip to throw away —
+    an `idle` hauler first, then `outbound` (it carries nothing, so only the
+    walk out is lost), then `returning`. Within a phase, the one with the
+    fewest `ticksLeft`, whose remaining walk is smallest. Ties break by entity
+    order, so the choice stays deterministic. Note this is deliberately *not*
+    the inverse of the dispatch rule below: dispatch asks who can do the most
+    good, removal asks whose work is cheapest to discard.
 - A hauler's trip lives in a runtime-only `HaulTrip` component present on every
   worker (idle for non-haulers): target building id, phase, ticks remaining,
   and the single resource plus amount being carried. **`HaulTrip` never enters
@@ -271,7 +281,7 @@ Documented as starting points, tuned in increment 5:
 | --- | --- | --- |
 | `outputBufferCap` | 12 | ~18 ticks of a two-worker forester before stalling — long enough to be forgiving, short enough that neglect bites. |
 | `haulCarryCapacity` | 6 | Two trips clear a full buffer. |
-| `haulTilesPerTick` | 2 | A building beside the camp is a 1-tick walk; the far corner is ~13. One hauler roughly sustains one far producer, or several near ones. |
+| `haulTilesPerTick` | 2 | A building beside the camp is a 1-tick walk; the far corner is ~13. **Corrected in increment 5:** the "one hauler roughly sustains one far producer" half of this claim was wrong — measured, one hauler serves a single producer only to leg ~4; leg 8 needs two and leg 13 needs three. The "or several near ones" half remains **untested** — the balance harness runs one building per scenario, so nothing here measures haulers shared across buildings. The gradient is sound; the far-producer claim was not. See `tests/engine/balance.test.ts`. |
 | `CAMP_TILE` | `{ col: 2, row: 0 }` | The tent's existing tile-space anchor, so sim cost and drawn distance agree. |
 
 The gradient these produce is the point: near buildings are cheap to serve, far

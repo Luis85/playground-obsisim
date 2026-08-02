@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { MigrationStep, SaveGuards } from '../../src/shared/save-migration';
 import { migrateSaveToLatest, readSaveVersion } from '../../src/shared/save-migration';
 import { initialSave } from '../../src/engine/world';
-import type { SaveGameV3 } from '../../src/shared/save';
+import type { SaveGameV4 } from '../../src/shared/save';
 
 /** A structurally valid v1 save (pre-spatial: no map, no positions). */
 function v1Fixture(buildingCount: number) {
@@ -173,8 +173,8 @@ describe('migrateSaveToLatest (real chain)', () => {
 
 describe('migrateSaveToLatest (v1 -> v2)', () => {
   it('migrates v1 to v2 with legacy-pattern positions and the default map', () => {
-    const out = migrateSaveToLatest(v1Fixture(7)) as SaveGameV3;
-    expect(out.version).toBe(3);
+    const out = migrateSaveToLatest(v1Fixture(7)) as SaveGameV4;
+    expect(out.version).toBe(4);
     expect(out.map).toEqual({ cols: 24, rows: 16 });
     expect(out.buildings.map((b) => ({ col: b.col, row: b.row }))).toEqual([
       { col: 4, row: 1 }, { col: 6, row: 1 }, { col: 8, row: 1 }, { col: 10, row: 1 }, { col: 12, row: 1 },
@@ -186,7 +186,7 @@ describe('migrateSaveToLatest (v1 -> v2)', () => {
   it('assigns positions in ascending id order regardless of array order', () => {
     const shuffled = v1Fixture(2);
     shuffled.buildings.reverse();
-    const out = migrateSaveToLatest(shuffled) as SaveGameV3;
+    const out = migrateSaveToLatest(shuffled) as SaveGameV4;
     expect(out.buildings.find((b) => b.id === 10)).toMatchObject({ col: 4, row: 1 });
     expect(out.buildings.find((b) => b.id === 11)).toMatchObject({ col: 6, row: 1 });
   });
@@ -194,8 +194,8 @@ describe('migrateSaveToLatest (v1 -> v2)', () => {
   it('preserves a valid colony bigger than the default map by growing the map', () => {
     // v1 had no building cap: 337 buildings is a legal save, never a corrupt
     // one — the migration must not route it to the backup-and-start-fresh path
-    const out = migrateSaveToLatest(v1Fixture(337)) as SaveGameV3;
-    expect(out.version).toBe(3);
+    const out = migrateSaveToLatest(v1Fixture(337)) as SaveGameV4;
+    expect(out.version).toBe(4);
     expect(out.buildings).toHaveLength(337);
     expect(out.map.rows).toBeGreaterThan(16); // grown past the 336-tile default
     const tiles = new Set(out.buildings.map((b) => `${b.col},${b.row}`));
@@ -210,7 +210,7 @@ describe('migrateSaveToLatest (v1 -> v2)', () => {
     // the sequence walk is linear — this is a performance contract as much as
     // a correctness one (a save must never hang plugin startup); vitest's
     // default per-test timeout doubles as the stall detector
-    const out = migrateSaveToLatest(v1Fixture(10_000)) as SaveGameV3;
+    const out = migrateSaveToLatest(v1Fixture(10_000)) as SaveGameV4;
     expect(out.buildings).toHaveLength(10_000);
     const tiles = new Set(out.buildings.map((b) => `${b.col},${b.row}`));
     expect(tiles.size).toBe(10_000);
@@ -242,7 +242,7 @@ describe('migrateSaveToLatest (v2 -> v3)', () => {
 
   it('fills empty buffers and no haulers — what a v2 colony was', () => {
     const out = migrateSaveToLatest(v2Save())!;
-    expect(out.version).toBe(3);
+    expect(out.version).toBe(4);
     expect(out.buildings.every((b) => Object.keys(b.buffer).length === 0)).toBe(true);
     expect(out.workers.every((w) => w.hauling === false)).toBe(true);
   });
@@ -256,14 +256,30 @@ describe('migrateSaveToLatest (v2 -> v3)', () => {
     expect(before.buildings[0]).not.toHaveProperty('buffer'); // input untouched
   });
 
-  it('migrates a v1 save all the way to v3 in one call', () => {
+  it('migrates a v1 save all the way to v4 in one call', () => {
     const v1 = {
       version: 1, tick: 5, lastRecruitTick: 0, stockpile: {},
       buildings: [{ id: 1, defId: 'forester', progress: 0, batchActive: false }],
       workers: [], nextEntityId: 2,
     };
     const out = migrateSaveToLatest(v1)!;
-    expect(out.version).toBe(3);
-    expect(out.buildings[0]).toMatchObject({ col: 4, row: 1, buffer: {} });
+    expect(out.version).toBe(4);
+    expect(out.buildings[0]).toMatchObject({ col: 4, row: 1, buffer: {}, relocatingTicks: 0 });
+  });
+});
+
+describe('migrateSaveToLatest (v3 -> v4)', () => {
+  it('v3 -> v4 gives every building a zero relocation countdown', () => {
+    const v3 = {
+      version: 3, tick: 5, lastRecruitTick: 0, stockpile: { wood: 10 },
+      map: { cols: 24, rows: 16 }, nextEntityId: 3,
+      buildings: [{ id: 1, defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, buffer: { wood: 2 } }],
+      workers: [{ id: 2, hunger: 0, buildingId: null, toolTicks: 0, hauling: false }],
+    };
+    const migrated = migrateSaveToLatest(v3) as SaveGameV4;
+    expect(migrated.version).toBe(4);
+    expect(migrated.buildings[0].relocatingTicks).toBe(0);
+    expect(migrated.buildings[0].buffer).toEqual({ wood: 2 }); // everything else survives
+    expect(v3.buildings[0]).not.toHaveProperty('relocatingTicks'); // input untouched
   });
 });

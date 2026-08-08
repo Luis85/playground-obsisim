@@ -2,7 +2,10 @@ import type { IEntity } from 'sim-ecs';
 import type { Command } from '../../shared/commands';
 import type { ResourceId } from '../../shared/content-types';
 import { haulTicks } from '../../shared/haul';
-import { nomadBlocker, SALT, spreadFor, type LifeStage, type NomadGate, type PopulationBlocker } from '../../shared/population';
+// NOMAD_REJECTIONS is imported, not declared here: the Population view shows
+// the same sentence beside its disabled button before the click, and one list
+// beside the union it explains is what keeps the two from drifting apart.
+import { nomadBlocker, NOMAD_REJECTIONS, SALT, spreadFor, type LifeStage, type NomadGate } from '../../shared/population';
 import { autoPlacePosition, isTileBuildable, relocationTicks, type TileRef } from '../../shared/placement';
 import { BALANCE } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
@@ -131,15 +134,6 @@ export function handleConstructBuilding(ctx: CommandContext, command: Extract<Co
   ctx.pending.constructed.push({ id, defId: def.id, col: at.col, row: at.row });
   ctx.notices.succeed(`Built a ${def.name}.`);
 }
-
-/** One message per gate, so the rejection the engine emits and the reason the
- * button will show come from the same enumeration. */
-const NOMAD_REJECTIONS: Record<Exclude<PopulationBlocker, null>, string> = {
-  noBed: 'No free bed: build a house first.',
-  notEnoughFood: 'Not enough food stored to feed another colonist.',
-  cooldown: 'No one is passing through just yet.',
-  noParents: 'No one is passing through just yet.', // unreachable: nomadBlocker never returns it
-};
 
 /**
  * Recruiting is now a nomad ARRIVING, gated on food and a bed (spec 2.7). It

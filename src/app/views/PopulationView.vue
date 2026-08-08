@@ -3,6 +3,10 @@ import { computed, inject } from 'vue';
 import { ENGINE_KEY } from '../engine-key';
 import { useGameStore } from '../stores/game-store';
 import { BALANCE, BUILDINGS } from '../../engine/content';
+// The engine's own rejection strings, not a view-side paraphrase of them: the
+// sentence beside the disabled button is exactly the notice a click would
+// produce, because both sides read this one Record.
+import { NOMAD_REJECTIONS } from '../../shared/population';
 // Presentation lives in labels.ts, never in the template: LIFE_STAGE_LABELS is
 // a Record keyed by the LifeStage union, so a stage added without a label is a
 // type error here rather than a raw union member in the rendered cell.
@@ -67,19 +71,55 @@ function commuteClass(homeId: number | null): string {
 function starvingClass(starvingTicks: number): string {
   return starvingTicks > 0 ? 'obsisim-negative' : '';
 }
+
+// Both arrival thresholds at once, because the store crossing either one
+// changes what the colony can do: below the birth bar it cannot grow at all,
+// between the two it can only grow its own, and above both a nomad may join.
+// Reads BALANCE rather than repeating 6 and 10, so a retune moves the colours
+// with the rules.
+function mealsClass(perHead: number): string {
+  if (perHead < BALANCE.birthFoodPerHead) return 'obsisim-negative';
+  if (perHead < BALANCE.nomadFoodPerHead) return 'obsisim-warning';
+  return 'obsisim-positive';
+}
+
+// Homelessness is a standing cost (BALANCE.homelessFactor off every one of
+// their working ticks) rather than a countdown to a death, so it warns where
+// the starvation clock goes straight to negative.
+function homelessClass(homeless: number): string {
+  return homeless > 0 ? 'obsisim-warning' : '';
+}
 </script>
 
 <template>
   <div v-if="store.snapshot">
     <div class="obsisim-headline">
+      <span>
+        Population: <strong>{{ store.snapshot.population }}</strong> —
+        <strong data-test="stage-children">{{ store.snapshot.demographics.children }}</strong> children,
+        <strong data-test="stage-adults">{{ store.snapshot.demographics.adults }}</strong> adults,
+        <strong data-test="stage-elders">{{ store.snapshot.demographics.elders }}</strong> elders
+      </span>
+      <span data-test="beds">
+        Beds: <strong>{{ store.snapshot.beds.occupied }} / {{ store.snapshot.beds.total }}</strong>
+        ({{ store.bedsFree }} spare)
+      </span>
+      <span data-test="homeless" :class="homelessClass(store.snapshot.homeless)">
+        Homeless: <strong>{{ store.snapshot.homeless }}</strong>
+      </span>
+      <span data-test="meals" :class="mealsClass(store.snapshot.mealsPerHead)">
+        Meals/head: <strong>{{ store.snapshot.mealsPerHead.toFixed(1) }}</strong>
+        (birth at {{ BALANCE.birthFoodPerHead }}, nomad at {{ BALANCE.nomadFoodPerHead }})
+      </span>
       <button
         data-test="recruit"
-        :disabled="store.recruitCooldownRemaining > 0"
+        :disabled="store.nomadBlocker !== null"
         @click="engine.dispatch({ type: 'recruitWorker' })"
       >
-        Recruit worker
+        Welcome a nomad
       </button>
-      <span v-if="store.recruitCooldownRemaining > 0">available in {{ store.recruitCooldownRemaining }} ticks</span>
+      <span v-if="store.nomadBlocker" data-test="recruit-reason">{{ NOMAD_REJECTIONS[store.nomadBlocker] }}</span>
+      <span v-if="store.nomadBlocker === 'cooldown'" data-test="recruit-wait">{{ store.recruitCooldownRemaining }}t</span>
     </div>
     <table class="obsisim-table">
       <thead>

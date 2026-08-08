@@ -133,6 +133,31 @@ export function mealsPerHead(stock: Readonly<Record<string, number>>, weights: M
 
 export type PopulationBlocker = 'noBed' | 'notEnoughFood' | 'cooldown' | 'noParents' | null;
 
+/**
+ * What to tell the player about each gate a nomad can fail on.
+ *
+ * ONE list, beside the union it is total over, deliberately. The engine emits
+ * these as rejection notices when a recruitWorker command is refused, and the
+ * Population view shows the same sentence beside the disabled button BEFORE
+ * the click — two audiences for one fact. A second copy on the view side,
+ * keyed by this same union, would still satisfy the compiler while drifting in
+ * wording the first time either half was reworded, and the sharp edge is that
+ * nothing would fail: the player would simply be promised one thing and told
+ * another. Living here (rather than in the engine or in app/labels.ts) is what
+ * lets both sides read it — src/shared imports nothing and both layers may
+ * import it.
+ *
+ * The Record is keyed by the union with `null` excluded, so a gate added to
+ * `PopulationBlocker` is a compile error here rather than an unexplained
+ * disabled button.
+ */
+export const NOMAD_REJECTIONS: Record<Exclude<PopulationBlocker, null>, string> = {
+  noBed: 'No free bed: build a house first.',
+  notEnoughFood: 'Not enough food stored to feed another colonist.',
+  cooldown: 'No one is passing through just yet.',
+  noParents: 'No one is passing through just yet.', // unreachable: nomadBlocker never returns it
+};
+
 export interface BirthGate {
   stock: Readonly<Record<string, number>>;
   weights: MealWeights;

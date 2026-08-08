@@ -1,8 +1,11 @@
 import { defineStore } from 'pinia';
 import { toRaw } from 'vue';
 import type { EngineStatus, NoticeKind, Snapshot } from '../../shared/snapshot';
+// Aliased: the getter below is deliberately named after the predicate it
+// delegates to, and the alias keeps the two readable side by side.
+import { nomadBlocker as blockerForNomad, type PopulationBlocker } from '../../shared/population';
 import {
-  BALANCE, BUILDINGS, BUILDING_IDS, RESOURCE_IDS, RESOURCES,
+  BALANCE, BUILDINGS, BUILDING_IDS, MEAL_WEIGHTS, RESOURCE_IDS, RESOURCES,
   type BuildingDefId, type ResourceId,
 } from '../../engine/content';
 
@@ -30,6 +33,31 @@ const MAX_NOTICES = 5;
 // How many ticks of per-worker consumption the stockpile must cover before
 // lowFood clears; today's inline `* 2` given a name, not a behavior change.
 const LOW_FOOD_TICKS_OF_COVER = 2;
+
+/**
+ * Beds nobody has a claim on, restated over a Snapshot.
+ *
+ * This is the engine's own `spareBeds` (population-handlers.ts): `total` minus
+ * every living colonist, NOT minus `beds.occupied`. A homeless colonist is
+ * still owed a bed, so counting only the occupied ones would offer a nomad a
+ * bed a resident is already queueing for. `beds.total` has relocating houses
+ * excluded upstream, which is the other half of what spareBeds does.
+ *
+ * Clamped at 0 for the same reason recruitCooldownRemaining is: a view binds
+ * it directly, and the gate below only ever asks whether it is above zero.
+ */
+function spareBedsIn(snapshot: Snapshot | null): number {
+  if (snapshot === null) return 0;
+  return Math.max(0, snapshot.beds.total - snapshot.population);
+}
+
+/** The stockpile as the shared meal arithmetic wants it: bare amounts per
+ * resource id, every id present, zeroed before the first snapshot. */
+function stockAmounts(snapshot: Snapshot | null): Record<string, number> {
+  const stock: Record<string, number> = {};
+  for (const id of RESOURCE_IDS) stock[id] = snapshot?.stockpile[id].stock ?? 0;
+  return stock;
+}
 
 // The single read-model store the whole app layer subscribes to: GameEngine
 // stays headless and knows nothing about Vue or Pinia, and this is the only
@@ -66,6 +94,42 @@ export const useGameStore = defineStore('game', {
         0,
         state.snapshot.lastRecruitTick + BALANCE.recruitCooldownTicks - state.snapshot.tick,
       );
+    },
+    /** Beds nobody has a claim on — see spareBedsIn above. */
+    bedsFree(state): number {
+      return spareBedsIn(state.snapshot);
+    },
+    /**
+     * Which gate would refuse a nomad right now, or null when one may join.
+     *
+     * Goes through the SAME shared predicate handleRecruitWorker rejects with,
+     * fed from the same quantities, so the reason on the disabled button and
+     * the notice a click would produce cannot disagree. Before this getter the
+     * button read only the recruit cooldown and rendered enabled against a
+     * colony with no bed and no food, promising an arrival the engine was
+     * always going to refuse.
+     *
+     * Food comes from the STOCKPILE, not from the published
+     * `Snapshot.mealsPerHead`: that figure is an OUTPUT of this same
+     * calculation (meals over population + 1), so reading it back would be a
+     * second derivation that agrees only by luck.
+     *
+     * There is no early return for the pre-first-snapshot case. A zeroed gate
+     * has no free bed, and the predicate says 'noBed' on its own — one code
+     * path, which is the whole point of sharing it. A hand-written early
+     * return would be an answer the engine never gives.
+     */
+    nomadBlocker(state): PopulationBlocker {
+      return blockerForNomad({
+        stock: stockAmounts(state.snapshot),
+        weights: MEAL_WEIGHTS,
+        population: state.snapshot?.population ?? 0,
+        freeBeds: spareBedsIn(state.snapshot),
+        tick: state.snapshot?.tick ?? 0,
+        lastRecruitTick: state.snapshot?.lastRecruitTick ?? 0,
+        cooldown: BALANCE.recruitCooldownTicks,
+        perHead: BALANCE.nomadFoodPerHead,
+      });
     },
     /** Ticks until a draining resource runs out; absent while not draining. */
     runways(state): Partial<Record<ResourceId, number>> {

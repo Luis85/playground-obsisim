@@ -6,7 +6,9 @@ import PopulationView from '../../src/app/views/PopulationView.vue';
 import { ENGINE_KEY } from '../../src/app/engine-key';
 import { useGameStore } from '../../src/app/stores/game-store';
 import { BALANCE } from '../../src/engine/content/balance';
-import { makeSnapshot, makeWorker } from './fixtures';
+import { GameEngine } from '../../src/engine/game-engine';
+import { initialSave } from '../../src/engine/world';
+import { makeSnapshot, makeWorker, stockedWith } from './fixtures';
 import type { ColonistSnapshot, Snapshot } from '../../src/shared/snapshot';
 
 // A single idle worker, overridable field by field — hunger is the only
@@ -18,10 +20,9 @@ function worker(overrides: Partial<ColonistSnapshot> = {}): ColonistSnapshot {
 
 // Mounts with a fresh testing Pinia each call, so tests never leak state
 // between it.each cases the way a shared module-level store would. Takes a
-// whole Snapshot override rather than just a roster: the headline reads
-// demographics, beds and mealsPerHead, none of which this fixture derives
-// from `colonists`.
-function mountPopulationView(overrides: Partial<Snapshot>) {
+// whole Snapshot (not a roster) so the engine-fed cases below can hand it one
+// the simulation actually produced, unedited.
+function mountWithSnapshot(snapshot: Snapshot) {
   const engine = { dispatch: vi.fn() };
   const wrapper = mount(PopulationView, {
     global: {
@@ -30,8 +31,14 @@ function mountPopulationView(overrides: Partial<Snapshot>) {
     },
   });
   const store = useGameStore();
-  store.ingest(makeSnapshot(overrides), { paused: true, speed: 1, error: null });
+  store.ingest(snapshot, { paused: true, speed: 1, error: null });
   return { engine, wrapper, store };
+}
+
+// The fixture-built variant: the headline reads demographics, beds and
+// mealsPerHead, none of which makeSnapshot derives from `colonists`.
+function mountPopulationView(overrides: Partial<Snapshot>) {
+  return mountWithSnapshot(makeSnapshot(overrides));
 }
 
 /**
@@ -109,7 +116,10 @@ describe('PopulationView', () => {
     expect(wrapper.get('[data-test="stage-1"]').text()).toBe('Child');
     expect(wrapper.get('[data-test="stage-2"]').text()).toBe('Adult');
     expect(wrapper.get('[data-test="stage-5"]').text()).toBe('Elder');
-    expect(wrapper.text()).not.toContain('elder'); // the raw stage, not the label
+    // Scoped to the roster: the headline legitimately says "elders" in prose,
+    // so only the table body can testify that the raw union never reaches a cell.
+    expect(wrapper.get('tbody').text()).not.toContain('elder');
+    expect(wrapper.get('tbody').text()).not.toContain('child');
   });
 
   // The commute is the number the player can act on by moving a house, so the
@@ -160,5 +170,126 @@ describe('PopulationView', () => {
     expect(await at(10)).toBe(`${BALANCE.starvationDeathTicks - 10}t`);
     expect(await at(90)).toBe(`${BALANCE.starvationDeathTicks - 90}t`);
     expect(await at(0)).toBe('—');
+  });
+
+  // Stage counts are 1/3/2 in ROSTER precisely so a cell wired to the wrong
+  // one renders a different number; beds 5-of-9 collides with none of them.
+  it('breaks the headline population down by stage, and states the beds', async () => {
+    const { wrapper } = mountPopulationView(ROSTER);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('[data-test="stage-children"]').text()).toBe('1');
+    expect(wrapper.get('[data-test="stage-adults"]').text()).toBe('3');
+    expect(wrapper.get('[data-test="stage-elders"]').text()).toBe('2');
+    expect(wrapper.get('[data-test="beds"]').text()).toContain('5 / 9');
+    expect(wrapper.get('[data-test="homeless"]').text()).toContain('1');
+  });
+
+  // Every headline cell must track its own snapshot field. A second ingest
+  // with all five numbers changed catches a cell frozen at mount, a cell bound
+  // to a neighbouring field, and a hardcoded literal, none of which the
+  // single-snapshot case above can distinguish.
+  it('every headline number follows the snapshot it came from', async () => {
+    const { wrapper, store } = mountPopulationView(ROSTER);
+    await wrapper.vm.$nextTick();
+    store.ingest(makeSnapshot({
+      ...ROSTER,
+      demographics: { children: 4, adults: 7, elders: 5 },
+      beds: { total: 20, occupied: 11 },
+      homeless: 6,
+    }), { paused: true, speed: 1, error: null });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('[data-test="stage-children"]').text()).toBe('4');
+    expect(wrapper.get('[data-test="stage-adults"]').text()).toBe('7');
+    expect(wrapper.get('[data-test="stage-elders"]').text()).toBe('5');
+    expect(wrapper.get('[data-test="beds"]').text()).toContain('11 / 20');
+    expect(wrapper.get('[data-test="homeless"]').text()).toContain('6');
+  });
+
+  /**
+   * mealsPerHead END TO END: the number on screen is the one the engine
+   * published, not a second derivation of it by the view.
+   *
+   * The expected string is computed FROM the engine's own snapshot field, so
+   * there is no literal to go stale — and the fixture is chosen so the figure
+   * is fractional (bread 7 + berries 20 over 3 founders + 1 = 4.75), which no
+   * other quantity on this screen coincides with.
+   */
+  it('shows the meals-per-head figure the engine published', async () => {
+    const base = initialSave();
+    const engine = await GameEngine.create({ ...base, stockpile: { ...base.stockpile, bread: 7 } });
+    await engine.stepOnce();
+    const published = engine.snapshot!;
+    expect(published.mealsPerHead).toBeGreaterThan(0);         // not vacuous
+    expect(Number.isInteger(published.mealsPerHead)).toBe(false); // and not a round number
+
+    const { wrapper } = mountWithSnapshot(published);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('[data-test="meals"]').text()).toContain(published.mealsPerHead.toFixed(1));
+  });
+
+  /**
+   * The anti-drift test this whole design exists for: the sentence beside the
+   * disabled button is byte-identical to the notice the engine emits when the
+   * click is actually made, on the same colony.
+   *
+   * A fresh v5 colony has a spare bed and nowhere near nomadFoodPerHead, so
+   * the live gate is FOOD. A button reading only the recruit cooldown — as it
+   * did before this increment — would render enabled here.
+   */
+  it('the reason beside the button is the sentence the engine rejects with', async () => {
+    const engine = await GameEngine.create();
+    await engine.stepOnce();
+    const { wrapper, store } = mountWithSnapshot(engine.snapshot!);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('[data-test="recruit"]').attributes('disabled')).toBeDefined();
+    expect(store.nomadBlocker).toBe('notEnoughFood'); // the food gate, not beds and not cooldown
+    const shown = wrapper.get('[data-test="recruit-reason"]').text();
+
+    engine.dispatch({ type: 'recruitWorker' });
+    await engine.stepOnce();
+    const rejection = engine.snapshot!.notices.find((n) => n.kind === 'rejection');
+    expect(rejection, 'the engine accepted a nomad the button said it would refuse').toBeDefined();
+    expect(shown).toBe(rejection!.message);
+    expect(engine.snapshot!.population).toBe(3); // genuinely refused
+  });
+
+  it('enables the button, with no reason shown, once every gate is clear', async () => {
+    // The stockpile is seeded, not mealsPerHead: the getter recomputes the
+    // ratio from stock and population, so overriding the published figure
+    // alone would leave the gate reading an empty store and the button
+    // disabled for a reason this test never names.
+    const { wrapper, engine } = mountPopulationView({
+      ...ROSTER,
+      stockpile: stockedWith({ bread: 5000 }),
+      beds: { total: 12, occupied: 5 },
+      homeless: 0,
+    });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('[data-test="recruit"]').attributes('disabled')).toBeUndefined();
+    expect(wrapper.find('[data-test="recruit-reason"]').exists()).toBe(false);
+    await wrapper.get('[data-test="recruit"]').trigger('click');
+    expect(engine.dispatch).toHaveBeenCalledWith({ type: 'recruitWorker' });
+  });
+
+  // "No one is passing through just yet." says the gate but not the wait, so
+  // the countdown rides alongside it — and ONLY alongside it: the same span
+  // appearing under the food or bed gate would tell the player to wait for a
+  // clock that is not what is stopping them.
+  it('counts down the wait, but only while the cooldown is the live gate', async () => {
+    const clear = {
+      ...ROSTER,
+      stockpile: stockedWith({ bread: 5000 }),
+      beds: { total: 12, occupied: 5 },
+      homeless: 0,
+    };
+    const { wrapper, store } = mountPopulationView({ ...clear, tick: 10, lastRecruitTick: 0 });
+    await wrapper.vm.$nextTick();
+    expect(store.nomadBlocker).toBe('cooldown');
+    expect(wrapper.get('[data-test="recruit-wait"]').text()).toBe(`${BALANCE.recruitCooldownTicks - 10}t`);
+
+    store.ingest(makeSnapshot({ ...clear, stockpile: stockedWith({ bread: 0 }), tick: 10, lastRecruitTick: 0 }), { paused: true, speed: 1, error: null });
+    await wrapper.vm.$nextTick();
+    expect(store.nomadBlocker).toBe('notEnoughFood'); // food is checked first
+    expect(wrapper.find('[data-test="recruit-wait"]').exists()).toBe(false);
   });
 });

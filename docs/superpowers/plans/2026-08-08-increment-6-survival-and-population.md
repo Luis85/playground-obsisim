@@ -2294,7 +2294,7 @@ Both helpers take `PendingChanges` rather than a bare count precisely so the dem
 
 **An arrival names its bed, and `rehome` must honour that.** Neither arrival is homed on its own tick — a nomad is invisible to `PopulationSystem`, a birth happens after homing — so each passes a `homeId` into `colonistComponents` and pushes `{ homeId }` onto the ledger. `rehome` then counts pending arrivals against their houses when computing per-shelter room, or it will fill the very bed an arrival reserved.
 
-Register `PendingChanges` in `buildColonyPrepWorld`'s `instances` array. `handleRecruitWorker` gates on `freeBeds(...) > 0`, picks its bed with `shelterWithRoom`, and pushes onto the ledger.
+`PendingChanges` is already registered (Task 6). Here, `handleRecruitWorker` gates on `freeBeds(ctx.shelters, population, ctx.pending) > 0`, picks its bed with `shelterWithRoom(ctx.shelters, claimed, ctx.pending)`, and pushes `{ homeId }` onto `ctx.pending.arrivals`.
 
 **Pin the invariant, not just the three known cases.** All three defects violated one property, and a property test catches the next variant:
 

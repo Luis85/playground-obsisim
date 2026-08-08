@@ -3090,6 +3090,8 @@ const migrateV4toV5: MigrationStep = {
       // records that never carried it.
       starvingTicks: w.starvingTicks ?? 0,
     }));
+```
+
 **Why `break` and `at === null` are both unreachable, and why the code keeps
 them anyway.** A reviewer has twice read the no-house path as a live
 regression — a migrated colony loading wholly homeless with no tile left to
@@ -3124,6 +3126,9 @@ homeless. And homeless is recoverable by the player — demolishing one
 building frees a tile and the next homing pass rehouses everyone, which is
 precisely the decision this increment is about.
 
+Resuming `migrateV4toV5`, immediately after the `colonists` declaration above:
+
+```ts
     const { workers: _dropped, ...rest } = v4;
     return {
       ...rest,

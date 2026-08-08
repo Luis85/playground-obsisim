@@ -117,7 +117,7 @@ export const useGameStore = defineStore('game', {
         ]),
       ) as Record<BuildingDefId, boolean>;
     },
-    /** Workers currently assigned to hauling rather than to a building. */
+    /** Colonists currently assigned to hauling rather than to a building. */
     haulerCount(state): number {
       return state.snapshot?.colonists.filter((w) => w.hauling).length ?? 0;
     },

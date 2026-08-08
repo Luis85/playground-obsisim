@@ -33,7 +33,7 @@ export class Efficiency {
   constructor(public value = 1) {}
 }
 
-/** A building's tile on the world map. Workers have none: their spots stay
+/** A building's tile on the world map. Colonists have none: their spots stay
  * derived by the app-layer layout (spec §2.3). */
 export class Position {
   constructor(public col: number, public row: number) {}

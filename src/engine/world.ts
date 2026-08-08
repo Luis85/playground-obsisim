@@ -13,7 +13,7 @@ import {
   Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Colonist,
   WorkerSlots,
 } from './components';
-import { isBuffersValid, isBuildingsValid, isIdsValid, isPositionsValid, isStockpileValid, isWorkersValid } from './save-guard';
+import { isBuffersValid, isBuildingsValid, isIdsValid, isPositionsValid, isStockpileValid, isColonistsValid } from './save-guard';
 import {
   buildingComponents, clampedBuffer, clampedHunger, clampedProgress, clampedRelocation, clampedToolTicks, colonistComponents,
 } from './spawn';
@@ -152,7 +152,7 @@ export function isLoadableSave(data: unknown): data is SaveGameV4 {
   if (!isIdsValid(data)) return false;
   if (!isPositionsValid(data)) return false;
   if (!isBuffersValid(data)) return false;
-  return isWorkersValid(data);
+  return isColonistsValid(data);
 }
 
 /**

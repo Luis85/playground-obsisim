@@ -55,7 +55,7 @@ export function isBuildingsValid(buildings: SaveGameV4['buildings']): boolean {
   });
 }
 
-function isWorkerRecordValid(w: SaveGameV4['workers'][number], buildingIds: ReadonlySet<number>): boolean {
+function isColonistRecordValid(w: SaveGameV4['workers'][number], buildingIds: ReadonlySet<number>): boolean {
   // Upper bounds intentionally NOT checked against current BALANCE.hungerMax /
   // toolDurationTicks: those are clamped to current balance at spawn instead
   // (see spawnColonist), so a save written under a higher balance value still loads.
@@ -72,9 +72,9 @@ function isWorkerRecordValid(w: SaveGameV4['workers'][number], buildingIds: Read
   return buildingIds.has(w.buildingId);
 }
 
-export function isWorkersValid(data: SaveGameV4): boolean {
+export function isColonistsValid(data: SaveGameV4): boolean {
   const buildingIds = new Set(data.buildings.map((b) => b.id));
-  return data.workers.every((w) => isWorkerRecordValid(w, buildingIds));
+  return data.workers.every((w) => isColonistRecordValid(w, buildingIds));
 }
 
 // Cross-array id validity: positive integers, unique across buildings AND

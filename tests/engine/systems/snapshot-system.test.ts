@@ -4,19 +4,25 @@ import { IdCounter, NoticeBoard, SnapshotStore } from '../../../src/engine/resou
 import { HaulSystem } from '../../../src/engine/systems/haul-system';
 import { SnapshotSystem } from '../../../src/engine/systems/snapshot-system';
 import { BALANCE } from '../../../src/engine/content/balance';
-import { buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spawnWorker } from '../../../src/engine/world';
+import { buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist } from '../../../src/engine/world';
+import { campAdjacentFreeTile } from '../fixtures';
 
 describe('SnapshotSystem', () => {
   it('projects a complete snapshot', async () => {
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
     save.stockpile = { wood: 10, bread: 2 };
     const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
     const ids = getPrepResource(prep, IdCounter);
     const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 1.5, batchActive: true, col: 4, row: 1, relocatingTicks: 0 });
     const buildingId = building.getComponent(Building)!.id;
-    spawnWorker(prep, ids, { buildingId, hunger: 20, toolTicks: 10 });
-    spawnWorker(prep, ids); // idle
+    // Housed at the same building it works: this test is about staffing,
+    // progress and tool coverage, not homelessness — an unhoused worker here
+    // would halve workPower via Task 6's placementFactor and desync the
+    // 1.5-power assertion below from what the comment says it means.
+    spawnColonist(prep, ids, { buildingId, hunger: 20, toolTicks: 10, homeId: buildingId });
+    spawnColonist(prep, ids, { ageTicks: BALANCE.lifeBands.matureTicks }); // idle adult
     getPrepResource(prep, NoticeBoard).reject('test notice');
 
     const world = await prep.prepareRun();
@@ -24,7 +30,7 @@ describe('SnapshotSystem', () => {
     const snapshot = world.getResource(SnapshotStore).latest!;
 
     expect(snapshot.population).toBe(2);
-    expect(snapshot.idleWorkers).toBe(1);
+    expect(snapshot.idleAdults).toBe(1);
     expect(snapshot.stockpile.wood.stock).toBe(10);
     expect(snapshot.colonyWealth).toBe(10 * 1 + 2 * 8); // wood@1 + bread@8
     expect(snapshot.notices).toEqual([{ kind: 'rejection', message: 'test notice' }]);
@@ -37,18 +43,19 @@ describe('SnapshotSystem', () => {
     expect(b.tooledWorkers).toBe(1);
     expect(b.workPower).toBeCloseTo(1.5); // 1 covered worker: eff 1.0 x tool 1.5
 
-    expect(snapshot.workers.map((w) => w.buildingId)).toEqual([buildingId, null]);
-    expect(snapshot.workers[0].toolTicks).toBe(10);
+    expect(snapshot.colonists.map((w) => w.buildingId)).toEqual([buildingId, null]);
+    expect(snapshot.colonists[0].toolTicks).toBe(10);
   });
 
   it('marks unstaffed and waiting states', async () => {
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
     const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
     const ids = getPrepResource(prep, IdCounter);
     spawnBuilding(prep, ids, { defId: 'mill', progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 0 });
     const staffed = spawnBuilding(prep, ids, { defId: 'mill', progress: 0, batchActive: false, col: 6, row: 1, relocatingTicks: 0 });
-    spawnWorker(prep, ids, { buildingId: staffed.getComponent(Building)!.id });
+    spawnColonist(prep, ids, { buildingId: staffed.getComponent(Building)!.id });
     const world = await prep.prepareRun();
     await world.step();
     const snapshot = world.getResource(SnapshotStore).latest!;
@@ -57,7 +64,8 @@ describe('SnapshotSystem', () => {
 
   it('pins staffing precedence: unstaffed wins over outputFull', async () => {
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
     const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
     const ids = getPrepResource(prep, IdCounter);
 
@@ -68,7 +76,7 @@ describe('SnapshotSystem', () => {
     // Staffed building with full buffer: should report 'outputFull'
     const staffedFull = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1, relocatingTicks: 0 });
     staffedFull.getComponent(OutputBuffer)!.add('wood', BALANCE.outputBufferCap);
-    spawnWorker(prep, ids, { buildingId: staffedFull.getComponent(Building)!.id });
+    spawnColonist(prep, ids, { buildingId: staffedFull.getComponent(Building)!.id });
 
     const world = await prep.prepareRun();
     await world.step();
@@ -92,7 +100,8 @@ describe('SnapshotSystem', () => {
     // (OBS-5-01) follow the same rule: published so the layout never has to
     // re-derive them from the building's live tile.
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
     save.stockpile = {};
     const prep = buildColonyPrepWorld({ save, systems: [HaulSystem, SnapshotSystem] });
     const ids = getPrepResource(prep, IdCounter);
@@ -100,9 +109,16 @@ describe('SnapshotSystem', () => {
     const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 5, row: 4, relocatingTicks: 0 });
     building.getComponent(OutputBuffer)!.add('wood', 9);
     const buildingId = building.getComponent(Building)!.id;
-    spawnWorker(prep, ids, { hauling: true });
+    // Housed beside the camp for the same reason the staffed worker above is
+    // housed at its building: Task 7 scales a hauler's carry by their commute,
+    // and this case is about what the snapshot PUBLISHES for a trip, not about
+    // housing. A commute-neutral tile keeps `carrying` at the flat
+    // BALANCE.haulCarryCapacity the assertion below names.
+    const at = campAdjacentFreeTile([{ col: 5, row: 4 }]);
+    const house = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: at.col, row: at.row, relocatingTicks: 0 });
+    spawnColonist(prep, ids, { hauling: true, homeId: house.getComponent(Building)!.id });
     const world = await prep.prepareRun();
-    const hauler = () => world.getResource(SnapshotStore).latest!.workers[0];
+    const hauler = () => world.getResource(SnapshotStore).latest!.colonists[0];
 
     await world.step(); // dispatched: walking out to the building
     // The dispatch tick sets the full 3-tick leg without decrementing it, so
@@ -134,9 +150,49 @@ describe('SnapshotSystem', () => {
     });
   });
 
+  it('publishes each colonist\'s commute, and spends the same factor on the building\'s workPower', async () => {
+    // The snapshot is where a player learns WHY a building is slow, so the
+    // commute has to be visible and it has to be the number the simulation
+    // actually spent — buildEntitySections computes it once and uses it for
+    // both, and this pins that they cannot drift apart.
+    const save = initialSave();
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
+    save.stockpile = {};
+    const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
+    const ids = getPrepResource(prep, IdCounter);
+    const work = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 0 });
+    const workId = work.getComponent(Building)!.id;
+    // 10 tiles away: 8 charged tiles at 0.03 is 0.76, strictly between a free
+    // commute and the 0.5 floor, so neither end could produce this by accident.
+    const house = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: 14, row: 1, relocatingTicks: 0 });
+    spawnColonist(prep, ids, { id: 1, buildingId: workId, homeId: house.getComponent(Building)!.id });
+    // A hauler measures to the CAMP store, not to any building — their round
+    // trip begins and ends there. Housed at (3,0), one tile from it.
+    const campHouse = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: 3, row: 0, relocatingTicks: 0 });
+    spawnColonist(prep, ids, { id: 2, hauling: true, homeId: campHouse.getComponent(Building)!.id });
+    spawnColonist(prep, ids, { id: 3 }); // homeless, unassigned
+
+    const world = await prep.prepareRun();
+    await world.step();
+    const snapshot = world.getResource(SnapshotStore).latest!;
+    const byId = (id: number) => snapshot.colonists.find((c) => c.id === id)!;
+
+    expect(byId(1).commuteTiles).toBeCloseTo(10, 5);
+    expect(byId(1).commuteFactor).toBeCloseTo(0.76, 5);
+    expect(byId(2).commuteTiles).toBeCloseTo(1, 5); // (3,0) to CAMP_TILE (2,0)
+    expect(byId(2).commuteFactor).toBe(1);
+    // No bed, so no distance to report: the whole charge lands in the factor.
+    expect(byId(3)).toMatchObject({ commuteTiles: 0, commuteFactor: BALANCE.homelessFactor });
+
+    // ...and the published workPower is that same 0.76, not a full-power 1.
+    expect(snapshot.buildings.find((b) => b.id === workId)!.workPower).toBeCloseTo(0.76, 5);
+  });
+
   it('reports a relocating building as relocating, with its remaining ticks', async () => {
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
     save.stockpile = {};
     const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
     const ids = getPrepResource(prep, IdCounter);
@@ -147,7 +203,7 @@ describe('SnapshotSystem', () => {
     // test below, whose fixtures genuinely satisfy those rival branches.
     const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 5, row: 4, relocatingTicks: 7 });
     const buildingId = building.getComponent(Building)!.id;
-    spawnWorker(prep, ids, { buildingId });
+    spawnColonist(prep, ids, { buildingId });
     const world = await prep.prepareRun();
     await world.step();
 
@@ -163,7 +219,8 @@ describe('SnapshotSystem', () => {
     // These two fixtures instead genuinely satisfy the rival branch's own
     // condition, so a reordered priority actually flips the result.
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
     const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
     const ids = getPrepResource(prep, IdCounter);
 
@@ -177,7 +234,7 @@ describe('SnapshotSystem', () => {
     // ran before relocatingTicks > 0, this would read 'outputFull' instead.
     const relocatingFull = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1, relocatingTicks: 5 });
     relocatingFull.getComponent(OutputBuffer)!.add('wood', BALANCE.outputBufferCap);
-    spawnWorker(prep, ids, { buildingId: relocatingFull.getComponent(Building)!.id });
+    spawnColonist(prep, ids, { buildingId: relocatingFull.getComponent(Building)!.id });
 
     const world = await prep.prepareRun();
     await world.step();
@@ -185,6 +242,24 @@ describe('SnapshotSystem', () => {
 
     expect(snapshot.buildings[0].state).toBe('relocating'); // rival condition: staffed === 0
     expect(snapshot.buildings[1].state).toBe('relocating'); // rival condition: outputBlocked === true
+  });
+
+  it('pins relocating precedence over housing too', async () => {
+    // Same shape as the precedence test above: a relocating house's OWN rival
+    // condition (recipe === null) is genuinely satisfied, so if that check
+    // ran before relocatingTicks > 0, this would read 'housing' instead. A
+    // house can never be 'unstaffed' or 'outputFull' (no slots, no batch), so
+    // relocating-vs-housing is the one precedence a house can actually flip.
+    const save = initialSave();
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
+    const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
+    const ids = getPrepResource(prep, IdCounter);
+    spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 5 });
+
+    const world = await prep.prepareRun();
+    await world.step();
+    expect(world.getResource(SnapshotStore).latest!.buildings[0].state).toBe('relocating');
   });
 
   it('clears notices after snapshotting them', async () => {

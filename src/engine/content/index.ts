@@ -5,4 +5,4 @@ export { BALANCE } from './balance';
 export { BUILDINGS, BUILDING_IDS } from './buildings';
 export { CHAINS } from './chains';
 export { RESOURCES, RESOURCE_IDS } from './resources';
-export type { BuildingDefId, CostMap, ResourceId } from '../../shared/content-types';
+export type { BuildingDef, BuildingDefId, CostMap, ResourceId } from '../../shared/content-types';

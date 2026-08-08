@@ -17,23 +17,62 @@ export class ToolCoverage {
   constructor(public remainingTicks = 0) {}
 }
 
-export class Worker {
+export class Colonist {
   constructor(public id: number) {}
 }
 
 export class Hunger {
-  constructor(public value = 0) {}
+  /**
+   * `starvingTicks` counts consecutive ticks pinned at `hungerMax` with
+   * nothing eaten. HungerSystem is its ONLY writer — it already owns this
+   * component and is the one place that knows whether this colonist ate this
+   * tick; PopulationSystem only reads it. Two systems writing one counter is
+   * how a starvation clock ends up advancing twice on a tick where a colonist
+   * both starved and was fed.
+   *
+   * Saved (v5) for the reason relocatingTicks is: it is a penalty already
+   * incurred, and dropping it would let save-and-reload cancel a starvation
+   * in progress.
+   */
+  constructor(public value = 0, public starvingTicks = 0) {}
+}
+
+/**
+ * How long this colonist has been alive, in ticks. The single source of their
+ * life stage — `stageOf` derives child/adult/elder from it, so there is no
+ * maturity flag beside the age that could disagree with it, and moving a band
+ * needs no migration.
+ *
+ * Saved (v5): plainly persistent state, not runtime scratch like HaulTrip.
+ * Magnitude is clamped at load by `clampedAge` rather than bounds-checked in
+ * the load guard, so a save written under a longer lifespan still opens.
+ */
+export class Age {
+  constructor(public ticks = 0) {}
 }
 
 export class JobAssignment {
   constructor(public buildingId: number | null = null, public hauling = false) {}
 }
 
+/**
+ * The house this colonist sleeps in, or null when homeless. Occupancy is read
+ * from these references rather than counted on the building, so a house and
+ * its residents cannot disagree about who lives there.
+ *
+ * Saved (v5): where a colonist lives is a decision, not derived state — the
+ * homing phase would re-derive *a* valid assignment on load, but not
+ * necessarily the same one, which would silently reshuffle commutes.
+ */
+export class Home {
+  constructor(public buildingId: number | null = null) {}
+}
+
 export class Efficiency {
   constructor(public value = 1) {}
 }
 
-/** A building's tile on the world map. Workers have none: their spots stay
+/** A building's tile on the world map. Colonists have none: their spots stay
  * derived by the app-layer layout (spec §2.3). */
 export class Position {
   constructor(public col: number, public row: number) {}

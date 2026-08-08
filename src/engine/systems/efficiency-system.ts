@@ -1,5 +1,5 @@
 import { createSystem, queryComponents, Read, Write, WriteResource } from 'sim-ecs';
-import { BALANCE, workerEfficiency } from '../content/balance';
+import { BALANCE, colonistEfficiency } from '../content/balance';
 import { Efficiency, Hunger, JobAssignment, ToolCoverage } from '../components';
 import { Stockpile } from '../resources';
 
@@ -15,7 +15,7 @@ export const EfficiencySystem = () => createSystem({
   .withName('EfficiencySystem')
   .withRunFunction(({ stockpile, workers }) => {
     for (const { hunger, job, efficiency, coverage } of workers.iter()) {
-      efficiency.value = workerEfficiency(hunger.value);
+      efficiency.value = colonistEfficiency(hunger.value);
       if (coverage.remainingTicks > 0) {
         // wears down whether assigned or idle: simple and deterministic
         coverage.remainingTicks--;

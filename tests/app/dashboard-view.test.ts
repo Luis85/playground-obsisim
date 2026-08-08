@@ -21,13 +21,13 @@ function mountDashboard() {
 describe('DashboardView', () => {
   it('shows the hauler count and dispatches both hauler commands', async () => {
     const { wrapper, engine } = mountDashboard();
-    // idleWorkers is a separate snapshot field, not derived from `workers` by
+    // idleAdults is a separate snapshot field, not derived from `workers` by
     // this fixture (see fixtures.ts) — it must be set explicitly here so
     // worker 2 (idle, non-hauling) actually enables the assign-hauler button
     // below; otherwise the click on a disabled button is a real-DOM no-op.
     useGameStore().ingest(makeSnapshot({
-      workers: [makeWorker(1, { hauling: true }), makeWorker(2, {})],
-      idleWorkers: 1,
+      colonists: [makeWorker(1, { hauling: true }), makeWorker(2, {})],
+      idleAdults: 1,
     }), { paused: false, speed: 1, error: null });
     await wrapper.vm.$nextTick();
 
@@ -40,7 +40,7 @@ describe('DashboardView', () => {
 
   it('disables removing a hauler when there are none', async () => {
     const { wrapper } = mountDashboard();
-    useGameStore().ingest(makeSnapshot({ workers: [makeWorker(1, {})] }), { paused: false, speed: 1, error: null });
+    useGameStore().ingest(makeSnapshot({ colonists: [makeWorker(1, {})] }), { paused: false, speed: 1, error: null });
     await wrapper.vm.$nextTick();
     expect((wrapper.find('[data-test="unassign-hauler"]').element as HTMLButtonElement).disabled).toBe(true);
   });

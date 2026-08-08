@@ -132,7 +132,7 @@ describe('useGameStore', () => {
     const store = useGameStore();
     const base = {
       col: 0, row: 0, workers: 0, workerSlots: 2, progress: 0, batchActive: false,
-      progressPct: 0, tooledWorkers: 0, workPower: 0, buffered: 0, relocatingTicks: 0,
+      progressPct: 0, tooledWorkers: 0, workPower: 0, buffered: 0, relocatingTicks: 0, beds: 0, occupants: 0,
     };
     store.ingest(makeSnapshot({
       buildings: [
@@ -172,7 +172,7 @@ describe('useGameStore', () => {
         makeBuilding(2, { buffered: 3, state: 'producing' }),
         makeBuilding(3, { buffered: 0, state: 'unstaffed' }),
       ],
-      workers: [makeWorker(1, { hauling: true }), makeWorker(2, { hauling: true }), makeWorker(3, {})],
+      colonists: [makeWorker(1, { hauling: true }), makeWorker(2, { hauling: true }), makeWorker(3, {})],
     }), { paused: false, speed: 1, error: null });
     expect(store.haulerCount).toBe(2);
     expect(store.unitsWaiting).toBe(15);

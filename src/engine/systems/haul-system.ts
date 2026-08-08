@@ -1,24 +1,66 @@
-import { createSystem, queryComponents, Read, Write, WriteResource } from 'sim-ecs';
+import { createSystem, queryComponents, Read, ReadResource, Write, WriteResource } from 'sim-ecs';
 import type { HaulCandidate } from '../../shared/haul';
-import { haulTicks, nextHaulTarget } from '../../shared/haul';
+import { haulDistance, haulTicks, nextHaulTarget } from '../../shared/haul';
+import type { TileRef } from '../../shared/placement';
+import { commuteFactor } from '../../shared/population';
 import { BALANCE } from '../content/balance';
 import { RESOURCE_IDS } from '../content/resources';
-import { Building, HaulTrip, JobAssignment, OutputBuffer, Position } from '../components';
-import { Stockpile } from '../resources';
+import { Building, HaulTrip, Home, JobAssignment, OutputBuffer, Position } from '../components';
+import { PendingChanges, Stockpile } from '../resources';
 
 interface BuildingRow { building: Building; position: Position; buffer: OutputBuffer; }
-interface WorkerRow { job: JobAssignment; trip: HaulTrip; }
+interface WorkerRow { job: JobAssignment; trip: HaulTrip; home: Home; }
+
+/**
+ * What THIS hauler carries per trip. A hauler's output is goods moved, so
+ * their commute costs them the same fraction of it that a worker's costs them
+ * of production — ProductionSystem never sees a hauler (no buildingId), so
+ * without this their commute would be decorative. Rounded, floored at 1: a
+ * hauler who shows up carries something.
+ *
+ * The distance is `haulDistance`, the camp-store measure the rest of logistics
+ * already uses, because a hauler's round trip both starts and ends there — the
+ * same tile buildEntitySections measures a hauler's published commute to.
+ *
+ * Every site that reserves or takes capacity must call this — buildClaimMap,
+ * the same-tick dispatch claim, and the load. A reservation computed from the
+ * flat BALANCE.haulCarryCapacity while the load uses this would claim 6 for a
+ * hauler taking 3, leaving goods unclaimed and other haulers sent away: a
+ * scheduling penalty stacked on top of the commute, which is not what this
+ * models.
+ */
+export function haulerCapacity(homeTile: TileRef | null): number {
+  const tiles = homeTile === null ? null : haulDistance(homeTile.col, homeTile.row);
+  const factor = commuteFactor(tiles, BALANCE.commute, BALANCE.homelessFactor);
+  return Math.max(1, Math.round(BALANCE.haulCarryCapacity * factor));
+}
+
+/** Where a hauler sleeps, or null when nowhere — the input haulerCapacity
+ * charges. Resolved against the same building rows the haul targets come from,
+ * so a house is just another row here. */
+function homeTileOf(homeId: number | null, byId: ReadonlyMap<number, BuildingRow>, pending: PendingChanges): TileRef | null {
+  if (homeId === null) return null;
+  const row = byId.get(homeId);
+  // A house built earlier THIS tick is absent from the query until the
+  // post-step sync, yet homing has already seated its residents. Without this
+  // fallback a hauler housed on the construction tick resolves to no tile and
+  // takes the homeless carry capacity, while the snapshot published moments
+  // later reports them housed. ProductionSystem folds the same pending tiles
+  // into its own map; here byId carries whole rows a pending building has no
+  // counterpart for, so the tile is resolved on its own.
+  return row === undefined ? pending.tileOf(homeId) : row.position;
+}
 
 /**
  * What haulers already on their way will take, keyed by target building id.
  * Without this a second hauler would be dispatched at the same single unit
  * the first is already fetching, and both would arrive to an empty buffer.
  */
-function buildClaimMap(workerRows: readonly WorkerRow[]): Map<number, number> {
+function buildClaimMap(workerRows: readonly WorkerRow[], byId: ReadonlyMap<number, BuildingRow>, pending: PendingChanges): Map<number, number> {
   const claimed = new Map<number, number>();
-  for (const { job, trip } of workerRows) {
+  for (const { job, trip, home } of workerRows) {
     if (!job.hauling || trip.phase !== 'outbound' || trip.targetId === null) continue;
-    claimed.set(trip.targetId, (claimed.get(trip.targetId) ?? 0) + BALANCE.haulCarryCapacity);
+    claimed.set(trip.targetId, (claimed.get(trip.targetId) ?? 0) + haulerCapacity(homeTileOf(home.buildingId, byId, pending)));
   }
   return claimed;
 }
@@ -50,18 +92,19 @@ export const HaulSystem = () => createSystem({
   buildings: queryComponents({
     building: Read(Building), position: Read(Position), buffer: Write(OutputBuffer),
   }),
-  workers: queryComponents({ job: Read(JobAssignment), trip: Write(HaulTrip) }),
+  workers: queryComponents({ job: Read(JobAssignment), trip: Write(HaulTrip), home: Read(Home) }),
+  pending: ReadResource(PendingChanges),
 })
   .withName('HaulSystem')
-  .withRunFunction(({ stockpile, buildings, workers }) => {
+  .withRunFunction(({ stockpile, buildings, workers, pending }) => {
     const buildingRows = [...buildings.iter()];
     const byId = new Map(buildingRows.map((row) => [row.building.id, row]));
     const workerRows = [...workers.iter()];
 
-    const claimed = buildClaimMap(workerRows);
+    const claimed = buildClaimMap(workerRows, byId, pending);
     const candidates = buildCandidates(buildingRows, claimed);
 
-    const dispatch = (trip: HaulTrip): void => {
+    const dispatch = (trip: HaulTrip, capacity: number): void => {
       const target = nextHaulTarget(candidates);
       if (target === null) return;
       trip.phase = 'outbound';
@@ -73,10 +116,10 @@ export const HaulSystem = () => createSystem({
       trip.amount = 0;
       // Mutating the candidate makes the claim visible to the next idle hauler
       // dispatched in this same tick, not only to the next tick's recompute.
-      target.claimed += BALANCE.haulCarryCapacity;
+      target.claimed += capacity;
     };
 
-    const load = (trip: HaulTrip): void => {
+    const load = (trip: HaulTrip, capacity: number): void => {
       const row = trip.targetId === null ? undefined : byId.get(trip.targetId);
       // The building can be gone (demolished while this hauler walked): the trip
       // simply ends, which is cheaper than a special cancellation path.
@@ -85,7 +128,7 @@ export const HaulSystem = () => createSystem({
         return;
       }
       const resource = row.buffer.fullestResource(RESOURCE_IDS);
-      const amount = resource === null ? 0 : row.buffer.take(resource, BALANCE.haulCarryCapacity);
+      const amount = resource === null ? 0 : row.buffer.take(resource, capacity);
       trip.resource = amount > 0 ? resource : null;
       trip.amount = amount;
       trip.phase = 'returning';
@@ -107,15 +150,18 @@ export const HaulSystem = () => createSystem({
       trip.reset();
     };
 
-    for (const { job, trip } of workerRows) {
+    for (const { job, trip, home } of workerRows) {
       if (!job.hauling) continue;
+      // Read once per hauler per tick and handed to both the claim and the
+      // load, so the two can never be computed from different numbers.
+      const capacity = haulerCapacity(homeTileOf(home.buildingId, byId, pending));
       if (trip.phase === 'idle') {
-        dispatch(trip);
+        dispatch(trip, capacity);
         continue; // a trip dispatched this tick starts walking next tick
       }
       trip.ticksLeft -= 1;
       if (trip.ticksLeft > 0) continue;
-      if (trip.phase === 'outbound') load(trip);
+      if (trip.phase === 'outbound') load(trip, capacity);
       else deposit(trip);
     }
   })

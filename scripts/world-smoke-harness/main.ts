@@ -3,7 +3,7 @@
 // drives phases via window.__step(n) and asserts on screenshots and errors.
 // This file is a declared fallow entry point (.fallowrc.json `entry`) — it is
 // loaded by the built harness page, never imported by app or test code.
-import type { BuildingSnapshot, Snapshot, WorkerSnapshot } from '../../src/shared/snapshot';
+import type { BuildingSnapshot, ColonistSnapshot, Snapshot } from '../../src/shared/snapshot';
 import { createExcaliburWorldRenderer } from '../../src/app/world/renderer';
 
 declare global {
@@ -23,26 +23,36 @@ function building(id: number, defId: BuildingSnapshot['defId'], col: number, row
   return {
     id, defId, col, row, workers: 0, workerSlots: 2, state: 'unstaffed',
     progress: 0, batchActive: false, progressPct: 0, tooledWorkers: 0, workPower: 0, buffered: 0, relocatingTicks: 0,
+    beds: 0, occupants: 0,
     ...overrides,
   };
 }
 
-function worker(id: number, overrides: Partial<WorkerSnapshot> = {}): WorkerSnapshot {
+function worker(id: number, overrides: Partial<ColonistSnapshot> = {}): ColonistSnapshot {
   return {
-    id, hunger: 0, efficiency: 1, buildingId: null, hauling: false,
+    id, hunger: 0, starvingTicks: 0, efficiency: 1, buildingId: null, hauling: false,
     haulTargetId: null, haulPhase: 'idle', haulTicksLeft: 0,
     haulLegTicks: 0, haulPickupCol: 0, haulPickupRow: 0,
-    carrying: 0, toolTicks: 0,
+    carrying: 0, toolTicks: 0, ageTicks: 0, stage: 'adult', homeId: null,
+    // The world renderer never reads the commute either — static zeros, same
+    // reason as `homeless` and the empty stockpile cast below.
+    commuteTiles: 0, commuteFactor: 1,
     ...overrides,
   };
 }
 
-function snap(tick: number, buildings: BuildingSnapshot[], workers: WorkerSnapshot[]): Snapshot {
+function snap(tick: number, buildings: BuildingSnapshot[], colonists: ColonistSnapshot[]): Snapshot {
   return {
     // the world renderer never reads the stockpile — an empty cast keeps this
     // smoke fixture decoupled from the resource catalog
-    tick, lastRecruitTick: -30, map: { cols: 24, rows: 16 }, stockpile: {} as Snapshot['stockpile'], colonyWealth: 0,
-    population: workers.length, idleWorkers: 0, buildings, workers, notices: [],
+    tick, lastRecruitTick: -30, lastBirthTick: -50, map: { cols: 24, rows: 16 }, stockpile: {} as Snapshot['stockpile'], colonyWealth: 0,
+    // the world renderer never reads mealsPerHead either
+    mealsPerHead: 0,
+    population: colonists.length, idleAdults: 0,
+    // the world renderer never reads these either — static zeros for the
+    // same reason the stockpile cast above is empty
+    homeless: 0, beds: { total: 0, occupied: 0 }, demographics: { children: 0, adults: 0, elders: 0 },
+    buildings, colonists, notices: [],
   };
 }
 
@@ -77,7 +87,7 @@ const growWorkers = () => [worker(10, { buildingId: 1, toolTicks: 100 }), worker
  * recomputing them (OBS-5-01), so a stale or missing value here would move
  * the dot, not just fail silently.
  */
-const haulScene = (tick: number, hauler: Partial<WorkerSnapshot>, forester: Partial<BuildingSnapshot> = {}) => snap(tick,
+const haulScene = (tick: number, hauler: Partial<ColonistSnapshot>, forester: Partial<BuildingSnapshot> = {}) => snap(tick,
   [building(1, 'forester', 4, 1, { buffered: 12, state: 'outputFull', ...forester }), building(2, 'farm', 6, 1)],
   [worker(10, { buildingId: 1 }), worker(11, { buildingId: 1 }), worker(12, {
     toolTicks: 100, haulLegTicks: 2, haulPickupCol: 4, haulPickupRow: 1, ...hauler,

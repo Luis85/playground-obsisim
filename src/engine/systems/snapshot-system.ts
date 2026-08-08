@@ -2,10 +2,10 @@ import { createSystem, queryComponents, Read, ReadResource, WriteResource } from
 import type { ResourceStats } from '../../shared/snapshot';
 import type { ResourceId } from '../../shared/content-types';
 import { RESOURCES, RESOURCE_IDS } from '../content/resources';
-import { Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Worker, WorkerSlots } from '../components';
+import { Age, Building, Efficiency, HaulTrip, Home, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Colonist, WorkerSlots } from '../components';
 import { NoticeBoard, SimClock, SnapshotStore, StatsHistory, Stockpile, WorldMap } from '../resources';
-import type { BuildingFacts, WorkerFacts } from '../snapshot-builder';
-import { buildEntitySections, buildingFactsOf, workerFactsOf } from '../snapshot-builder';
+import type { BuildingFacts, ColonistFacts } from '../snapshot-builder';
+import { buildEntitySections, buildingFactsOf, colonistFactsOf } from '../snapshot-builder';
 
 export const SnapshotSystem = () => createSystem({
   clock: ReadResource(SimClock),
@@ -19,19 +19,20 @@ export const SnapshotSystem = () => createSystem({
     relocation: Read(Relocation),
   }),
   workers: queryComponents({
-    worker: Read(Worker), hunger: Read(Hunger), job: Read(JobAssignment), efficiency: Read(Efficiency), coverage: Read(ToolCoverage), trip: Read(HaulTrip),
+    worker: Read(Colonist), hunger: Read(Hunger), job: Read(JobAssignment), efficiency: Read(Efficiency), coverage: Read(ToolCoverage), trip: Read(HaulTrip),
+    age: Read(Age), home: Read(Home),
   }),
 })
   .withName('SnapshotSystem')
-  // Entity-derived sections (workers/buildings/population/idleWorkers) come from the
+  // Entity-derived sections (workers/buildings/population/idleAdults) come from the
   // shared buildEntitySections builder; this system only gathers facts from its
   // queries and assembles the remaining stockpile/notices sections.
   .withRunFunction(({ clock, stockpile, stats, notices, store, map, buildings, workers }) => {
     // Fact shape lives in the shared mappers, never here: this system only
     // supplies component instances from its queries (see snapshot-builder).
-    const workerFacts: WorkerFacts[] = [];
-    for (const { worker, hunger, job, efficiency, coverage, trip } of workers.iter()) {
-      workerFacts.push(workerFactsOf(worker, hunger, job, efficiency, coverage, trip));
+    const workerFacts: ColonistFacts[] = [];
+    for (const { worker, hunger, job, efficiency, coverage, trip, age, home } of workers.iter()) {
+      workerFacts.push(colonistFactsOf(worker, hunger, job, efficiency, coverage, trip, age, home));
     }
 
     const buildingFacts: BuildingFacts[] = [];
@@ -39,7 +40,9 @@ export const SnapshotSystem = () => createSystem({
       buildingFacts.push(buildingFactsOf(building, slots, production, position, buffer, relocation));
     }
 
-    const { workers: workerSnaps, buildings: buildingSnaps, population, idleWorkers } = buildEntitySections(workerFacts, buildingFacts);
+    const {
+      colonists: workerSnaps, buildings: buildingSnaps, population, idleAdults, homeless, beds, demographics, mealsPerHead,
+    } = buildEntitySections(workerFacts, buildingFacts, stockpile.toJSON());
 
     const stockpileStats = {} as Record<ResourceId, ResourceStats>;
     let colonyWealth = 0;
@@ -61,13 +64,18 @@ export const SnapshotSystem = () => createSystem({
     store.latest = {
       tick: clock.tick,
       lastRecruitTick: clock.lastRecruitTick,
+      lastBirthTick: clock.lastBirthTick,
+      mealsPerHead,
       map: { cols: map.cols, rows: map.rows },
       stockpile: stockpileStats,
       colonyWealth,
       population,
-      idleWorkers,
+      idleAdults,
+      homeless,
+      beds,
+      demographics,
       buildings: buildingSnaps,
-      workers: workerSnaps,
+      colonists: workerSnaps,
       notices: notices.takeAll(),
     };
   })

@@ -17,8 +17,15 @@ const forester = (col: number, row: number, haulers: number) =>
 
 // 200 ticks, not TICKS: a relocation is a one-off event, and a 600-tick run
 // dilutes it below the noise of the surrounding steady state.
+//
+// houseCrew: false on every call, not just the mover: housing uniformity is
+// a property of this comparison, not of any one scenario, and the stationary
+// controls below (`from`/`to`) never set `moveTo` themselves — so a default
+// keyed off it cannot see that they belong to the same comparison as the
+// mover. See Scenario.houseCrew for why uniform-UNhoused, rather than
+// uniform-housed, is the right call for a relocation comparison.
 const relocating = (col: number, row: number, moveTo?: { col: number; row: number; atTick: number }) =>
-  runScenario({ defId: 'forester', col, row, crew: 2, haulers: 2, ticks: 200, resource: 'wood', moveTo });
+  runScenario({ defId: 'forester', col, row, crew: 2, haulers: 2, ticks: 200, resource: 'wood', moveTo, houseCrew: false });
 
 const share = (r: { delivered: number; ceiling: number }) => r.delivered / r.ceiling;
 

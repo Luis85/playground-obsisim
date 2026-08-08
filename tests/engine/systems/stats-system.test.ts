@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { IdCounter, ProductionLedger, SimClock, SnapshotStore, StatsHistory, Stockpile } from '../../../src/engine/resources';
 import { SnapshotSystem } from '../../../src/engine/systems/snapshot-system';
 import { StatsSystem } from '../../../src/engine/systems/stats-system';
-import { ALL_SYSTEMS, buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spawnWorker } from '../../../src/engine/world';
+import { ALL_SYSTEMS, buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist } from '../../../src/engine/world';
 import { Building } from '../../../src/engine/components';
 
 // StatsSystem's actual contract is "record whatever flows the Stockpile saw
@@ -25,7 +25,8 @@ const DepositWoodSystem = () => createSystem({
 describe('StatsSystem', () => {
   it('records per-tick flows and resets them', async () => {
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
     // 1 wood deposited per tick, same as "3 workers on a forester" used to yield.
     const prep = buildColonyPrepWorld({ save, systems: [DepositWoodSystem, StatsSystem, SnapshotSystem] });
     const world = await prep.prepareRun();
@@ -44,14 +45,15 @@ describe('StatsSystem', () => {
     // and nothing ever reaches the store. Under one combined "production" rate
     // these were indistinguishable, which is the schema half of OBS-4-06.
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
     save.stockpile = {};
     const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
     const ids = getPrepResource(prep, IdCounter);
     const b = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 5, row: 4, relocatingTicks: 0 });
     const bid = b.getComponent(Building)!.id;
-    spawnWorker(prep, ids, { buildingId: bid });
-    spawnWorker(prep, ids, { buildingId: bid });
+    spawnColonist(prep, ids, { buildingId: bid });
+    spawnColonist(prep, ids, { buildingId: bid });
     const world = await prep.prepareRun();
 
     for (let i = 0; i < 12; i++) {

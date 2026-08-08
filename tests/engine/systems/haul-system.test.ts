@@ -1,14 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import type { IEntity, IRuntimeWorld } from 'sim-ecs';
-import { Building, HaulTrip, JobAssignment, OutputBuffer, Worker } from '../../../src/engine/components';
+import type { IEntity, IPreptimeWorld, IRuntimeWorld } from 'sim-ecs';
+import type { TileRef } from '../../../src/shared/placement';
+import { Building, HaulTrip, JobAssignment, OutputBuffer, Colonist } from '../../../src/engine/components';
 import { IdCounter, Stockpile } from '../../../src/engine/resources';
 import { BALANCE } from '../../../src/engine/content/balance';
 import { BUILDINGS } from '../../../src/engine/content/buildings';
-import { HaulSystem } from '../../../src/engine/systems/haul-system';
+import { HaulSystem, haulerCapacity } from '../../../src/engine/systems/haul-system';
 import { CommandSystem } from '../../../src/engine/systems/command-system';
-import { enqueue } from '../fixtures';
+import { campAdjacentFreeTile, enqueue } from '../fixtures';
 import {
-  buildColonyPrepWorld, createColonyWorld, getPrepResource, initialSave, spawnBuilding, spawnWorker, type TColonySystemFactory,
+  buildColonyPrepWorld, createColonyWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist, type TColonySystemFactory,
 } from '../../../src/engine/world';
 import { buildSaveFromWorld } from '../../../src/engine/game-engine';
 
@@ -19,10 +20,24 @@ interface BuildingSpec { col: number; row: number; wood: number; id?: number }
  * CommandSystem: a tick drains its commands first and only then moves haulers.
  * The order is load-bearing for the demolition cases below — it is what makes
  * "the tick the player pressed demolish" the tick the trip has to end on.
+ *
+ * Haulers are HOUSED beside the camp store by default. Task 7 scales a
+ * hauler's carry capacity by their commute, so an unhoused hauler carries half
+ * a load — and every case in this file counts loads. Housing them on a
+ * commute-neutral tile (see campAdjacentFreeTile) holds that at exactly
+ * `BALANCE.haulCarryCapacity`, the same way the balance harness's berry stock
+ * holds hunger neutral, so these cases keep measuring haulage. `houseHaulers:
+ * false` opts out where the reduced capacity IS the subject.
  */
-async function setup(specs: readonly BuildingSpec[], haulerCount: number, systemsBefore: readonly TColonySystemFactory[] = []) {
+async function setup(
+  specs: readonly BuildingSpec[],
+  haulerCount: number,
+  systemsBefore: readonly TColonySystemFactory[] = [],
+  { houseHaulers = true }: { houseHaulers?: boolean } = {},
+) {
   const save = initialSave();
-  save.workers = [];
+  save.colonists = [];
+  save.buildings = [];   // no starter house: this fixture builds its own world
   save.stockpile = {};
   const prep = buildColonyPrepWorld({ save, systems: [...systemsBefore, HaulSystem] });
   const ids = getPrepResource(prep, IdCounter);
@@ -33,10 +48,24 @@ async function setup(specs: readonly BuildingSpec[], haulerCount: number, system
     if (spec.wood > 0) entity.getComponent(OutputBuffer)!.add('wood', spec.wood);
     return entity;
   });
-  const haulers: IEntity[] = Array.from({ length: haulerCount }, () => spawnWorker(prep, ids, { hauling: true }));
+  // Spawned after the specs so it can dodge their tiles, and so its id never
+  // shifts the ones the cases below assert on. An empty buffer keeps it out of
+  // every dispatch decision: nextHaulTarget skips a candidate with nothing
+  // claimable.
+  const homeId = houseHaulers ? spawnHaulerHouse(prep, ids, specs) : null;
+  const haulers: IEntity[] = Array.from({ length: haulerCount }, () => spawnColonist(prep, ids, { hauling: true, homeId }));
   const world = await prep.prepareRun();
   const step = async (times: number) => { for (let i = 0; i < times; i++) await world.step(); };
   return { world, buildings, haulers, step, stockpile: world.getResource(Stockpile) };
+}
+
+/** One house on a commute-neutral tile, returning its building id. */
+function spawnHaulerHouse(prep: IPreptimeWorld, ids: IdCounter, taken: readonly TileRef[]): number {
+  const at = campAdjacentFreeTile(taken);
+  const house = spawnBuilding(prep, ids, {
+    defId: 'house', progress: 0, batchActive: false, col: at.col, row: at.row, relocatingTicks: 0,
+  });
+  return house.getComponent(Building)!.id;
 }
 
 const tripOf = (hauler: IEntity) => hauler.getComponent(HaulTrip)!;
@@ -56,7 +85,7 @@ function haulStateOf(world: IRuntimeWorld) {
     .map((e) => {
       const trip = e.getComponent(HaulTrip)!;
       return {
-        workerId: e.getComponent(Worker)!.id,
+        workerId: e.getComponent(Colonist)!.id,
         targetId: trip.targetId,
         phase: trip.phase,
         ticksLeft: trip.ticksLeft,
@@ -238,15 +267,55 @@ describe('HaulSystem', () => {
     expect(stockpile.get('wood')).toBe(0); // still waiting at the building
   });
 
+  it('reserves exactly what a reduced-capacity hauler will actually take', async () => {
+    // A homeless hauler carries 3, not 6. BALANCE.haulCarryCapacity appears at
+    // three sites in HaulSystem — the cross-tick claim map, the same-tick
+    // dispatch claim, and the load — and all three must read this same number.
+    // A claim of 6 for a hauler who will take 3 makes claimableAt under-report,
+    // so a second hauler is sent elsewhere (or nowhere) while half the buffer
+    // sits unclaimed: a scheduling penalty stacked on top of the commute,
+    // which is not what the commute models.
+    const reduced = haulerCapacity(null);
+    expect(reduced).toBeLessThan(BALANCE.haulCarryCapacity);
+
+    // One building beside the camp (1 tick each way) holding exactly one FLAT
+    // carry — which is two REDUCED carries, so the buffer has room for both
+    // haulers and only a mis-sized claim can keep the second at home.
+    const { buildings, haulers, step, stockpile } = await setup(
+      [{ col: 3, row: 0, wood: BALANCE.haulCarryCapacity }], 2, [], { houseHaulers: false },
+    );
+
+    await step(1);
+    expect(haulers.map((h) => tripOf(h).phase)).toEqual(['outbound', 'outbound']);
+
+    await step(1); // arrival: each takes what its own capacity allows, not the flat 6
+    expect(haulers.map((h) => tripOf(h).amount)).toEqual([reduced, reduced]);
+    expect(bufferOf(buildings[0]).total()).toBe(0); // between them they cleared it
+
+    await step(1);
+    expect(stockpile.get('wood')).toBe(2 * reduced);
+  });
+
+  it('a hauler housed beside the camp carries a full load, one housed far away carries less', async () => {
+    // The mechanic itself, at the level a player experiences it: where you put
+    // a hauler's bed changes how much they move per trip. Both ends measured,
+    // so neither "always full" nor "always reduced" passes.
+    expect(haulerCapacity({ col: 3, row: 0 })).toBe(BALANCE.haulCarryCapacity);
+    expect(haulerCapacity({ col: 23, row: 15 })).toBeLessThan(BALANCE.haulCarryCapacity);
+    // Never zero: a hauler who shows up carries something, however far they walked.
+    expect(haulerCapacity({ col: 23, row: 15 })).toBeGreaterThan(0);
+  });
+
   it('ignores workers who are not haulers', async () => {
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
     save.stockpile = {};
     const prep = buildColonyPrepWorld({ save, systems: [HaulSystem] });
     const ids = getPrepResource(prep, IdCounter);
     const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 0 });
     building.getComponent(OutputBuffer)!.add('wood', 9);
-    const idle = spawnWorker(prep, ids, {});
+    const idle = spawnColonist(prep, ids, {});
     const world = await prep.prepareRun();
     for (let i = 0; i < 6; i++) await world.step();
     expect(idle.getComponent(HaulTrip)!.phase).toBe('idle');
@@ -315,14 +384,20 @@ describe('HaulSystem lifecycle', () => {
     // claim map is rebuilt from live components every tick rather than being
     // remembered, so a hauler promoted mid-walk must see the first one's claim.
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
     save.stockpile = {};
     const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, HaulSystem] });
     const ids = getPrepResource(prep, IdCounter);
     const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 5, row: 4, relocatingTicks: 0 });
     building.getComponent(OutputBuffer)!.add('wood', BALANCE.haulCarryCapacity); // exactly one load, no more
-    const first = spawnWorker(prep, ids, { hauling: true });
-    const second = spawnWorker(prep, ids, {}); // idle for now; promoted next tick
+    // Both housed beside the camp, so "exactly one load" stays literally true:
+    // an unhoused hauler carries half of it (Task 7) and would leave a
+    // remainder for the promoted one to claim, which is the opposite of what
+    // this case is about.
+    const homeId = spawnHaulerHouse(prep, ids, [{ col: 5, row: 4 }]);
+    const first = spawnColonist(prep, ids, { hauling: true, homeId });
+    const second = spawnColonist(prep, ids, { homeId }); // idle for now; promoted next tick
     const world = await prep.prepareRun();
 
     await world.step(); // tick 1: the first hauler claims the whole buffer
@@ -334,6 +409,36 @@ describe('HaulSystem lifecycle', () => {
     expect(tripOf(first).phase).toBe('outbound'); // still en route, claim intact
   });
 
+  it('a hauler promoted mid-walk sees the REDUCED claim the walker will really take', async () => {
+    // The CROSS-tick half of "all three capacity sites move together". The
+    // same-tick dispatch claim is pinned above; this one is buildClaimMap,
+    // which is rebuilt from live components every tick and must reserve what
+    // the outbound hauler will actually carry. A buffer of 4 is one reduced
+    // carry (3) plus a remainder worth fetching — but a claim map still
+    // reserving the flat 6 reports the whole buffer spoken for, and the
+    // promoted hauler stays at the camp while a unit sits at the building.
+    const save = initialSave();
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
+    save.stockpile = {};
+    const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, HaulSystem] });
+    const ids = getPrepResource(prep, IdCounter);
+    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 5, row: 4, relocatingTicks: 0 });
+    building.getComponent(OutputBuffer)!.add('wood', haulerCapacity(null) + 1);
+    // Homeless on purpose: the reduced capacity IS the subject here.
+    const first = spawnColonist(prep, ids, { hauling: true });
+    const second = spawnColonist(prep, ids, {}); // promoted next tick, while the first is still walking
+    const world = await prep.prepareRun();
+
+    await world.step(); // (5,4) is 3 ticks out, so the first is nowhere near arrival
+    expect(tripOf(first).phase).toBe('outbound');
+
+    enqueue(world, { type: 'assignHauler' });
+    await world.step(); // CommandSystem promotes, HaulSystem dispatches in the same tick
+    expect(tripOf(first).phase).toBe('outbound'); // still en route, its claim intact
+    expect(tripOf(second).targetId).toBe(building.getComponent(Building)!.id);
+  });
+
   it('a colony restored from a save starts with no trips in flight', async () => {
     // HaulTrip is runtime-only and never enters the save (spec §2.5): a hauler
     // caught mid-trip banks its load at save time, and on load every worker
@@ -342,15 +447,15 @@ describe('HaulSystem lifecycle', () => {
     // a backlog worth claiming — so an attempt to persist trip state, or a
     // restore that carried one across timelines, fails here.
     const save = initialSave();
-    save.workers = save.workers.map((worker) => ({ ...worker, hauling: true }));
+    save.colonists = save.colonists.map((worker) => ({ ...worker, hauling: true }));
     save.buildings = [{ id: 10, defId: 'forester', progress: 0, batchActive: false, col: 5, row: 4, buffer: { wood: 9 }, relocatingTicks: 0 }];
     save.nextEntityId = 11;
     const world = await createColonyWorld(save);
 
     const trips = [...world.getEntities()]
-      .filter((entity) => entity.getComponent(Worker) !== undefined)
+      .filter((entity) => entity.getComponent(Colonist) !== undefined)
       .map((entity) => entity.getComponent(HaulTrip)!);
-    expect(trips).toHaveLength(save.workers.length);
+    expect(trips).toHaveLength(save.colonists.length);
     expect(trips.every((t) => t.phase === 'idle' && t.targetId === null && t.ticksLeft === 0 && t.amount === 0)).toBe(true);
   });
 });

@@ -2,19 +2,53 @@ import { describe, expect, it } from 'vitest';
 import type { IRuntimeWorld } from 'sim-ecs';
 import { CommandQueue, IdCounter, MAX_PENDING_COMMANDS, SimClock, SnapshotStore, Stockpile } from '../../../src/engine/resources';
 import { BALANCE } from '../../../src/engine/content/balance';
-import { Building, HaulTrip, OutputBuffer, Relocation, Worker } from '../../../src/engine/components';
+import { Building, HaulTrip, OutputBuffer, Relocation, Colonist } from '../../../src/engine/components';
 import { CommandSystem } from '../../../src/engine/systems/command-system';
-import { HaulSystem } from '../../../src/engine/systems/haul-system';
+import { HaulSystem, haulerCapacity } from '../../../src/engine/systems/haul-system';
 import { HungerSystem } from '../../../src/engine/systems/hunger-system';
 import { ProductionSystem } from '../../../src/engine/systems/production-system';
 import { SnapshotSystem } from '../../../src/engine/systems/snapshot-system';
 import { enqueue } from '../fixtures';
 import { buildSaveFromWorld } from '../../../src/engine/game-engine';
-import { buildColonyPrepWorld, COMPONENT_TYPES, getPrepResource, initialSave, spawnWorker } from '../../../src/engine/world';
+import { buildColonyPrepWorld, COMPONENT_TYPES, getPrepResource, initialSave, spawnBuilding, spawnColonist } from '../../../src/engine/world';
 import type { Command } from '../../../src/shared/commands';
-import type { SaveGameV4 } from '../../../src/shared/save';
+import type { SaveGameV5 } from '../../../src/shared/save';
 
-async function setup(save: SaveGameV4 = initialSave()) {
+/**
+ * What a hauler in this file's fixtures carries per trip.
+ *
+ * NOT BALANCE.haulCarryCapacity, which is what a hauler with a neutral commute
+ * carries. `setup()` runs `initialSave()`, a colony with no house in it and no
+ * planks to build one, so its haulers are homeless and Task 7's carry scaling
+ * gives them `haulerCapacity(null)` instead. Named once and used by every case
+ * below that seeds "exactly one load" AND every case that asserts a full
+ * delivery: if the seed and the assertion ever read different numbers, the
+ * fixture silently becomes a two-trip run and the case stops testing what its
+ * name says.
+ *
+ * Housing them is not the fix here the way it is in haul-system.test.ts: this
+ * file asserts on `snapshot().buildings[0]` and on building COUNTS throughout,
+ * so an extra house entity would break a dozen unrelated cases.
+ */
+const ONE_LOAD = haulerCapacity(null);
+
+/**
+ * `initialSave()` with the starter house taken away and the founders back on
+ * the street — the colony this whole file was written against.
+ *
+ * Almost every case here counts `snapshot().buildings` or reads
+ * `buildings[0]`, and ONE_LOAD above is the capacity of an UNHOUSED hauler.
+ * Save v5 gives a fresh colony a house and puts all three founders in it, so
+ * inheriting that here would shift a dozen assertions that have nothing to do
+ * with housing. Stating the houseless colony explicitly keeps them honest —
+ * the same move `houseHaulers: false` makes in haul-system.test.ts.
+ */
+function houselessSave(): SaveGameV5 {
+  const base = initialSave();
+  return { ...base, buildings: [], colonists: base.colonists.map((c) => ({ ...c, homeId: null })) };
+}
+
+async function setup(save: SaveGameV5 = houselessSave()) {
   const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, HaulSystem, SnapshotSystem] });
   const world = await prep.prepareRun();
   // mirror GameEngine.stepOnce: the engine owns time, bumping the clock before each step.
@@ -31,10 +65,31 @@ async function setup(save: SaveGameV4 = initialSave()) {
   return { world, tick, dispatch, snapshot };
 }
 
+/**
+ * A colony that can actually take a nomad in: two houses (8 beds against 3
+ * founders) and food well past `nomadFoodPerHead`. Recruiting is gated on beds
+ * and food since Task 8, so a fixture that supplies neither can only ever test
+ * the rejection. Two houses, not one: a one-house colony has 4 - 3 = 1 spare
+ * bed, so the SECOND recruit below would be refused for want of a bed and the
+ * cooldown assertion would pass for the wrong reason.
+ */
+function saveThatCanHouseArrivals(): SaveGameV5 {
+  const base = houselessSave();
+  return {
+    ...base,
+    buildings: [
+      { id: 90, defId: 'house', col: 5, row: 3, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 },
+      { id: 91, defId: 'house', col: 7, row: 3, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 },
+    ],
+    stockpile: { ...base.stockpile, bread: 5000 },
+    nextEntityId: 100,
+  };
+}
+
 // Relocation downtime is enforced by ProductionSystem, which the shared setup()
 // deliberately omits. Order matches ALL_SYSTEMS (buildColonyPrepWorld throws
 // otherwise).
-async function setupWithProduction(save: SaveGameV4 = initialSave()) {
+async function setupWithProduction(save: SaveGameV5 = houselessSave()) {
   const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, ProductionSystem, HaulSystem, SnapshotSystem] });
   const world = await prep.prepareRun();
   const tick = async () => {
@@ -70,18 +125,39 @@ describe('CommandSystem', () => {
     expect(snapshot().buildings).toHaveLength(0);
   });
 
-  it('recruits a worker and enforces the 30-tick cooldown', async () => {
-    const { tick, dispatch, snapshot } = await setup();
+  it('welcomes a nomad and enforces the 30-tick cooldown', async () => {
+    // Beds and food are both held far from their thresholds by the fixture, so
+    // the cooldown is the only gate in play — the same reason the balance
+    // harness seeds a berry stock to hold hunger neutral.
+    const { tick, dispatch, snapshot } = await setup(saveThatCanHouseArrivals());
     await dispatch({ type: 'recruitWorker' });
-    expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Recruited worker #4.' }]);
+    expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Colonist #100 joined the colony.' }]);
     await tick();
     expect(snapshot().population).toBe(4);
     await dispatch({ type: 'recruitWorker' }); // still on cooldown
-    expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'Recruiting is still on cooldown.' }]);
+    expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'No one is passing through just yet.' }]);
     for (let i = 0; i < 30; i++) await tick();
     await dispatch({ type: 'recruitWorker' });
     await tick();
     expect(snapshot().population).toBe(5);
+  });
+
+  it('refuses a nomad when there is nowhere to sleep, and says so', async () => {
+    // The discriminating half of the pair above: same command, same cooldown
+    // state, only the beds removed. initialSave() has no houses.
+    const { dispatch, snapshot } = await setup();
+    await dispatch({ type: 'recruitWorker' });
+    expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'No free bed: build a house first.' }]);
+    expect(snapshot().population).toBe(3);
+  });
+
+  it('refuses a nomad when the store cannot feed one', async () => {
+    // Beds available, food gone: the OTHER gate, named distinctly so a single
+    // catch-all rejection cannot satisfy both tests.
+    const { dispatch, snapshot } = await setup({ ...saveThatCanHouseArrivals(), stockpile: {} });
+    await dispatch({ type: 'recruitWorker' });
+    expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'Not enough food stored to feed another colonist.' }]);
+    expect(snapshot().population).toBe(3);
   });
 
   it('assigns and unassigns workers within slot limits', async () => {
@@ -98,7 +174,7 @@ describe('CommandSystem', () => {
     await dispatch({ type: 'unassignWorker', buildingId });
     expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Unassigned a worker from Forester.' }]);
     expect(snapshot().buildings[0].workers).toBe(1);
-    expect(snapshot().idleWorkers).toBe(2);
+    expect(snapshot().idleAdults).toBe(2);
   });
 
   it('falls back to a generic name when the building an assignment points at is gone', async () => {
@@ -108,9 +184,10 @@ describe('CommandSystem', () => {
     // the same-tick demolishedIds guard rejects later commands against the id.
     // Pinned as defense in depth for any future remover that misses eviction.
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // this fixture spawns exactly the world it needs
     const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, SnapshotSystem] });
-    spawnWorker(prep, getPrepResource(prep, IdCounter), { buildingId: 404 }); // no building 404
+    spawnColonist(prep, getPrepResource(prep, IdCounter), { buildingId: 404 }); // no building 404
     const world = await prep.prepareRun();
     enqueue(world, { type: 'unassignWorker', buildingId: 404 });
     world.getResource(SimClock).tick++;
@@ -121,7 +198,7 @@ describe('CommandSystem', () => {
   });
 
   it('refuses entity creation once the id space is exhausted, without side effects', async () => {
-    const save = initialSave();
+    const save = houselessSave();
     save.nextEntityId = Number.MAX_SAFE_INTEGER - 2 ** 32; // == MAX_SAVED_COUNTER: nothing left to hand out
     const { world, tick, dispatch, snapshot } = await setup(save);
     await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
@@ -228,7 +305,7 @@ describe('CommandSystem', () => {
   });
 
   it('rejects construction once no buildable tile remains', async () => {
-    const save = initialSave();
+    const save = houselessSave(); // its own fill covers (4,1), where the starter house would stand
     let id = 10;
     for (let row = 0; row < 16; row++) {
       for (let col = 3; col < 24; col++) {
@@ -253,7 +330,7 @@ describe('CommandSystem', () => {
     expect(world.getResource(Stockpile).get('wood')).toBe(30); // full refund
     await tick();
     expect(snapshot().buildings).toHaveLength(0);
-    expect(snapshot().idleWorkers).toBe(3);
+    expect(snapshot().idleAdults).toBe(3);
   });
 
   it('demolishing a building with buffered goods names the loss; the refund stays exactly the construction cost', async () => {
@@ -286,6 +363,62 @@ describe('CommandSystem', () => {
     const buildingId = snapshot().buildings[0].id;
     await dispatch({ type: 'demolishBuilding', buildingId });
     expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Demolished the Forester — cost refunded.' }]);
+  });
+
+  it('names exactly one displaced resident, singular wording', async () => {
+    const save = initialSave();
+    save.colonists = [];
+    save.buildings = [];   // this fixture spawns exactly the world it needs
+    const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, HaulSystem, SnapshotSystem] });
+    const ids = getPrepResource(prep, IdCounter);
+    const house = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: 5, row: 3, relocatingTicks: 0 });
+    const houseId = house.getComponent(Building)!.id;
+    spawnColonist(prep, ids, { id: 1, homeId: houseId });
+    const world = await prep.prepareRun();
+    enqueue(world, { type: 'demolishBuilding', buildingId: houseId });
+    world.getResource(SimClock).tick++;
+    await world.step();
+    expect(world.getResource(SnapshotStore).latest!.notices).toEqual([
+      { kind: 'success', message: 'Demolished the House — cost refunded. — 1 colonist(s) displaced.' },
+    ]);
+  });
+
+  it('names the exact count of several displaced residents', async () => {
+    const save = initialSave();
+    save.colonists = [];
+    save.buildings = [];   // this fixture spawns exactly the world it needs
+    const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, HaulSystem, SnapshotSystem] });
+    const ids = getPrepResource(prep, IdCounter);
+    const house = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: 5, row: 3, relocatingTicks: 0 });
+    const houseId = house.getComponent(Building)!.id;
+    for (const id of [1, 2, 3]) spawnColonist(prep, ids, { id, homeId: houseId });
+    const world = await prep.prepareRun();
+    enqueue(world, { type: 'demolishBuilding', buildingId: houseId });
+    world.getResource(SimClock).tick++;
+    await world.step();
+    expect(world.getResource(SnapshotStore).latest!.notices).toEqual([
+      { kind: 'success', message: 'Demolished the House — cost refunded. — 3 colonist(s) displaced.' },
+    ]);
+  });
+
+  it('demolishing a house with no residents gains no displaced clause', async () => {
+    // The empty case is how a clause like this grows noise: pinned directly
+    // against a house (the one building type residents ever point home at),
+    // not just the Forester the byte-identical test above already covers.
+    const save = initialSave();
+    save.colonists = [];
+    save.buildings = [];   // this fixture spawns exactly the world it needs
+    const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, HaulSystem, SnapshotSystem] });
+    const ids = getPrepResource(prep, IdCounter);
+    const house = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: 5, row: 3, relocatingTicks: 0 });
+    const houseId = house.getComponent(Building)!.id;
+    const world = await prep.prepareRun();
+    enqueue(world, { type: 'demolishBuilding', buildingId: houseId });
+    world.getResource(SimClock).tick++;
+    await world.step();
+    expect(world.getResource(SnapshotStore).latest!.notices).toEqual([
+      { kind: 'success', message: 'Demolished the House — cost refunded.' },
+    ]);
   });
 
   it('rejects demolishing a building that does not exist', async () => {
@@ -373,13 +506,13 @@ describe('CommandSystem', () => {
     const { dispatch, snapshot } = await setup();
     await dispatch({ type: 'assignHauler' });
     expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Assigned a hauler.' }]);
-    expect(snapshot().workers.filter((w) => w.hauling)).toHaveLength(1);
-    expect(snapshot().idleWorkers).toBe(2); // 3 starting workers, one now hauling
+    expect(snapshot().colonists.filter((w) => w.hauling)).toHaveLength(1);
+    expect(snapshot().idleAdults).toBe(2); // 3 starting workers, one now hauling
 
     await dispatch({ type: 'unassignHauler' });
     expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Unassigned a hauler.' }]);
-    expect(snapshot().workers.filter((w) => w.hauling)).toHaveLength(0);
-    expect(snapshot().idleWorkers).toBe(3);
+    expect(snapshot().colonists.filter((w) => w.hauling)).toHaveLength(0);
+    expect(snapshot().idleAdults).toBe(3);
   });
 
   it('rejects hauler assignment with no idle worker, and unassignment with no hauler', async () => {
@@ -396,10 +529,11 @@ describe('CommandSystem', () => {
     // Built directly against HungerSystem: the shared `setup` runs only the
     // command and snapshot systems, so it could never show a hauler eating.
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // this fixture spawns exactly the world it needs
     save.stockpile = { berries: 5 };
     const prep = buildColonyPrepWorld({ save, systems: [HungerSystem] });
-    spawnWorker(prep, getPrepResource(prep, IdCounter), { hauling: true });
+    spawnColonist(prep, getPrepResource(prep, IdCounter), { hauling: true });
     const world = await prep.prepareRun();
     for (let i = 0; i <= BALANCE.mealThreshold; i++) await world.step();
     expect(world.getResource(Stockpile).get('berries')).toBeLessThan(5);
@@ -427,13 +561,13 @@ describe('CommandSystem', () => {
     await dispatch({ type: 'assignHauler' });
     await dispatch({ type: 'assignHauler' });
     // Verify all are hauling and none are idle
-    expect(snapshot().workers.filter((w) => w.hauling)).toHaveLength(3);
-    expect(snapshot().idleWorkers).toBe(0);
+    expect(snapshot().colonists.filter((w) => w.hauling)).toHaveLength(3);
+    expect(snapshot().idleAdults).toBe(0);
     // Try to assign a worker to the building — should reject, not poach a hauler
     await dispatch({ type: 'assignWorker', buildingId });
     expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'No idle workers available.' }]);
     // Verify every hauler is still hauling with no buildingId
-    expect(snapshot().workers.every((w) => w.hauling && w.buildingId === null)).toBe(true);
+    expect(snapshot().colonists.every((w) => w.hauling && w.buildingId === null)).toBe(true);
     expect(snapshot().buildings[0].workers).toBe(0);
   });
 
@@ -451,7 +585,7 @@ describe('CommandSystem', () => {
     const carrier = [...world.getEntities()].find((e) => (e.getComponent(HaulTrip)?.amount ?? 0) > 0)!;
     const before = world.getResource(Stockpile).get('wood');
     await dispatch({ type: 'unassignHauler' });
-    expect(world.getResource(Stockpile).get('wood')).toBe(before + BALANCE.haulCarryCapacity);
+    expect(world.getResource(Stockpile).get('wood')).toBe(before + ONE_LOAD);
     expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Unassigned a hauler.' }]);
     // The trip must be reset, not merely handed off: buildSaveFromWorld banks a
     // carried load into the save filtered on `carrying`, NOT on `hauling`, so a
@@ -463,7 +597,7 @@ describe('CommandSystem', () => {
     expect(carrier.getComponent(HaulTrip)!).toMatchObject({
       phase: 'idle', targetId: null, resource: null, amount: 0, legTicks: 0, pickupCol: 0, pickupRow: 0,
     });
-    expect(buildSaveFromWorld(world).stockpile.wood).toBe(before + BALANCE.haulCarryCapacity);
+    expect(buildSaveFromWorld(world).stockpile.wood).toBe(before + ONE_LOAD);
   });
 
   // OBS-4-08: the old rule took the first hauler in entity-iteration order, so
@@ -481,7 +615,7 @@ describe('CommandSystem', () => {
       // Exactly one load: the first hauler empties the buffer, so the second has
       // nothing to fetch and stays idle at the camp instead of going outbound.
       if (entity.getComponent(Building)?.id === buildingId) {
-        entity.getComponent(OutputBuffer)!.add('wood', BALANCE.haulCarryCapacity);
+        entity.getComponent(OutputBuffer)!.add('wood', ONE_LOAD);
       }
     }
     await dispatch({ type: 'assignHauler' });
@@ -499,7 +633,7 @@ describe('CommandSystem', () => {
     // holding its load, and nothing banked early.
     expect(carrier.getComponent(HaulTrip)!).toMatchObject({ phase: 'returning', amount: carriedBefore });
     expect(world.getResource(Stockpile).get('wood')).toBe(stockBefore);
-    expect(snapshot().workers.filter((w) => w.hauling)).toHaveLength(1);
+    expect(snapshot().colonists.filter((w) => w.hauling)).toHaveLength(1);
   });
 
   it('a move retargets the haulers already walking to that building', async () => {
@@ -540,7 +674,7 @@ describe('CommandSystem', () => {
     // hauler must actually arrive, load, walk home and deposit.
     await tick(); await tick(); await tick();
     expect(trip().phase).toBe('idle'); // arrived, loaded, walked home, delivered
-    expect(world.getResource(Stockpile).get('wood')).toBe(before + BALANCE.haulCarryCapacity); // the goods actually reached the stockpile
+    expect(world.getResource(Stockpile).get('wood')).toBe(before + ONE_LOAD); // the goods actually reached the stockpile
   });
 
   it('a move does not disturb a hauler already on its return leg', async () => {
@@ -551,7 +685,7 @@ describe('CommandSystem', () => {
     const before = world.getResource(Stockpile).get('wood'); // 30 starting - 10 forester cost
     for (const entity of world.getEntities()) {
       const building = entity.getComponent(Building);
-      if (building?.id === buildingId) entity.getComponent(OutputBuffer)!.add('wood', BALANCE.haulCarryCapacity);
+      if (building?.id === buildingId) entity.getComponent(OutputBuffer)!.add('wood', ONE_LOAD);
     }
     await dispatch({ type: 'assignHauler' }); // dispatched this same tick: outbound, ticksLeft 3
     const hauler = [...world.getEntities()].find((e) => e.getComponent(HaulTrip)?.phase === 'outbound')!;
@@ -559,7 +693,7 @@ describe('CommandSystem', () => {
     await tick(); await tick(); await tick(); // walks the 3 ticks out and loads
     expect(trip()).toMatchObject({
       phase: 'returning', ticksLeft: 3, legTicks: 3, pickupCol: 5, pickupRow: 4,
-      resource: 'wood', amount: BALANCE.haulCarryCapacity,
+      resource: 'wood', amount: ONE_LOAD,
     });
 
     // The building it loaded from moves elsewhere. A returning hauler walks to
@@ -573,12 +707,12 @@ describe('CommandSystem', () => {
     // the OLD (5,4), never the new (9,6) the building moved to.
     expect(trip()).toMatchObject({
       phase: 'returning', ticksLeft: 2, legTicks: 3, pickupCol: 5, pickupRow: 4,
-      resource: 'wood', amount: BALANCE.haulCarryCapacity,
+      resource: 'wood', amount: ONE_LOAD,
     });
 
     await tick(); await tick(); // the same 2 ticks it would have taken without the move
     expect(trip().phase).toBe('idle');
-    expect(world.getResource(Stockpile).get('wood')).toBe(before + BALANCE.haulCarryCapacity); // still delivers in full
+    expect(world.getResource(Stockpile).get('wood')).toBe(before + ONE_LOAD); // still delivers in full
   });
 
   // The buildings-side companion to the worker parity test below. OBS-4-02
@@ -586,9 +720,14 @@ describe('CommandSystem', () => {
   // path only, so buildings constructed during play had no buffer at all, and
   // nothing in the suite would have noticed.
   it('a constructed building carries the same components as a restored one', async () => {
-    const save: SaveGameV4 = {
+    const save: SaveGameV5 = {
       ...initialSave(),
-      buildings: [{ id: 10, defId: 'forester', col: 6, row: 3, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 }],
+      // Beside the starter house, not instead of it: the founders' homeId
+      // points at it, and the load guard refuses a home that names nothing.
+      buildings: [
+        ...initialSave().buildings,
+        { id: 10, defId: 'forester', col: 6, row: 3, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 },
+      ],
       nextEntityId: 11, // strictly past every id above, or the load guard refuses the save
     };
     const { world, tick, dispatch } = await setup(save);
@@ -610,20 +749,20 @@ describe('CommandSystem', () => {
   });
 
   it('a recruited worker carries the same components as a restored one', async () => {
-    const { world, tick, dispatch } = await setup();
+    const { world, tick, dispatch } = await setup(saveThatCanHouseArrivals());
     // The highest existing id, not just "the first worker found": entity
     // iteration order is not id-ordered, and comparing against an arbitrary
     // starting worker would let the id > before.id check below match another
     // pre-existing (and therefore trivially complete) worker instead of the
     // actual recruit, silently defeating the whole test.
-    const workers = [...world.getEntities()].filter((e) => e.getComponent(Worker) !== undefined);
-    const before = workers.reduce((max, e) => (e.getComponent(Worker)!.id > max.getComponent(Worker)!.id ? e : max));
+    const workers = [...world.getEntities()].filter((e) => e.getComponent(Colonist) !== undefined);
+    const before = workers.reduce((max, e) => (e.getComponent(Colonist)!.id > max.getComponent(Colonist)!.id ? e : max));
     const expected = COMPONENT_TYPES.filter((type) => before.getComponent(type) !== undefined);
     await dispatch({ type: 'recruitWorker' });
     await tick();
     const recruited = [...world.getEntities()]
-      .filter((e) => e.getComponent(Worker) !== undefined)
-      .find((e) => e.getComponent(Worker)!.id > before.getComponent(Worker)!.id)!;
+      .filter((e) => e.getComponent(Colonist) !== undefined)
+      .find((e) => e.getComponent(Colonist)!.id > before.getComponent(Colonist)!.id)!;
     for (const type of expected) {
       expect(recruited.getComponent(type), `recruited worker is missing ${type.name}`).toBeDefined();
     }
@@ -673,7 +812,7 @@ describe('CommandSystem', () => {
     const buildingId = snapshot().buildings[0].id;
     for (const entity of world.getEntities()) {
       if (entity.getComponent(Building)?.id === buildingId) {
-        entity.getComponent(OutputBuffer)!.add('wood', BALANCE.haulCarryCapacity);
+        entity.getComponent(OutputBuffer)!.add('wood', ONE_LOAD);
       }
     }
     await dispatch({ type: 'assignHauler' });
@@ -686,7 +825,7 @@ describe('CommandSystem', () => {
 
     const before = world.getResource(Stockpile).get('wood');
     for (let i = 0; i < 40; i++) await tick();
-    expect(world.getResource(Stockpile).get('wood')).toBe(before + BALANCE.haulCarryCapacity);
+    expect(world.getResource(Stockpile).get('wood')).toBe(before + ONE_LOAD);
     expect(snapshot().buildings[0].buffered).toBe(0); // the buffer genuinely drained
   });
 

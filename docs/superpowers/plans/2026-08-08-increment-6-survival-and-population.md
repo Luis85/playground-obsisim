@@ -3040,6 +3040,29 @@ In `src/engine/world.ts`'s `initialSave`, replace `buildings: []`:
 - `buildInitialSnapshot`: read all three from the save through `clampedAge` / `clampedStarving`, and derive `stage`, `homeless`, `beds`, and `mealsPerHead` through `buildEntitySections` as the live path does.
 - `savedColonistOf`: add the three fields.
 
+**`runScenario` must stop inheriting `initialSave()`'s buildings.** Its fixture (`tests/support/balance-harness.ts:139-144`) spreads `initialSave()`, clears the roster and stockpile, and resets `nextEntityId` to 1 — but leaves `buildings` alone. That is harmless today because a fresh colony has none. The moment this task puts a starter house in `initialSave()`, two things break at once, silently:
+
+- **Duplicate ids.** `nextEntityId: 1` means the harness's first `spawnBuilding` mints id 1, which the saved house already holds.
+- **Stacked tiles.** `campAdjacentFreeTile` only avoids the tiles the harness itself placed, so it can put the hauler house directly on the saved starter house.
+
+Either one corrupts the distance and relocation sweeps and Task 12's commute measurements — the numbers increment 5 pinned as this increment's regression net. Fix it in the same edit that adds the starter house, not afterwards:
+
+```ts
+  const save: SaveGameV5 = {
+    ...initialSave(),
+    // Both, and for different reasons. `colonists` because v5 renamed the
+    // roster key — clearing `workers` would leave the real array untouched.
+    // `buildings` because initialSave() now ships a starter house, whose id
+    // and tile would collide with the ones this harness mints below.
+    colonists: [],
+    buildings: [],
+    stockpile: seededStockpile as Partial<Record<ResourceId, number>>,
+    nextEntityId: 1,
+  };
+```
+
+Every other pre-v5 fixture in the suite that clears `workers: []` needs the same rename — `npm run typecheck` will not catch it, because an extra property on an object literal spread into a typed value is only an error when the literal is *directly* assigned. Grep for `workers: []` and convert each one.
+
 **One transitional exemption comes due here.** It was added because an export had no cross-file consumer yet; this task is that consumer, so leaving it would permanently exempt live code from the gate that exists to catch it:
 
 - `.fallowrc.json` — remove the `clampedStarving` entry from `ignoreExports`, and its note in `docs/build-ci/quality-gates.md`. Confirm `npm run check:quality` still reports `deadCodeIssues: 0` without it.

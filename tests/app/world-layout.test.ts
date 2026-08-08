@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { layoutWorld, pickBuildingAt, TILE } from '../../src/app/world/layout';
+import { describePick, layoutWorld, pickBuildingAt, TILE } from '../../src/app/world/layout';
 import { CAMP_COLS } from '../../src/shared/placement';
 import type { ColonistSnapshot } from '../../src/shared/snapshot';
 import { makeBuilding, makeSnapshot, makeWorker } from './fixtures';
@@ -247,6 +247,51 @@ describe('layoutWorld', () => {
     expect(at.get(10)).toBe(1);
     expect(at.get(11)).toBeNull(); // idle
     expect(at.get(12)).toBeNull(); // orphaned assignment falls back to camp
+  });
+
+  it('carries each colonist\'s life stage and whether they have a home', () => {
+    // The renderer draws a mark per stage and a mark for homelessness, and it
+    // only ever sees the layout — so the layout has to publish both. Read
+    // straight off the snapshot, never re-derived from ageTicks: stageOf needs
+    // BALANCE.lifeBands, and a second derivation here could disagree with the
+    // engine's own about where a band starts.
+    const layout = layoutWorld(makeSnapshot({
+      buildings: [makeBuilding(1, { defId: 'house', beds: 4, occupants: 2, state: 'housing', workerSlots: 0 })],
+      colonists: [
+        makeWorker(10, { stage: 'child', homeId: 1 }),
+        makeWorker(11, { stage: 'adult', homeId: 1 }),
+        makeWorker(12, { stage: 'elder', homeId: null }),
+      ],
+    }));
+    const byId = new Map(layout.colonists.map((c) => [c.id, c]));
+    expect(byId.get(10)).toMatchObject({ stage: 'child', homeless: false });
+    expect(byId.get(11)).toMatchObject({ stage: 'adult', homeless: false });
+    expect(byId.get(12)).toMatchObject({ stage: 'elder', homeless: true });
+  });
+
+  it('describes a shelter by who lives in it, not by a batch it can never run', () => {
+    // A house has no recipe and no worker slots, so the producer wording read
+    // "0/0 workers — housing" and "no active batch" — three lines, none of
+    // them about the only thing a house does.
+    const snapshot = makeSnapshot({
+      buildings: [makeBuilding(1, { defId: 'house', beds: 4, occupants: 3, state: 'housing', workerSlots: 0 })],
+    });
+    const lines = describePick(snapshot, { kind: 'building', id: 1 });
+    expect(lines[0]).toBe('House');
+    expect(lines.join(' ')).toContain('3/4 residents');
+    expect(lines.join(' ')).not.toContain('workers');
+    expect(lines.join(' ')).not.toContain('batch');
+  });
+
+  it('still describes a producer by its crew and its batch', () => {
+    // The control: a house must not have rewritten every building's tooltip.
+    const snapshot = makeSnapshot({
+      buildings: [makeBuilding(1, { defId: 'bakery', workers: 1, workerSlots: 2, state: 'producing', batchActive: true, progressPct: 55 })],
+    });
+    const lines = describePick(snapshot, { kind: 'building', id: 1 });
+    expect(lines.join(' ')).toContain('1/2 workers');
+    expect(lines.join(' ')).toContain('batch 55%');
+    expect(lines.join(' ')).not.toContain('residents');
   });
 
   it('pickBuildingAt resolves the exact tile and nothing else', () => {

@@ -95,6 +95,34 @@ describe('resolveWorldTheme', () => {
     expect(minChannelDistance(theme.carriedLoad, theme.progressFill)).toBeGreaterThan(3);
   });
 
+  it('resolves the demographic tokens to concrete colours', () => {
+    const theme = resolveWorldTheme(() => '');   // no vault variables: fallbacks
+    expect(theme.buildingGlyph.house).toBe('🏠');
+    expect(theme.homelessMark).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(theme.stageMark.child).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(theme.stageMark.elder).toMatch(/^#[0-9a-f]{6}$/i);
+    // Discriminating: the two stage marks must differ from each other AND from
+    // the hues already spoken for, or the canvas says two things with one colour.
+    const claimed = [theme.workerToolRing, theme.progressFill, theme.carriedLoad, theme.accent, theme.danger];
+    expect(theme.stageMark.child).not.toBe(theme.stageMark.elder);
+    expect(claimed).not.toContain(theme.stageMark.child);
+    expect(claimed).not.toContain(theme.stageMark.elder);
+    expect(claimed).not.toContain(theme.homelessMark);
+  });
+
+  it('keeps the demographic marks off every building state ring as well', () => {
+    // The brief's `claimed` list above covers the colonist-scale hues but not
+    // the building rings, and a house is drawn beside the colonists standing
+    // in it — a stage mark in the housing blue (or the relocating cyan) would
+    // read as a property of the wrong object.
+    const theme = resolveWorldTheme(() => '');
+    const rings = Object.values(theme.stateRing);
+    for (const mark of [theme.stageMark.child, theme.stageMark.elder, theme.homelessMark]) {
+      expect(rings).not.toContain(mark);
+    }
+    expect(new Set([theme.stageMark.child, theme.stageMark.elder, theme.homelessMark]).size).toBe(3);
+  });
+
   // Deliberate, not a coincidence: carriedLoad's doc comment (theme.ts) and
   // the relocating case in resolveWorldTheme both say "in transit" and
   // intentionally resolve to the same --color-cyan. Pinned as equality so a

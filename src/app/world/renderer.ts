@@ -1,5 +1,5 @@
 import {
-  Actor, BaseAlign, Circle, Color, DisplayMode, Engine, Font,
+  Actor, BaseAlign, Color, DisplayMode, Engine, Font,
   Rectangle, Text, TextAlign, TileMap, vec, type Vector,
 } from 'excalibur';
 import type { Snapshot } from '../../shared/snapshot';
@@ -8,7 +8,7 @@ import {
   layoutWorld, pickBuildingAt, TILE,
   type PlacedBuilding, type PlacedColonist, type WorldLayout, type WorldPick,
 } from './layout';
-import { BUILDING_SIZE, GraphicCache, COLONIST_RADIUS } from './graphics-cache';
+import { BUILDING_SIZE, COLONIST_RADIUS, GraphicCache, MARK_RADIUS } from './graphics-cache';
 import { efficiencyBucket, resolveWorldTheme, type WorldTheme } from './theme';
 
 // The Excalibur end of the renderer seam: the only module that imports
@@ -41,7 +41,9 @@ const BAR_HEIGHT = 5;
 // the camp tent (z 1), progress bars and the selection ring (z 2), colonists
 // (z 3), the placement ghost on top of everything (z 4).
 interface BuildingBundle { root: Actor; bar: Actor; track: Actor; }
-interface ColonistBundle { actor: Actor; target: Vector; load: Actor; }
+// The three satellite marks hang off three sides of the dot — see
+// spawnColonist for the geometry that keeps them apart.
+interface ColonistBundle { actor: Actor; target: Vector; load: Actor; stage: Actor; homeless: Actor; }
 
 /**
  * Owns the scene contents: diffs each layout against the live actors by
@@ -260,6 +262,13 @@ class WorldScene {
     // A carrying hauler reads as "loaded" at a glance, which is what makes the
     // flow direction legible: dots going out are empty, dots coming back are not.
     bundle.load.graphics.visible = w.carrying;
+    // Adults wear no stage mark: they are the baseline the other two are read
+    // against, and a mark on every dot would be noise rather than information.
+    // The graphic is re-applied (not just revealed) because one colonist walks
+    // through both bands in a lifetime, on the same actor.
+    if (w.stage !== 'adult') bundle.stage.graphics.use(this.cache.mark(this.theme.stageMark[w.stage]));
+    bundle.stage.graphics.visible = w.stage !== 'adult';
+    bundle.homeless.graphics.visible = w.homeless;
     this.walkColonist(bundle, target, w.travelling);
   }
 
@@ -267,13 +276,31 @@ class WorldScene {
   private spawnColonist(id: number, target: Vector): ColonistBundle {
     const actor = new Actor({ pos: target, z: 3 });
     this.engine.currentScene.add(actor);
-    const load = new Actor({ pos: vec(0, -COLONIST_RADIUS - 3), z: 3 });
-    load.graphics.use(new Circle({ radius: 3, color: Color.fromHex(this.theme.carriedLoad) }));
-    load.graphics.visible = false;
-    actor.addChild(load);
-    const bundle = { actor, target, load };
+    // Twelve, three and six o'clock, each tangent to the dot at
+    // COLONIST_RADIUS + MARK_RADIUS. Quarter-turns apart puts (R+M)*sqrt(2)
+    // between adjacent mark centres — comfortably past the 2*MARK_RADIUS at
+    // which two of them would touch — so a tooled elder carrying a load with
+    // nowhere to live still reads as four separate facts.
+    const orbit = COLONIST_RADIUS + MARK_RADIUS;
+    const load = this.satellite(actor, vec(0, -orbit), this.theme.carriedLoad);
+    // The stage mark carries no colour yet: upsertColonist supplies the band's
+    // own hue, and an adult never reveals it at all.
+    const stage = this.satellite(actor, vec(orbit, 0), null);
+    const homeless = this.satellite(actor, vec(0, orbit), this.theme.homelessMark);
+    const bundle = { actor, target, load, stage, homeless };
     this.colonists.set(id, bundle);
     return bundle;
+  }
+
+  /** One hidden satellite dot pinned to a colonist. A fixed-hue mark takes its
+   * graphic here once; a mark whose hue varies passes null and gets it per
+   * sync. */
+  private satellite(parent: Actor, offset: Vector, color: string | null): Actor {
+    const dot = new Actor({ pos: offset, z: 3 });
+    if (color !== null) dot.graphics.use(this.cache.mark(color));
+    dot.graphics.visible = false;
+    parent.addChild(dot);
+    return dot;
   }
 
   /**

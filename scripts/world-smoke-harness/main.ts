@@ -93,6 +93,29 @@ const haulScene = (tick: number, hauler: Partial<ColonistSnapshot>, forester: Pa
     toolTicks: 100, haulLegTicks: 2, haulPickupCol: 4, haulPickupRow: 1, ...hauler,
   })]);
 
+/**
+ * The four demographic phases hold EVERYTHING constant except one field on
+ * colonist 4 — the same shape the haul phases above were rebuilt into after
+ * OBS-4-04. Both colonists arrive homeless (`worker()` defaults `homeId` to
+ * null and `stage` to adult), so the house appearing is the only change in the
+ * first frame, and each later phase moves exactly one field on the same
+ * settled dot: it moves in, then it turns child, then elder.
+ *
+ * `occupants` tracks the resident so the fixture is not internally
+ * inconsistent, but it is invisible to the canvas — `PlacedBuilding` does not
+ * carry it and only `describePick` reads it — so it can never be the reason
+ * two frames differ.
+ *
+ * Ticks must strictly increase here too: a sync at the same or an earlier tick
+ * is a colony reset (see renderer.ts) and would wipe the scene between phases
+ * instead of changing one thing in it.
+ */
+const homeScene = (tick: number, resident: Partial<ColonistSnapshot> = {}) => snap(tick,
+  [building(1, 'house', 4, 1, {
+    workerSlots: 0, state: 'housing', beds: 4, occupants: (resident.homeId ?? null) === null ? 0 : 1,
+  })],
+  [worker(4, resident), worker(5)]);
+
 // Phase script, advanced from the runner. Worker 12 walks in phase 1; the
 // batch progresses in both; phase 4 adds a building and a tooled worker.
 const phases: Array<() => void> = [
@@ -142,7 +165,15 @@ const phases: Array<() => void> = [
   // reset of a tick-1 colony: a NEW snapshot at the SAME tick is also a new
   // timeline (round 10 — e.g. resetting a freshly-loaded save)
   () => renderer.sync(snap(1, [], [worker(4), worker(5)])),
-  () => renderer.dispose(),
+  // Four demographic phases, one change each — see homeScene above. They go
+  // HERE, before dispose(), not appended after it: the renderer is destroyed
+  // by that phase and every sync past it would draw nothing while every
+  // `!after.equals(before)` check went red for the wrong reason.
+  () => renderer.sync(homeScene(2)),                                // 16: a house appears; nothing else moves
+  () => renderer.sync(homeScene(3, { homeId: 1 })),                 // 17: colonist 4 moves in — ONLY its homeId changes
+  () => renderer.sync(homeScene(4, { homeId: 1, stage: 'child' })), // 18: the same colonist becomes a child
+  () => renderer.sync(homeScene(5, { homeId: 1, stage: 'elder' })), // 19: the same colonist becomes an elder
+  () => renderer.dispose(),                                         // 20
 ];
 
 window.__step = (index: number) => {

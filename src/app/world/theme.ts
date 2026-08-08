@@ -1,4 +1,5 @@
 import type { BuildingDefId } from '../../shared/content-types';
+import type { LifeStage } from '../../shared/population';
 import type { BuildingState } from '../../shared/snapshot';
 
 export type VarReader = (name: string) => string;
@@ -29,6 +30,18 @@ export interface WorldTheme {
   /** Danger — the blocked-ghost tint (the same resolved red the
    * starving-colonist gradient starts from). */
   danger: string;
+  /**
+   * Life-stage marks. Adults carry none — they are the baseline the other
+   * two are read against, and a mark on every colonist would be noise.
+   *
+   * Keyed by `Exclude<LifeStage, 'adult'>` rather than the literal union, the
+   * same move NOMAD_REJECTIONS makes over PopulationBlocker: a fourth band
+   * added to LifeStage becomes a compile error here instead of an unmarked
+   * dot nobody notices.
+   */
+  stageMark: Record<Exclude<LifeStage, 'adult'>, string>;
+  /** A colonist with nowhere to live. */
+  homelessMark: string;
 }
 
 const HEX = /^#[0-9a-f]{6}$/i;
@@ -105,5 +118,25 @@ export function resolveWorldTheme(read: VarReader): WorldTheme {
     carriedLoad: pick(read, '--color-cyan', '#4bbfd4'),
     accent: pick(read, '--interactive-accent', '#7c8cf0'),
     danger: red,
+    stageMark: {
+      // The last bright vault hue nothing else claims. Red, orange and green
+      // are the building rings, purple the output-full stall, cyan the
+      // in-transit pair, blue the housing ring, cream the tools and the
+      // progress bar, blue-violet the accent — yellow and pink are what is
+      // left, and yellow is the one that reads as "new".
+      child: pick(read, '--color-yellow', '#e6c84a'),
+      // NOT a vault hue, deliberately. Pink is the only one still free and it
+      // goes to homelessMark below, which is a problem the player can act on;
+      // an elder is not a warning, they are simply out of the workforce, so a
+      // neutral silver ("grey hair") says it without borrowing an alarm
+      // colour. Hardcoded the way unstaffed, the ground tints and the two
+      // creams are — well clear of the unstaffed grey (#8f8f8f), which sits
+      // on buildings rather than colonists in any case.
+      elder: '#b9c2d0',
+    },
+    // The last vault hue, and the right register for it: homelessness is a
+    // live problem, but it is not the ghost's blocked-red, so it gets its own
+    // alarm rather than a second meaning for one already on screen.
+    homelessMark: pick(read, '--color-pink', '#e0619e'),
   };
 }

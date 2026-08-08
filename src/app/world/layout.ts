@@ -1,4 +1,5 @@
-import type { Snapshot, BuildingState, ColonistSnapshot } from '../../shared/snapshot';
+import type { Snapshot, BuildingSnapshot, BuildingState, ColonistSnapshot } from '../../shared/snapshot';
+import type { LifeStage } from '../../shared/population';
 import type { BuildingDefId } from '../../shared/content-types';
 import { BUILDINGS } from '../../engine/content';
 import { legProgress } from '../../shared/haul';
@@ -34,6 +35,17 @@ export interface PlacedColonist {
   efficiency: number;
   tooled: boolean;
   carrying: boolean;
+  /**
+   * Copied off the snapshot, never re-derived from `ageTicks`: `stageOf` needs
+   * BALANCE.lifeBands, and a second derivation on the view side is a second
+   * opinion about where a band starts — the renderer would mark someone a
+   * child the Population view calls an adult.
+   */
+  stage: LifeStage;
+  /** Nowhere to live. Its own boolean rather than a `homeId`, because that is
+   * the whole of what the canvas encodes — which house is nobody's business
+   * from a 14 px dot. */
+  homeless: boolean;
   /**
    * True while this colonist is mid-haul. The renderer walks these at whatever
    * speed reaches the next point before the next snapshot, instead of the fixed
@@ -156,16 +168,31 @@ export interface WorldPick {
   id: number;
 }
 
+/**
+ * Tooltip lines for one building. A shelter answers a different question from
+ * a producer: it has no recipe and no slots, so the producer wording rendered
+ * as "0/0 workers — housing" and "no active batch" — three lines, not one of
+ * them about the only thing a house does.
+ *
+ * Split on `beds > 0`, the same test every shelter rule in the engine uses,
+ * rather than on `state === 'housing'`: a house being MOVED publishes
+ * 'relocating', and who lives there is still the fact worth reporting.
+ */
+function describeBuilding(b: BuildingSnapshot): string[] {
+  const name = BUILDINGS[b.defId].name;
+  if (b.beds > 0) return [name, `${b.occupants}/${b.beds} residents — ${b.state}`];
+  return [
+    name,
+    `${b.workers}/${b.workerSlots} workers — ${b.state}`,
+    b.batchActive ? `batch ${b.progressPct}%` : 'no active batch',
+  ];
+}
+
 /** Tooltip lines for a picked entity, from the current snapshot. */
 export function describePick(snapshot: Snapshot, pick: WorldPick): string[] {
   if (pick.kind === 'building') {
     const b = snapshot.buildings.find((candidate) => candidate.id === pick.id);
-    if (!b) return [];
-    return [
-      BUILDINGS[b.defId].name,
-      `${b.workers}/${b.workerSlots} workers — ${b.state}`,
-      b.batchActive ? `batch ${b.progressPct}%` : 'no active batch',
-    ];
+    return b === undefined ? [] : describeBuilding(b);
   }
   const w = snapshot.colonists.find((candidate) => candidate.id === pick.id);
   if (!w) return [];
@@ -297,6 +324,7 @@ export function layoutWorld(snapshot: Snapshot, previous?: WorldLayout): WorldLa
     return {
       id: w.id, x: p.spot.x, y: p.spot.y, at: p.at, slot: p.slot,
       efficiency: w.efficiency, tooled: w.toolTicks > 0, carrying: w.carrying > 0,
+      stage: w.stage, homeless: w.homeId === null,
       travelling: p.slot === HAULER_SLOT,
     };
   });

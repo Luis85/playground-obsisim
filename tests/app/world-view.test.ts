@@ -210,6 +210,10 @@ describe('WorldView', () => {
     expect(legend.text()).toContain('output full');
     expect(legend.text()).toContain('relocating');
     expect(legend.text()).toContain('carrying');
+    expect(legend.text()).toContain('housing');
+    expect(legend.text()).toContain('child');
+    expect(legend.text()).toContain('elder');
+    expect(legend.text()).toContain('homeless');
 
     // Every entry's swatch is a separate child element, sibling to the label
     // text — never the label's own element. "output full" and "carrying"
@@ -219,12 +223,12 @@ describe('WorldView', () => {
     // swatch. Checked across every entry, not just those two, so increment 5
     // cannot reintroduce the same collapse.
     //
-    // Exact counts, not thresholds: 14 entries, 13 with a swatch ("idle camp"
+    // Exact counts, not thresholds: 18 entries, 17 with a swatch ("idle camp"
     // is a literal glyph with no encoded color). A >= bound stayed green when
     // WorldLegend's "relocating" entry (added for increment 5's Relocation
     // state) was deleted outright, because 13 and 12 still satisfied it.
     const entries = legend.findAll('span');
-    expect(entries.length).toBe(14);
+    expect(entries.length).toBe(18);
     let withSwatch = 0;
     for (const entry of entries) {
       const ownsChipClass = entry.classes().includes('obsisim-chip');
@@ -235,7 +239,7 @@ describe('WorldView', () => {
       expect(swatch.text()).toBe(''); // …carrying no label text of its own
       withSwatch += 1;
     }
-    expect(withSwatch).toBe(13);
+    expect(withSwatch).toBe(17);
   });
 
   it('falls back when the renderer reports an async fatal failure', async () => {

@@ -178,7 +178,42 @@ check(
   afterSameTickReset.building === 0 && afterSameTickReset.worker > 0,
 );
 
-await step(16); // dispose()
+// Demographics. One change per phase (see homeScene in the harness), so each
+// check below fails for the reason it names and nothing else: the scene is two
+// settled dots at the camp, and the only thing that moves is the house
+// arriving, then one field on colonist 4.
+const preHouse = await shot();
+
+await step(16); // a house appears — nothing else moves
+await wait(400);
+const withHouse = await shot();
+check('a house is drawn on the canvas', !withHouse.equals(preHouse));
+
+await step(17); // ONE colonist's homeId becomes 1 — it stands where it stood
+await wait(400);
+const housed = await shot();
+check('the homeless mark clears when a colonist moves in', !housed.equals(withHouse));
+
+await step(18); // that SAME colonist's stage becomes 'child' — one field, one frame
+await wait(400);
+const withChild = await shot();
+check('a child is drawn differently from an adult', !withChild.equals(housed));
+
+await step(19); // that same colonist becomes 'elder' — one field, one frame
+await wait(400);
+const withElder = await shot();
+// Against the ADULT frame as well as the child one, deliberately. `!==` the
+// child frame alone is satisfied by an elder mark that is never drawn at all
+// (no mark differs from a yellow one just as much as a silver one does) — the
+// precise "green with the feature removed" failure OBS-4-04 is about. The
+// adult frame is the unmarked baseline, so the pair pins both halves: the mark
+// exists, and it is not the child's colour.
+check(
+  'an elder is drawn differently from a child and from an unmarked adult',
+  !withElder.equals(withChild) && !withElder.equals(housed),
+);
+
+await step(20); // dispose()
 await wait(300);
 check('dispose() raises no errors', pageErrors.length === 0);
 

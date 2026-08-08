@@ -2829,7 +2829,9 @@ function isValidSaveArrays(save: Record<string, unknown>, rosterKey: 'workers' |
 
 **A `homeId` must name a building that actually shelters.** Add to `isLoadableSave`: every non-null `homeId` names a building present in the save **whose def has `beds > 0`**. A `homeId` pointing at a forester is a record no engine version could write, which is precisely this guard's stated criterion.
 
-**But over-capacity is NOT rejected — it is repaired.** A save with five colonists in a four-bed house is exactly what a `houseBeds` retune from 5 to 4 produces, and rejecting it would orphan a save for a balance change, which this project's load principle forbids ("balance-coupled values are clamped or grandfathered on load"). So `rehome` **evicts the excess** instead: when a house's occupancy exceeds its beds, the highest colonist ids lose their home and re-enter the homeless pool for reassignment. Deterministic, and it repairs both the retune case and any hand-edited save through the same path.
+**But over-capacity is NOT rejected — it is repaired, at load.** The repair belongs in the shared spawn/seed path (`colonistComponents` and `buildInitialSnapshot`), not only in `rehome`: a restored engine is paused until the player advances it, so a repair that waits for the first tick leaves the seeded snapshot advertising a state the engine will immediately revoke.
+
+The rule itself: A save with five colonists in a four-bed house is exactly what a `houseBeds` retune from 5 to 4 produces, and rejecting it would orphan a save for a balance change, which this project's load principle forbids ("balance-coupled values are clamped or grandfathered on load"). So `rehome` **evicts the excess** instead: when a house's occupancy exceeds its beds, the highest colonist ids lose their home and re-enter the homeless pool for reassignment. Deterministic, and it repairs both the retune case and any hand-edited save through the same path.
 
 ```ts
 it('evicts down to capacity when a save puts more colonists in a house than it has beds', async () => {
@@ -2837,8 +2839,19 @@ it('evicts down to capacity when a save puts more colonists in a house than it h
   // save for a balance change; the load principle says clamp, not refuse.
   const save = saveWithColonistsInOneHouse({ beds: BALANCE.houseBeds, colonists: BALANCE.houseBeds + 1 });
   const world = await createColonyWorld(save);
-  await stepTick(world);
 
+  // BEFORE any tick. A restored engine starts paused, and the initial
+  // snapshot is seeded straight from the save — so leaving the repair to
+  // rehome would display five residents in a four-bed house, zero homeless,
+  // and work power based on assignments the engine is about to revoke, for as
+  // long as the player leaves it paused. Normalize at load, exactly as the v5
+  // migration writes its home assignments rather than deferring them.
+  const seeded = world.getResource(SnapshotStore).latest!;
+  const seededHouse = seeded.buildings.find((b) => b.beds > 0)!;
+  expect(seededHouse.occupants).toBe(BALANCE.houseBeds);
+  expect(seeded.homeless).toBe(1);
+
+  await stepTick(world);
   const snap = world.getResource(SnapshotStore).latest!;
   const house = snap.buildings.find((b) => b.beds > 0)!;
   expect(house.occupants).toBe(BALANCE.houseBeds);
@@ -3491,8 +3504,19 @@ describe('population balance', () => {
     // retirement wave falls inside that window, leaving "stable"
     // indistinguishable from "still climbing".
     const chain = { startingAdults: 4, foodPerTick: 'chain' as const, huts: 4, haulers: 2, ticks: 12000, sampleEvery: 200 };
-    const roomy = await runPopulationScenario({ ...chain, houses: 12 });
+    const ROOMY_HOUSES = 12;
+    const roomy = await runPopulationScenario({ ...chain, houses: ROOMY_HOUSES });
     const capped = await runPopulationScenario({ ...chain, houses: 1 });
+
+    // The roomy run is only a control if BEDS never bind. 12 houses is 48
+    // beds, and one birth per 50 ticks fills the 44 openings in ~2,200 of
+    // 12,000 — so if food turns out to sustain that many, this "roomy" curve
+    // is a housing plateau wearing a demographic disguise, and Task 13 cannot
+    // tell stability from a cap. Whether food binds first is precisely what
+    // this experiment measures, so it cannot be assumed: assert it instead.
+    // If this fails, the answer is more houses, never a weaker assertion.
+    const peak = Math.max(...roomy.samples.map((s) => s.children + s.adults + s.elders));
+    expect(peak).toBeLessThan(ROOMY_HOUSES * BALANCE.houseBeds);
     const finalOf = (r: PopulationResult) => r.samples.at(-1)!;
     expect(finalOf(roomy).adults + finalOf(roomy).children).toBeGreaterThan(4);
     expect(capped.births).toBeLessThan(roomy.births);

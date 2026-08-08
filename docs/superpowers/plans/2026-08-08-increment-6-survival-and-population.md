@@ -3285,7 +3285,15 @@ describe('population balance', () => {
     // is where the crew sleeps.
     const far = { defId: 'forester' as const, col: 20, row: 13, crew: 2, haulers: 3, ticks: 600, resource: 'wood' as const };
     const housedOnSite = await runScenario(far);
-    const housedAtCamp = await runScenario({ ...far, crewHouseAt: { col: CAMP_TILE.col + 1, row: CAMP_TILE.row } });
+    // col + 2, NOT col + 1: the harness already puts the HAULER house on
+    // col + 1, and `spawnBuilding` writes a tile directly without going
+    // through `isTileBuildable`, so reusing it would stack two houses on one
+    // plot. That layout is unreachable in play — it wins eight camp-adjacent
+    // beds from a single contested tile — so a result measured on it could
+    // not say anything about whether clustering is a real strategy.
+    // col + 2 is still inside commuteFreeTiles of the camp, so "housed at the
+    // camp" stays exactly as neutral as intended for the haulers.
+    const housedAtCamp = await runScenario({ ...far, crewHouseAt: { col: CAMP_TILE.col + 2, row: CAMP_TILE.row } });
 
     expect(housedOnSite.delivered).toBeGreaterThan(housedAtCamp.delivered);
     // And by a margin a player would act on — a 1% edge is noise, not a

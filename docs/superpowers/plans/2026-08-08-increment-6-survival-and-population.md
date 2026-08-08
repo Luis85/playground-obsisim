@@ -3221,14 +3221,23 @@ describe('population balance', () => {
     // 'chain', not a drip: spec section 4's first question is about a working
     // food chain, and a drip supplies food regardless of how many adults are
     // alive — holding constant the exact feedback loop under test.
-    const roomy = await runPopulationScenario({ houses: 4, startingAdults: 2, foodPerTick: 'chain', ticks: 4000, sampleEvery: 100 });
-    const capped = await runPopulationScenario({ houses: 1, startingAdults: 2, foodPerTick: 'chain', ticks: 4000, sampleEvery: 100 });
+    // 12,000 ticks and generous housing, so FOOD and demographics — not bed
+    // count — decide the curve. This is the minimum that answers the question,
+    // not a round number: founders start at age 1,000 and die between 5,700
+    // and 7,300, so this spans their whole life plus enough of the next
+    // generation to tell an oscillation from a plateau. The original 4,000
+    // ticks with 4 houses could only ever show a bed-capped ramp — no
+    // retirement wave falls inside that window, leaving "stable"
+    // indistinguishable from "still climbing".
+    const chain = { startingAdults: 4, foodPerTick: 'chain' as const, huts: 4, haulers: 2, ticks: 12000, sampleEvery: 200 };
+    const roomy = await runPopulationScenario({ ...chain, houses: 12 });
+    const capped = await runPopulationScenario({ ...chain, houses: 1 });
     const finalOf = (r: PopulationResult) => r.samples.at(-1)!;
     expect(finalOf(roomy).adults + finalOf(roomy).children).toBeGreaterThan(4);
     expect(capped.births).toBeLessThan(roomy.births);
     // The cap is BEDS, not food: the capped run must not simply have starved.
     expect(capped.deathsByStarvation).toBe(0);
-  }, 120000);
+  }, 300000);   // two 12,000-tick chain runs against a growing colony: the slowest test in the suite, and the comment above says why it cannot be shorter
 
   it('the starvation countdown is visible for a real interval before the first death', async () => {
     const starved = await runPopulationScenario({ houses: 2, startingAdults: 3, foodPerTick: 0, ticks: 400, sampleEvery: 10 });
@@ -3262,6 +3271,26 @@ describe('population balance', () => {
       crewHouseAt: { col: 22, row: 15 },
     });
     expect(far.delivered).toBeLessThan(near.delivered);
+  }, 120000);
+
+  it('housing beside a distant producer beats housing at the camp — so clustering is not always right', async () => {
+    // The OTHER half of spec section 4's commute question. The test above
+    // shows only that distance costs output, which on its own argues for
+    // putting everything at the camp; the haul sweep favours camp-adjacent
+    // producers too, so nothing yet contradicts "cluster everything". Task 13
+    // cannot sign the penalty off as well-sized without one configuration
+    // where spreading out wins.
+    //
+    // Same producer, same tile, same crew, same haulers. The ONLY difference
+    // is where the crew sleeps.
+    const far = { defId: 'forester' as const, col: 20, row: 13, crew: 2, haulers: 3, ticks: 600, resource: 'wood' as const };
+    const housedOnSite = await runScenario(far);
+    const housedAtCamp = await runScenario({ ...far, crewHouseAt: { col: CAMP_TILE.col + 1, row: CAMP_TILE.row } });
+
+    expect(housedOnSite.delivered).toBeGreaterThan(housedAtCamp.delivered);
+    // And by a margin a player would act on — a 1% edge is noise, not a
+    // tradeoff, and would not make "do not cluster" a real decision.
+    expect(housedOnSite.delivered / housedAtCamp.delivered).toBeGreaterThan(1.05);
   }, 120000);
 });
 ```
@@ -3407,11 +3436,20 @@ export async function runPopulationScenario(scenario: PopulationScenario): Promi
       const at = spots.next().value!;
       spawnBuilding(prep, ids, { defId: 'gatherersHut', progress: 0, batchActive: false, col: at.col, row: at.row });
     }
-    for (let i = 0; i < (scenario.haulers ?? 2); i++) {
-      spawnColonist(prep, ids, { ageTicks: BALANCE.lifeBands.matureTicks, hauling: true, homeId: houseIds[0] ?? null });
-    }
   }
-  for (let i = 0; i < startingAdults; i++) {
+  // Haulers come OUT OF startingAdults, they are not extra. Spawning them on
+  // top meant `startingAdults: 2` really began with four adults, four mouths
+  // and four beds taken — so "no births in the one-house control" was a
+  // fixture artefact rather than a measurement, and every reported population
+  // and dependency figure described a different colony than the one requested.
+  const haulerCount = chain ? (scenario.haulers ?? 2) : 0;
+  if (haulerCount > startingAdults) {
+    throw new Error(`Scenario asks for ${haulerCount} haulers out of only ${startingAdults} adults`);
+  }
+  for (let i = 0; i < haulerCount; i++) {
+    spawnColonist(prep, ids, { ageTicks: BALANCE.lifeBands.matureTicks, hauling: true, homeId: houseIds[0] ?? null });
+  }
+  for (let i = 0; i < startingAdults - haulerCount; i++) {
     // Adults, homed into the first house so the run does not open on a
     // homelessness penalty it never meant to measure.
     spawnColonist(prep, ids, { ageTicks: BALANCE.lifeBands.matureTicks, homeId: houseIds[0] ?? null });

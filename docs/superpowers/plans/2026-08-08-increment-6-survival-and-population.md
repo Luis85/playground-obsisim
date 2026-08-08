@@ -2742,6 +2742,64 @@ it('a migrated colony is housed in the SEEDED snapshot, before any tick runs', (
   const seeded = getPrepResource(prep, SnapshotStore).latest!;
   expect(seeded.homeless).toBe(0);
 });
+
+it('fills houses the save already has instead of only the synthesized one', () => {
+  // Not hypothetical: Task 5 shipped the house while LATEST_SAVE_VERSION was
+  // still 4, so every save written by a build between Task 5 and this one is
+  // a v4 save that can already contain houses. Assigning only the synthesized
+  // house would seed a well-housed colony as wholly homeless, at penalty work
+  // power, for as long as the restored engine stays paused.
+  const v4 = v4WithThreeWorkers();
+  v4.buildings.push({
+    id: 90, defId: 'house', col: 5, row: 3,
+    progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0,
+  });
+  const v5 = migrateSaveToLatest(v4) as SaveGameV5;
+
+  expect(v5.colonists.every((c) => c.homeId === 90)).toBe(true);
+  // AND no starter house was gifted on top: a colony with shelter does not
+  // need a free building, and this is what stops the assertion above passing
+  // via a synthesized house that merely happens to be filled too.
+  expect(v5.buildings.filter((b) => b.defId === 'house')).toHaveLength(1);
+  expect(v5.map).toEqual(v4.map);   // and its map was not resized for a tile it never needed
+});
+
+it('does not seat anyone in a relocating house', () => {
+  // rehome excludes relocating shelters, so a migration that included them
+  // would seed an assignment the first homing pass immediately revokes —
+  // exactly the seed-contradicts-engine defect this whole section exists to
+  // prevent, just arriving from the other direction.
+  const v4 = v4WithThreeWorkers();
+  v4.buildings.push({
+    id: 90, defId: 'house', col: 5, row: 3,
+    progress: 0, batchActive: false, buffer: {}, relocatingTicks: 6,
+  });
+  const v5 = migrateSaveToLatest(v4) as SaveGameV5;
+
+  expect(v5.colonists.every((c) => c.homeId !== 90)).toBe(true);
+  // The colony counts as shelterless, so it DOES get the starter house — and
+  // everyone lands there rather than being left homeless.
+  const starter = v5.buildings.find((b) => b.defId === 'house' && b.id !== 90)!;
+  expect(v5.colonists.every((c) => c.homeId === starter.id)).toBe(true);
+});
+
+it('leaves the overflow homeless when the saved houses cannot hold everyone', () => {
+  // Six adults, one four-bed house: two really are homeless, and the
+  // migration's job is to reproduce what homing would do rather than to bail
+  // the player out of a colony they under-built.
+  const v4 = v4WithThreeWorkers();
+  v4.workers = [1, 2, 3, 4, 5, 6].map((id) => ({ ...v4.workers[0], id }));
+  v4.buildings.push({
+    id: 90, defId: 'house', col: 5, row: 3,
+    progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0,
+  });
+  const v5 = migrateSaveToLatest(v4) as SaveGameV5;
+
+  expect(v5.colonists.filter((c) => c.homeId === 90)).toHaveLength(MIGRATION_CONSTANTS.houseBeds);
+  expect(v5.colonists.filter((c) => c.homeId === null)).toHaveLength(6 - MIGRATION_CONSTANTS.houseBeds);
+  // Ascending colonist id fills first — rehome's rule, so reload is stable.
+  expect(v5.colonists.filter((c) => c.homeId === null).map((c) => c.id)).toEqual([5, 6]);
+});
 ```
 
 Append to `tests/engine/save.test.ts`:
@@ -2947,6 +3005,29 @@ const migrateV4toV5: MigrationStep = {
   migrate: (save) => {
     const v4 = save as SaveGameV4;
     const occupied = v4.buildings.map((b) => ({ col: b.col, row: b.row }));
+    // Shelters the save ALREADY has. A v4 save written by any build after
+    // Task 5 can contain houses — that is the repo's present state, not a
+    // hypothetical — and ignoring them would hand a well-housed colony a
+    // wholly-homeless seed at penalty work power for as long as the player
+    // leaves the restored engine paused. `defId === 'house'` rather than a
+    // catalog lookup because `src/shared/**` cannot import BUILDINGS; pinned
+    // by the content test below, like every other duplicated fact here.
+    //
+    // Relocating houses are excluded for exactly the reason `rehome` excludes
+    // them, and that agreement is the whole point: this must produce the
+    // assignment the first homing pass would, or the seed contradicts the
+    // engine the instant it runs.
+    const savedShelters = v4.buildings
+      .filter((b) => b.defId === 'house' && b.relocatingTicks === 0)
+      .map((b) => b.id)
+      .sort((a, b) => a - b);
+    // The starter house is synthesized ONLY for a colony with no shelter at
+    // all. Its justification is "a v4 colony has never had anywhere to live";
+    // a colony that demonstrably has houses does not need a free one, and
+    // adding it would spend a tile and gift a building the player never
+    // built. Growth is gated on the same question — a save that needs no
+    // tile must not have its persisted map resized as a side effect.
+    const needsStarterHouse = savedShelters.length === 0;
     // Grow the map if the colony has filled it. Without this, a v4 save with
     // every buildable tile occupied silently gets NO starter house and every
     // colonist loads homeless — the precise outcome this migration exists to
@@ -2959,12 +3040,12 @@ const migrateV4toV5: MigrationStep = {
     // takes the corrupt-backup path. Existing dimensions are a floor, never
     // a starting point to be replaced.
     const map = { ...v4.map };
-    while (v4.buildings.length >= (map.cols - CAMP_COLS) * map.rows) {
+    while (needsStarterHouse && v4.buildings.length >= (map.cols - CAMP_COLS) * map.rows) {
       if (map.rows < MAX_MAP.rows) map.rows += 1;
       else if (map.cols < MAX_MAP.cols) map.cols += 1;
       else break; // unreachable — see the capacity proof below the loop
     }
-    const at = autoPlacePosition(map, occupied);
+    const at = needsStarterHouse ? autoPlacePosition(map, occupied) : null;
     // The smallest unused positive id, NOT max + 1. A guard-valid v4 save may
     // sit at nextEntityId === MAX_SAVED_COUNTER — IdCounter.exhausted() exists
     // precisely to keep such a save playable — and max + 1 would push
@@ -2978,6 +3059,16 @@ const migrateV4toV5: MigrationStep = {
       id: houseId, defId: 'house' as const, col: at.col, row: at.row,
       progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0,
     };
+    // Greedy fill: colonists ascending by id into shelters ascending by
+    // building id, houseBeds each — `rehome`'s own documented rule, so the
+    // seeded assignment IS the one the first homing pass produces. Colonists
+    // past the last bed get null, which is the truth about that colony rather
+    // than a failure: a save with one house and ten adults really does have
+    // six homeless, and the migration's job is to reproduce homing, not to
+    // bail the player out of it.
+    const shelterIds = house === null ? savedShelters : [...savedShelters, houseId];
+    const homeIdFor = (index: number): number | null =>
+      shelterIds[Math.floor(index / MIGRATION_CONSTANTS.houseBeds)] ?? null;
     const colonists = [...v4.workers].sort((a, b) => a.id - b.id).map((w, index) => ({
       ...w,
       // Keep an age the save already carries. Task 3 made `savedColonistOf`
@@ -2988,7 +3079,7 @@ const migrateV4toV5: MigrationStep = {
       // the save was upgraded. Synthesize only for genuinely legacy records
       // that never had the field.
       ageTicks: w.ageTicks ?? MIGRATION_CONSTANTS.startingAgeTicks + jitter(w.id),
-      homeId: house !== null && index < MIGRATION_CONSTANTS.houseBeds ? houseId : null,
+      homeId: homeIdFor(index),
       // Preserved for the same reason as `ageTicks` above, and it became true
       // for the same reason: Task 4's fix pass made `savedColonistOf` write
       // the optional `starvingTicks` onto v4 records too. Zeroing it here
@@ -3090,6 +3181,16 @@ it('the migration constants match the balance they duplicate', () => {
   expect(MIGRATION_CONSTANTS.startingAgeTicks).toBe(BALANCE.startingAgeTicks);
   expect(MIGRATION_CONSTANTS.spreadTicks).toBe(BALANCE.lifeBands.spreadTicks);
   expect(MIGRATION_CONSTANTS.birthCooldownTicks).toBe(BALANCE.birthCooldownTicks);
+});
+
+it("'house' is still the only sheltering def the migration can name", () => {
+  // The migration identifies a saved shelter as `defId === 'house'`, because
+  // src/shared/** cannot import BUILDINGS. That literal is a duplicated fact
+  // like the numbers above, and it fails in a nastier way: add a second
+  // building with beds and the migration silently stops seeing it as
+  // housing, seeding its residents homeless with nothing to point at.
+  const sheltering = BUILDING_IDS.filter((id) => BUILDINGS[id].beds > 0);
+  expect(sheltering).toEqual(['house']);
 });
 ```
 
@@ -3223,9 +3324,21 @@ SP=/tmp/obsisim-mutation && mkdir -p $SP
 cp src/shared/save-migration.ts "$SP/save-migration.ts"
 
 # The migration must assign homes, not leave them to the first tick
-sed -i 's|homeId: house !== null \&\& index < MIGRATION_CONSTANTS.houseBeds ? houseId : null,|homeId: null,|' src/shared/save-migration.ts
+sed -i 's|homeId: homeIdFor(index),|homeId: null,|' src/shared/save-migration.ts
 grep -q 'homeId: null,' src/shared/save-migration.ts || { echo "MUTATION DID NOT APPLY — fix the pattern"; exit 1; }
 npx vitest run tests/shared/save-migration.test.ts -t "SEEDED snapshot"        # expect FAIL
+cp "$SP/save-migration.ts" src/shared/save-migration.ts
+
+# Houses the save ALREADY has must be filled, not only the synthesized one
+sed -i "s|.filter((b) => b.defId === 'house' \&\& b.relocatingTicks === 0)|.filter(() => false)|" src/shared/save-migration.ts
+grep -q '.filter(() => false)' src/shared/save-migration.ts || { echo "MUTATION DID NOT APPLY — fix the pattern"; exit 1; }
+npx vitest run tests/shared/save-migration.test.ts -t "houses the save already has"   # expect FAIL
+cp "$SP/save-migration.ts" src/shared/save-migration.ts
+
+# A relocating house has no usable beds — including it disagrees with rehome
+sed -i "s|b.defId === 'house' \&\& b.relocatingTicks === 0|b.defId === 'house'|" src/shared/save-migration.ts
+grep -q "b.defId === 'house')" src/shared/save-migration.ts || { echo "MUTATION DID NOT APPLY — fix the pattern"; exit 1; }
+npx vitest run tests/shared/save-migration.test.ts -t "relocating house"       # expect FAIL
 cp "$SP/save-migration.ts" src/shared/save-migration.ts
 
 # Ages must be staggered, not uniform

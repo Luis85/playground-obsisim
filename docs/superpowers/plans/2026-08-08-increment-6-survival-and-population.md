@@ -1563,9 +1563,20 @@ set `occupants: occupantsByHouse.get(b.id) ?? 0` on each building snapshot, and 
       total: buildingSnaps.reduce((sum, b) => sum + b.beds, 0),
       occupied: buildingSnaps.reduce((sum, b) => sum + b.occupants, 0),
     },
+    // Spec 2.13's stage counts. Aggregated here beside the other cross-entity
+    // sections rather than recomputed in each view: the Population view and
+    // the Dashboard both show them, and two independent reductions over the
+    // roster are two chances to disagree about what a stage is.
+    demographics: {
+      children: colonistSnaps.filter((c) => c.stage === 'child').length,
+      adults: colonistSnaps.filter((c) => c.stage === 'adult').length,
+      elders: colonistSnaps.filter((c) => c.stage === 'elder').length,
+    },
 ```
 
-adding both to `EntitySections` and to `Snapshot`.
+adding all three to `EntitySections` and to `Snapshot`. `demographics` is typed `{ children: number; adults: number; elders: number }`.
+
+Because `buildEntitySections` is the shared aggregator, this reaches **both** snapshot paths at once — the live `SnapshotSystem` one and `buildInitialSnapshot`'s seeded one — which is the property that keeps a restored colony's headline numbers identical to a running one's.
 
 - [ ] **Step 8: Apply the homeless penalty**
 
@@ -1847,6 +1858,15 @@ In `tests/support/balance-harness.ts`, add to `Scenario`:
    * a housing scenario sets it false deliberately.
    */
   houseCrew?: boolean;
+  /**
+   * Put the crew's house at THIS tile instead of beside their building — the
+   * only way to vary commute while holding everything else fixed, which is
+   * what the "a distant house costs delivered goods" measurement needs. Task
+   * 12 depends on `runScenario` actually reading it; a `Scenario` field the
+   * runner ignores makes the near and far worlds identical, so the test can
+   * never fail and proves nothing.
+   */
+  crewHouseAt?: { col: number; row: number };
 ```
 
 and in `runScenario`, after spawning the measured building:
@@ -1865,7 +1885,10 @@ So `runScenario` defaults `houseCrew` to `moveTo === undefined`: distance scenar
     // Adjacent to the measured building, and adjacent to the camp. Both land
     // inside commuteFreeTiles, so commuteFactor is exactly 1 and every
     // increment-5 measurement is preserved by construction.
-    const crewHouse = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: adjacentCol(save.map, col), row });
+    // crewHouseAt wins when given; otherwise adjacent to the building, which
+    // lands inside commuteFreeTiles and scores exactly 1.0.
+    const crewTile = scenario.crewHouseAt ?? { col: adjacentCol(save.map, col), row };
+    const crewHouse = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: crewTile.col, row: crewTile.row });
     crewHomeId = crewHouse.getComponent(Building)!.id;
     const haulerHouse = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: CAMP_TILE.col + 1, row: CAMP_TILE.row });
     haulerHomeId = haulerHouse.getComponent(Building)!.id;
@@ -2211,9 +2234,15 @@ Two places consume it:
 /** Beds nobody living has a claim on. See the note above — this deliberately
  * does not ask which house has room, because that answer changes across the
  * homing phase and the two callers sit on opposite sides of it. */
-export function freeBeds(shelters: readonly ShelterRow[], population: number, pending: number): number {
-  const total = shelters.filter((s) => !s.relocating).reduce((sum, s) => sum + s.beds, 0);
-  return total - population - pending;
+export function freeBeds(
+  shelters: readonly ShelterRow[],
+  population: number,
+  pending: PendingChanges,
+): number {
+  const total = shelters
+    .filter((s) => !s.relocating && !pending.demolished.has(s.id))
+    .reduce((sum, s) => sum + s.beds, 0);
+  return total - population - pending.arrivals.length;
 }
 
 /** Which house an arrival moves into, given what is already spoken for.
@@ -2222,14 +2251,19 @@ export function freeBeds(shelters: readonly ShelterRow[], population: number, pe
 export function shelterWithRoom(
   shelters: readonly ShelterRow[],
   claimed: ReadonlyMap<number, number>,
+  pending: PendingChanges,
 ): number | null {
   for (const shelter of [...shelters].sort((a, b) => a.id - b.id)) {
-    if (shelter.relocating) continue;
+    // Both exclusions, or a nomad drained on the same tick as a demolition
+    // gets a bed in a house that vanishes at the sync.
+    if (shelter.relocating || pending.demolished.has(shelter.id)) continue;
     if ((claimed.get(shelter.id) ?? 0) < shelter.beds) return shelter.id;
   }
   return null;
 }
 ```
+
+Both helpers take `PendingChanges` rather than a bare count precisely so the demolition exclusion cannot be forgotten at one call site — the failure mode that produced this whole family of bugs.
 
 **An arrival names its bed, and `rehome` must honour that.** Neither arrival is homed on its own tick — a nomad is invisible to `PopulationSystem`, a birth happens after homing — so each passes a `homeId` into `colonistComponents` and pushes `{ homeId }` onto the ledger. `rehome` then counts pending arrivals against their houses when computing per-shelter room, or it will fill the very bed an arrival reserved.
 
@@ -3183,9 +3217,12 @@ Append to `tests/engine/balance.test.ts`:
 
 ```ts
 describe('population balance', () => {
-  it('a fed colony with free beds grows; a bed-capped one plateaus', async () => {
-    const roomy = await runPopulationScenario({ houses: 4, startingAdults: 2, foodPerTick: 5, ticks: 2000, sampleEvery: 100 });
-    const capped = await runPopulationScenario({ houses: 1, startingAdults: 2, foodPerTick: 5, ticks: 2000, sampleEvery: 100 });
+  it('a colony feeding ITSELF grows when it has beds, and plateaus when it does not', async () => {
+    // 'chain', not a drip: spec section 4's first question is about a working
+    // food chain, and a drip supplies food regardless of how many adults are
+    // alive — holding constant the exact feedback loop under test.
+    const roomy = await runPopulationScenario({ houses: 4, startingAdults: 2, foodPerTick: 'chain', ticks: 4000, sampleEvery: 100 });
+    const capped = await runPopulationScenario({ houses: 1, startingAdults: 2, foodPerTick: 'chain', ticks: 4000, sampleEvery: 100 });
     const finalOf = (r: PopulationResult) => r.samples.at(-1)!;
     expect(finalOf(roomy).adults + finalOf(roomy).children).toBeGreaterThan(4);
     expect(capped.births).toBeLessThan(roomy.births);
@@ -3244,8 +3281,25 @@ Append to `tests/support/balance-harness.ts`:
 export interface PopulationScenario {
   houses: number;
   startingAdults: number;
-  /** Bread added to the store each tick. 0 starves the colony deliberately. */
-  foodPerTick: number;
+  /**
+   * `number` drips that much bread into the store each tick — an exogenous
+   * supply, useful for isolating one variable (0 starves the colony
+   * deliberately). `'chain'` instead builds gatherers' huts and haulers and
+   * lets the colony **feed itself**.
+   *
+   * The distinction is not cosmetic. Spec section 4's first question is
+   * whether a colony with a working food chain stabilises or oscillates, and
+   * a drip cannot answer it: food arrives regardless of how many adults are
+   * alive, so the dependency ratio never feeds back on supply and the loop
+   * being tuned is precisely the one held constant. Use `'chain'` for the
+   * stability measurement and a number only where the point is to hold food
+   * fixed.
+   */
+  foodPerTick: number | 'chain';
+  /** Gatherers' huts to build when `foodPerTick` is `'chain'`. */
+  huts?: number;
+  /** Haulers to staff when `foodPerTick` is `'chain'`. */
+  haulers?: number;
   ticks: number;
   sampleEvery: number;
 }
@@ -3285,14 +3339,54 @@ function foodDripSystem(perTick: number): TColonySystemFactory {
     .build();
 }
 
+/**
+ * Stands in for the player under `'chain'`: every tick, put any idle adult to
+ * work in a hut with a free slot.
+ *
+ * The instrument needs this because nothing in the engine assigns anyone —
+ * colonists are born unassigned and the player staffs them. Without a stand-in
+ * the chain would be worked only by the founders, every child would grow up
+ * idle, and the run would measure a colony that starves as it grows, which is
+ * an artefact of the harness rather than a property of the balance. Stated
+ * here as a limitation, in the same spirit as the FED berry stock: this models
+ * an *attentive* player, so it measures the best case the balance allows.
+ */
+function autoStaffSystem(): TColonySystemFactory {
+  return () => createSystem({
+    colonists: queryComponents({ age: Read(Age), job: Write(JobAssignment) }),
+    buildings: queryComponents({ building: Read(Building), slots: Read(WorkerSlots) }),
+  })
+    .withName('AutoStaff')
+    .withRunFunction(({ colonists, buildings }) => {
+      const staffed = new Map<number, number>();
+      const rows = [...colonists.iter()];
+      for (const { job } of rows) {
+        if (job.buildingId !== null) staffed.set(job.buildingId, (staffed.get(job.buildingId) ?? 0) + 1);
+      }
+      const openings = [...buildings.iter()]
+        .filter(({ building, slots }) => (staffed.get(building.id) ?? 0) < slots.max)
+        .sort((a, b) => a.building.id - b.building.id);
+      for (const { age, job } of rows) {
+        if (job.buildingId !== null || job.hauling) continue;
+        if (stageOf(age.ticks, BALANCE.lifeBands) !== 'adult') continue;
+        const opening = openings.find(({ building, slots }) => (staffed.get(building.id) ?? 0) < slots.max);
+        if (opening === undefined) return;
+        job.buildingId = opening.building.id;
+        staffed.set(opening.building.id, (staffed.get(opening.building.id) ?? 0) + 1);
+      }
+    })
+    .build();
+}
+
 export async function runPopulationScenario(scenario: PopulationScenario): Promise<PopulationResult> {
   const { houses, startingAdults, foodPerTick, ticks, sampleEvery } = scenario;
   const save: SaveGameV5 = { ...initialSave(), buildings: [], colonists: [], stockpile: {}, nextEntityId: 1 };
 
+  const chain = foodPerTick === 'chain';
   const statsIndex = ALL_SYSTEMS.indexOf(StatsSystem);
   const systems: TColonySystemFactory[] = [
     ...ALL_SYSTEMS.slice(0, statsIndex),
-    foodDripSystem(foodPerTick),
+    ...(chain ? [autoStaffSystem()] : [foodDripSystem(foodPerTick)]),
     ...ALL_SYSTEMS.slice(statsIndex),
   ];
   const prep = buildColonyPrepWorld({ save, systems });
@@ -3304,6 +3398,18 @@ export async function runPopulationScenario(scenario: PopulationScenario): Promi
     const at = spots.next().value!;
     const house = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: at.col, row: at.row });
     houseIds.push(house.getComponent(Building)!.id);
+  }
+  // Under 'chain' the colony feeds itself: gatherers' huts (berries need no
+  // input, so this is the shortest real production loop) plus haulers to carry
+  // the berries to the store. autoStaffSystem crews them as adults mature.
+  if (chain) {
+    for (let i = 0; i < (scenario.huts ?? 2); i++) {
+      const at = spots.next().value!;
+      spawnBuilding(prep, ids, { defId: 'gatherersHut', progress: 0, batchActive: false, col: at.col, row: at.row });
+    }
+    for (let i = 0; i < (scenario.haulers ?? 2); i++) {
+      spawnColonist(prep, ids, { ageTicks: BALANCE.lifeBands.matureTicks, hauling: true, homeId: houseIds[0] ?? null });
+    }
   }
   for (let i = 0; i < startingAdults; i++) {
     // Adults, homed into the first house so the run does not open on a

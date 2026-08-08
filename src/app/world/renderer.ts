@@ -432,7 +432,7 @@ export const createExcaliburWorldRenderer: WorldRendererFactory = (host) => {
       if (disposed || last === undefined) return null;
       const world = engine.screen.pageToWorldCoordinates(vec(pageX, pageY));
       const colonistId = scene.colonistAt(world.x, world.y);
-      if (colonistId !== null) return { kind: 'worker', id: colonistId };
+      if (colonistId !== null) return { kind: 'colonist', id: colonistId };
       return pickBuildingAt(last, world.x / TILE, world.y / TILE);
     },
     tileAt(pageX, pageY) {

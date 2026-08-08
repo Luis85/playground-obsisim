@@ -91,8 +91,8 @@ check('scene is static once the walk settles', settledB.equals(settledA));
 
 const probe = await page.evaluate(() => window.__probe());
 check(
-  `pick() resolves buildings, workers, and empty ground through the live camera (${JSON.stringify(probe)})`,
-  probe.building > 0 && probe.worker > 0 && probe.empty > 0,
+  `pick() resolves buildings, colonists, and empty ground through the live camera (${JSON.stringify(probe)})`,
+  probe.building > 0 && probe.colonist > 0 && probe.empty > 0,
 );
 
 await step(2); // stop()
@@ -163,19 +163,19 @@ await step(14); // colony reset: tick regresses, ids recycle
 await wait(400);
 const afterReset = await page.evaluate(() => window.__probe());
 check(
-  `reset clears the old colony (buildings gone, fresh workers at camp) (${JSON.stringify(afterReset)})`,
-  afterReset.building === 0 && afterReset.worker > 0,
+  `reset clears the old colony (buildings gone, fresh colonists at camp) (${JSON.stringify(afterReset)})`,
+  afterReset.building === 0 && afterReset.colonist > 0,
 );
 
 await step(15); // same-tick reset: a new snapshot at the same tick is a new timeline
 await wait(400);
 const afterSameTickReset = await page.evaluate(() => window.__probe());
 check(
-  // worker > 0, not an exact count: the probe grid's nearest sample sits
+  // colonist > 0, not an exact count: the probe grid's nearest sample sits
   // within ~1px of the pick radius at this zoom — an exact count flips on
   // any TILE/margin/host change and would read as a renderer regression
   `same-tick reset also clears the previous colony (${JSON.stringify(afterSameTickReset)})`,
-  afterSameTickReset.building === 0 && afterSameTickReset.worker > 0,
+  afterSameTickReset.building === 0 && afterSameTickReset.colonist > 0,
 );
 
 // Demographics. One change per phase (see homeScene in the harness), so each

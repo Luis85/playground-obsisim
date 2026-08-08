@@ -11,7 +11,7 @@ declare global {
     __ready: boolean;
     __errors: string[];
     __step: (index: number) => string;
-    __probe: () => { building: number; worker: number; empty: number };
+    __probe: () => { building: number; colonist: number; empty: number };
   }
 }
 
@@ -185,7 +185,10 @@ window.__step = (index: number) => {
 // page -> world -> tile transform against the live camera end to end.
 window.__probe = () => {
   const rect = document.querySelector('#host canvas')!.getBoundingClientRect();
-  const found = { building: 0, worker: 0, empty: 0 };
+  // Keys match WorldPick['kind'] exactly — `found[pick.kind] += 1` below is
+  // what ties them, so a rename on either side is a type error rather than a
+  // tally that silently counts nothing.
+  const found = { building: 0, colonist: 0, empty: 0 };
   for (let ix = 0; ix < 40; ix++) {
     for (let iy = 0; iy < 26; iy++) {
       const pick = renderer.pick(rect.left + (rect.width * (ix + 0.5)) / 40, rect.top + (rect.height * (iy + 0.5)) / 26);

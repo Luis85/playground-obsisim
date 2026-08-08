@@ -164,7 +164,12 @@ function buildingSpot(cell: PlacedBuilding, capacity: number, slot: number): Spo
 }
 
 export interface WorldPick {
-  kind: 'building' | 'worker';
+  // 'colonist', not 'worker': this names the PERSON picked off the canvas, and
+  // spec 2.1's line is that the person is a colonist while work is still work.
+  // It was the last world-layer name for a person, sitting one file away from
+  // `workerSlots` and `tooledWorkers`, which genuinely do name employment — so
+  // the two senses of "worker" were adjacent and indistinguishable at a glance.
+  kind: 'building' | 'colonist';
   id: number;
 }
 

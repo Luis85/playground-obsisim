@@ -142,7 +142,7 @@ describe('WorldView', () => {
 
   it('shows a worker tooltip with efficiency and tool state', async () => {
     const { renderer, factory } = makeFake();
-    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'worker', id: 3 });
+    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'colonist', id: 3 });
     const { wrapper } = mountHarness(factory);
     useGameStore().ingest(makeSnapshot({
       colonists: [makeWorker(3, { hunger: 40, efficiency: 0.8, buildingId: null, toolTicks: 12 })],
@@ -157,7 +157,7 @@ describe('WorldView', () => {
 
   it('hides a stationary tooltip once the hovered worker is no longer under the pointer', async () => {
     const { renderer, factory } = makeFake();
-    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'worker', id: 3 });
+    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'colonist', id: 3 });
     const { wrapper } = mountHarness(factory);
     useGameStore().ingest(makeSnapshot({
       colonists: [makeWorker(3, { hunger: 0, efficiency: 1, buildingId: null, toolTicks: 0 })],
@@ -178,7 +178,7 @@ describe('WorldView', () => {
     vi.useFakeTimers();
     try {
       const { renderer, factory } = makeFake();
-      (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'worker', id: 3 });
+      (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'colonist', id: 3 });
       const { wrapper } = mountHarness(factory);
       useGameStore().ingest(makeSnapshot({
         colonists: [makeWorker(3, { hunger: 0, efficiency: 1, buildingId: null, toolTicks: 0 })],
@@ -421,7 +421,7 @@ describe('WorldView interaction', () => {
     await nextTick();
     await wrapper.find('[data-test="world-host"]').trigger('click', { pageX: 40, pageY: 40 }); // select
     expect(wrapper.find('[data-test="selection-panel"]').exists()).toBe(true);
-    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'worker', id: 3 });
+    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'colonist', id: 3 });
     await wrapper.find('[data-test="world-host"]').trigger('click', { pageX: 50, pageY: 50 });
     expect(wrapper.find('[data-test="selection-panel"]').exists()).toBe(true); // hover-only: still selected
     (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue(null);

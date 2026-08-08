@@ -2825,7 +2825,14 @@ const migrateV4toV5: MigrationStep = {
       // that never had the field.
       ageTicks: w.ageTicks ?? MIGRATION_CONSTANTS.startingAgeTicks + jitter(w.id),
       homeId: house !== null && index < MIGRATION_CONSTANTS.houseBeds ? houseId : null,
-      starvingTicks: 0,
+      // Preserved for the same reason as `ageTicks` above, and it became true
+      // for the same reason: Task 4's fix pass made `savedColonistOf` write
+      // the optional `starvingTicks` onto v4 records too. Zeroing it here
+      // would cancel up to 99 ticks of incurred starvation purely because the
+      // save crossed a version boundary — the exact defect persisting the
+      // field was meant to close. `?? 0` still covers genuinely legacy
+      // records that never carried it.
+      starvingTicks: w.starvingTicks ?? 0,
     }));
     const { workers: _dropped, ...rest } = v4;
     return {

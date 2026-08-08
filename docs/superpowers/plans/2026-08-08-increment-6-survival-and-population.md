@@ -1395,7 +1395,44 @@ Expected: FAIL — `homeId` is not on `ColonistSnapshot`.
 
 - [ ] **Step 3: Add the component**
 
-In `src/engine/components.ts`:
+**First, the `PendingChanges` resource** — Task 6 is where it is first needed, because demolition cannot evict without it.
+
+In `src/engine/resources.ts`, beside `RemovalLedger`:
+
+```ts
+/**
+ * Entity changes made this tick that no query can see yet. sim-ecs syncs
+ * creations and removals only after every system has run, so within one tick a
+ * spawned colonist is invisible and a demolished building is still present.
+ * Both halves are the same question, so they share one answer and one clear
+ * point — the same hazard, and the same remedy, as
+ * CommandContext.claimedTiles.
+ *
+ * `demolished` is what makes handleDemolishBuilding's eviction stick: it nulls
+ * its residents' homes, but the house stays in PopulationSystem's shelters
+ * query for the rest of the tick, so rehome would put those same colonists
+ * straight back into a building that no longer exists.
+ *
+ * `arrivals` is unused until Task 8 introduces births and nomads; it is
+ * declared here so the two halves cannot drift apart, and so `clear()` has one
+ * definition rather than growing a second field later.
+ */
+export class PendingChanges {
+  /** One entry per colonist spawned this tick, carrying the bed it took. */
+  readonly arrivals: { homeId: number | null }[] = [];
+  /** Buildings demolished this tick. Still in every query until the sync. */
+  readonly demolished = new Set<number>();
+
+  clear(): void {
+    this.arrivals.length = 0;
+    this.demolished.clear();
+  }
+}
+```
+
+Register it in `buildColonyPrepWorld`'s `instances` array, add `pending: PendingChanges` to both `CommandContext` and `PopulationContext`, have `handleDemolishBuilding` record the id, and have `PopulationSystem` call `ctx.pending.clear()` at the end of its run — by the next tick the real entities are in the query, so counting them again would double the arrivals and keep a demolished house excluded forever.
+
+Then in `src/engine/components.ts`:
 
 ```ts
 /**
@@ -1461,11 +1498,16 @@ export function rehome(ctx: PopulationContext): void {
   const rows = livingRows(ctx);
   const free = new Map<number, number>();
   for (const shelter of ctx.shelters) {
-    if (!shelter.relocating) free.set(shelter.id, shelter.beds);
+    // A house demolished earlier this tick is still in the query until the
+    // post-step sync — see PendingChanges above. Counting its beds would let
+    // homing put the residents handleDemolishBuilding just evicted straight
+    // back into a building that no longer exists.
+    if (shelter.relocating || ctx.pending.demolished.has(shelter.id)) continue;
+    free.set(shelter.id, shelter.beds);
   }
-  // A nomad welcomed earlier this tick already reserved its bed and is not in
-  // `rows` — without this, homing hands that same bed to a homeless colonist
-  // and the house ends the tick over capacity.
+  // Arrivals hold reserved beds too, but nothing creates one until Task 8, so
+  // this loop is a no-op until then — written now because it belongs beside
+  // the exclusion above, and both halves clear together.
   for (const arrival of ctx.pending.arrivals) {
     if (arrival.homeId !== null) free.set(arrival.homeId, (free.get(arrival.homeId) ?? 0) - 1);
   }
@@ -2186,36 +2228,7 @@ Add `lastBirthTick` to `Snapshot` beside `lastRecruitTick`, seeded in `buildInit
 
 In `src/engine/systems/population-handlers.ts`:
 
-**First, a resource for arrivals queued earlier in the same tick.** `CommandSystem` runs before `PopulationSystem`, and a nomad it spawns is invisible to queries until the post-step sync — so without this, a nomad and a birth can each take the *same* last bed and the tick ends over capacity. This is precisely the problem `CommandContext.claimedTiles` already solves for buildings ("an entity built this tick is invisible to queries until the post-step sync, but its tile must already count as occupied"), so it gets the same shape.
-
-In `src/engine/resources.ts`, beside `RemovalLedger`:
-
-```ts
-/**
- * Colonists spawned earlier in THIS tick and not yet visible to any query —
- * sim-ecs syncs new entities only after every system has run. PopulationSystem
- * counts these against beds and population before deciding on a birth;
- * without that, a nomad welcomed this tick and a child born this tick both
- * claim the last bed. Same hazard, and same remedy, as
- * CommandContext.claimedTiles.
- *
- * Reset by PopulationSystem after it has read it: by the next tick the real
- * entities are in the query and counting them again would double them.
- */
-export class PendingChanges {
-  /** One entry per colonist spawned this tick, carrying the bed it took. */
-  readonly arrivals: { homeId: number | null }[] = [];
-  /** Buildings demolished this tick. Still in every query until the sync. */
-  readonly demolished = new Set<number>();
-
-  clear(): void {
-    this.arrivals.length = 0;
-    this.demolished.clear();
-  }
-}
-```
-
-**One resource, because both halves are the same bug.** sim-ecs makes a spawned entity invisible until the post-step sync *and* keeps a removed one visible until then, so `PopulationSystem` needs to know about both. The arrivals half stops a nomad and a birth taking the same bed. The demolished half is what makes `handleDemolishBuilding`'s eviction stick: it nulls its residents' homes, but the house is still in `PopulationSystem`'s `shelters` query later in the same tick, so `rehome` would see its beds as free and put the very same colonists straight back into the building that no longer exists. Both are one question — "what changed this tick that queries cannot see yet?" — so they get one answer, cleared together by `PopulationSystem` after `tryBirth`.
+**`PendingChanges` already exists** — Task 6 introduced it, because demolition needed its `demolished` half to make eviction stick. Task 8 is where its `arrivals` half stops being a no-op: `CommandSystem` runs before `PopulationSystem`, and a nomad it spawns is invisible to queries until the post-step sync, so without recording it a nomad and a birth each take the *same* last bed and the tick ends over capacity.
 
 `rehome` and both gates therefore skip any shelter in `ctx.pending.demolished`, exactly as they skip a relocating one:
 
@@ -2315,13 +2328,19 @@ export function tryBirth(ctx: PopulationContext): void {
   const rows = livingRows(ctx);
   // A nomad welcomed earlier this tick holds a bed and eats, but is not in
   // `rows` yet — count them, or both arrivals take the same last bed.
+  // Count only, and only for the population total — the bed maths below takes
+  // the whole object.
   const pending = ctx.pending.arrivals.length;
   const blocker = birthBlocker({
     stock: ctx.stockpile.toJSON(),
     weights: MEAL_WEIGHTS,
     population: rows.length + pending,
     adults: rows.filter((row) => stageOf(row.age.ticks, BALANCE.lifeBands) === 'adult').length,
-    freeBeds: freeBeds(ctx.shelters, rows.length, pending),
+    // The OBJECT, not the count: freeBeds reads `.demolished` as well as
+    // `.arrivals`, and passing the number back would silently drop the
+    // demolition exclusion — the exact "changed at one site of N" failure
+    // this helper's signature exists to prevent.
+    freeBeds: freeBeds(ctx.shelters, rows.length, ctx.pending),
     tick: ctx.clock.tick,
     lastBirthTick: ctx.clock.lastBirthTick,
     cooldown: BALANCE.birthCooldownTicks,
@@ -2340,7 +2359,7 @@ export function tryBirth(ctx: PopulationContext): void {
   for (const arrival of ctx.pending.arrivals) {
     if (arrival.homeId !== null) claimed.set(arrival.homeId, (claimed.get(arrival.homeId) ?? 0) + 1);
   }
-  const homeId = shelterWithRoom(ctx.shelters, claimed);
+  const homeId = shelterWithRoom(ctx.shelters, claimed, ctx.pending);
   ctx.spawn(...colonistComponents({ id, ageTicks: 0, homeId }));
   ctx.pending.arrivals.push({ homeId });
   ctx.notices.succeed(`Colonist #${id} was born.`);

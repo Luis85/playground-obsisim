@@ -456,8 +456,13 @@ describe('CommandSystem', () => {
     // The trip must be reset, not merely handed off: buildSaveFromWorld banks a
     // carried load into the save filtered on `carrying`, NOT on `hauling`, so a
     // load left in hand here would be banked a second time on the next save —
-    // the same units twice.
-    expect(carrier.getComponent(HaulTrip)!).toMatchObject({ phase: 'idle', targetId: null, resource: null, amount: 0 });
+    // the same units twice. legTicks and the pickup tile were genuinely
+    // non-zero the moment before this (the carrier was mid-return-leg from
+    // (5,4)) — reset() must clear them along with everything else, the same
+    // way it clears phase/targetId/resource/amount.
+    expect(carrier.getComponent(HaulTrip)!).toMatchObject({
+      phase: 'idle', targetId: null, resource: null, amount: 0, legTicks: 0, pickupCol: 0, pickupRow: 0,
+    });
     expect(buildSaveFromWorld(world).stockpile.wood).toBe(before + BALANCE.haulCarryCapacity);
   });
 
@@ -515,18 +520,20 @@ describe('CommandSystem', () => {
     await dispatch({ type: 'assignHauler' });
     const hauler = [...world.getEntities()].find((e) => e.getComponent(HaulTrip)?.phase === 'outbound')!;
     const trip = () => hauler.getComponent(HaulTrip)!;
-    expect(trip()).toMatchObject({ targetId: buildingId, ticksLeft: 13 }); // the far-corner distance
+    expect(trip()).toMatchObject({ targetId: buildingId, ticksLeft: 13, legTicks: 13 }); // the far-corner distance
 
     await tick(); await tick(); // well into the walk, nowhere near arrival
-    expect(trip()).toMatchObject({ phase: 'outbound', ticksLeft: 11 });
+    expect(trip()).toMatchObject({ phase: 'outbound', ticksLeft: 11, legTicks: 13 }); // legTicks never decrements
 
     await dispatch({ type: 'moveBuilding', buildingId, to: { col: 5, row: 1 } }); // just past camp: 2 ticks away
     // Recomputed against the new tile (2), then HaulSystem's same-tick decrement
     // (CommandSystem runs first) takes it to 1 -- not the stale 11 the old,
     // far-away tile would have left behind. Exact value, still true under the
     // real order because 2 ticks leaves room for CommandSystem's write to be
-    // decremented once without hitting zero in this same tick.
-    expect(trip()).toMatchObject({ phase: 'outbound', ticksLeft: 1 });
+    // decremented once without hitting zero in this same tick. legTicks is
+    // refreshed to the SAME new total (2) but, unlike ticksLeft, is never
+    // touched by that same-tick decrement — it is OBS-5-01's frozen figure.
+    expect(trip()).toMatchObject({ phase: 'outbound', ticksLeft: 1, legTicks: 2 });
 
     // Behavioral proof, not another frame of the counter: within a handful of
     // ticks (not the dozen the original far-corner distance demanded) the
@@ -550,15 +557,24 @@ describe('CommandSystem', () => {
     const hauler = [...world.getEntities()].find((e) => e.getComponent(HaulTrip)?.phase === 'outbound')!;
     const trip = () => hauler.getComponent(HaulTrip)!;
     await tick(); await tick(); await tick(); // walks the 3 ticks out and loads
-    expect(trip()).toMatchObject({ phase: 'returning', ticksLeft: 3, resource: 'wood', amount: BALANCE.haulCarryCapacity });
+    expect(trip()).toMatchObject({
+      phase: 'returning', ticksLeft: 3, legTicks: 3, pickupCol: 5, pickupRow: 4,
+      resource: 'wood', amount: BALANCE.haulCarryCapacity,
+    });
 
     // The building it loaded from moves elsewhere. A returning hauler walks to
     // the camp, which never moves, so this must leave the trip alone.
     await dispatch({ type: 'moveBuilding', buildingId, to: { col: 9, row: 6 } });
     expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Moved the Forester.' }]);
     // Only HaulSystem's ordinary per-tick decrement (3 -> 2), nothing extra
-    // from the move: ticksLeft and the load it is carrying are untouched.
-    expect(trip()).toMatchObject({ phase: 'returning', ticksLeft: 2, resource: 'wood', amount: BALANCE.haulCarryCapacity });
+    // from the move: ticksLeft and the load it is carrying are untouched — and
+    // neither are legTicks or the pickup tile. OBS-5-01: a returning trip's
+    // origin does not follow the building; pickupCol/pickupRow must still read
+    // the OLD (5,4), never the new (9,6) the building moved to.
+    expect(trip()).toMatchObject({
+      phase: 'returning', ticksLeft: 2, legTicks: 3, pickupCol: 5, pickupRow: 4,
+      resource: 'wood', amount: BALANCE.haulCarryCapacity,
+    });
 
     await tick(); await tick(); // the same 2 ticks it would have taken without the move
     expect(trip().phase).toBe('idle');

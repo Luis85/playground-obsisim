@@ -284,8 +284,16 @@ describe('hauler placement', () => {
   const haulSnapshot = (overrides: Partial<WorkerSnapshot>) => makeSnapshot({
     buildings: [makeBuilding(1, { defId: 'forester', col: 8, row: 4 })],
     // Default: an outbound hauler that has ARRIVED (0 ticks left), which is the
-    // doorstep case the placement tests below were written against.
-    workers: [makeWorker(20, { hauling: true, haulPhase: 'outbound', haulTicksLeft: 0, ...overrides })],
+    // doorstep case the placement tests below were written against. The leg
+    // total and pickup tile match building 1's own (fixed, in this describe
+    // block) position — haulSpot now reads them from the snapshot rather than
+    // recomputing them from the building's live tile (OBS-5-01); the dedicated
+    // "building moved mid-leg" test below is the one that overrides them.
+    workers: [makeWorker(20, {
+      hauling: true, haulPhase: 'outbound', haulTicksLeft: 0,
+      haulLegTicks: LEG_TICKS, haulPickupCol: 8, haulPickupRow: 4,
+      ...overrides,
+    })],
   });
   const haulerIn = (snapshot: ReturnType<typeof makeSnapshot>) =>
     layoutWorld(snapshot).workers.find((w) => w.id === 20)!;
@@ -424,5 +432,30 @@ describe('hauler placement', () => {
     expect(crew.x).toBeGreaterThan(cell.col); // a crew spot inside the cell (the sentinel collapses x to cell.col)
     expect(crew.x).toBeLessThan(cell.col + 1);
     expect(crew.y).toBeLessThan(wasHauler.y); // on the crew row, above the doorstep line it stood on a moment ago
+  });
+
+  // OBS-5-01. handleMoveBuilding deliberately never retargets a RETURNING
+  // trip (the goods are already in hand, bound for a camp that did not move),
+  // so haulTicksLeft/haulLegTicks/the pickup tile still describe the 4-tick
+  // leg this hauler actually started from (8,4) — even though the snapshot
+  // below reports building 1 relocated to the far corner out from under it.
+  // haulSpot must draw the leg that was actually walked, not the one the
+  // building's new tile would imply.
+  it('draws a returning hauler on the leg it actually walked, not the one its building\'s new tile implies', () => {
+    const snapshot = makeSnapshot({
+      buildings: [makeBuilding(1, { defId: 'forester', col: 23, row: 15 })], // moved mid-leg, far corner
+      workers: [makeWorker(20, {
+        hauling: true, haulTargetId: 1, haulPhase: 'returning', haulTicksLeft: 2, carrying: 6,
+        haulLegTicks: LEG_TICKS, haulPickupCol: 8, haulPickupRow: 4, // frozen at the ORIGINAL (8,4) pickup
+      })],
+    });
+    const hauler = layoutWorld(snapshot).workers.find((w) => w.id === 20)!;
+    // Halfway through the ORIGINAL 4-tick leg (2 of 4 remain), walking the
+    // pickup(8,4)<->camp line. The old, buggy computation re-derives both
+    // endpoint and total from the building's CURRENT tile: haulTicks(23, 15,
+    // …) = 13, so legProgress(2, 13) ≈ 0.846 — 85% home on a line from the
+    // far-corner door, not the door this hauler actually left.
+    expect(hauler.x).toBeCloseTo(5.25);
+    expect(hauler.y).toBeCloseTo(2.9);
   });
 });

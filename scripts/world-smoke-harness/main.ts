@@ -30,7 +30,9 @@ function building(id: number, defId: BuildingSnapshot['defId'], col: number, row
 function worker(id: number, overrides: Partial<WorkerSnapshot> = {}): WorkerSnapshot {
   return {
     id, hunger: 0, efficiency: 1, buildingId: null, hauling: false,
-    haulTargetId: null, haulPhase: 'idle', haulTicksLeft: 0, carrying: 0, toolTicks: 0,
+    haulTargetId: null, haulPhase: 'idle', haulTicksLeft: 0,
+    haulLegTicks: 0, haulPickupCol: 0, haulPickupRow: 0,
+    carrying: 0, toolTicks: 0,
     ...overrides,
   };
 }
@@ -66,10 +68,20 @@ const growWorkers = () => [worker(10, { buildingId: 1, toolTicks: 100 }), worker
  * Ticks must strictly increase: a sync at the same or an earlier tick is a
  * colony reset by design (see renderer.ts), which would wipe the scene between
  * phases instead of animating through it.
+ *
+ * Building 1 never moves across these phases, so worker 12's leg total and
+ * return-leg pickup tile are the same constants (2 ticks, the building's own
+ * (4,1)) on every haul phase — baked in here rather than repeated per phase,
+ * the way `hauler` overrides `haulTargetId`/`haulPhase`/`haulTicksLeft` per
+ * phase instead. haulSpot now reads these from the snapshot rather than
+ * recomputing them (OBS-5-01), so a stale or missing value here would move
+ * the dot, not just fail silently.
  */
 const haulScene = (tick: number, hauler: Partial<WorkerSnapshot>, forester: Partial<BuildingSnapshot> = {}) => snap(tick,
   [building(1, 'forester', 4, 1, { buffered: 12, state: 'outputFull', ...forester }), building(2, 'farm', 6, 1)],
-  [worker(10, { buildingId: 1 }), worker(11, { buildingId: 1 }), worker(12, { toolTicks: 100, ...hauler })]);
+  [worker(10, { buildingId: 1 }), worker(11, { buildingId: 1 }), worker(12, {
+    toolTicks: 100, haulLegTicks: 2, haulPickupCol: 4, haulPickupRow: 1, ...hauler,
+  })]);
 
 // Phase script, advanced from the runner. Worker 12 walks in phase 1; the
 // batch progresses in both; phase 4 adds a building and a tooled worker.
@@ -94,8 +106,10 @@ const phases: Array<() => void> = [
     growWorkers())),
   // Four haul phases, one change each — see haulScene above. Building 1 sits at
   // (4,1), hypot(2,1) = 2.24 tiles from the camp, so each leg is
-  // ceil(2.24/2) = 2 ticks. The dot's position comes from haulTicksLeft
-  // (OBS-4-09), so these values are what move it, not elapsed wall-clock.
+  // ceil(2.24/2) = 2 ticks — haulScene's haulLegTicks/haulPickupCol/Row
+  // constants. The dot's position comes from haulTicksLeft against that
+  // published total (OBS-4-09, OBS-5-01), so these values are what move it,
+  // not elapsed wall-clock.
   () => renderer.sync(haulScene(5, {})),                                                    // 6: baseline, idle at camp
   () => renderer.sync(haulScene(6, { hauling: true, haulTargetId: 1, haulPhase: 'outbound', haulTicksLeft: 0 })), // 7: arrived at the building
   () => renderer.sync(haulScene(7, { hauling: true, haulTargetId: 1, haulPhase: 'returning', haulTicksLeft: 1 })), // 8: half way home — a genuinely interpolated point, neither endpoint

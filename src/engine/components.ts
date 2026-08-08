@@ -115,6 +115,11 @@ export class Relocation {
  * caught mid-trip banks its load into the saved stockpile instead — so nothing
  * here needs a load guard or a migration. Present on every worker; anyone who
  * is not hauling simply sits at 'idle'.
+ *
+ * `legTicks` and the pickup tile freeze facts about the CURRENT leg at the
+ * moment it begins, so the snapshot can publish them instead of the app layer
+ * re-deriving them from the building's live position — which desyncs a
+ * returning hauler's drawn walk once its building moves mid-leg (OBS-5-01).
  */
 export class HaulTrip {
   constructor(
@@ -123,6 +128,14 @@ export class HaulTrip {
     public ticksLeft = 0,
     public resource: ResourceId | null = null,
     public amount = 0,
+    // What `haulTicks` charged for the CURRENT leg — frozen, unlike `ticksLeft`,
+    // which counts down. Set beside `ticksLeft` at every site that assigns it.
+    public legTicks = 0,
+    // The return leg's origin tile: the building's position at the moment this
+    // hauler loaded, frozen for the rest of that leg. Meaningful only once
+    // `phase` is 'returning'.
+    public pickupCol = 0,
+    public pickupRow = 0,
   ) {}
 
   /** Back to standing at the camp with empty hands. */
@@ -132,5 +145,8 @@ export class HaulTrip {
     this.ticksLeft = 0;
     this.resource = null;
     this.amount = 0;
+    this.legTicks = 0;
+    this.pickupCol = 0;
+    this.pickupRow = 0;
   }
 }

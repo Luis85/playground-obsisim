@@ -90,6 +90,25 @@ describe('HaulSystem', () => {
     expect(tripOf(haulers[0]).phase).toBe('idle');
   });
 
+  // OBS-5-01: legTicks and the pickup tile are frozen at the two sites that
+  // begin a leg (dispatch, and load/turn-for-home) and must survive exactly
+  // as long as the leg they describe — cleared only once the trip resets.
+  it('freezes the leg total and the return-leg pickup tile when each leg begins, and clears both on reset', async () => {
+    // Same (5,4) trip as the test above: 3 ticks each way.
+    const { haulers, step, stockpile } = await setup([{ col: 5, row: 4, wood: 9 }], 1);
+    await step(1); // dispatched: outbound leg begins
+    expect(tripOf(haulers[0])).toMatchObject({ phase: 'outbound', ticksLeft: 3, legTicks: 3 });
+
+    await step(3); // arrives, loads, turns for home: the return leg begins here
+    expect(tripOf(haulers[0])).toMatchObject({
+      phase: 'returning', ticksLeft: 3, legTicks: 3, pickupCol: 5, pickupRow: 4,
+    });
+
+    await step(3); // delivered
+    expect(stockpile.get('wood')).toBe(BALANCE.haulCarryCapacity);
+    expect(tripOf(haulers[0])).toMatchObject({ phase: 'idle', legTicks: 0, pickupCol: 0, pickupRow: 0 });
+  });
+
   it('charges a tick each way even beside the camp — no trip is free', async () => {
     const { step, stockpile } = await setup([{ col: 3, row: 0, wood: 6 }], 1);
     await step(2);

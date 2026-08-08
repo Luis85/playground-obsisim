@@ -1,6 +1,5 @@
 import type { IRuntimeWorld } from 'sim-ecs';
 import type { BuildingDefId, ResourceId } from '../shared/content-types';
-import type { HaulPhase } from '../shared/haul';
 import type { SavedBuilding, SavedWorker } from '../shared/save';
 import type { BuildingSnapshot, BuildingState, WorkerSnapshot } from '../shared/snapshot';
 import { BALANCE, workerWorkPower } from './content/balance';
@@ -16,19 +15,17 @@ import {
  * The single shared aggregation below (buildEntitySections) is fed from
  * either source so the worker/building snapshot derivation logic — tool
  * multiplier, staffing state, progress percent — exists exactly once.
+ *
+ * A worker's facts ARE its published snapshot, field for field: unlike a
+ * building, nothing about one worker's own snapshot is aggregated across
+ * other entities (compare BuildingFacts below, which is a genuinely smaller
+ * set — staffing and power are counted from the whole roster). WorkerFacts
+ * therefore extends WorkerSnapshot instead of repeating its field list, plus
+ * the one thing a snapshot never needed: which resource is in hand (the
+ * amount alone, `carrying`, is what the app and the save both actually use).
  */
-export interface WorkerFacts {
-  id: number;
-  hunger: number;
-  efficiency: number;
-  buildingId: number | null;
-  hauling: boolean;
-  haulTargetId: number | null;
-  haulPhase: HaulPhase;
-  haulTicksLeft: number;
-  carrying: number;
+export interface WorkerFacts extends WorkerSnapshot {
   carryingResource: ResourceId | null;
-  toolTicks: number;
 }
 
 export interface BuildingFacts {
@@ -72,6 +69,7 @@ export function buildEntitySections(workers: readonly WorkerFacts[], buildings: 
     .map((w) => ({
       id: w.id, hunger: w.hunger, efficiency: w.efficiency, buildingId: w.buildingId, hauling: w.hauling,
       haulTargetId: w.haulTargetId, haulPhase: w.haulPhase, haulTicksLeft: w.haulTicksLeft,
+      haulLegTicks: w.haulLegTicks, haulPickupCol: w.haulPickupCol, haulPickupRow: w.haulPickupRow,
       carrying: w.carrying, toolTicks: w.toolTicks,
     }))
     .sort((a, b) => a.id - b.id);
@@ -147,6 +145,13 @@ export function workerFactsOf(
     haulTargetId: trip.targetId,
     haulPhase: trip.phase,
     haulTicksLeft: trip.ticksLeft,
+    // The leg total and the return leg's origin, frozen by HaulTrip when the
+    // leg began — published so the layout reads them instead of recomputing
+    // from the building's live tile, which desyncs once the building moves
+    // mid-leg (OBS-5-01).
+    haulLegTicks: trip.legTicks,
+    haulPickupCol: trip.pickupCol,
+    haulPickupRow: trip.pickupRow,
     carrying: trip.amount,
     carryingResource: trip.resource,
     toolTicks: coverage.remainingTicks,

@@ -1,7 +1,7 @@
 import type { Snapshot, BuildingState, WorkerSnapshot } from '../../shared/snapshot';
 import type { BuildingDefId } from '../../shared/content-types';
-import { BALANCE, BUILDINGS } from '../../engine/content';
-import { haulTicks, legProgress } from '../../shared/haul';
+import { BUILDINGS } from '../../engine/content';
+import { legProgress } from '../../shared/haul';
 
 export const TILE = 48;
 
@@ -201,17 +201,21 @@ function campSpot(slot: number, rows: number): Spot {
 }
 
 /**
- * Where a hauler stands while it is at a building: on the doorstep, below the
- * crew's spots. Deliberately outside the slot machinery — a hauler is a
- * visitor, not staff, and must never displace a worker's remembered slot.
+ * Where a hauler stands at a given tile: on the doorstep, below the crew's
+ * spots. Deliberately outside the slot machinery — a hauler is a visitor, not
+ * staff, and must never displace a worker's remembered slot.
+ *
+ * Takes a bare tile rather than a PlacedBuilding so `haulSpot` can also use it
+ * for a returning hauler's frozen pickup point, which is a remembered tile,
+ * not a building that is necessarily still standing there.
  */
-function haulerSpot(cell: PlacedBuilding): Spot {
-  return { x: cell.col + 0.5, y: cell.row + 1.05 };
+function haulerSpot(tile: { col: number; row: number }): Spot {
+  return { x: tile.col + 0.5, y: tile.row + 1.05 };
 }
 
 /**
- * Where a hauler's dot is RIGHT NOW: interpolated along the camp<->building
- * line from the leg's remaining ticks.
+ * Where a hauler's dot is RIGHT NOW: interpolated along its leg from the
+ * ticks the engine says remain, against the leg total the engine charged.
  *
  * Increment 4 placed an outbound hauler at its target and let the renderer walk
  * there at a fixed 90 px/s. That is 1.875 tiles/s against a simulation moving
@@ -221,13 +225,22 @@ function haulerSpot(cell: PlacedBuilding): Spot {
  * from `haulTicksLeft` makes the two clocks identical by construction, at every
  * game speed, and needs no notion of speed here at all.
  *
- * The leg's full length is recomputed with the same `haulTicks` the simulation
- * charged, so the endpoints of the drawn walk and the cost model agree.
+ * Both the leg's length (`haulLegTicks`) and a returning hauler's origin
+ * (`haulPickupCol`/`haulPickupRow`) are read from the snapshot rather than
+ * recomputed from the building's CURRENT tile. A returning trip is
+ * deliberately left alone when its building moves — the goods are already in
+ * hand, bound for a camp that did not move — so a recomputed
+ * `haulTicks(cell.col, cell.row, …)` can silently disagree with the leg the
+ * sim is actually running once that happens (OBS-5-01). An outbound leg's
+ * `to` endpoint is still the building's live door: the engine DOES retarget an
+ * outbound trip's ticks on a move (handleMoveBuilding), so that endpoint and
+ * the leg total the snapshot publishes always agree.
  */
 function haulSpot(w: WorkerSnapshot, cell: PlacedBuilding): Spot {
   const door = haulerSpot(cell);
-  const travelled = legProgress(w.haulTicksLeft, haulTicks(cell.col, cell.row, BALANCE.haulTilesPerTick));
-  const from = w.haulPhase === 'outbound' ? CAMP_ANCHOR : door;
+  const pickup = haulerSpot({ col: w.haulPickupCol, row: w.haulPickupRow });
+  const travelled = legProgress(w.haulTicksLeft, w.haulLegTicks);
+  const from = w.haulPhase === 'outbound' ? CAMP_ANCHOR : pickup;
   const to = w.haulPhase === 'outbound' ? door : CAMP_ANCHOR;
   return { x: from.x + (to.x - from.x) * travelled, y: from.y + (to.y - from.y) * travelled };
 }

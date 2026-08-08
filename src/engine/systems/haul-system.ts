@@ -66,7 +66,9 @@ export const HaulSystem = () => createSystem({
       if (target === null) return;
       trip.phase = 'outbound';
       trip.targetId = target.buildingId;
-      trip.ticksLeft = haulTicks(target.col, target.row, BALANCE.haulTilesPerTick);
+      const ticks = haulTicks(target.col, target.row, BALANCE.haulTilesPerTick);
+      trip.ticksLeft = ticks;
+      trip.legTicks = ticks;
       trip.resource = null;
       trip.amount = 0;
       // Mutating the candidate makes the claim visible to the next idle hauler
@@ -88,8 +90,16 @@ export const HaulSystem = () => createSystem({
       trip.amount = amount;
       trip.phase = 'returning';
       // Recomputed from the building's CURRENT tile, so a building moved while
-      // the hauler was outbound charges the walk home it actually walks.
-      trip.ticksLeft = haulTicks(row.position.col, row.position.row, BALANCE.haulTilesPerTick);
+      // the hauler was outbound charges the walk home it actually walks. Frozen
+      // into legTicks/pickupCol/pickupRow here because this is the one moment
+      // the return leg's origin is unambiguous: handleMoveBuilding deliberately
+      // never retargets a returning trip, so nothing after this point may treat
+      // the building's tile as this leg's start again (OBS-5-01).
+      const ticks = haulTicks(row.position.col, row.position.row, BALANCE.haulTilesPerTick);
+      trip.ticksLeft = ticks;
+      trip.legTicks = ticks;
+      trip.pickupCol = row.position.col;
+      trip.pickupRow = row.position.row;
     };
 
     const deposit = (trip: HaulTrip): void => {

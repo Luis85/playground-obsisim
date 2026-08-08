@@ -2900,8 +2900,9 @@ function isValidSaveArrays(save: Record<string, unknown>, rosterKey: 'workers' |
 
 - Every non-null `homeId` names a building present in the save **whose def has `beds > 0`**. A `homeId` pointing at a forester is a record no engine version could write.
 - Every non-null `buildingId` names a building **whose def has a `recipe`**. Today the guard only checks the id exists, so a save assigning a colonist to a house is accepted — and the result is permanent and silent: the colonist publishes as `1 / 0` workers on a zero-slot building, drops out of `idleAdults`, and produces nothing forever, because `ProductionSystem` skips recipe-less buildings. No command can create that assignment, which is exactly what makes it structural rather than balance-coupled.
+- Every non-null `homeId` names a building **whose `relocatingTicks` is 0**. Beds alone are not enough: a house in transit has no usable beds, and `rehome` evicts its residents on sight. `handleMoveBuilding` sets `relocation.ticksLeft` and deliberately never touches homes — eviction is `rehome`'s job, and it runs later in the same tick, before the end-of-tick autosave. So the pairing cannot survive to a save file, and a record holding it counts a colonist as housed in a shelter that `beds.total` excludes: the seeded snapshot then reports more occupants than beds until the first tick undoes it.
 
-Both are the guard's stated criterion — reject only what no engine version could have written — as distinct from the over-capacity case below, which a retune *can* produce legitimately and so is repaired instead.
+All three are the guard's stated criterion — reject only what no engine version could have written — as distinct from the over-capacity case below, which a retune *can* produce legitimately and so is repaired instead. Note the asymmetry that makes relocation a rejection rather than a repair: over-capacity follows from changing `houseBeds`, a balance value, while nothing in `BALANCE` can turn an evicted resident back into a housed one.
 
 **But over-capacity is NOT rejected — it is repaired, at load.** The repair belongs in the shared spawn/seed path (`colonistComponents` and `buildInitialSnapshot`), not only in `rehome`: a restored engine is paused until the player advances it, so a repair that waits for the first tick leaves the seeded snapshot advertising a state the engine will immediately revoke.
 
@@ -3276,7 +3277,7 @@ In `src/engine/world.ts`'s `initialSave`, replace `buildings: []`:
 
 - [ ] **Step 6: Guards, clamps, and the seeded snapshot**
 
-- `isLoadableSave`: add `lastBirthTick` to the same safe-integer / not-ahead-of-`tick` check `lastRecruitTick` gets; add a structural check that every `homeId` names a building present in the save (a dangling reference is a record no engine could write); reject negative or fractional `ageTicks` / `starvingTicks`.
+- `isLoadableSave`: add `lastBirthTick` to the same safe-integer / not-ahead-of-`tick` check `lastRecruitTick` gets; reject negative or fractional `ageTicks` / `starvingTicks`; and add the four reference rules argued above — a non-null `homeId` must name a building **present in the save**, **whose def has `beds > 0`**, **whose `relocatingTicks` is 0**; and a non-null `buildingId` must name a building **whose def has a `recipe`**. Each is a record no engine version could write. One test per rule, each asserting `isLoadableSave` returns `false` for a save violating exactly that rule and `true` for its otherwise-identical control — a shared fixture that trips two rules at once proves neither.
 - `buildColonyPrepWorld`: pass `ageTicks`, `homeId`, `starvingTicks` through to `spawnColonist`, and set `clock.lastBirthTick`.
 - `buildInitialSnapshot`: read all three from the save through `clampedAge` / `clampedStarving`, and derive `stage`, `homeless`, `beds`, and `mealsPerHead` through `buildEntitySections` as the live path does.
 - `savedColonistOf`: add the three fields.

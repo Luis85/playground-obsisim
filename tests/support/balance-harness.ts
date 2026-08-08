@@ -1,7 +1,9 @@
 import { createSystem, ReadResource } from 'sim-ecs';
+import type { IPreptimeWorld } from 'sim-ecs';
 import type { BuildingDefId, ResourceId } from '../../src/shared/content-types';
 import type { SaveGameV4 } from '../../src/shared/save';
 import { haulTicks } from '../../src/shared/haul';
+import { autoPlacePosition, type TileRef, type WorldMapSize } from '../../src/shared/placement';
 import { BALANCE } from '../../src/engine/content/balance';
 import { BUILDINGS } from '../../src/engine/content/buildings';
 import { Building } from '../../src/engine/components';
@@ -133,6 +135,36 @@ function captureDeliveredSystem(resource: ResourceId, onDeliver: (amount: number
     .build();
 }
 
+/**
+ * Enough real shelter to house `crew`, placed by autoPlacePosition so this
+ * instrument never collides with a scenario's own tiles. `occupied` is
+ * mutated as each house is placed, so a second (or third) house never lands
+ * on the first.
+ *
+ * A real house, not a sentinel homeId reusing the measured building's own
+ * id: this harness runs ALL_SYSTEMS, so PopulationSystem's rehome executes
+ * every tick and evicts any Home pointing at a building that isn't an actual
+ * shelter (rehome's `shelter === undefined` branch) — a fake homeId would be
+ * evicted on tick 1, leaving the crew homeless (and at half work power, via
+ * Task 6's placementFactor) for the rest of the run, and silently
+ * invalidating every threshold this instrument is calibrated against.
+ *
+ * Split out of runScenario purely to keep its own cognitive complexity under
+ * the gate — same principle as population-handlers.ts's rehome splitting
+ * into freeBeds/settleExistingHome/claimOpening.
+ */
+function spawnShelters(prep: IPreptimeWorld, ids: IdCounter, map: WorldMapSize, crew: number, occupied: TileRef[]): number[] {
+  const homeIds: number[] = [];
+  while (homeIds.length * BALANCE.houseBeds < crew) {
+    const at = autoPlacePosition(map, occupied);
+    if (at === null) throw new Error('balance harness: no free tile left for a shelter house');
+    const house = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: at.col, row: at.row, relocatingTicks: 0 });
+    homeIds.push(house.getComponent(Building)!.id);
+    occupied.push(at);
+  }
+  return homeIds;
+}
+
 export async function runScenario(scenario: Scenario): Promise<BalanceResult> {
   const { defId, col, row, crew, haulers, ticks, resource, moveTo } = scenario;
   const seededStockpile = Object.fromEntries(SEEDED_RESOURCE_IDS.map((id): [ResourceId, number] => [id, FED]));
@@ -155,7 +187,15 @@ export async function runScenario(scenario: Scenario): Promise<BalanceResult> {
   const ids = getPrepResource(prep, IdCounter);
   const entity = spawnBuilding(prep, ids, { defId, progress: 0, batchActive: false, col, row, relocatingTicks: 0 });
   const buildingId = entity.getComponent(Building)!.id;
-  for (let i = 0; i < crew; i++) spawnColonist(prep, ids, { buildingId });
+  // Avoids the measured building's own tile and the move destination (if
+  // any) — see spawnShelters for why this crew needs a REAL house rather
+  // than a sentinel homeId.
+  const occupiedForHousing: TileRef[] = [{ col, row }];
+  if (moveTo) occupiedForHousing.push({ col: moveTo.col, row: moveTo.row });
+  const homeIds = spawnShelters(prep, ids, save.map, crew, occupiedForHousing);
+  for (let i = 0; i < crew; i++) {
+    spawnColonist(prep, ids, { buildingId, homeId: homeIds[Math.floor(i / BALANCE.houseBeds)] });
+  }
   for (let i = 0; i < haulers; i++) spawnColonist(prep, ids, { hauling: true });
   const world = await prep.prepareRun();
 

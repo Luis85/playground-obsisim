@@ -4,6 +4,7 @@ import type { NoticeMessage, Snapshot } from '../shared/snapshot';
 import type { WorldMapSize } from '../shared/placement';
 import { MAX_SAVED_COUNTER } from '../shared/save';
 import { BALANCE } from './content/balance';
+import type { Home } from './components';
 
 export class Stockpile {
   private readonly amounts = new Map<ResourceId, number>();
@@ -255,4 +256,47 @@ export class WorldMap implements WorldMapSize {
  */
 export class RemovalLedger {
   dirty = false;
+}
+
+/**
+ * Entity changes made this tick that no query can see yet. sim-ecs syncs
+ * creations and removals only after every system has run, so within one tick a
+ * spawned colonist is invisible and a demolished building is still present.
+ * Both halves are the same question, so they share one answer and one clear
+ * point — the same hazard, and the same remedy, as
+ * CommandContext.claimedTiles.
+ *
+ * `demolished` is what makes handleDemolishBuilding's eviction stick: it nulls
+ * its residents' homes, but the house stays in PopulationSystem's shelters
+ * query for the rest of the tick, so rehome would put those same colonists
+ * straight back into a building that no longer exists.
+ *
+ * `arrivals` is unused until Task 8 introduces births and nomads; it is
+ * declared here so the two halves cannot drift apart, and so `clear()` has one
+ * definition rather than growing a second field later.
+ */
+export class PendingChanges {
+  /**
+   * One entry per colonist spawned this tick, holding its LIVE `Home`
+   * component — not a copied id.
+   *
+   * The component, because this tick may still need to change it. If
+   * `recruitWorker` is queued before `demolishBuilding`, the nomad has already
+   * spawned with a `homeId` pointing at that house, and
+   * `handleDemolishBuilding` cannot reach it: its loop walks `ctx.workers`,
+   * whose query will not see the new entity until the post-step sync. The
+   * nomad would keep a reference to a building that no longer exists, the
+   * autosave at the end of the tick would serialize it, and the v5 load guard
+   * — which requires every `homeId` to name a real shelter — would send that
+   * save down the corrupt-backup path. Holding the component lets the
+   * demolition null it in place.
+   */
+  readonly arrivals: { home: Home }[] = [];
+  /** Buildings demolished this tick. Still in every query until the sync. */
+  readonly demolished = new Set<number>();
+
+  clear(): void {
+    this.arrivals.length = 0;
+    this.demolished.clear();
+  }
 }

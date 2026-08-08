@@ -8,7 +8,7 @@ import {
 import { BALANCE } from '../../../src/engine/content/balance';
 import { lifespanFor } from '../../../src/shared/population';
 import type { ResourceId } from '../../../src/shared/content-types';
-import { stepTick } from '../fixtures';
+import { enqueue, stepTick } from '../fixtures';
 
 async function colonyWith(ages: { id: number; ageTicks: number; buildingId?: number | null }[]) {
   const save = { ...initialSave(), workers: [], stockpile: { berries: 100_000 }, nextEntityId: 100 };
@@ -196,5 +196,142 @@ describe('PopulationSystem — standDown on death', () => {
     const forester = snapshot.buildings.find((b) => b.id === 50)!;
     expect(forester.progress).toBe(0);        // no contribution banked from beyond the grave
     expect(forester.batchActive).toBe(false); // never even started
+  });
+});
+
+describe('PopulationSystem — homing', () => {
+  it('homes a homeless colonist into a free bed, and evicts when the house relocates', async () => {
+    const save = { ...initialSave(), workers: [], stockpile: { berries: 100_000 }, nextEntityId: 100 };
+    const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
+    const ids = getPrepResource(prep, IdCounter);
+    const house = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: 5, row: 3, relocatingTicks: 0 });
+    const houseId = house.getComponent(Building)!.id;
+    spawnColonist(prep, ids, { id: 1, ageTicks: BALANCE.lifeBands.matureTicks });
+    const world = await prep.prepareRun();
+    const step = () => stepTick(world);
+    const snap = () => world.getResource(SnapshotStore).latest!;
+
+    await step();
+    expect(snap().colonists[0].homeId).toBe(houseId);
+    expect(snap().homeless).toBe(0);
+    expect(snap().beds).toEqual({ total: BALANCE.houseBeds, occupied: 1 });
+    expect(snap().buildings.find((b) => b.id === houseId)!.occupants).toBe(1);
+
+    // A house being carried shelters nobody — otherwise moving a house would
+    // be the one free relocation in the game.
+    enqueue(world, { type: 'moveBuilding', buildingId: houseId, to: { col: 15, row: 11 } });
+    await step();
+    expect(snap().colonists[0].homeId).toBeNull();
+    expect(snap().homeless).toBe(1);
+    // The relocating house's beds drop out of the total too — a "0/4 free"
+    // reading would contradict rehome's own refusal to fill it.
+    expect(snap().beds).toEqual({ total: 0, occupied: 0 });
+  });
+
+  it('re-homes an evicted colonist once its relocating house lands', async () => {
+    // Same move as the test above, ridden all the way out: eviction is only
+    // half the relocation story — a house that stops sheltering must start
+    // again once it lands, or a homeless colonist evicted by a move would
+    // never recover without a SECOND, unrelated free bed opening elsewhere.
+    const save = { ...initialSave(), workers: [], stockpile: { berries: 100_000 }, nextEntityId: 100 };
+    const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
+    const ids = getPrepResource(prep, IdCounter);
+    const house = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: 5, row: 3, relocatingTicks: 0 });
+    const houseId = house.getComponent(Building)!.id;
+    spawnColonist(prep, ids, { id: 1, ageTicks: BALANCE.lifeBands.matureTicks });
+    const world = await prep.prepareRun();
+    const step = () => stepTick(world);
+    const snap = () => world.getResource(SnapshotStore).latest!;
+    await step();
+    expect(snap().colonists[0].homeId).toBe(houseId); // precondition: housed first
+
+    // hypot(10,8) = 12.8 tiles -> relocationTicks floors/ceils to 13.
+    enqueue(world, { type: 'moveBuilding', buildingId: houseId, to: { col: 15, row: 11 } });
+    await step(); // tick 1 of 13: evicted (see the test above)
+    expect(snap().colonists[0].homeId).toBeNull();
+
+    for (let i = 0; i < 12; i++) await step(); // ride out the remaining 12 charged ticks
+    expect(snap().buildings.find((b) => b.id === houseId)!.relocatingTicks).toBe(0); // landed
+    expect(snap().colonists[0].homeId).toBe(houseId); // rehomed the same tick it lands
+    expect(snap().homeless).toBe(0);
+    expect(snap().buildings.find((b) => b.id === houseId)!.occupants).toBe(1);
+  });
+
+  it('evicts the highest-id resident first when a house holds more than its current beds allow', async () => {
+    // Spec 4.5: a save can legitimately carry more residents than a
+    // retuned houseBeds currently permits, and the load principle clamps
+    // rather than rejects. Ascending id is the deterministic tie-break —
+    // spawned in a SHUFFLED order so entity-creation order and colonist id
+    // order disagree: a rehome that walked entity order (or Map/Set
+    // iteration order) instead of sorting by id would evict a different
+    // colonist than id 5, the numerically highest.
+    const save = { ...initialSave(), workers: [], stockpile: { berries: 100_000 }, nextEntityId: 100 };
+    const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
+    const ids = getPrepResource(prep, IdCounter);
+    const house = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: 5, row: 3, relocatingTicks: 0 });
+    const houseId = house.getComponent(Building)!.id;
+    expect(BALANCE.houseBeds).toBe(4); // fixture precondition: exactly one resident over capacity below
+    for (const id of [3, 1, 5, 2, 4]) {
+      spawnColonist(prep, ids, { id, ageTicks: BALANCE.lifeBands.matureTicks, homeId: houseId });
+    }
+    const world = await prep.prepareRun();
+    await stepTick(world);
+
+    const snap = world.getResource(SnapshotStore).latest!;
+    for (const id of [1, 2, 3, 4]) expect(snap.colonists.find((c) => c.id === id)!.homeId).toBe(houseId);
+    expect(snap.colonists.find((c) => c.id === 5)!.homeId).toBeNull(); // the highest id is displaced
+    expect(snap.homeless).toBe(1);
+    expect(snap.buildings.find((b) => b.id === houseId)!.occupants).toBe(BALANCE.houseBeds);
+  });
+
+  it('makes a demolished house homeless immediately, not next tick', async () => {
+    const save = { ...initialSave(), workers: [], stockpile: { berries: 100_000 }, nextEntityId: 100 };
+    const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
+    const ids = getPrepResource(prep, IdCounter);
+    const house = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: 5, row: 3, relocatingTicks: 0 });
+    const houseId = house.getComponent(Building)!.id;
+    spawnColonist(prep, ids, { id: 1, ageTicks: BALANCE.lifeBands.matureTicks });
+    const world = await prep.prepareRun();
+    const step = () => stepTick(world);
+    await step();
+    expect(world.getResource(SnapshotStore).latest!.colonists[0].homeId).toBe(houseId);
+
+    enqueue(world, { type: 'demolishBuilding', buildingId: houseId });
+    await step();
+    expect(world.getResource(SnapshotStore).latest!.colonists[0].homeId).toBeNull();
+  });
+
+  // PopulationSystem runs before ProductionSystem (ALL_SYSTEMS order), and
+  // ProductionSystem is what decrements Relocation.ticksLeft. So on the tick
+  // ticksLeft counts down from 1 to 0 — the tick the house actually lands —
+  // rehome sees it BEFORE that decrement, still reading 1. Reading `> 0`
+  // there would misclassify a house on its landing tick as still relocating,
+  // evicting residents rehome would immediately be entitled to re-admit next
+  // tick anyway: a one-tick, self-correcting eviction that is pure display
+  // noise (or, worse, a lasting contradiction if the player is paused right
+  // then). This pins the fix at the exact boundary: a one-tile move costs
+  // exactly one relocation tick (relocationTicks' floor-of-one), so the same
+  // tick that starts the move is also the tick it lands.
+  it('keeps a colonist housed through the one tick a short relocation both starts and lands on', async () => {
+    const save = { ...initialSave(), workers: [], stockpile: { berries: 100_000 }, nextEntityId: 100 };
+    const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
+    const ids = getPrepResource(prep, IdCounter);
+    const house = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: 5, row: 3, relocatingTicks: 0 });
+    const houseId = house.getComponent(Building)!.id;
+    spawnColonist(prep, ids, { id: 1, ageTicks: BALANCE.lifeBands.matureTicks });
+    const world = await prep.prepareRun();
+    const step = () => stepTick(world);
+    const snap = () => world.getResource(SnapshotStore).latest!;
+    await step();
+    expect(snap().colonists[0].homeId).toBe(houseId); // precondition: actually housed first
+
+    // One tile away: relocationTicks floors distance-scaled cost at 1, so this
+    // relocation starts and lands on the very same tick.
+    enqueue(world, { type: 'moveBuilding', buildingId: houseId, to: { col: 6, row: 3 } });
+    await step();
+    expect(snap().buildings.find((b) => b.id === houseId)!.relocatingTicks).toBe(0); // already landed
+    expect(snap().colonists[0].homeId).toBe(houseId);   // never evicted
+    expect(snap().homeless).toBe(0);
+    expect(snap().buildings.find((b) => b.id === houseId)!.occupants).toBe(1);
   });
 });

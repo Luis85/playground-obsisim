@@ -76,6 +76,11 @@ export const BALANCE = {
    * the opening has a free bed and the second house is the first growth
    * decision the player makes. */
   houseBeds: 4,
+  /** Work power multiplier for a colonist with nowhere to live. Equal to
+   * commute.floor (spec 4): homelessness is exactly as bad as the worst
+   * possible commute, so the player has one number to beat. Task 7 adds the
+   * content test pinning the two together. */
+  homelessFactor: 0.5,
 } as const;
 
 /**
@@ -97,14 +102,23 @@ export function colonistEfficiency(hunger: number): number {
 
 /**
  * One worker's contribution to its building's work power: efficiency, multiplied
- * while tool coverage lasts. Lives here beside colonistEfficiency because two
- * callers derive it from different sources — ProductionSystem from live
- * components during a tick, buildEntitySections from ColonistFacts. While the
- * expression existed in both places they could drift, and the drift is invisible
- * on inspection: the UI would report a work power the simulation never used.
+ * while tool coverage lasts, multiplied again by where the worker lives.
+ * Lives here beside colonistEfficiency because two callers derive it from
+ * different sources — ProductionSystem from live components during a tick,
+ * buildEntitySections from ColonistFacts. While the expression existed in both
+ * places they could drift, and the drift is invisible on inspection: the UI
+ * would report a work power the simulation never used.
+ *
+ * `placementFactor` defaults to 1 (no penalty) rather than requiring every
+ * caller to pass it: Task 6 has exactly two callers that need anything other
+ * than 1 (ProductionSystem and buildEntitySections, both applying
+ * BALANCE.homelessFactor to a homeless worker), and a default keeps every
+ * other computation — and every fixture that builds a worker with no notion
+ * of housing — unaffected. Task 7 replaces the binary homeless/housed value
+ * both of those callers pass with the full commute factor.
  */
-export function workerWorkPower(efficiency: number, toolTicks: number): number {
-  return efficiency * (toolTicks > 0 ? BALANCE.toolMultiplier : 1);
+export function workerWorkPower(efficiency: number, toolTicks: number, placementFactor = 1): number {
+  return efficiency * (toolTicks > 0 ? BALANCE.toolMultiplier : 1) * placementFactor;
 }
 
 export const STARTING_STOCK: Partial<Record<ResourceId, number>> = {

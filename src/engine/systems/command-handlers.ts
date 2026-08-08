@@ -7,9 +7,9 @@ import { autoPlacePosition, isTileBuildable, relocationTicks, type TileRef } fro
 import { BALANCE } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
 import { RESOURCES, RESOURCE_IDS } from '../content/resources';
-import { Building, HaulTrip, JobAssignment, OutputBuffer, Position, Relocation, WorkerSlots } from '../components';
+import { Building, HaulTrip, Home, JobAssignment, OutputBuffer, Position, Relocation, WorkerSlots } from '../components';
 import { buildingComponents, colonistComponents } from '../spawn';
-import type { IdCounter, NoticeBoard, RemovalLedger, SimClock, Stockpile, WorldMap } from '../resources';
+import type { IdCounter, NoticeBoard, PendingChanges, RemovalLedger, SimClock, Stockpile, WorldMap } from '../resources';
 
 // One small handler per command type (the complexity gate is why they live
 // here and not inline in the system's run function). Notice doctrine:
@@ -30,6 +30,7 @@ export interface BuildingRow {
 export interface WorkerRow {
   job: JobAssignment;
   trip: HaulTrip;
+  home: Home;
   stage: LifeStage;
 }
 
@@ -50,6 +51,7 @@ export interface CommandContext {
   spawn: (...components: object[]) => void;
   claimedTiles: TileRef[];
   removals: RemovalLedger;
+  pending: PendingChanges;
   remove: (entity: Readonly<IEntity>) => void;
   /** Buildings demolished earlier in this same drain: removal is deferred to
    * the post-step sync, so queries still see them — every lookup must not. */
@@ -218,8 +220,14 @@ export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Com
   // gone.
   const lost = bufferLossText(found.buffer.amounts);
   found.buffer.amounts.clear();
-  for (const { job, trip } of ctx.workers) {
+  // Read BEFORE the loop below nulls every matching home: this counts exactly
+  // who the demolition displaces, for the notice.
+  const displaced = ctx.workers.filter(({ home }) => home.buildingId === command.buildingId).length;
+  for (const { job, trip, home } of ctx.workers) {
     if (job.buildingId === command.buildingId) job.buildingId = null;
+    // The house is gone now, not at the post-step sync — rehome would
+    // otherwise leave its residents nominally housed for one more tick.
+    if (home.buildingId === command.buildingId) home.buildingId = null;
     // Spec §2.8: the trip cancels now, riding the same-tick demolishedIds
     // machinery, rather than lazily when the hauler reaches a tile with nothing
     // on it — up to 13 ticks later, all of them spent booked to a building the
@@ -228,14 +236,24 @@ export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Com
     // destroy the load (mirrors handleMoveBuilding's guard below).
     if (trip.phase === 'outbound' && trip.targetId === command.buildingId) trip.reset();
   }
+  // Colonists spawned EARLIER THIS TICK are not in ctx.workers — the query
+  // cannot see them until the post-step sync — so a nomad welcomed before
+  // this demolition would keep a homeId pointing at the building being
+  // removed. The autosave at the end of the tick would then serialize a
+  // dangling reference, and the v5 load guard would refuse the save.
+  for (const { home } of ctx.pending.arrivals) {
+    if (home.buildingId === command.buildingId) home.buildingId = null;
+  }
   ctx.remove(found.entity);
   ctx.demolishedIds.add(command.buildingId);
+  ctx.pending.demolished.add(command.buildingId);
   ctx.removals.dirty = true;
   // A zero-units clause would be noise on the common case, so the empty
   // buffer keeps the plain wording rather than gaining an empty ", lost."
-  const notice = lost === ''
+  let notice = lost === ''
     ? `Demolished the ${def.name} — cost refunded.`
     : `Demolished the ${def.name} — cost refunded, ${lost} lost.`;
+  if (displaced > 0) notice += ` — ${displaced} colonist(s) now homeless.`;
   ctx.notices.succeed(notice);
 }
 

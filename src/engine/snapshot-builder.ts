@@ -6,7 +6,7 @@ import { stageOf } from '../shared/population';
 import { BALANCE, workerWorkPower } from './content/balance';
 import { batchOutputUnits, BUILDINGS } from './content/buildings';
 import {
-  Age, Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Colonist,
+  Age, Building, Efficiency, HaulTrip, Home, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Colonist,
   WorkerSlots,
 } from './components';
 
@@ -47,6 +47,9 @@ export interface EntitySections {
   buildings: BuildingSnapshot[];
   population: number;
   idleAdults: number;
+  homeless: number;
+  beds: { total: number; occupied: number };
+  demographics: { children: number; adults: number; elders: number };
 }
 
 /**
@@ -96,9 +99,12 @@ export function buildEntitySections(workers: readonly ColonistFacts[], buildings
     if (w.buildingId === null) continue;
     const tooled = w.toolTicks > 0;
     staffCount.set(w.buildingId, (staffCount.get(w.buildingId) ?? 0) + 1);
+    // Mirrors ProductionSystem's own placementFactor read, so the displayed
+    // workPower never disagrees with the power the simulation actually used.
+    const placementFactor = w.homeId === null ? BALANCE.homelessFactor : 1;
     powerByBuilding.set(
       w.buildingId,
-      (powerByBuilding.get(w.buildingId) ?? 0) + workerWorkPower(w.efficiency, w.toolTicks),
+      (powerByBuilding.get(w.buildingId) ?? 0) + workerWorkPower(w.efficiency, w.toolTicks, placementFactor),
     );
     if (tooled) tooledByBuilding.set(w.buildingId, (tooledByBuilding.get(w.buildingId) ?? 0) + 1);
   }
@@ -108,9 +114,16 @@ export function buildEntitySections(workers: readonly ColonistFacts[], buildings
       id: w.id, hunger: w.hunger, starvingTicks: w.starvingTicks, efficiency: w.efficiency, buildingId: w.buildingId,
       hauling: w.hauling, haulTargetId: w.haulTargetId, haulPhase: w.haulPhase, haulTicksLeft: w.haulTicksLeft,
       haulLegTicks: w.haulLegTicks, haulPickupCol: w.haulPickupCol, haulPickupRow: w.haulPickupRow,
-      carrying: w.carrying, toolTicks: w.toolTicks, ageTicks: w.ageTicks, stage: w.stage,
+      carrying: w.carrying, toolTicks: w.toolTicks, ageTicks: w.ageTicks, stage: w.stage, homeId: w.homeId,
     }))
     .sort((a, b) => a.id - b.id);
+
+  // Occupancy read from who points at a house, never counted on the building
+  // itself — see Home's own doc comment on why that pair must never disagree.
+  const occupantsByHouse = new Map<number, number>();
+  for (const c of workerSnaps) {
+    if (c.homeId !== null) occupantsByHouse.set(c.homeId, (occupantsByHouse.get(c.homeId) ?? 0) + 1);
+  }
 
   const buildingSnaps: BuildingSnapshot[] = buildings
     .map((b) => {
@@ -133,7 +146,7 @@ export function buildEntitySections(workers: readonly ColonistFacts[], buildings
         buffered: b.buffered,
         relocatingTicks: b.relocatingTicks,
         beds: def.beds,
-        occupants: 0, // Task 6 fills this from Home
+        occupants: occupantsByHouse.get(b.id) ?? 0,
       };
     })
     .sort((a, b) => a.id - b.id);
@@ -145,6 +158,26 @@ export function buildEntitySections(workers: readonly ColonistFacts[], buildings
     // Children and elders are not idle, they are ineligible — counting them
     // here would advertise labour the assign command will refuse.
     idleAdults: workerSnaps.filter((c) => c.stage === 'adult' && c.buildingId === null && !c.hauling).length,
+    homeless: workerSnaps.filter((c) => c.homeId === null).length,
+    beds: {
+      // Relocating houses are excluded, because homing and both admission
+      // gates already exclude them. Counting their beds here would let the
+      // Population view read "0 / 4 free" while the engine refuses a nomad
+      // for want of a bed — the display contradicting the rule it exists to
+      // explain. `total` therefore means beds you can actually sleep in
+      // tonight, which is the only number a player can act on.
+      total: buildingSnaps.filter((b) => b.state !== 'relocating').reduce((sum, b) => sum + b.beds, 0),
+      occupied: buildingSnaps.reduce((sum, b) => sum + b.occupants, 0),
+    },
+    // Spec 2.13's stage counts. Aggregated here beside the other cross-entity
+    // sections rather than recomputed in each view: the Population view and
+    // the Dashboard both show them, and two independent reductions over the
+    // roster are two chances to disagree about what a stage is.
+    demographics: {
+      children: workerSnaps.filter((c) => c.stage === 'child').length,
+      adults: workerSnaps.filter((c) => c.stage === 'adult').length,
+      elders: workerSnaps.filter((c) => c.stage === 'elder').length,
+    },
   };
 }
 
@@ -161,6 +194,7 @@ export function buildEntitySections(workers: readonly ColonistFacts[], buildings
  */
 export function colonistFactsOf(
   worker: Colonist, hunger: Hunger, job: JobAssignment, efficiency: Efficiency, coverage: ToolCoverage, trip: HaulTrip, age: Age,
+  home: Home,
 ): ColonistFacts {
   return {
     id: worker.id,
@@ -171,6 +205,7 @@ export function colonistFactsOf(
     hauling: job.hauling,
     ageTicks: age.ticks,
     stage: stageOf(age.ticks, BALANCE.lifeBands),
+    homeId: home.buildingId,
     // Published on BOTH legs now: the layout interpolates the dot along the
     // camp<->building line, so a returning hauler still needs to know which
     // building it is walking back from (OBS-4-09). `trip.targetId` survives the
@@ -279,6 +314,7 @@ export function gatherEntityFacts(world: IRuntimeWorld): EntityFacts {
         entity.getComponent(ToolCoverage)!,
         entity.getComponent(HaulTrip)!,
         entity.getComponent(Age)!,
+        entity.getComponent(Home)!,
       ));
     }
   }

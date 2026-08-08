@@ -2,8 +2,8 @@ import { Actions, createSystem, queryComponents, Read, ReadEntity, ReadResource,
 import type { Command } from '../../shared/commands';
 import { stageOf } from '../../shared/population';
 import { BALANCE } from '../content/balance';
-import { Age, Building, HaulTrip, JobAssignment, OutputBuffer, Position, Relocation, WorkerSlots } from '../components';
-import { CommandQueue, IdCounter, NoticeBoard, RemovalLedger, SimClock, Stockpile, WorldMap } from '../resources';
+import { Age, Building, HaulTrip, Home, JobAssignment, OutputBuffer, Position, Relocation, WorkerSlots } from '../components';
+import { CommandQueue, IdCounter, NoticeBoard, PendingChanges, RemovalLedger, SimClock, Stockpile, WorldMap } from '../resources';
 import {
   type CommandContext,
   handleAssignHauler, handleAssignWorker, handleConstructBuilding, handleDemolishBuilding, handleMoveBuilding, handleRecruitWorker,
@@ -33,6 +33,7 @@ export const CommandSystem = () => createSystem({
   ids: WriteResource(IdCounter),
   notices: WriteResource(NoticeBoard),
   removals: WriteResource(RemovalLedger),
+  pending: WriteResource(PendingChanges),
   map: ReadResource(WorldMap),
   buildings: queryComponents({
     entity: ReadEntity(), building: Read(Building), slots: Read(WorkerSlots), position: Write(Position), buffer: Write(OutputBuffer),
@@ -40,17 +41,17 @@ export const CommandSystem = () => createSystem({
   }),
   // JobAssignment alone identifies a worker entity — the Colonist component
   // added nothing the handlers read.
-  workers: queryComponents({ job: Write(JobAssignment), trip: Write(HaulTrip), age: Read(Age) }),
+  workers: queryComponents({ job: Write(JobAssignment), trip: Write(HaulTrip), age: Read(Age), home: Write(Home) }),
 })
   .withName('CommandSystem')
   // Handlers live in command-handlers.ts, one small function per command
   // type; this run function only materializes the query rows into a context
   // and drains the queue through dispatchCommand.
-  .withRunFunction(({ actions, queue, clock, stockpile, ids, notices, removals, map, buildings, workers }) => {
+  .withRunFunction(({ actions, queue, clock, stockpile, ids, notices, removals, pending, map, buildings, workers }) => {
     const ctx: CommandContext = {
       clock, stockpile, ids, notices, map,
       buildings: [...buildings.iter()].map(({ entity, building, slots, position, buffer, relocation }) => ({ entity, building, slots, position, buffer, relocation })),
-      workers: [...workers.iter()].map(({ job, trip, age }) => ({ job, trip, stage: stageOf(age.ticks, BALANCE.lifeBands) })),
+      workers: [...workers.iter()].map(({ job, trip, age, home }) => ({ job, trip, home, stage: stageOf(age.ticks, BALANCE.lifeBands) })),
       spawn: (...components) => {
         let entity = actions.commands.buildEntity();
         for (const component of components) entity = entity.with(component);
@@ -58,6 +59,7 @@ export const CommandSystem = () => createSystem({
       },
       claimedTiles: [],
       removals,
+      pending,
       remove: (entity) => actions.commands.removeEntity(entity),
       demolishedIds: new Set<number>(),
     };

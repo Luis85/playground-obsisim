@@ -2,7 +2,7 @@ import { createSystem, queryComponents, Read, ReadResource, WriteResource } from
 import type { ResourceStats } from '../../shared/snapshot';
 import type { ResourceId } from '../../shared/content-types';
 import { RESOURCES, RESOURCE_IDS } from '../content/resources';
-import { Age, Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Colonist, WorkerSlots } from '../components';
+import { Age, Building, Efficiency, HaulTrip, Home, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Colonist, WorkerSlots } from '../components';
 import { NoticeBoard, SimClock, SnapshotStore, StatsHistory, Stockpile, WorldMap } from '../resources';
 import type { BuildingFacts, ColonistFacts } from '../snapshot-builder';
 import { buildEntitySections, buildingFactsOf, colonistFactsOf } from '../snapshot-builder';
@@ -20,7 +20,7 @@ export const SnapshotSystem = () => createSystem({
   }),
   workers: queryComponents({
     worker: Read(Colonist), hunger: Read(Hunger), job: Read(JobAssignment), efficiency: Read(Efficiency), coverage: Read(ToolCoverage), trip: Read(HaulTrip),
-    age: Read(Age),
+    age: Read(Age), home: Read(Home),
   }),
 })
   .withName('SnapshotSystem')
@@ -31,8 +31,8 @@ export const SnapshotSystem = () => createSystem({
     // Fact shape lives in the shared mappers, never here: this system only
     // supplies component instances from its queries (see snapshot-builder).
     const workerFacts: ColonistFacts[] = [];
-    for (const { worker, hunger, job, efficiency, coverage, trip, age } of workers.iter()) {
-      workerFacts.push(colonistFactsOf(worker, hunger, job, efficiency, coverage, trip, age));
+    for (const { worker, hunger, job, efficiency, coverage, trip, age, home } of workers.iter()) {
+      workerFacts.push(colonistFactsOf(worker, hunger, job, efficiency, coverage, trip, age, home));
     }
 
     const buildingFacts: BuildingFacts[] = [];
@@ -40,7 +40,9 @@ export const SnapshotSystem = () => createSystem({
       buildingFacts.push(buildingFactsOf(building, slots, production, position, buffer, relocation));
     }
 
-    const { colonists: workerSnaps, buildings: buildingSnaps, population, idleAdults } = buildEntitySections(workerFacts, buildingFacts);
+    const {
+      colonists: workerSnaps, buildings: buildingSnaps, population, idleAdults, homeless, beds, demographics,
+    } = buildEntitySections(workerFacts, buildingFacts);
 
     const stockpileStats = {} as Record<ResourceId, ResourceStats>;
     let colonyWealth = 0;
@@ -67,6 +69,9 @@ export const SnapshotSystem = () => createSystem({
       colonyWealth,
       population,
       idleAdults,
+      homeless,
+      beds,
+      demographics,
       buildings: buildingSnaps,
       colonists: workerSnaps,
       notices: notices.takeAll(),

@@ -55,6 +55,19 @@ export class JobAssignment {
   constructor(public buildingId: number | null = null, public hauling = false) {}
 }
 
+/**
+ * The house this colonist sleeps in, or null when homeless. Occupancy is read
+ * from these references rather than counted on the building, so a house and
+ * its residents cannot disagree about who lives there.
+ *
+ * Saved (v5): where a colonist lives is a decision, not derived state — the
+ * homing phase would re-derive *a* valid assignment on load, but not
+ * necessarily the same one, which would silently reshuffle commutes.
+ */
+export class Home {
+  constructor(public buildingId: number | null = null) {}
+}
+
 export class Efficiency {
   constructor(public value = 1) {}
 }

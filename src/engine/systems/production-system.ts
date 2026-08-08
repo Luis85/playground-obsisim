@@ -2,7 +2,7 @@ import { createSystem, queryComponents, Read, Write, WriteResource } from 'sim-e
 import type { RecipeDef, ResourceId } from '../../shared/content-types';
 import { BALANCE, workerWorkPower } from '../content/balance';
 import { batchOutputUnits, BUILDINGS } from '../content/buildings';
-import { Building, Efficiency, JobAssignment, OutputBuffer, Production, Relocation, ToolCoverage } from '../components';
+import { Building, Efficiency, Home, JobAssignment, OutputBuffer, Production, Relocation, ToolCoverage } from '../components';
 import { ProductionLedger, Stockpile } from '../resources';
 
 /**
@@ -47,22 +47,40 @@ function completeBatches(
   if (!production.batchActive) production.progress = 0; // stalled: don't bank effort
 }
 
+/**
+ * Every currently-assigned worker's contribution to its building's work
+ * power this tick, summed by building id. Extracted out of the run function
+ * purely to keep ITS OWN complexity (fallow scores CRAP per function, which
+ * reads cyclomatic, not just cognitive) under the gate — same principle as
+ * startBatch/completeBatches already being split out above.
+ */
+function sumWorkPower(
+  workers: Iterable<{ job: JobAssignment; efficiency: Efficiency; coverage: ToolCoverage; home: Home }>,
+): Map<number, number> {
+  const powerByBuilding = new Map<number, number>();
+  for (const { job, efficiency, coverage, home } of workers) {
+    if (job.buildingId === null) continue;
+    // Homelessness costs exactly what the worst possible commute costs
+    // (BALANCE.homelessFactor) — Task 7 replaces this binary read with the
+    // full commute factor.
+    const placementFactor = home.buildingId === null ? BALANCE.homelessFactor : 1;
+    const contribution = workerWorkPower(efficiency.value, coverage.remainingTicks, placementFactor);
+    powerByBuilding.set(job.buildingId, (powerByBuilding.get(job.buildingId) ?? 0) + contribution);
+  }
+  return powerByBuilding;
+}
+
 export const ProductionSystem = () => createSystem({
   stockpile: WriteResource(Stockpile),
   ledger: WriteResource(ProductionLedger),
   buildings: queryComponents({
     building: Read(Building), production: Write(Production), buffer: Write(OutputBuffer), relocation: Write(Relocation),
   }),
-  workers: queryComponents({ job: Read(JobAssignment), efficiency: Read(Efficiency), coverage: Read(ToolCoverage) }),
+  workers: queryComponents({ job: Read(JobAssignment), efficiency: Read(Efficiency), coverage: Read(ToolCoverage), home: Read(Home) }),
 })
   .withName('ProductionSystem')
   .withRunFunction(({ stockpile, ledger, buildings, workers }) => {
-    const powerByBuilding = new Map<number, number>();
-    for (const { job, efficiency, coverage } of workers.iter()) {
-      if (job.buildingId === null) continue;
-      const contribution = workerWorkPower(efficiency.value, coverage.remainingTicks);
-      powerByBuilding.set(job.buildingId, (powerByBuilding.get(job.buildingId) ?? 0) + contribution);
-    }
+    const powerByBuilding = sumWorkPower(workers.iter());
 
     // Isolated so the run function itself stays a flat dispatch loop.
     const advanceBatches = (building: Building, production: Production, buffer: OutputBuffer, workPower: number) => {

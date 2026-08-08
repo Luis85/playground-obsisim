@@ -729,9 +729,14 @@ describe('live-world projections agree', () => {
   // covered by default like everything else — see the dedicated round-trip
   // test below for the property this list can't express (per-colonist values,
   // not merely "the field exists").
+  // `homeId` sits here for the identical reason `starvingTicks` once did: real
+  // decision state (Task 6's Home component — its own doc comment says
+  // "Saved (v5)"), just not yet saved. Task 6 stops short of the save-format
+  // bump; a future task adds SavedColonist.homeId and this graduates out of
+  // the list, the same way starvingTicks did.
   const DERIVED = [
     'efficiency', 'stage', 'haulTargetId', 'haulPhase', 'haulTicksLeft', 'haulLegTicks', 'haulPickupCol', 'haulPickupRow',
-    'carrying',
+    'carrying', 'homeId',
   ] as const;
 
   function persisted(workers: readonly object[]): Record<string, unknown>[] {

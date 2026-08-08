@@ -89,6 +89,8 @@ export interface ColonistSnapshot {
   ageTicks: number;
   /** Derived from ageTicks, never stored: only an adult can be assigned. */
   stage: LifeStage;
+  /** The house this colonist sleeps in, or null when homeless. */
+  homeId: number | null;
 }
 
 export interface ResourceStats {
@@ -118,6 +120,15 @@ export interface Snapshot {
   colonyWealth: number;
   population: number;
   idleAdults: number;
+  /** Colonists with no home (ColonistSnapshot.homeId === null). Nobody is
+   * homeless is the same condition rehome uses to decide a bed is free. */
+  homeless: number;
+  /** Beds actually available tonight, and how many are occupied. Excludes
+   * relocating houses from `total` — see buildEntitySections. */
+  beds: { total: number; occupied: number };
+  /** Spec 2.13's stage counts, aggregated once beside population/idleAdults
+   * rather than recomputed per view. */
+  demographics: { children: number; adults: number; elders: number };
   buildings: BuildingSnapshot[];
   colonists: ColonistSnapshot[];
   /** Per-tick feedback (success and rejection alike); cleared after each snapshot. */

@@ -11,7 +11,7 @@ import { BALANCE, STARTING_STOCK, STARTING_COLONISTS, colonistEfficiency } from 
 import { BUILDINGS } from './content/buildings';
 import { RESOURCES, RESOURCE_IDS } from './content/resources';
 import {
-  Age, Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Colonist,
+  Age, Building, Efficiency, HaulTrip, Home, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Colonist,
   WorkerSlots,
 } from './components';
 import { isBuffersValid, isBuildingsValid, isIdsValid, isPositionsValid, isStockpileValid, isColonistsValid } from './save-guard';
@@ -20,7 +20,8 @@ import {
   clampedToolTicks, colonistComponents,
 } from './spawn';
 import {
-  CommandQueue, IdCounter, NoticeBoard, ProductionLedger, RemovalLedger, SimClock, SnapshotStore, StatsHistory, Stockpile, WorldMap,
+  CommandQueue, IdCounter, NoticeBoard, PendingChanges, ProductionLedger, RemovalLedger, SimClock, SnapshotStore, StatsHistory, Stockpile,
+  WorldMap,
 } from './resources';
 import type { BuildingFacts, ColonistFacts } from './snapshot-builder';
 import { buildEntitySections, gatherEntityFacts } from './snapshot-builder';
@@ -87,7 +88,7 @@ export function getPrepResource<T extends object>(prep: IPreptimeWorld, type: ne
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors sim-ecs's own TTypeProto<T> constructor-parameter shape exactly
 export const COMPONENT_TYPES: (new (...args: any[]) => object)[] = [
   Building, WorkerSlots, Production, Colonist, Hunger, JobAssignment, Efficiency, ToolCoverage, Position, OutputBuffer, HaulTrip,
-  Relocation, Age,
+  Relocation, Age, Home,
 ];
 
 export function initialSave(): SaveGameV4 {
@@ -222,7 +223,7 @@ export function spawnColonist(
   ids: IdCounter,
   opts: {
     id?: number; hunger?: number; buildingId?: number | null; hauling?: boolean; efficiency?: number; toolTicks?: number;
-    ageTicks?: number; starvingTicks?: number;
+    ageTicks?: number; starvingTicks?: number; homeId?: number | null;
   } = {},
 ): IEntity {
   return attach(prep, colonistComponents({ ...opts, id: opts.id ?? ids.take() }));
@@ -296,6 +297,7 @@ export function buildColonyPrepWorld(
     store,
     new WorldMap(save.map.cols, save.map.rows),
     new RemovalLedger(),
+    new PendingChanges(),
   ];
   const registry = new Map<object, object>();
   for (const instance of instances) {
@@ -351,6 +353,11 @@ function buildInitialSnapshot(save: SaveGameV4): Snapshot {
       carrying: 0, carryingResource: null,
       toolTicks,
       ageTicks, stage: stageOf(ageTicks, BALANCE.lifeBands),
+      // Not yet part of any save record (Task 6 stops short of the v5 bump):
+      // every restored colonist seeds as homeless, exactly like the entity
+      // colonistComponents actually spawns for the same record — the next
+      // tick's rehome phase re-derives a real assignment.
+      homeId: null,
     };
   });
   const buildingFacts: BuildingFacts[] = save.buildings.map((saved) => {
@@ -370,7 +377,7 @@ function buildInitialSnapshot(save: SaveGameV4): Snapshot {
       relocatingTicks: clampedRelocation(saved.relocatingTicks ?? 0),
     };
   });
-  const { colonists, buildings, population, idleAdults } = buildEntitySections(workerFacts, buildingFacts);
+  const { colonists, buildings, population, idleAdults, homeless, beds, demographics } = buildEntitySections(workerFacts, buildingFacts);
   const stockpile = {} as Record<ResourceId, ResourceStats>;
   let colonyWealth = 0;
   for (const resourceId of RESOURCE_IDS) {
@@ -387,6 +394,9 @@ function buildInitialSnapshot(save: SaveGameV4): Snapshot {
     colonyWealth,
     population,
     idleAdults,
+    homeless,
+    beds,
+    demographics,
     buildings,
     colonists,
     notices: [],

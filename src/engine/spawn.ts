@@ -3,7 +3,7 @@ import { BALANCE, MAX_AGE_TICKS } from './content/balance';
 import { BUILDINGS } from './content/buildings';
 import { RESOURCE_IDS } from './content/resources';
 import {
-  Age, Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Colonist,
+  Age, Building, Efficiency, HaulTrip, Home, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Colonist,
   WorkerSlots,
 } from './components';
 
@@ -125,6 +125,7 @@ export interface ColonistSpec {
   efficiency?: number;
   toolTicks?: number;
   ageTicks?: number;
+  homeId?: number | null;
 }
 
 /** Every component a worker needs, in one list. Order is not significant. */
@@ -145,5 +146,11 @@ export function colonistComponents(spec: ColonistSpec): object[] {
     // every pre-Task-9 save reload and every existing test's fixture colonist —
     // silently ineligible for the assign command this same task adds.
     new Age(clampedAge(spec.ageTicks ?? BALANCE.startingAgeTicks)),
+    // Not yet part of any save record (Task 6 stops short of the v5 bump), so
+    // every restored colonist reads as homeless until PopulationSystem's
+    // rehome phase re-derives an assignment on the next tick. Runtime commands
+    // (recruitWorker) never pass homeId either — a nomad's own arrival gate
+    // is Task 8's, not this constructor's.
+    new Home(spec.homeId ?? null),
   ];
 }

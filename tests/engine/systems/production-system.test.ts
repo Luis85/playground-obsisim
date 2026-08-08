@@ -20,7 +20,12 @@ async function setup(defId: BuildingDefId, stock: Partial<Record<ResourceId, num
   const ids = getPrepResource(prep, IdCounter);
   const building: IEntity = spawnBuilding(prep, ids, { defId, progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 0 });
   const buildingId = building.getComponent(Building)!.id;
-  for (let i = 0; i < workerCount; i++) spawnColonist(prep, ids, { buildingId, toolTicks: workerToolTicks });
+  // Housed at the same building it works: this file is exercising batch
+  // arithmetic in isolation (systems: [ProductionSystem], no PopulationSystem
+  // to ever rehome anyone), the same way it already holds hunger and age off
+  // to the side — homelessness is Task 6's third orthogonal axis, and an
+  // unhoused worker here would halve every power figure these tests pin.
+  for (let i = 0; i < workerCount; i++) spawnColonist(prep, ids, { buildingId, toolTicks: workerToolTicks, homeId: buildingId });
   const world = await prep.prepareRun();
   return { world, building, stockpile: world.getResource(Stockpile) };
 }
@@ -66,6 +71,29 @@ describe('ProductionSystem', () => {
     expect(building.getComponent(OutputBuffer)!.total()).toBe(1);
   });
 
+  it('a homeless worker contributes at BALANCE.homelessFactor work power', async () => {
+    // Unlike setup() (see its own comment), this worker is spawned with no
+    // homeId at all — genuinely homeless, not the housed default every other
+    // test in this file uses. forester needs 3 worker-ticks; a homeless
+    // worker contributes only BALANCE.homelessFactor (0.5) power/tick, so the
+    // batch needs 6 ticks rather than the 3 "produces raw output" pins for an
+    // otherwise-identical housed worker — the discriminating half of the
+    // pair.
+    const save = initialSave();
+    save.workers = [];
+    save.stockpile = {};
+    const prep = buildColonyPrepWorld({ save, systems: [ProductionSystem] });
+    const ids = getPrepResource(prep, IdCounter);
+    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 0 });
+    const buildingId = building.getComponent(Building)!.id;
+    spawnColonist(prep, ids, { buildingId }); // no homeId: homeless by default
+    const world = await prep.prepareRun();
+    for (let i = 0; i < 5; i++) await world.step(); // 5 x 0.5 = 2.5 < 3
+    expect(building.getComponent(OutputBuffer)!.total()).toBe(0);
+    await world.step(); // 6 x 0.5 = 3
+    expect(building.getComponent(OutputBuffer)!.total()).toBe(1);
+  });
+
   it('only covered workers get the multiplier (mixed staffing)', async () => {
     const save = initialSave();
     save.workers = [];
@@ -75,8 +103,10 @@ describe('ProductionSystem', () => {
     // one covered worker (1.5) + one bare worker (1.0) = 2.5 power/tick, forester batch is 3
     const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 0 });
     const buildingId = building.getComponent(Building)!.id;
-    spawnColonist(prep, ids, { buildingId, toolTicks: 1000 });
-    spawnColonist(prep, ids, { buildingId });
+    // Housed (see setup()'s comment above): this test isolates the tool
+    // multiplier, not homelessness.
+    spawnColonist(prep, ids, { buildingId, toolTicks: 1000, homeId: buildingId });
+    spawnColonist(prep, ids, { buildingId, homeId: buildingId });
     const world = await prep.prepareRun();
     await world.step(); // 2.5 < 3: batch not done
     expect(building.getComponent(OutputBuffer)!.total()).toBe(0);
@@ -112,8 +142,12 @@ describe('ProductionSystem', () => {
     const ids = getPrepResource(prep, IdCounter);
     const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 0 });
     const buildingId = building.getComponent(Building)!.id;
-    spawnColonist(prep, ids, { buildingId, toolTicks: 1000 }); // exercises the tooled branch
-    spawnColonist(prep, ids, { buildingId }); // and the untooled one
+    // Housed (see setup()'s comment above): both derivations must agree on
+    // the SAME placementFactor too, but that agreement is not what this test
+    // is pinning — an unhoused worker here would just halve both sides at
+    // once and hide a real mismatch as easily as it would hide none.
+    spawnColonist(prep, ids, { buildingId, toolTicks: 1000, homeId: buildingId }); // exercises the tooled branch
+    spawnColonist(prep, ids, { buildingId, homeId: buildingId }); // and the untooled one
     const world = await prep.prepareRun();
     await world.step();
 

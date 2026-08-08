@@ -15,7 +15,11 @@ describe('SnapshotSystem', () => {
     const ids = getPrepResource(prep, IdCounter);
     const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 1.5, batchActive: true, col: 4, row: 1, relocatingTicks: 0 });
     const buildingId = building.getComponent(Building)!.id;
-    spawnColonist(prep, ids, { buildingId, hunger: 20, toolTicks: 10 });
+    // Housed at the same building it works: this test is about staffing,
+    // progress and tool coverage, not homelessness — an unhoused worker here
+    // would halve workPower via Task 6's placementFactor and desync the
+    // 1.5-power assertion below from what the comment says it means.
+    spawnColonist(prep, ids, { buildingId, hunger: 20, toolTicks: 10, homeId: buildingId });
     spawnColonist(prep, ids, { ageTicks: BALANCE.lifeBands.matureTicks }); // idle adult
     getPrepResource(prep, NoticeBoard).reject('test notice');
 

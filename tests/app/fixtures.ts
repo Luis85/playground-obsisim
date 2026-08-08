@@ -21,7 +21,9 @@ export function stockedWith(stocks: Partial<Record<ResourceId, number>> = {}): R
 export function makeSnapshot(overrides: Partial<Snapshot> = {}): Snapshot {
   return {
     tick: 0, lastRecruitTick: -30, map: { cols: 24, rows: 16 }, stockpile: stockedWith(), colonyWealth: 0,
-    population: 0, idleAdults: 0, buildings: [], colonists: [], notices: [],
+    population: 0, idleAdults: 0, homeless: 0, beds: { total: 0, occupied: 0 },
+    demographics: { children: 0, adults: 0, elders: 0 },
+    buildings: [], colonists: [], notices: [],
     ...overrides,
   };
 }
@@ -43,7 +45,7 @@ export function makeWorker(id: number, overrides: Partial<ColonistSnapshot> = {}
     id, hunger: 0, starvingTicks: 0, efficiency: 1, buildingId: null, hauling: false,
     haulTargetId: null, haulPhase: 'idle', haulTicksLeft: 0,
     haulLegTicks: 0, haulPickupCol: 0, haulPickupRow: 0,
-    carrying: 0, toolTicks: 0, ageTicks: BALANCE.lifeBands.matureTicks, stage: 'adult',
+    carrying: 0, toolTicks: 0, ageTicks: BALANCE.lifeBands.matureTicks, stage: 'adult', homeId: null,
     ...overrides,
   };
 }

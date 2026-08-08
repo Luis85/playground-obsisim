@@ -1594,13 +1594,21 @@ build the shelter rows in the context:
           beds: BUILDINGS[building.defId].beds,
           col: position.col,
           row: position.row,
-          // `> 1`, not `> 0`: ProductionSystem decrements this countdown
-          // LATER in the same tick, so a house sitting at 1 has landed by the
-          // time SnapshotSystem publishes. Excluding it here would advertise a
-          // `housing` building with free beds while its former residents stay
-          // homeless until the next tick — indefinitely, if the player is
-          // paused. This means "still relocating once this tick is done".
-          relocating: relocation.ticksLeft > 1,
+          // `> 0`: is this house in transit RIGHT NOW? A countdown of 1 means
+          // it is still being carried this tick — ProductionSystem decrements
+          // afterwards, and skips its work in the same pass — so it lands at
+          // the END of this tick, not the start.
+          //
+          // `> 1` was tried and is wrong: it homes colonists into a house that
+          // has not landed, and sumWorkPower then grants them the full housed
+          // factor during a charged relocation tick, shortening every housing
+          // penalty by one tick. The cost of `> 0` is milder and accepted: the
+          // snapshot published at the end of the landing tick shows an empty
+          // house with free beds while its former residents are still
+          // homeless, until the next tick homes them. That reads oddly but is
+          // ACCURATE at the instant it is published, and a mis-timed penalty
+          // would not be.
+          relocating: relocation.ticksLeft > 0,
         })),
 ```
 

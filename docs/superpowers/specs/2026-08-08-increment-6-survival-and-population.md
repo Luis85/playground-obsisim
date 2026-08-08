@@ -170,14 +170,25 @@ A colonist's contribution is scaled by the walk between where they sleep and
 where they work:
 
 ```
-commuteTicks  = ticksForDistance(distance(home, workplace), haulTilesPerTick)
-commuteFactor = max(commuteFloor, 1 - commuteTicks * commutePenaltyPerTick)
+commuteTiles  = euclidean(home, workplace)
+charged       = max(0, commuteTiles - commuteFreeTiles)
+commuteFactor = max(commuteFloor, 1 - charged * commutePenaltyPerTile)
 ```
 
-- `ticksForDistance` and the Euclidean measure are **the existing shared law**
-  (`src/shared/placement.ts`, `src/shared/haul.ts`), reused rather than
-  reinvented, so "walking costs what walking costs" is one idea the player
-  learns once — the same argument increment 5 §2.3 made for relocation.
+- The **Euclidean measure** is the existing shared one (`haulDistance`'s
+  family in `src/shared/placement.ts`), so the cost model still agrees with the
+  line the renderer draws — the argument increment 5 §2.3 made for relocation.
+- **It charges tiles, not `ticksForDistance`.** That reuse is the obvious move
+  and it is wrong here. `ticksForDistance` floors at 1 *by design*, so that no
+  placement is ever free and no haul costs nothing. Applied to a commute, that
+  floor means every colonist in the game pays the minimum penalty permanently —
+  including the balance harness's crews, which would shift every number
+  increment 5 measured for a reason that has nothing to do with hauling, in
+  breach of §1.3. A commute genuinely *can* be free: you live next door.
+- **`commuteFreeTiles` is what makes it free.** Living within that radius of
+  your job costs nothing; the penalty ramps beyond it. This is also the better
+  rule on its own terms — it rewards siting homes near the work they serve
+  without taxing the unavoidable first few tiles.
 - **A hauler's workplace is `CAMP_TILE`.** A hauler's job starts and ends at
   the store, so that is the tile their commute is measured to.
 - An unassigned adult has no workplace and no commute; they contribute nothing
@@ -211,8 +222,16 @@ view, and throttles growth by construction: it falls as population rises.
 
 `ResourceDef.edible` already exists and is what the weighting iterates.
 
-With a population of 0, `mealsPerHead` is treated as unbounded rather than a
-division by zero — see §2.7.
+**Each gate divides by the population it would produce, not the current one:**
+a birth by `population + 1`, a nomad by `population + 1`. That is the honest
+question ("can the store feed them once they are here?"), and it removes what
+would otherwise be a special case with a hole in it. Dividing by the *current*
+population needs `population === 0` treated as unbounded to avoid a division by
+zero — and unbounded satisfies any threshold, so a colony with an **empty
+store** and one standing bed could still welcome a nomad, flatly contradicting
+§2.7's claim that a colony with no food is unrecoverable. Dividing by
+`population + 1` is never zero, needs no special case, and makes the last
+survivor's death leave a colony that genuinely cannot restart without food.
 
 ### 2.6 Births
 
@@ -220,8 +239,17 @@ A birth spawns a colonist at `Age 0`. All four conditions are required:
 
 1. a free bed exists (equivalently, by §2.3, nobody is homeless);
 2. at least **two adults** are alive;
-3. `mealsPerHead >= BALANCE.birthFoodPerHead`;
-4. `BALANCE.birthCooldownTicks` have passed since the last birth.
+3. `mealsPerHead >= BALANCE.birthFoodPerHead` (per §2.5, over `population + 1`);
+4. `BALANCE.birthCooldownTicks` have passed since `SimClock.lastBirthTick`.
+
+**`lastBirthTick` is a new persisted clock field, exactly like
+`lastRecruitTick`.** Without it the cooldown has no state to reconstruct from
+on load, so reopening a save written just after a birth either grants a free
+extra birth immediately or blocks births that should be due — save-and-reload
+would change population growth, which is the same defect §2.10 rejects for
+`starvingTicks`. It is saved at the top level of the save, not per colonist,
+and its fresh-colony sentinel is `-BALANCE.birthCooldownTicks` (matching
+`lastRecruitTick`'s).
 
 The two-adult rule is a token nod to reproduction without modelling families,
 couples, or genders — all explicitly out of scope (§2.15). Its real function is
@@ -267,9 +295,9 @@ predicate** (§2.8), so the two cannot disagree.
 
 **Nomads work at population 0.** Beds and food outlive their owners, so a
 wiped-out colony with food still in the store can be restarted by welcoming
-someone. This is deliberate: it removes a divide-by-zero special case *and*
-means the only unrecoverable state is one the player can see coming (no food,
-no beds), with the existing reset button as the floor.
+someone — and, because §2.5's gate divides by `population + 1`, one *with an
+empty store* cannot. The unrecoverable state is exactly the one the player
+could see coming, with the existing reset button as the floor.
 
 ### 2.8 The shared population law
 
@@ -280,12 +308,21 @@ readable by both sides of the seam.
 | export | purpose |
 | --- | --- |
 | `LifeStage` | `'child' \| 'adult' \| 'elder'` |
-| `stageOf(ageTicks)` | the band, derived |
-| `spreadFor(id, range)` | the id-derived jitter primitive (§2.12) |
-| `lifespanFor(id)` | `lifespanYears + spreadFor(id, lifespanSpreadYears)` |
+| `stageOf(ageTicks, bands)` | the band, derived |
+| `spreadFor(id, range, salt)` | the id-derived jitter primitive (§2.12) |
+| `lifespanFor(id, bands)` | **a lifespan in TICKS** (see below) |
 | `commuteFactor(...)` | §2.4 |
 | `mealsInStore(...)`, `mealsPerHead(...)` | §2.5 |
 | `birthBlocker(...)`, `nomadBlocker(...)` | the failed gate, or `null` |
+
+**Everything age-shaped in this module is in ticks, never years.** Years are a
+*display and authoring* unit only: `BALANCE` declares bands in years because
+that is how a human reasons about them, and converts once. `Age.ticks` is
+compared against a `lifespanFor` that also returns ticks — a `lifespanFor`
+returning years would kill colonists around tick 65 instead of year 65, i.e.
+before they ever mature, and the types would not catch it because both are
+`number`. The conversion happens where the constants are declared, and nothing
+downstream ever sees a year.
 
 The blocker predicates exist because the UI must *explain* a disabled button
 and `src/shared/**` may not import the engine — the same constraint that put
@@ -336,20 +373,36 @@ the literal migration would load every colonist homeless and halve their output
 on open — taxing a save whose player could not have prepared for it. Instead
 the migration:
 
-- gives every v4 worker an adult age, staggered by id (§2.12), `homeId: null`,
-  and `starvingTicks: 0`;
+- gives every v4 worker an adult age, staggered by id (§2.12), and
+  `starvingTicks: 0`;
 - places **the same starter house a fresh colony gets** (§2.11), using the
   existing deterministic auto-placement pattern so a v4 colony that already
-  built on that tile gets the next one instead.
+  built on that tile gets the next one instead;
+- **writes `homeId` for the first `houseBeds` colonists by ascending id**,
+  leaving the rest `null`.
 
-That puts a migrated colony in exactly a new colony's position: housed up to
-`houseBeds`, and building for the rest. There is precedent for deterministic
+That last step is not redundant with §2.9's homing phase. `buildColonyPrepWorld`
+seeds the initial snapshot **directly from the save**, and a restored engine is
+paused until the player advances it — so a migration that wrote every `homeId`
+as null would present a wholly homeless colony, at `homelessFactor` work power,
+for as long as the player leaves it paused, contradicting acceptance criterion 7.
+Writing the assignment into the save makes the record self-consistent, and the
+homing phase then has nothing to do on the first tick rather than silently
+repairing the save's own output. It also mirrors what v1→v2 already does:
+migrations synthesise the state the new mechanic needs rather than deferring it
+to the first tick.
+
+The result puts a migrated colony in exactly a new colony's position: housed up
+to `houseBeds`, and building for the rest. There is precedent for deterministic
 fabrication at migration — v1→v2 invented every building's position — and the
 alternative is a silent penalty on load.
 
-Homing on the next tick then fills the beds, so a migrated colony's first
-`houseBeds` colonists (by id) are housed and any beyond that are homeless until
-the player builds.
+The save also gains a top-level `lastBirthTick` (§2.6). A fresh colony seeds it
+to `-BALANCE.birthCooldownTicks`, matching `lastRecruitTick`'s sentinel, but the
+**migration writes `0`** — migrations may not import `BALANCE`, and they do not
+need to: any migrated colony is already past tick `birthCooldownTicks`, so `0`
+and the sentinel are indistinguishable in effect. It is guarded exactly as
+`lastRecruitTick` is (a safe integer, not ahead of `tick`).
 
 ### 2.11 The opening
 
@@ -365,7 +418,8 @@ it, the pressure starts legibly instead: you are housed, you have one spare
 bed, and the fourth colonist is the first thing you must build for.
 
 Starting colonists' ages are **staggered by id** (§2.12) around
-`BALANCE.startingAgeYears`, so the three founders do not die in the same year.
+`BALANCE.startingAgeYears`, under a salt distinct from the lifespan draw's, so
+the three founders do not die in the same year.
 
 ### 2.12 Determinism without randomness
 
@@ -375,18 +429,30 @@ earlier: the founders die together, a migrated v4 colony dies together, and a
 run of births spaced by `birthCooldownTicks` produces deaths spaced identically
 — visibly mechanical, and a demographic wave with no width to it.
 
-One primitive, `spreadFor(id, range)`, derives a jitter from the entity id: a
-multiplicative hash of the id, reduced modulo `2 * range + 1`, minus `range`.
-It is pure, uniform over the range, stable across save/load (ids are already
-unique and persisted), and needs no seed in the save. `lifespanFor` is its only
-interesting caller; the same primitive staggers starting ages (§2.11) and nomad
-arrival ages (§2.7), so there is one hash in the codebase rather than three.
+One primitive, `spreadFor(id, range, salt)`, derives a jitter from the entity
+id: a multiplicative hash of the id mixed with the salt, reduced modulo
+`2 * range + 1`, minus `range`. It is pure, uniform over the range, stable
+across save/load (ids are already unique and persisted), and needs no seed in
+the save. It has three callers: lifespan, starting age (§2.11), and nomad
+arrival age (§2.7) — one hash in the codebase rather than three.
+
+**The salt is load-bearing, not decoration.** Founders are created together and
+get both their starting age and their lifespan from this primitive. With one
+unsalted spread `s` per id, every founder's remaining life is
+`(lifespanYears + s) − (startingAgeYears + s)` = a constant — the two jitters
+cancel exactly and the founders die on the same tick anyway, which is the
+precise outcome §2.11 introduced staggered ages to avoid. Each call site
+therefore passes its own salt (`SALT.lifespan`, `SALT.startingAge`,
+`SALT.arrivalAge`), so the three draws are independent.
 
 It must be exported and unit-tested for **range** (never outside
 `[-range, +range]`), **stability** (same id, same answer, across a
-serialize/restore round trip), and **distribution** (a run of consecutive ids
-does not collapse onto one value, nor alternate between two — the failure mode
-a weak hash produces, and one a range test alone passes happily).
+serialize/restore round trip), **distribution** (a run of consecutive ids does
+not collapse onto one value, nor alternate between two — the failure mode a
+weak hash produces, and one a range test alone passes happily), and
+**decorrelation** (over a run of ids, `spreadFor(id, r, A) − spreadFor(id, r, B)`
+is not constant — the exact defect the salt exists to prevent, and one that
+range, stability, and distribution tests all pass).
 
 ### 2.13 Snapshot and surfaces
 
@@ -432,7 +498,15 @@ unnecessary it is dropped — but the baseline is not loosened either way.
     unit test of `commuteFactor`.
 - **Increment 5's existing balance assertions must still pass unchanged**
   (§1.3). They are the regression net proving this increment did not move the
-  haul gradient.
+  haul gradient. Making that true requires one change to the instrument: the
+  harness must **house its colonists** — the crew beside their building, the
+  haulers beside the camp — so that commute is not a confound. This is the same
+  move, for the same reason, as increment 5 §2.1 seeding a large berry stock so
+  hunger is not one: the harness measures logistics, so everything that is not
+  logistics is held at its neutral value. With `commuteFreeTiles` at 2, an
+  adjacent home scores exactly 1.0, so the existing numbers are preserved by
+  construction rather than by luck — and the task that lands commute must
+  verify that claim by running the increment-5 assertions before and after.
 - Every new behaviour is **mutation-tested**: break the feature, confirm the
   named test fails, restore. Assertions must discriminate — fixture values
   chosen so that binding to a neighbouring field changes the result
@@ -486,13 +560,17 @@ unnecessary it is dropped — but the baseline is not loosened either way.
 6. The nomad button is disabled with the reason naming the failed gate (no bed
    / not enough food / cooldown), and the engine rejects the command with the
    same reason when dispatched anyway.
-7. A save written mid-starvation reopens with `starvingTicks` intact; a v4 save
+7. A save written mid-starvation reopens with `starvingTicks` intact, and one
+   written just after a birth reopens still on its birth cooldown; a v4 save
    loads as adults with a starter house placed and its first four colonists
-   housed; the v1→v5 chain still runs.
+   already homed **in the seeded snapshot, before any tick runs**; the v1→v5
+   chain still runs.
 8. `npm run balance:report` prints the population scenario, and increment 5's
    distance/hauler assertions still pass with their existing thresholds.
 9. `renderer.ts` is under the 500-line LOC gate without a baseline entry.
-10. The README gains an Increment 6 section describing what a player can now
+10. A colony at population 0 with beds standing and an **empty** store cannot
+    welcome a nomad; the same colony with food in the store can.
+11. The README gains an Increment 6 section describing what a player can now
     do, and §4 of this document is rewritten with measured values rather than
     the starting points below.
 
@@ -519,7 +597,8 @@ outcome "validated, unchanged", which is a legitimate result.
 | `birthFoodPerHead` | 6 meals | ~3 years of food per colonist. |
 | `nomadFoodPerHead` | 10 meals | ~5 years — strictly above the birth gate, per §2.7. |
 | `birthCooldownTicks` | 50 | Half a year between births, colony-wide. |
-| `commutePenaltyPerTick` | 0.04 | A 1-tick walk costs 4%; the map's longest commute reaches the floor. |
+| `commuteFreeTiles` | 2 | Living next door to your job is free — and, per §2.4, this is what keeps increment 5's measurements from shifting under a floor they never paid. |
+| `commutePenaltyPerTile` | 0.03 | Distance 10 costs ~24%; the floor arrives around distance 19, well inside the default map but only for genuinely bad siting. |
 | `commuteFloor` | 0.5 | The worst possible housing halves a colonist, never zeroes them. |
 | `homelessFactor` | 0.5 | Equal to the commute floor: being homeless is exactly as bad as the worst commute, so the player has one number to beat. |
 | `houseBeds` | 4 | Three founders plus one spare, so the opening has a free bed and the second house is the first growth decision. |

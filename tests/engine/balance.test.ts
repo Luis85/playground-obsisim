@@ -205,3 +205,99 @@ describe('population balance', () => {
     expect(housedOnSite.delivered / housedAtCamp.delivered).toBeGreaterThan(1.05);
   }, 120000);
 });
+
+// 'chain', not a drip: spec section 4's first question is about a working food
+// chain, and a drip supplies food regardless of how many adults are alive —
+// holding constant the exact feedback loop under test.
+//
+// TWO huts, not four. With four the chain out-produces 48 beds and the roomy
+// run below becomes a housing plateau wearing a demographic disguise, which
+// answers nothing. Two gatherers' huts is four slots, and the huts are placed
+// BEFORE the houses so that both runs in a comparison get the same hut tiles
+// whatever their house count (see placeColony).
+const chain = { startingAdults: 4, foodPerTick: 'chain' as const, huts: 2, haulers: 2 };
+const LONG = { ticks: 12000, sampleEvery: 200 };
+const ROOMY_HOUSES = 12;
+const populationOf = (s: { children: number; adults: number; elders: number }) => s.children + s.adults + s.elders;
+const peakOf = (r: { samples: { children: number; adults: number; elders: number }[] }) =>
+  Math.max(...r.samples.map(populationOf));
+
+describe('population balance — the long curve', () => {
+  it('a colony feeding itself is capped by its FOOD CHAIN, overshoots that cap, and starves back down', async () => {
+    // 12,000 ticks and generous housing, so FOOD and demographics — not bed
+    // count — decide the curve. This is the minimum that answers the question,
+    // not a round number: founders start at matureTicks and the first
+    // generation dies between 5,700 and 7,300, so this spans a whole life plus
+    // enough of the next generation to tell an oscillation from a plateau.
+    const roomy = await runPopulationScenario({ ...chain, ...LONG, houses: ROOMY_HOUSES });
+    const capped = await runPopulationScenario({ ...chain, ...LONG, houses: 1 });
+    const roomyPeak = peakOf(roomy);
+
+    // It really grew, rather than merely surviving: a colony that never breeds
+    // would sit at startingAdults and satisfy every relationship below by
+    // being flat.
+    expect(roomyPeak).toBeGreaterThan(chain.startingAdults * 4);
+    // The roomy run is only a control if BEDS never bind. 12 houses is 48 beds
+    // and one birth per 50 ticks fills the 44 openings in ~2,200 of 12,000 —
+    // so if food turned out to sustain that many, this "roomy" curve would be a
+    // housing plateau, and Task 13 could not tell stability from a cap.
+    // Measured: the ceiling is 41 against 48 beds.
+    expect(roomyPeak).toBeLessThan(ROOMY_HOUSES * BALANCE.houseBeds);
+
+    // And the cap is BEDS in the control, not food: one house is four beds for
+    // four founders, so spareBeds is 0 from the first tick and never recovers.
+    expect(capped.births).toBe(0);
+    expect(capped.births).toBeLessThan(roomy.births);
+    expect(capped.deathsByStarvation).toBe(0);
+
+    // THE FINDING, and the reason this test is not called "plateaus". The
+    // roomy colony does not settle at its food ceiling: the birth gate tests
+    // meals in STORE per head, which a young colony banks faster than it eats,
+    // so births continue past the population the chain can feed. The store then
+    // drains, births stop for a whole maturity span, and when the one
+    // synchronised cohort retires there is nobody behind it. Measured: peak 41
+    // at tick ~2,600, extinct by tick ~8,000, 24 starvation deaths.
+    expect(roomy.deathsByStarvation).toBeGreaterThan(0);
+    expect(populationOf(roomy.samples.at(-1)!)).toBeLessThan(roomyPeak / 2);
+  }, 300000);
+
+  it('that ceiling is the chain PRODUCING, not the harness under-hauling it', async () => {
+    // Without this the previous test cannot tell a balance property from a
+    // fixture choice: `haulers: 2` is the harness's number, and a colony whose
+    // berries pile up in a hut buffer would plateau for a reason that says
+    // nothing about birthFoodPerHead. Same colony, one extra hauler, and the
+    // ceiling has to be unchanged.
+    //
+    // 3,500 ticks, not 12,000: the peak is reached around 2,600 and this
+    // compares peaks, not endings. Two full-length runs would cost a minute to
+    // measure a number both would have settled long before.
+    const short = { ticks: 3500, sampleEvery: 100, houses: ROOMY_HOUSES };
+    const twoHaulers = await runPopulationScenario({ ...chain, ...short });
+    const threeHaulers = await runPopulationScenario({ ...chain, ...short, haulers: 3, startingAdults: 5 });
+    // Not `toBe`: the third hauler is one more mouth and one fewer pair of
+    // hands in a hut, so an exact tie would be a coincidence. Within a couple
+    // of colonists is the claim — haulage is not what is holding the colony
+    // down.
+    expect(Math.abs(peakOf(threeHaulers) - peakOf(twoHaulers))).toBeLessThanOrEqual(3);
+  }, 180000);
+
+  it('a birth burst becomes a retirement bulge one generation later', async () => {
+    const long = await runPopulationScenario({ houses: 6, startingAdults: 2, foodPerTick: 8, ticks: 9000, sampleEvery: 100 });
+    const peakChildren = long.samples.reduce((best, s, i) => (s.children > long.samples[best].children ? i : best), 0);
+    const peakElders = long.samples.reduce((best, s, i) => (s.elders > long.samples[best].elders ? i : best), 0);
+
+    // Non-vacuity FIRST. With no births at all, every sample ties at
+    // children === 0, peakChildren stays pinned at index 0, and the two
+    // FOUNDERS becoming elders around tick 4,500 clears the gap threshold on
+    // their own — so the test would pass without a single birth cohort ever
+    // reaching old age, which is the entire behaviour its name claims.
+    expect(long.births).toBeGreaterThan(0);
+    expect(long.samples[peakChildren].children).toBeGreaterThan(0);
+    // And the elder peak must belong to that cohort, not to the founders:
+    // it has to arrive at least a maturity-to-retirement span after the
+    // children peaked, and outnumber the founders who were alive at tick 0.
+    expect(long.samples[peakElders].elders).toBeGreaterThan(2);
+    const gapTicks = long.samples[peakElders].tick - long.samples[peakChildren].tick;
+    expect(gapTicks).toBeGreaterThan(BALANCE.lifeBands.retireTicks * 0.6);
+  }, 180000);
+});

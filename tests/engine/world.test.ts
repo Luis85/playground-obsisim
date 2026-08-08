@@ -10,8 +10,10 @@ import { buildSaveFromWorld } from '../../src/engine/game-engine';
 import { CommandSystem } from '../../src/engine/systems/command-system';
 import { HaulSystem } from '../../src/engine/systems/haul-system';
 import { SnapshotSystem } from '../../src/engine/systems/snapshot-system';
+import type { SavedColonist, SaveGameV5 } from '../../src/shared/save';
 import { isSaveGameV4, MAX_SAVED_ENTITIES } from '../../src/shared/save';
 import { MAX_MAP, relocationTicks } from '../../src/shared/placement';
+import { stepTick } from './fixtures';
 
 describe('initialSave', () => {
   it('matches the spec starting state', () => {
@@ -597,6 +599,94 @@ describe('isLoadableSave', () => {
     const written = engine.serialize();
     expect(written.buildings.find((b) => b.id === 5)!.buffer.wood).toBe(BALANCE.outputBufferCap); // clamped, not the original over-cap amount
     expect(isLoadableSave(written)).toBe(true);
+  });
+});
+
+// Two states a save can arrive in that a BALANCE retune genuinely produces, so
+// the load principle clamps them instead of orphaning the save (contrast the
+// four reference rules above, which no engine version could write). Both are
+// repaired at LOAD rather than on the first tick: a restored engine starts
+// paused, so a repair that waits for tick 1 is a state the player looks at —
+// and acts on — for as long as they leave it there.
+describe('balance-coupled states a save is repaired into, not rejected for', () => {
+  // Well clear of the roster's ids below, so a fixture can add colonists
+  // without ever colliding with it.
+  const FORESTER_ID = 50;
+
+  /** initialSave() plus a producer, and exactly the roster the caller names. */
+  function saveWith(colonists: Partial<SavedColonist>[]): SaveGameV5 {
+    const save = initialSave();
+    save.buildings.push({
+      id: FORESTER_ID, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0,
+    });
+    save.colonists = colonists.map((overrides, index) => ({
+      id: index + 2, hunger: 0, buildingId: null, toolTicks: 0, hauling: false,
+      ageTicks: BALANCE.startingAgeTicks, homeId: 1, starvingTicks: 0, ...overrides,
+    }));
+    save.nextEntityId = FORESTER_ID + 1;
+    return save;
+  }
+
+  it('evicts down to capacity when a save puts more colonists in a house than it has beds', async () => {
+    // What a houseBeds retune from 5 to 4 produces. Rejecting would orphan the
+    // save for a balance change; the load principle says clamp, not refuse.
+    const save = saveWith(Array.from({ length: BALANCE.houseBeds + 1 }, () => ({})));
+    expect(isLoadableSave(save)).toBe(true); // accepted, then repaired
+    const world = await createColonyWorld(save);
+
+    // BEFORE any tick. Leaving the repair to rehome would display five
+    // residents in a four-bed house, zero homeless, and work power based on
+    // assignments the engine is about to revoke, for as long as the player
+    // leaves it paused.
+    const seeded = world.getResource(SnapshotStore).latest!;
+    expect(seeded.buildings.find((b) => b.beds > 0)!.occupants).toBe(BALANCE.houseBeds);
+    expect(seeded.homeless).toBe(1);
+    // Ascending colonist id fills first, so the HIGHEST id is the one
+    // displaced — rehome's own rule, which is what makes reload stable.
+    expect(seeded.colonists.filter((c) => c.homeId === null).map((c) => c.id)).toEqual([BALANCE.houseBeds + 2]);
+
+    await stepTick(world);
+    const snap = world.getResource(SnapshotStore).latest!;
+    expect(snap.buildings.find((b) => b.beds > 0)!.occupants).toBe(BALANCE.houseBeds);
+    expect(snap.homeless).toBe(1); // the surplus, not silently over capacity
+  });
+
+  it('a retune that raises matureTicks does not seed a child as staff', async () => {
+    // Only a retune can produce this record, so it is repaired rather than
+    // rejected. Asserted BEFORE any tick: standDownNonAdults would fix it on
+    // tick 1, and a paused engine never reaches tick 1.
+    const save = saveWith([{ ageTicks: BALANCE.lifeBands.matureTicks - 1, buildingId: FORESTER_ID }]);
+    const world = await createColonyWorld(save);
+
+    const seeded = world.getResource(SnapshotStore).latest!;
+    expect(seeded.colonists[0].buildingId).toBeNull();
+    const forester = seeded.buildings.find((b) => b.id === FORESTER_ID)!;
+    expect(forester.workers).toBe(0);
+    expect(forester.workPower).toBe(0);
+  });
+
+  it('a retune that lowers retireTicks does not seed an elder still hauling', async () => {
+    // The other end of the same band, and the other field the repair clears:
+    // `hauling` would otherwise leave a retired colonist counted as a working
+    // hauler in the seeded snapshot, at full carry capacity.
+    const save = saveWith([{ ageTicks: BALANCE.lifeBands.retireTicks, hauling: true }]);
+    const world = await createColonyWorld(save);
+
+    const seeded = world.getResource(SnapshotStore).latest!;
+    expect(seeded.colonists[0].stage).toBe('elder'); // fixture precondition
+    expect(seeded.colonists[0].hauling).toBe(false);
+  });
+
+  it('leaves a working adult exactly as the save wrote them', async () => {
+    // The control both repairs are measured against: same fixture, same
+    // building, an adult — nothing is cleared and nobody is evicted.
+    const save = saveWith([{ buildingId: FORESTER_ID }, { hauling: true }]);
+    const world = await createColonyWorld(save);
+
+    const seeded = world.getResource(SnapshotStore).latest!;
+    expect(seeded.colonists[0].buildingId).toBe(FORESTER_ID);
+    expect(seeded.colonists[1].hauling).toBe(true);
+    expect(seeded.homeless).toBe(0);
   });
 });
 

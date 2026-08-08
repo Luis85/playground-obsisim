@@ -100,6 +100,13 @@ export interface SavedColonist {
   /** Ticks alive (save v5). Optional here — a v4 save predates the field, so
    * it is read as `?? BALANCE.startingAgeTicks` until save v5 makes it required. */
   ageTicks?: number;
+  /** Consecutive ticks pinned at max hunger (save v5). Optional here for the
+   * same reason `ageTicks` is — a v4 save predates the field, so it is read
+   * as `?? 0` until save v5 makes it required. It is saved for the same
+   * reason `relocatingTicks` is (increment 5 §2.4): a penalty already
+   * incurred, and omitting it would let save-and-reload cancel a starvation
+   * in progress. */
+  starvingTicks?: number;
 }
 
 export interface SaveGameV1 {

@@ -78,13 +78,40 @@ function isValidAgeTicks(ageTicks: number | undefined): boolean {
   return ageTicks === undefined || (Number.isSafeInteger(ageTicks) && ageTicks >= 0);
 }
 
+/**
+ * starvingTicks is OPTIONAL for the identical reason ageTicks is: a v4 save
+ * predates the field until save v5 makes it required, and `undefined` means
+ * exactly that — colonistComponents reads it as 0, a clean starvation clock,
+ * same as every pre-this-change save. Present, it must be a non-negative safe
+ * integer — structural, like ageTicks — not bounds-checked against the
+ * CURRENT BALANCE.starvationDeathTicks: that is balance-coupled and clamped
+ * at spawn instead (clampedStarving), so a save written under a longer
+ * starvationDeathTicks still loads.
+ */
+function isValidStarvingTicks(starvingTicks: number | undefined): boolean {
+  return starvingTicks === undefined || (Number.isSafeInteger(starvingTicks) && starvingTicks >= 0);
+}
+
+// Upper bound intentionally NOT checked against current BALANCE.hungerMax:
+// clamped to current balance at spawn instead (see spawnColonist), so a save
+// written under a higher balance value still loads. Split out, alongside
+// isValidToolTicks below, purely to keep isColonistRecordValid's own branch
+// count (and CRAP score) down — same principle as isValidAgeTicks.
+function isValidHunger(hunger: number): boolean {
+  return hunger >= 0 && Number.isFinite(hunger);
+}
+
+// Upper bound intentionally NOT checked against current BALANCE.toolDurationTicks,
+// same reasoning as isValidHunger above.
+function isValidToolTicks(toolTicks: number): boolean {
+  return Number.isSafeInteger(toolTicks) && toolTicks >= 0 && toolTicks <= MAX_SAVED_COUNTER;
+}
+
 function isColonistRecordValid(w: SaveGameV4['workers'][number], buildingIds: ReadonlySet<number>): boolean {
-  // Upper bounds intentionally NOT checked against current BALANCE.hungerMax /
-  // toolDurationTicks: those are clamped to current balance at spawn instead
-  // (see spawnColonist), so a save written under a higher balance value still loads.
-  if (!(w.hunger >= 0 && Number.isFinite(w.hunger))) return false;
-  if (!Number.isSafeInteger(w.toolTicks) || w.toolTicks < 0 || w.toolTicks > MAX_SAVED_COUNTER) return false;
+  if (!isValidHunger(w.hunger)) return false;
+  if (!isValidToolTicks(w.toolTicks)) return false;
   if (!isValidAgeTicks(w.ageTicks)) return false;
+  if (!isValidStarvingTicks(w.starvingTicks)) return false;
   if (w.buildingId === null) return true;
   // A worker is staffed XOR hauling, never both — handleAssignWorker refuses to
   // poach a hauler and handleAssignHauler refuses to poach a staffed worker, so

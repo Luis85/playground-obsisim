@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { Building, JobAssignment } from '../../../src/engine/components';
+import type { IRuntimeWorld } from 'sim-ecs';
+import { Building, Colonist, HaulTrip, JobAssignment } from '../../../src/engine/components';
 import { IdCounter, SnapshotStore, Stockpile } from '../../../src/engine/resources';
 import {
   ALL_SYSTEMS, buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist,
 } from '../../../src/engine/world';
 import { BALANCE } from '../../../src/engine/content/balance';
 import { lifespanFor } from '../../../src/shared/population';
+import type { ResourceId } from '../../../src/shared/content-types';
 import { stepTick } from '../fixtures';
 
 async function colonyWith(ages: { id: number; ageTicks: number; buildingId?: number | null }[]) {
@@ -111,5 +113,88 @@ describe('PopulationSystem — starvation', () => {
     await step();
     expect(me().starvingTicks).toBe(0);
     expect(me().hunger).toBe(0);
+  });
+});
+
+/**
+ * Point colonist `id`'s HaulTrip mid-return, `amount` of `resource` in hand —
+ * the shape `standDown` must bank when this colonist dies. `ticksLeft` is set
+ * above 1 so HaulSystem's own deposit (`ticksLeft -= 1; if (> 0) continue`)
+ * would not fire on the death tick either: the only route the load has to the
+ * stockpile, on that tick, is `standDown` itself.
+ */
+function sendHauling(world: IRuntimeWorld, id: number, resource: ResourceId, amount: number): void {
+  for (const entity of world.getEntities()) {
+    if (entity.getComponent(Colonist)?.id !== id) continue;
+    entity.getComponent(JobAssignment)!.hauling = true;
+    const trip = entity.getComponent(HaulTrip)!;
+    trip.phase = 'returning';
+    trip.resource = resource;
+    trip.amount = amount;
+    trip.ticksLeft = 5;
+    trip.legTicks = 5;
+  }
+}
+
+describe('PopulationSystem — standDown on death', () => {
+  // Both removers call standDown(ctx, row) before removing the entity,
+  // because sim-ecs defers the removal to the post-step sync: a colonist
+  // killed this tick is still visible to ProductionSystem and HaulSystem
+  // later in the SAME tick. standDown nulls the job, clears hauling, banks
+  // any carried load into the stockpile, and resets the trip. Nothing else
+  // in either remover performs those four things, so deleting the standDown
+  // call is otherwise invisible to the rest of the suite.
+
+  it("banks a starving hauler's carried load into the stockpile the tick they die", async () => {
+    const save = { ...initialSave(), workers: [], stockpile: {}, nextEntityId: 100 };
+    const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
+    const ids = getPrepResource(prep, IdCounter);
+    // One tick short of the death threshold, already pinned at max hunger:
+    // the next tick's HungerSystem run (empty store, nothing to eat) pushes
+    // starvingTicks to the cap and resolveStarvation fires that same tick.
+    spawnColonist(prep, ids, {
+      id: 1, ageTicks: BALANCE.lifeBands.matureTicks, hunger: BALANCE.hungerMax, starvingTicks: BALANCE.starvationDeathTicks - 1,
+    });
+    const world = await prep.prepareRun();
+    sendHauling(world, 1, 'wood', 6);
+
+    await stepTick(world);
+    const snapshot = world.getResource(SnapshotStore).latest!;
+    expect(snapshot.colonists.find((c) => c.id === 1)).toBeUndefined(); // dead
+    expect(snapshot.stockpile.wood.stock).toBe(6);                     // the load survived them
+  });
+
+  it("banks an aged-out hauler's carried load into the stockpile the tick they die", async () => {
+    const save = { ...initialSave(), workers: [], stockpile: {}, nextEntityId: 100 };
+    const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
+    const ids = getPrepResource(prep, IdCounter);
+    const span = lifespanFor(1, BALANCE.lifeBands);
+    spawnColonist(prep, ids, { id: 1, ageTicks: span - 1, hunger: 0 }); // one tick short of its own lifespan
+    const world = await prep.prepareRun();
+    sendHauling(world, 1, 'planks', 4);
+
+    await stepTick(world);
+    const snapshot = world.getResource(SnapshotStore).latest!;
+    expect(snapshot.colonists.find((c) => c.id === 1)).toBeUndefined(); // dead
+    expect(snapshot.stockpile.planks.stock).toBe(4);                   // the load survived them
+  });
+
+  it('gives a building no phantom tick of work from a colonist who dies of old age this tick', async () => {
+    const save = { ...initialSave(), workers: [], stockpile: {}, nextEntityId: 100 };
+    const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
+    const ids = getPrepResource(prep, IdCounter);
+    spawnBuilding(prep, ids, { id: 50, defId: 'forester', progress: 0, batchActive: false, col: 5, row: 3, relocatingTicks: 0 });
+    const span = lifespanFor(1, BALANCE.lifeBands);
+    // Full efficiency (hunger 0) and no tool coverage: work power is exactly
+    // 1, so a banked phantom tick is unambiguous — 0 with standDown, 1 without.
+    spawnColonist(prep, ids, { id: 1, ageTicks: span - 1, hunger: 0, buildingId: 50 });
+    const world = await prep.prepareRun();
+
+    await stepTick(world);
+    const snapshot = world.getResource(SnapshotStore).latest!;
+    expect(snapshot.colonists.find((c) => c.id === 1)).toBeUndefined(); // dead
+    const forester = snapshot.buildings.find((b) => b.id === 50)!;
+    expect(forester.progress).toBe(0);        // no contribution banked from beyond the grave
+    expect(forester.batchActive).toBe(false); // never even started
   });
 });

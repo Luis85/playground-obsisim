@@ -127,6 +127,32 @@ describe('isLoadableSave', () => {
     expect(isLoadableSave(withAge)).toBe(true);
   });
 
+  it('rejects a non-numeric, NaN, negative, or fractional starvingTicks (a corrupted save must not silently resume a starvation clock)', () => {
+    const nonNumeric = initialSave();
+    nonNumeric.workers[0].starvingTicks = 'abc' as never;
+    expect(isLoadableSave(nonNumeric)).toBe(false);
+    const nan = initialSave();
+    nan.workers[0].starvingTicks = Number.NaN;
+    expect(isLoadableSave(nan)).toBe(false);
+    const negative = initialSave();
+    negative.workers[0].starvingTicks = -1;
+    expect(isLoadableSave(negative)).toBe(false);
+    const fractional = initialSave();
+    fractional.workers[0].starvingTicks = 1.5;
+    expect(isLoadableSave(fractional)).toBe(false);
+  });
+
+  it('accepts starvingTicks omitted or present as a valid non-negative integer (a v4 save predates the field)', () => {
+    const withoutIt = initialSave();
+    // fixture precondition: genuinely absent, not merely undefined-valued —
+    // this is what makes the pair below discriminate on starvingTicks alone.
+    expect(Object.hasOwn(withoutIt.workers[0], 'starvingTicks')).toBe(false);
+    expect(isLoadableSave(withoutIt)).toBe(true);
+    const withIt = initialSave();
+    withIt.workers[0].starvingTicks = 40;
+    expect(isLoadableSave(withIt)).toBe(true);
+  });
+
   it('accepts and grandfathers balance-coupled values above CURRENT balance (spec 4.5: saves survive retuning)', () => {
     // hunger/toolTicks above current BALANCE were valid under a prior, higher
     // balance value; the guard no longer rejects them (spawnColonist clamps instead).
@@ -586,6 +612,30 @@ describe('createColonyWorld', () => {
     expect(isLoadableSave(written)).toBe(true);
   });
 
+  it('each colonist survives save -> restore with its own exact starvingTicks, not a shared value', async () => {
+    // Two distinct values on two distinct colonists: a bug that writes one
+    // hardcoded number, or wires the wrong colonist's field, could still
+    // satisfy a single-colonist assertion but not this pair.
+    const save = initialSave();
+    save.workers[0].starvingTicks = 40; // partway through the countdown
+    save.workers[1].starvingTicks = 0;  // never starved
+    expect(isLoadableSave(save)).toBe(true);
+
+    // The SEEDED snapshot (buildInitialSnapshot), read before any tick runs —
+    // proves the restore path, not SnapshotSystem's live query.
+    const world = await createColonyWorld(save);
+    const seeded = world.getResource(SnapshotStore).latest!;
+    expect(seeded.colonists.find((c) => c.id === save.workers[0].id)!.starvingTicks).toBe(40);
+    expect(seeded.colonists.find((c) => c.id === save.workers[1].id)!.starvingTicks).toBe(0);
+
+    // And the round trip back out, from the live entities (buildSaveFromWorld
+    // walks components, not the snapshot) — proves the live spawn path too.
+    const written = buildSaveFromWorld(world);
+    expect(written.workers.find((w) => w.id === save.workers[0].id)!.starvingTicks).toBe(40);
+    expect(written.workers.find((w) => w.id === save.workers[1].id)!.starvingTicks).toBe(0);
+    expect(isLoadableSave(written)).toBe(true);
+  });
+
   it('grandfathers overstaffed buildings from a save (spec 4.5: slots retuned down must not orphan saves)', async () => {
     const save = initialSave();
     const building = { id: 4, defId: 'forester' as const, progress: 0, batchActive: false, col: 4, row: 1, buffer: {}, relocatingTicks: 0 }; // 2 slots
@@ -674,14 +724,14 @@ describe('live-world projections agree', () => {
   // layout re-deriving a leg's length and a returning hauler's origin from the
   // building's LIVE tile, which desyncs once the building moves mid-leg
   // (OBS-5-01) — still HaulTrip, still never saved.
-  // `starvingTicks` differs from the rest of this list: it IS real persistent
-  // state (Hunger's own doc comment explains why — a save/reload must not
-  // cancel a starvation in progress), just not yet saved. SavedColonist gains
-  // it once save v5 lands; remove this entry then, rather than leaving a live
-  // fact permanently exempted the way the others above are.
+  // `starvingTicks` used to sit in this list too: real persistent state, just
+  // not yet saved. SavedColonist now carries it (mirroring ageTicks), so it is
+  // covered by default like everything else — see the dedicated round-trip
+  // test below for the property this list can't express (per-colonist values,
+  // not merely "the field exists").
   const DERIVED = [
     'efficiency', 'stage', 'haulTargetId', 'haulPhase', 'haulTicksLeft', 'haulLegTicks', 'haulPickupCol', 'haulPickupRow',
-    'carrying', 'starvingTicks',
+    'carrying',
   ] as const;
 
   function persisted(workers: readonly object[]): Record<string, unknown>[] {

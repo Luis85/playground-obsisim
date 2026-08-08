@@ -197,6 +197,12 @@ export function savedColonistOf(facts: ColonistFacts): SavedColonist {
     // on every save/reload, silently undoing however much of a lifespan it
     // had already lived.
     ageTicks: facts.ageTicks,
+    // Same reasoning as ageTicks: starvingTicks is a penalty already incurred
+    // (HungerSystem is its only writer), not recomputable from anything else,
+    // so dropping it here would let save-and-reload cancel a starvation in
+    // progress — exactly what relocatingTicks (increment 5 §2.4) exists to
+    // prevent for a moved building.
+    starvingTicks: facts.starvingTicks,
   };
 }
 

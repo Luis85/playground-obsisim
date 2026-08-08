@@ -16,8 +16,8 @@ import {
 } from './components';
 import { isBuffersValid, isBuildingsValid, isIdsValid, isPositionsValid, isStockpileValid, isColonistsValid } from './save-guard';
 import {
-  buildingComponents, clampedAge, clampedBuffer, clampedHunger, clampedProgress, clampedRelocation, clampedToolTicks,
-  colonistComponents,
+  buildingComponents, clampedAge, clampedBuffer, clampedHunger, clampedProgress, clampedRelocation, clampedStarving,
+  clampedToolTicks, colonistComponents,
 } from './spawn';
 import {
   CommandQueue, IdCounter, NoticeBoard, ProductionLedger, RemovalLedger, SimClock, SnapshotStore, StatsHistory, Stockpile, WorldMap,
@@ -222,7 +222,7 @@ export function spawnColonist(
   ids: IdCounter,
   opts: {
     id?: number; hunger?: number; buildingId?: number | null; hauling?: boolean; efficiency?: number; toolTicks?: number;
-    ageTicks?: number;
+    ageTicks?: number; starvingTicks?: number;
   } = {},
 ): IEntity {
   return attach(prep, colonistComponents({ ...opts, id: opts.id ?? ids.take() }));
@@ -313,6 +313,7 @@ export function buildColonyPrepWorld(
       buildingId: saved.buildingId,
       hauling: saved.hauling,
       ageTicks: saved.ageTicks,
+      starvingTicks: saved.starvingTicks,
     });
   }
   // The UI must never see a null snapshot: a reset or freshly created engine is
@@ -334,12 +335,13 @@ function buildInitialSnapshot(save: SaveGameV4): Snapshot {
     // seed would disagree with the entity buildColonyPrepWorld actually
     // spawns for the very same save record the moment the first tick refreshes.
     const ageTicks = clampedAge(saved.ageTicks ?? BALANCE.startingAgeTicks);
+    // Same fallback colonistComponents uses: a save predating the field reads
+    // as a clean starvation clock, same as every pre-save-v5 restore.
+    const starvingTicks = clampedStarving(saved.starvingTicks ?? 0);
     return {
       id: saved.id,
       hunger,
-      // Not yet read from the save (Task 9): SavedColonist has no field for
-      // it, so every restored colonist starts with a clean starvation clock.
-      starvingTicks: 0,
+      starvingTicks,
       efficiency: colonistEfficiency(hunger),
       buildingId: saved.buildingId,
       hauling: saved.hauling,

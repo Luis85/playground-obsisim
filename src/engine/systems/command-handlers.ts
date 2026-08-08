@@ -107,10 +107,15 @@ export function handleConstructBuilding(ctx: CommandContext, command: Extract<Co
     return;
   }
   ctx.claimedTiles.push({ col: at.col, row: at.row });
+  const id = ctx.ids.take();
   // Component list shared with the save-restore path (src/engine/spawn.ts) so a
   // building constructed in play cannot end up missing one — it already did,
   // with OutputBuffer (OBS-4-02).
-  ctx.spawn(...buildingComponents({ id: ctx.ids.take(), defId: def.id, col: at.col, row: at.row }));
+  ctx.spawn(...buildingComponents({ id, defId: def.id, col: at.col, row: at.row }));
+  // Recorded AFTER every rejection path above: a construction refused for
+  // cost, tiles, or id exhaustion must not appear in this list, or homing
+  // would shelter someone in a house that was never actually built.
+  ctx.pending.constructed.push({ id, defId: def.id, col: at.col, row: at.row });
   ctx.notices.succeed(`Built a ${def.name}.`);
 }
 

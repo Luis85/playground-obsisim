@@ -1,4 +1,4 @@
-import type { CostMap, ResourceId } from '../shared/content-types';
+import type { BuildingDefId, CostMap, ResourceId } from '../shared/content-types';
 import type { Command } from '../shared/commands';
 import type { NoticeMessage, Snapshot } from '../shared/snapshot';
 import type { WorldMapSize } from '../shared/placement';
@@ -261,19 +261,25 @@ export class RemovalLedger {
 /**
  * Entity changes made this tick that no query can see yet. sim-ecs syncs
  * creations and removals only after every system has run, so within one tick a
- * spawned colonist is invisible and a demolished building is still present.
- * Both halves are the same question, so they share one answer and one clear
- * point — the same hazard, and the same remedy, as
- * CommandContext.claimedTiles.
+ * spawned colonist is invisible, a newly constructed building is invisible,
+ * and a demolished building is still present. All three are the same
+ * question, so they share one answer and one clear point — the same hazard,
+ * and the same remedy, as CommandContext.claimedTiles.
  *
  * `demolished` is what makes handleDemolishBuilding's eviction stick: it nulls
  * its residents' homes, but the house stays in PopulationSystem's shelters
  * query for the rest of the tick, so rehome would put those same colonists
  * straight back into a building that no longer exists.
  *
+ * `constructed` is the mirror image: a house built this tick is absent from
+ * PopulationSystem's `buildings` query for the rest of the tick, so without
+ * it rehome would leave that house's future residents homeless for the tick
+ * it was built on — resolving itself the tick after, but persisting
+ * indefinitely if the game is paused right after building.
+ *
  * `arrivals` is unused until Task 8 introduces births and nomads; it is
- * declared here so the two halves cannot drift apart, and so `clear()` has one
- * definition rather than growing a second field later.
+ * declared here so the three halves cannot drift apart, and so `clear()` has
+ * one definition rather than growing a fourth field later.
  */
 export class PendingChanges {
   /**
@@ -294,9 +300,21 @@ export class PendingChanges {
   readonly arrivals: { home: Home }[] = [];
   /** Buildings demolished this tick. Still in every query until the sync. */
   readonly demolished = new Set<number>();
+  /**
+   * Buildings constructed this tick. Absent from every query until the sync,
+   * the mirror image of `demolished` — and the reason homing must be told
+   * about them: a house built this tick would otherwise shelter nobody until
+   * the next one, publishing free beds beside homeless colonists.
+   */
+  readonly constructed: { id: number; defId: BuildingDefId; col: number; row: number }[] = [];
 
+  // Called through an interface-typed value (PopulationContext.pending,
+  // CommandContext.pending), which fallow's static analysis cannot trace
+  // back to this class.
+  // fallow-ignore-next-line unused-class-member
   clear(): void {
     this.arrivals.length = 0;
     this.demolished.clear();
+    this.constructed.length = 0;
   }
 }

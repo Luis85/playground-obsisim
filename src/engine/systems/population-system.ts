@@ -34,26 +34,39 @@ export const PopulationSystem = () => createSystem({
       clock, stockpile, ids, notices, removals, pending,
       colonists: [...colonists.iter()].map(({ entity, colonist, age, hunger, job, trip, home }) =>
         ({ entity, colonist, age, hunger, job, trip, home })),
-      shelters: [...buildings.iter()]
-        .filter(({ building }) => BUILDINGS[building.defId].beds > 0)
-        .map(({ building, position, relocation }) => ({
-          id: building.id,
-          beds: BUILDINGS[building.defId].beds,
-          col: position.col,
-          row: position.row,
-          // > 0: is this house relocating RIGHT NOW? The decrement to 0 happens
-          // LATER this same tick, in ProductionSystem — relocation downtime is
-          // a production stall (increment 5 §2.4), which is why that system
-          // owns the countdown. So on the tick ticksLeft counts down from 1 to
-          // 0, homing still reads the pre-decrement 1 and keeps residents
-          // homeless through it, rehoming them only the tick after — a
-          // one-tick lag, accepted deliberately. The alternative (`> 1`) reads
-          // that same landing tick as already-not-relocating and rehomes a
-          // tick early, handing sumWorkPower's full placementFactor to
-          // residents whose house is still mid-move for a tick genuinely
-          // charged as downtime.
-          relocating: relocation.ticksLeft > 0,
-        })),
+      shelters: [
+        ...[...buildings.iter()]
+          .filter(({ building }) => BUILDINGS[building.defId].beds > 0)
+          .map(({ building, position, relocation }) => ({
+            id: building.id,
+            beds: BUILDINGS[building.defId].beds,
+            col: position.col,
+            row: position.row,
+            // > 0: is this house relocating RIGHT NOW? The decrement to 0 happens
+            // LATER this same tick, in ProductionSystem — relocation downtime is
+            // a production stall (increment 5 §2.4), which is why that system
+            // owns the countdown. So on the tick ticksLeft counts down from 1 to
+            // 0, homing still reads the pre-decrement 1 and keeps residents
+            // homeless through it, rehoming them only the tick after — a
+            // one-tick lag, accepted deliberately. The alternative (`> 1`) reads
+            // that same landing tick as already-not-relocating and rehomes a
+            // tick early, handing sumWorkPower's full placementFactor to
+            // residents whose house is still mid-move for a tick genuinely
+            // charged as downtime.
+            relocating: relocation.ticksLeft > 0,
+          })),
+        // Buildings constructed THIS tick (PendingChanges.constructed):
+        // invisible to the `buildings` query above until the post-step sync,
+        // but a colonist must still be able to move in on the very tick the
+        // house goes up — see PendingChanges' own doc comment. Always
+        // `relocating: false`, never read from a Relocation component: a
+        // building just spawned via buildingComponents always starts with
+        // Relocation.ticksLeft === 0, so it cannot be mid-move on the tick it
+        // is built.
+        ...pending.constructed
+          .filter((c) => BUILDINGS[c.defId].beds > 0)
+          .map((c) => ({ id: c.id, beds: BUILDINGS[c.defId].beds, col: c.col, row: c.row, relocating: false })),
+      ],
       spawn: (...components) => {
         let entity = actions.commands.buildEntity();
         for (const component of components) entity = entity.with(component);

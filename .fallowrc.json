@@ -35,7 +35,6 @@
     "setSpeed",
     "dirty",
     "take",
-    "fullestResource",
-    "clear"
+    "fullestResource"
   ]
 }

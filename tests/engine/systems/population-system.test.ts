@@ -340,4 +340,93 @@ describe('PopulationSystem — homing', () => {
     expect(snap().homeless).toBe(0);
     expect(snap().buildings.find((b) => b.id === houseId)!.occupants).toBe(1);
   });
+
+  // sim-ecs defers entity creation to the post-step sync, so on the tick a
+  // house is built, PopulationSystem's `buildings` query cannot see it yet.
+  // Without telling homing about it separately, a homeless colonist would
+  // stay homeless for this one tick even though the house they'll move into
+  // already exists — resolving itself the tick after, but persisting forever
+  // if the game is paused right after building.
+  it('houses a homeless colonist on the tick its house is built, not the tick after', async () => {
+    const save = { ...initialSave(), workers: [], stockpile: { wood: 100, planks: 100 }, nextEntityId: 100 };
+    const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
+    const ids = getPrepResource(prep, IdCounter);
+    spawnColonist(prep, ids, { id: 1, ageTicks: BALANCE.lifeBands.matureTicks });
+    const world = await prep.prepareRun();
+    const snap = () => world.getResource(SnapshotStore).latest!;
+
+    enqueue(world, { type: 'constructBuilding', buildingDefId: 'house' });
+    await stepTick(world);
+
+    const house = snap().buildings.find((b) => b.defId === 'house')!;
+    expect(snap().colonists[0].homeId).toBe(house.id);
+  });
+
+  // Same tick as above, but the player-visible half: test 1 could pass while
+  // the published snapshot still shows the old, stale aggregates (free beds
+  // beside a homeless colonist), because homeless/beds are derived from the
+  // same Home components rehome just wrote. Distinct assertion, same defect.
+  it('does not publish free beds beside a homeless colonist on the tick its house is built', async () => {
+    const save = { ...initialSave(), workers: [], stockpile: { wood: 100, planks: 100 }, nextEntityId: 100 };
+    const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
+    const ids = getPrepResource(prep, IdCounter);
+    spawnColonist(prep, ids, { id: 1, ageTicks: BALANCE.lifeBands.matureTicks });
+    const world = await prep.prepareRun();
+    const snap = () => world.getResource(SnapshotStore).latest!;
+
+    enqueue(world, { type: 'constructBuilding', buildingDefId: 'house' });
+    await stepTick(world);
+
+    expect(snap().homeless).toBe(0);
+    expect(snap().beds.occupied).toBeGreaterThan(0);
+  });
+
+  // PendingChanges.clear() must wipe `constructed` every tick, the same as
+  // `arrivals` and `demolished`: by the tick after construction, the building
+  // is live in the `buildings` query, so a lingering pending entry is a STALE
+  // duplicate of it — frozen with `relocating: false` from the tick it was
+  // built, forever after. That stale copy sits AFTER the live one in
+  // ctx.shelters, so anything keyed by shelter id (rehome's `byId` map) reads
+  // the stale, wrong value once the live building's actual state diverges
+  // from it — e.g. once the house starts relocating. Without the clear, this
+  // relocation would go completely unnoticed: freeBeds would still hand out
+  // the relocating house's beds as free, and rehome would not evict its
+  // resident, both because the stale entry's hard-coded `relocating: false`
+  // outvotes the live, now-`true` value.
+  it('does not let a pending-constructed house shelter its resident through a later relocation', async () => {
+    const save = { ...initialSave(), workers: [], stockpile: { wood: 100, planks: 100 }, nextEntityId: 100 };
+    const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
+    const ids = getPrepResource(prep, IdCounter);
+    spawnColonist(prep, ids, { id: 1, ageTicks: BALANCE.lifeBands.matureTicks });
+    const world = await prep.prepareRun();
+    const snap = () => world.getResource(SnapshotStore).latest!;
+
+    enqueue(world, { type: 'constructBuilding', buildingDefId: 'house' });
+    await stepTick(world);
+    const house = snap().buildings.find((b) => b.defId === 'house')!;
+    expect(snap().colonists[0].homeId).toBe(house.id); // precondition: housed the tick it was built
+
+    // A tile far enough away that the move is not instantaneous — irrelevant
+    // to this test beyond needing ticksLeft > 0 the instant it is issued.
+    enqueue(world, { type: 'moveBuilding', buildingId: house.id, to: { col: 23, row: 15 } });
+    await stepTick(world);
+
+    expect(snap().colonists[0].homeId).toBeNull();
+    expect(snap().homeless).toBe(1);
+    expect(snap().beds).toEqual({ total: 0, occupied: 0 });
+  });
+
+  // No test for "a house constructed and demolished in the same tick shelters
+  // nobody": that scenario is unreachable. handleDemolishBuilding looks its
+  // target up through findBuilding -> ctx.buildings, a snapshot materialized
+  // BEFORE the drain loop starts — the same reason ctx.pending.constructed is
+  // needed at all. A demolishBuilding command naming a building constructed
+  // earlier in the same drain always rejects with "Building not found.": the
+  // construction stands, and its colonist ends up HOUSED, not homeless.
+  // Verified experimentally (constructBuilding then demolishBuilding for the
+  // predicted id, one drain): the notice board shows the rejection and the
+  // colonist's homeId is the new house's id. freeBeds' ctx.pending.demolished
+  // check is exercised by the existing "makes a demolished house homeless
+  // immediately" test above instead, against a building that already existed
+  // before the tick — the only way a demolish can ever reach one.
 });

@@ -96,6 +96,37 @@ describe('isLoadableSave', () => {
     expect(isLoadableSave(fractionalTool)).toBe(false);
   });
 
+  it('rejects a non-numeric, NaN, negative, or fractional ageTicks (a corrupted save must not silently kill the colonist)', () => {
+    // The exact failure this closes: clampedAge(NaN) is
+    // Math.max(0, Math.min(NaN, MAX_AGE_TICKS)) === NaN, and resolveOldAge's
+    // `row.age.ticks < lifespanFor(...)` guard is false either way for NaN, so
+    // its `continue` never fires — the colonist would be removed on the very
+    // first tick after load instead of the save taking the corrupt-backup path.
+    const nonNumeric = initialSave();
+    nonNumeric.workers[0].ageTicks = 'abc' as never;
+    expect(isLoadableSave(nonNumeric)).toBe(false);
+    const nan = initialSave();
+    nan.workers[0].ageTicks = Number.NaN;
+    expect(isLoadableSave(nan)).toBe(false);
+    const negative = initialSave();
+    negative.workers[0].ageTicks = -1;
+    expect(isLoadableSave(negative)).toBe(false);
+    const fractional = initialSave();
+    fractional.workers[0].ageTicks = 1.5;
+    expect(isLoadableSave(fractional)).toBe(false);
+  });
+
+  it('accepts ageTicks omitted or present as a valid non-negative integer (a v4 save predates the field until Task 9)', () => {
+    const withoutAge = initialSave();
+    // fixture precondition: genuinely absent, not merely undefined-valued —
+    // this is what makes the pair below discriminate on ageTicks alone.
+    expect(Object.hasOwn(withoutAge.workers[0], 'ageTicks')).toBe(false);
+    expect(isLoadableSave(withoutAge)).toBe(true);
+    const withAge = initialSave();
+    withAge.workers[0].ageTicks = 500;
+    expect(isLoadableSave(withAge)).toBe(true);
+  });
+
   it('accepts and grandfathers balance-coupled values above CURRENT balance (spec 4.5: saves survive retuning)', () => {
     // hunger/toolTicks above current BALANCE were valid under a prior, higher
     // balance value; the guard no longer rejects them (spawnColonist clamps instead).

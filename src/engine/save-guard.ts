@@ -55,12 +55,36 @@ export function isBuildingsValid(buildings: SaveGameV4['buildings']): boolean {
   });
 }
 
+/**
+ * ageTicks is OPTIONAL: a v4 save predates the field until Task 9 makes it
+ * required, and `undefined` means exactly that — colonistComponents reads it
+ * as BALANCE.startingAgeTicks, same as every pre-Task-3 save. Present, it
+ * must be a non-negative safe integer: a non-integer or negative value is a
+ * record no engine version could write, structural like the id checks, not
+ * balance. This specifically closes a NaN path: `Math.max(0, Math.min(NaN,
+ * MAX_AGE_TICKS))` is NaN, and resolveOldAge's `row.age.ticks <
+ * lifespanFor(...)` guard is false either way for NaN, so its `continue`
+ * never fires and the colonist is removed on the very first tick after load.
+ * Upper bound intentionally NOT checked against the current lifespan: that is
+ * balance-coupled and clamped at spawn instead (clampedAge), same principle
+ * as hunger/toolTicks below — a save written under a longer lifespan must
+ * still load.
+ *
+ * Split out of isColonistRecordValid (rather than inlined as one more `if`)
+ * so that function's own CRAP score stays down — see the file-level comment
+ * on keeping extracted helpers trivial.
+ */
+function isValidAgeTicks(ageTicks: number | undefined): boolean {
+  return ageTicks === undefined || (Number.isSafeInteger(ageTicks) && ageTicks >= 0);
+}
+
 function isColonistRecordValid(w: SaveGameV4['workers'][number], buildingIds: ReadonlySet<number>): boolean {
   // Upper bounds intentionally NOT checked against current BALANCE.hungerMax /
   // toolDurationTicks: those are clamped to current balance at spawn instead
   // (see spawnColonist), so a save written under a higher balance value still loads.
   if (!(w.hunger >= 0 && Number.isFinite(w.hunger))) return false;
   if (!Number.isSafeInteger(w.toolTicks) || w.toolTicks < 0 || w.toolTicks > MAX_SAVED_COUNTER) return false;
+  if (!isValidAgeTicks(w.ageTicks)) return false;
   if (w.buildingId === null) return true;
   // A worker is staffed XOR hauling, never both — handleAssignWorker refuses to
   // poach a hauler and handleAssignHauler refuses to poach a staffed worker, so

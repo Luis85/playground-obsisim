@@ -54,6 +54,15 @@ describe('decideLoad', () => {
     expect(decideLoad(save)).toEqual({ kind: 'backup' });
   });
 
+  it('routes a save with a corrupted (non-numeric) ageTicks to backup, not a silent population loss', () => {
+    // Without the guard, this load would have succeeded: clampedAge('abc') is
+    // NaN, and resolveOldAge removes any colonist whose age fails `< lifespanFor`
+    // — which NaN always does — killing it on the very first tick post-load.
+    const save = initialSave();
+    save.workers[0].ageTicks = 'abc' as never;
+    expect(decideLoad(save)).toEqual({ kind: 'backup' });
+  });
+
   it('restores only through the migration pipeline, not a bare structural guard', () => {
     // `{ version: 1, garbage: true }` is not a SaveGameV1 shape at all, so
     // isLoadableSave(data) called directly on it would reject outright, with

@@ -587,7 +587,15 @@ export function clampedAge(ticks: number): number {
 Import `MAX_AGE_TICKS` from `./content/balance`, add `ageTicks?: number` to `ColonistSpec`, and add to `colonistComponents`'s list:
 
 ```ts
-    new Age(clampedAge(spec.ageTicks ?? 0)),
+    // NOT `?? 0`. This default is only reached by callers that pass no age —
+    // and until Task 9 seeds `initialSave()`, that is every founder, plus
+    // `handleRecruitWorker`, which calls `colonistComponents({ id })` with no
+    // age at all. With `?? 0` all of them spawn as children, the adult-only
+    // assign gate added in Step 7 below rejects every assign-worker and
+    // assign-hauler flow for the next 1,000 ticks, and 28 pre-existing tests
+    // fail. A birth still produces a child, because it passes `ageTicks: 0`
+    // EXPLICITLY and `??` only fires on absence.
+    new Age(clampedAge(spec.ageTicks ?? BALANCE.startingAgeTicks)),
 ```
 
 In `src/engine/world.ts`, append `Age` to `COMPONENT_TYPES` and add it to the components import.
@@ -776,7 +784,7 @@ In `src/engine/snapshot-builder.ts`: add `age: Age` to `colonistFactsOf`'s param
     idleAdults: colonistSnaps.filter((c) => c.stage === 'adult' && c.buildingId === null && !c.hauling).length,
 ```
 
-In `src/engine/world.ts`'s `buildInitialSnapshot`, add `ageTicks` and `stage` to each seeded fact (reading `saved.ageTicks ?? 0` until Task 9 makes the field required) and rename the destructured `idleWorkers`.
+In `src/engine/world.ts`'s `buildInitialSnapshot`, add `ageTicks` and `stage` to each seeded fact and rename the destructured `idleWorkers`. Read the age as `clampedAge(saved.ageTicks ?? BALANCE.startingAgeTicks)` — **the same fallback as `colonistComponents`, for the same reason** (see Step 3). The two must move in lockstep: the seeded snapshot has to match the entities actually spawned, or a restored colony's stage counts disagree with its own roster before the first tick runs.
 
 - [ ] **Step 7: Reject assigning a non-adult**
 

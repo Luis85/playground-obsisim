@@ -2952,6 +2952,18 @@ engine rejects with — so the two cannot disagree."
 - Consumes: `ColonistSnapshot.stage`, `homeId`; `BuildingSnapshot.beds`, `occupants`, `state === 'housing'`.
 - Produces: theme tokens `house`, `colonistChild`, `colonistElder`, `homelessMark`; a `drawColonists`/`drawBuildings` split of `renderer.ts` if the cap demands it.
 
+- [ ] **Step 0: Finish Task 1's rename in this subsystem**
+
+Task 1 renamed the entity `Worker` → `Colonist` everywhere its word-boundary sed could reach. The world layer was structurally out of reach — every name here embeds `Worker` without a boundary — so this subsystem still calls the person a worker while the rest of the codebase does not. It is deferred to this task, not forgotten: this task already rewrites these files for the house glyph and the stage marks, and already has to split the renderer for the LOC gate, so the rename costs one pass here instead of a second pass over the same files.
+
+Rename, in `renderer.ts`, `layout.ts`, `theme.ts`, `graphics-cache.ts` and `WorldLegend.vue`:
+
+`WorkerBundle` → `ColonistBundle` · `PlacedWorker` → `PlacedColonist` · `WorldLayout.workers` → `.colonists` · `workerColors` → `colonistColors` · `WORKER_RADIUS` / `WORKER_BUCKETS` / `WORKER_SPEED` → `COLONIST_*` · `workerAt()` → `colonistAt()` · `upsertWorker()` → `upsertColonist()` · `walkWorker()` → `walkColonist()`
+
+**`workerToolRing` keeps its name** — a tool ring marks someone who is working, which is employment, the same line Task 1 drew for `workerSlots` and `workerWorkPower`.
+
+Land this as its own commit before the feature work, exactly as Task 1 did, so the diff a reviewer reads for houses and stages is not buried in a rename. `npx vitest run` must report the same count before and after.
+
 - [ ] **Step 1: Check the budget before writing anything**
 
 ```bash

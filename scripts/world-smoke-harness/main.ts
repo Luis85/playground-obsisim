@@ -3,7 +3,7 @@
 // drives phases via window.__step(n) and asserts on screenshots and errors.
 // This file is a declared fallow entry point (.fallowrc.json `entry`) — it is
 // loaded by the built harness page, never imported by app or test code.
-import type { BuildingSnapshot, Snapshot, WorkerSnapshot } from '../../src/shared/snapshot';
+import type { BuildingSnapshot, ColonistSnapshot, Snapshot } from '../../src/shared/snapshot';
 import { createExcaliburWorldRenderer } from '../../src/app/world/renderer';
 
 declare global {
@@ -27,7 +27,7 @@ function building(id: number, defId: BuildingSnapshot['defId'], col: number, row
   };
 }
 
-function worker(id: number, overrides: Partial<WorkerSnapshot> = {}): WorkerSnapshot {
+function worker(id: number, overrides: Partial<ColonistSnapshot> = {}): ColonistSnapshot {
   return {
     id, hunger: 0, efficiency: 1, buildingId: null, hauling: false,
     haulTargetId: null, haulPhase: 'idle', haulTicksLeft: 0,
@@ -37,12 +37,12 @@ function worker(id: number, overrides: Partial<WorkerSnapshot> = {}): WorkerSnap
   };
 }
 
-function snap(tick: number, buildings: BuildingSnapshot[], workers: WorkerSnapshot[]): Snapshot {
+function snap(tick: number, buildings: BuildingSnapshot[], colonists: ColonistSnapshot[]): Snapshot {
   return {
     // the world renderer never reads the stockpile — an empty cast keeps this
     // smoke fixture decoupled from the resource catalog
     tick, lastRecruitTick: -30, map: { cols: 24, rows: 16 }, stockpile: {} as Snapshot['stockpile'], colonyWealth: 0,
-    population: workers.length, idleWorkers: 0, buildings, workers, notices: [],
+    population: colonists.length, idleWorkers: 0, buildings, colonists, notices: [],
   };
 }
 
@@ -77,7 +77,7 @@ const growWorkers = () => [worker(10, { buildingId: 1, toolTicks: 100 }), worker
  * recomputing them (OBS-5-01), so a stale or missing value here would move
  * the dot, not just fail silently.
  */
-const haulScene = (tick: number, hauler: Partial<WorkerSnapshot>, forester: Partial<BuildingSnapshot> = {}) => snap(tick,
+const haulScene = (tick: number, hauler: Partial<ColonistSnapshot>, forester: Partial<BuildingSnapshot> = {}) => snap(tick,
   [building(1, 'forester', 4, 1, { buffered: 12, state: 'outputFull', ...forester }), building(2, 'farm', 6, 1)],
   [worker(10, { buildingId: 1 }), worker(11, { buildingId: 1 }), worker(12, {
     toolTicks: 100, haulLegTicks: 2, haulPickupCol: 4, haulPickupRow: 1, ...hauler,

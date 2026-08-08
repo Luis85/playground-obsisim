@@ -15,6 +15,16 @@
 - **Every component must be attached in `buildingComponents`/`colonistComponents` in `src/engine/spawn.ts`** — the single shared list. Adding a component also means appending its type to `COMPONENT_TYPES` in `src/engine/world.ts` for save round-tripping. Forgetting this is silent and has bitten twice (OBS-4-02).
 - **No vitest test may import `src/app/world/renderer.ts` or `src/app/world/graphics-cache.ts`.** Excalibur throws on import outside a browser. Their only coverage is `npm run smoke:world`.
 - **Mutation-test every test:** break the feature, confirm the named test fails, restore. Fixture values must *discriminate* — if the wrong field holds the same value, the assertion proves nothing.
+- **A mutation that makes a system THROW does not fail a test by default.** sim-ecs catches a system's exception and publishes it as a `SystemError` event rather than rejecting the tick, so the run completes, the assertion sees state from before the crash, and the mutation reads as "not discriminating" when in fact it detonated. Task 5 hit this: removing `ProductionSystem`'s recipe-null guard threw on the very first building and changed nothing observable. Any mutation whose effect is a crash rather than a wrong value therefore needs the test to assert on the error itself:
+
+  ```ts
+  const errors: unknown[] = [];
+  world.eventBus.subscribe(SystemError, (e) => errors.push(e));
+  // …step…
+  expect(errors).toHaveLength(0);   // and the mutation makes this fail
+  ```
+
+  Ask of each mutation you write: *does this produce a wrong number, or an exception?* Only the first kind fails on its own.
 - **Confirm every mutation actually applied before trusting its result.** `sed` exits 0 when its pattern matches nothing, so a stale pattern leaves the file untouched, the test passes against the *unmutated* implementation, and the mutation check reports the assertion as discriminating when nothing was ever tested. The patterns below are transcribed from code written in the same task and can drift from what you actually wrote. After each `sed`, verify the file changed — `git diff --quiet <file> && echo "MUTATION DID NOT APPLY"` — and fix the pattern rather than moving on. A mutation that silently no-ops is worse than skipping the check, because it produces false confidence.
 - **Never `--update` a quality baseline to make a gate pass.** `check:quality --update` refuses a loosened value without `--allow-regression`, and refuses pinned-at-zero breaches outright.
 - **Never pad comments to buy maintainability points.** Fallow's MI has no length term.

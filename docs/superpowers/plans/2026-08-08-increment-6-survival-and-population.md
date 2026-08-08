@@ -1418,8 +1418,22 @@ In `src/engine/resources.ts`, beside `RemovalLedger`:
  * definition rather than growing a second field later.
  */
 export class PendingChanges {
-  /** One entry per colonist spawned this tick, carrying the bed it took. */
-  readonly arrivals: { homeId: number | null }[] = [];
+  /**
+   * One entry per colonist spawned this tick, holding its LIVE `Home`
+   * component — not a copied id.
+   *
+   * The component, because this tick may still need to change it. If
+   * `recruitWorker` is queued before `demolishBuilding`, the nomad has already
+   * spawned with a `homeId` pointing at that house, and
+   * `handleDemolishBuilding` cannot reach it: its loop walks `ctx.workers`,
+   * whose query will not see the new entity until the post-step sync. The
+   * nomad would keep a reference to a building that no longer exists, the
+   * autosave at the end of the tick would serialize it, and the v5 load guard
+   * — which requires every `homeId` to name a real shelter — would send that
+   * save down the corrupt-backup path. Holding the component lets the
+   * demolition null it in place.
+   */
+  readonly arrivals: { home: Home }[] = [];
   /** Buildings demolished this tick. Still in every query until the sync. */
   readonly demolished = new Set<number>();
 
@@ -1508,8 +1522,8 @@ export function rehome(ctx: PopulationContext): void {
   // Arrivals hold reserved beds too, but nothing creates one until Task 8, so
   // this loop is a no-op until then — written now because it belongs beside
   // the exclusion above, and both halves clear together.
-  for (const arrival of ctx.pending.arrivals) {
-    if (arrival.homeId !== null) free.set(arrival.homeId, (free.get(arrival.homeId) ?? 0) - 1);
+  for (const { home } of ctx.pending.arrivals) {
+    if (home.buildingId !== null) free.set(home.buildingId, (free.get(home.buildingId) ?? 0) - 1);
   }
 
   for (const row of rows) {
@@ -1582,6 +1596,15 @@ and call `rehome(ctx)` after `standDownNonAdults(ctx)`. Add `home: Write(Home)` 
     if (home.buildingId === command.buildingId) home.buildingId = null;
     if (trip.phase === 'outbound' && trip.targetId === command.buildingId) trip.reset();
   }
+  // Colonists spawned EARLIER THIS TICK are not in ctx.workers — the query
+  // cannot see them until the post-step sync — so a nomad welcomed before
+  // this demolition would keep a homeId pointing at the building being
+  // removed. The autosave at the end of the tick would then serialize a
+  // dangling reference, and the v5 load guard would refuse the save.
+  for (const { home } of ctx.pending.arrivals) {
+    if (home.buildingId === command.buildingId) home.buildingId = null;
+  }
+  ctx.pending.demolished.add(command.buildingId);
 ```
 
 `WorkerRow` gains `home: Home`, populated from a `home: Write(Home)` addition to `command-system.ts`'s colonists query. Extend the demolition notice when residents were displaced:
@@ -2363,12 +2386,13 @@ export function tryBirth(ctx: PopulationContext): void {
   for (const row of rows) {
     if (row.home.buildingId !== null) claimed.set(row.home.buildingId, (claimed.get(row.home.buildingId) ?? 0) + 1);
   }
-  for (const arrival of ctx.pending.arrivals) {
-    if (arrival.homeId !== null) claimed.set(arrival.homeId, (claimed.get(arrival.homeId) ?? 0) + 1);
+  for (const { home } of ctx.pending.arrivals) {
+    if (home.buildingId !== null) claimed.set(home.buildingId, (claimed.get(home.buildingId) ?? 0) + 1);
   }
   const homeId = shelterWithRoom(ctx.shelters, claimed, ctx.pending);
-  ctx.spawn(...colonistComponents({ id, ageTicks: 0, homeId }));
-  ctx.pending.arrivals.push({ homeId });
+  const components = colonistComponents({ id, ageTicks: 0, homeId });
+  ctx.spawn(...components);
+  ctx.pending.arrivals.push({ home: components.find((c): c is Home => c instanceof Home)! });
   ctx.notices.succeed(`Colonist #${id} was born.`);
 }
 ```
@@ -2378,6 +2402,32 @@ export function tryBirth(ctx: PopulationContext): void {
 Pin the interaction — this is the whole reason the ledger exists:
 
 ```ts
+it('a nomad welcomed before a demolition does not keep a home in the demolished house', async () => {
+  // REVERSE command order from the test below, and the ordering is the whole
+  // point: recruitWorker spawns a deferred colonist that CommandSystem's own
+  // worker query cannot see, so the demolition drained moments later walks
+  // right past it. Left unevicted, the tick's autosave writes a homeId naming
+  // a building that no longer exists, and the v5 load guard refuses the save.
+  const save = { ...initialSave(), workers: [], buildings: [], stockpile: { bread: 5000 }, nextEntityId: 100 };
+  const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
+  const ids = getPrepResource(prep, IdCounter);
+  const house = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: 5, row: 3 });
+  const houseId = house.getComponent(Building)!.id;
+  spawnColonist(prep, ids, { id: 1, ageTicks: BALANCE.lifeBands.matureTicks, homeId: houseId });
+  const world = await prep.prepareRun();
+  world.getResource(SimClock).tick = 1000;   // cooldowns long expired
+
+  enqueue(world, { type: 'recruitWorker' }, { type: 'demolishBuilding', buildingId: houseId });
+  await stepTick(world);
+
+  const snap = world.getResource(SnapshotStore).latest!;
+  expect(snap.buildings.find((b) => b.id === houseId)).toBeUndefined();  // the house really went
+  expect(snap.colonists).toHaveLength(2);                                 // the nomad really arrived
+  for (const c of snap.colonists) expect(c.homeId).toBeNull();            // and NOBODY points at it
+  // The save the autosave would write must load, not take the backup path.
+  expect(isLoadableSave(buildSaveFromWorld(world))).toBe(true);
+});
+
 it('a nomad and a birth cannot take the same last bed', async () => {
   // One house, 4 beds, 3 colonists: exactly one bed free, and the food and
   // cooldown gates are both clear so ONLY the bed is in contention.
@@ -2432,12 +2482,14 @@ export function handleRecruitWorker(ctx: CommandContext): void {
   // the bed as free and let tryBirth hand it to a child as well. The tick
   // would end with five colonists in four beds and the nomad homeless.
   const homeId = shelterWithRoom(ctx.shelters, ctx.occupancy(), ctx.pending);
-  ctx.spawn(...colonistComponents({
+  const components = colonistComponents({
     id,
     homeId,
     ageTicks: BALANCE.nomadArrivalTicks + spreadFor(id, BALANCE.lifeBands.spreadTicks, SALT.arrivalAge),
-  }));
-  ctx.pending.arrivals.push({ homeId });
+  });
+  ctx.spawn(...components);
+  // The live Home, so a demolition LATER IN THIS TICK can still evict it.
+  ctx.pending.arrivals.push({ home: components.find((c): c is Home => c instanceof Home)! });
   ctx.notices.succeed(`Colonist #${id} joined the colony.`);
 }
 

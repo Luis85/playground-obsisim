@@ -763,11 +763,42 @@ describe('balance-coupled states a save is repaired into, not rejected for', () 
     expect(snap.homeless).toBe(1); // the surplus, not silently over capacity
   });
 
+  it('does not evict down to the beds of a RELOCATING house — that is not an over-capacity save', async () => {
+    // Same fixture as above, one field changed: the house they all name is in
+    // transit. That makes it a rule-3 record the guard refuses outright, not a
+    // `houseBeds` retune to repair — so `restoredColonists` must leave every
+    // one of them exactly as written, the way it already leaves a `homeId`
+    // naming nothing at all.
+    //
+    // Unreachable through the guard, but `createColonyWorld` is called
+    // directly with unvalidated saves, and its bed map was the one place a
+    // relocating shelter still counted as usable: it seated four of the five
+    // and evicted the fifth, half-repairing a state no repair applies to.
+    const save = saveWith(Array.from({ length: BALANCE.houseBeds + 1 }, () => ({})));
+    save.buildings[0].relocatingTicks = 6;      // the house every colonist here names
+    expect(isLoadableSave(save)).toBe(false);   // ...which is exactly why the guard refuses it
+
+    const world = await createColonyWorld(save);
+    const seeded = world.getResource(SnapshotStore).latest!;
+    expect(seeded.colonists.every((c) => c.homeId === 1)).toBe(true); // nobody quietly displaced
+    expect(seeded.homeless).toBe(0);
+
+    // And leaving it alone is safe because the repair that DOES apply happens
+    // on the first tick: rehome evicts every resident of a house in transit.
+    await stepTick(world);
+    expect(world.getResource(SnapshotStore).latest!.homeless).toBe(BALANCE.houseBeds + 1);
+  });
+
   it('a retune that raises matureTicks does not seed a child as staff', async () => {
     // Only a retune can produce this record, so it is repaired rather than
     // rejected. Asserted BEFORE any tick: standDownNonAdults would fix it on
     // tick 1, and a paused engine never reaches tick 1.
     const save = saveWith([{ ageTicks: BALANCE.lifeBands.matureTicks - 1, buildingId: FORESTER_ID }]);
+    // ACCEPTED, then repaired — the distinction this test exists to draw, and
+    // the one the over-capacity case above already pins. Without this line the
+    // test passes just as happily against a guard that REJECTED the save, since
+    // createColonyWorld never consults isLoadableSave.
+    expect(isLoadableSave(save)).toBe(true);
     const world = await createColonyWorld(save);
 
     const seeded = world.getResource(SnapshotStore).latest!;
@@ -782,6 +813,7 @@ describe('balance-coupled states a save is repaired into, not rejected for', () 
     // `hauling` would otherwise leave a retired colonist counted as a working
     // hauler in the seeded snapshot, at full carry capacity.
     const save = saveWith([{ ageTicks: BALANCE.lifeBands.retireTicks, hauling: true }]);
+    expect(isLoadableSave(save)).toBe(true); // accepted, then repaired — see above
     const world = await createColonyWorld(save);
 
     const seeded = world.getResource(SnapshotStore).latest!;

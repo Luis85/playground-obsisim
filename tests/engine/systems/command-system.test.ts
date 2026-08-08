@@ -18,17 +18,19 @@ import type { SaveGameV5 } from '../../../src/shared/save';
  * What a hauler in this file's fixtures carries per trip.
  *
  * NOT BALANCE.haulCarryCapacity, which is what a hauler with a neutral commute
- * carries. `setup()` runs `initialSave()`, a colony with no house in it and no
- * planks to build one, so its haulers are homeless and Task 7's carry scaling
- * gives them `haulerCapacity(null)` instead. Named once and used by every case
- * below that seeds "exactly one load" AND every case that asserts a full
- * delivery: if the seed and the assertion ever read different numbers, the
+ * carries. `setup()` defaults to `houselessSave()` below — no shelter anywhere
+ * and no planks to build one — so its haulers are homeless and Task 7's carry
+ * scaling gives them `haulerCapacity(null)` instead. Named once and used by
+ * every case below that seeds "exactly one load" AND every case that asserts a
+ * full delivery: if the seed and the assertion ever read different numbers, the
  * fixture silently becomes a two-trip run and the case stops testing what its
  * name says.
  *
  * Housing them is not the fix here the way it is in haul-system.test.ts: this
  * file asserts on `snapshot().buildings[0]` and on building COUNTS throughout,
- * so an extra house entity would break a dozen unrelated cases.
+ * so an extra house entity would break a dozen unrelated cases — which is
+ * exactly why the default is `houselessSave()` and not the `initialSave()` it
+ * used to be, now that save v5 ships a starter house in every fresh colony.
  */
 const ONE_LOAD = haulerCapacity(null);
 
@@ -144,7 +146,10 @@ describe('CommandSystem', () => {
 
   it('refuses a nomad when there is nowhere to sleep, and says so', async () => {
     // The discriminating half of the pair above: same command, same cooldown
-    // state, only the beds removed. initialSave() has no houses.
+    // state, only the beds removed. That is what `setup()`'s default
+    // `houselessSave()` is for — a fresh v5 colony ships a starter house with
+    // a bed to spare, so `initialSave()` would ACCEPT the nomad and this test
+    // would assert the opposite of its own name.
     const { dispatch, snapshot } = await setup();
     await dispatch({ type: 'recruitWorker' });
     expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'No free bed: build a house first.' }]);

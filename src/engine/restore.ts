@@ -60,14 +60,27 @@ export function restoredColonists(save: SaveGameV5): SavedColonist[] {
  *
  * A `homeId` that names no shelter at all is left alone here: that is a
  * record no engine version could write, and `isLoadableSave` refuses the
- * whole save for it rather than quietly patching one field.
+ * whole save for it rather than quietly patching one field. A `homeId` naming
+ * a RELOCATING shelter is left alone for exactly the same reason — see the
+ * bed map below.
  */
 function overCapacityEvictions(save: SaveGameV5): ReadonlySet<number> {
   const beds = new Map<number, number>();
   for (const b of save.buildings) {
     if (!Object.hasOwn(BUILDINGS, b.defId)) continue;
     const { beds: count } = BUILDINGS[b.defId];
-    if (count > 0) beds.set(b.id, count);
+    // Relocating shelters are excluded, as they already are from `spareBeds`,
+    // `shelterWithRoom` and `freeBeds`: a house in transit offers no beds, and
+    // `rehome` evicts its residents on the first tick. Counting them made this
+    // the one place that treated a relocating shelter as usable, and evicted
+    // its overflow as though a `houseBeds` retune had put them there. Leaving
+    // it out drops such a `homeId` into the same untouched branch below as a
+    // `homeId` naming nothing at all — both are reference states
+    // `isLoadableSave` refuses the whole save for, not balance-coupled values
+    // to repair. Unreachable through a guard-valid save (rule 3 rejects the
+    // pairing); reachable through `createColonyWorld`, which tests call
+    // directly with saves nobody validated.
+    if (count > 0 && b.relocatingTicks === 0) beds.set(b.id, count);
   }
   const evicted = new Set<number>();
   for (const c of [...save.colonists].sort((a, b) => a.id - b.id)) {

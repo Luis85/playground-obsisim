@@ -636,8 +636,15 @@ describe('live-world projections agree', () => {
   // (Task 6), so the trip itself never has a save-record counterpart to agree
   // with. `haulPhase`/`haulTicksLeft` joined the snapshot in increment 5 to
   // drive the dot's position from the trip's real duration (OBS-4-09) — same
-  // component, same runtime-only status.
-  const DERIVED = ['efficiency', 'haulTargetId', 'haulPhase', 'haulTicksLeft', 'carrying'] as const;
+  // component, same runtime-only status. `haulLegTicks`/`haulPickupCol`/
+  // `haulPickupRow` joined the same way for the same reason: they stop the
+  // layout re-deriving a leg's length and a returning hauler's origin from the
+  // building's LIVE tile, which desyncs once the building moves mid-leg
+  // (OBS-5-01) — still HaulTrip, still never saved.
+  const DERIVED = [
+    'efficiency', 'haulTargetId', 'haulPhase', 'haulTicksLeft', 'haulLegTicks', 'haulPickupCol', 'haulPickupRow',
+    'carrying',
+  ] as const;
 
   function persisted(workers: readonly object[]): Record<string, unknown>[] {
     return workers.map((w) => {

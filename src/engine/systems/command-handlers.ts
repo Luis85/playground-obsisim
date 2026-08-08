@@ -264,11 +264,16 @@ export function handleMoveBuilding(ctx: CommandContext, command: Extract<Command
   found.relocation.ticksLeft = relocationTicks(moved, BALANCE.relocationTilesPerTick);
   // Haulers already walking to this building now have a different journey:
   // recompute from the new tile so the ticks charged match the line the dot
-  // visibly travels. A returning hauler is unaffected — it walks to the camp,
-  // which did not move.
+  // visibly travels. legTicks is refreshed the same way, from the same call —
+  // this outbound trip is effectively restarting its leg, so the snapshot's
+  // published total must match the new ticksLeft it is now counting down from.
+  // A returning hauler is unaffected — it walks to the camp, which did not
+  // move, and its legTicks/pickup tile stay exactly as frozen at pickup.
   for (const { trip } of ctx.workers) {
     if (trip.phase === 'outbound' && trip.targetId === command.buildingId) {
-      trip.ticksLeft = haulTicks(to.col, to.row, BALANCE.haulTilesPerTick);
+      const ticks = haulTicks(to.col, to.row, BALANCE.haulTilesPerTick);
+      trip.ticksLeft = ticks;
+      trip.legTicks = ticks;
     }
   }
   ctx.notices.succeed(`Moved the ${BUILDINGS[found.building.defId].name}.`);

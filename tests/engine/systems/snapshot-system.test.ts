@@ -88,7 +88,9 @@ describe('SnapshotSystem', () => {
     // layout now interpolates from `haulTicksLeft`, so a returning hauler needs
     // the building it is walking BACK from, and both legs need their remaining
     // ticks (OBS-4-09). `trip.targetId` survives the phase flip; only
-    // trip.reset() clears it.
+    // trip.reset() clears it. `haulLegTicks`/`haulPickupCol`/`haulPickupRow`
+    // (OBS-5-01) follow the same rule: published so the layout never has to
+    // re-derive them from the building's live tile.
     const save = initialSave();
     save.workers = [];
     save.stockpile = {};
@@ -107,24 +109,29 @@ describe('SnapshotSystem', () => {
     // the hauler has not travelled yet — legProgress(3, 3) is 0 and the dot
     // correctly still stands at the camp on the tick it was assigned.
     expect(hauler()).toMatchObject({
-      hauling: true, haulTargetId: buildingId, haulPhase: 'outbound', haulTicksLeft: 3, carrying: 0,
+      hauling: true, haulTargetId: buildingId, haulPhase: 'outbound', haulTicksLeft: 3, haulLegTicks: 3, carrying: 0,
     });
 
     await world.step(); // one tick of walking: now genuinely partway out
-    expect(hauler()).toMatchObject({ haulPhase: 'outbound', haulTicksLeft: 2 });
+    expect(hauler()).toMatchObject({ haulPhase: 'outbound', haulTicksLeft: 2, haulLegTicks: 3 }); // legTicks holds the leg total, not the remainder
 
     for (let i = 0; i < 2; i++) await world.step(); // arrives, loads, turns for home
     expect(hauler()).toMatchObject({
       haulTargetId: buildingId, haulPhase: 'returning', carrying: BALANCE.haulCarryCapacity,
     });
     // The turn sets the full return leg, exactly as dispatch did: the dot is at
-    // the building's door with the whole walk home still ahead of it.
-    expect(hauler().haulTicksLeft).toBe(3);
+    // the building's door with the whole walk home still ahead of it. The
+    // pickup tile freezes to the building's tile at THIS moment (5,4) — the
+    // origin haulSpot must keep using even if the building later moves.
+    expect(hauler()).toMatchObject({ haulTicksLeft: 3, haulLegTicks: 3, haulPickupCol: 5, haulPickupRow: 4 });
     await world.step();
     expect(hauler()).toMatchObject({ haulPhase: 'returning', haulTicksLeft: 2 }); // genuinely walking home
 
     for (let i = 0; i < 2; i++) await world.step(); // banks the load, back to idle
-    expect(hauler()).toMatchObject({ haulTargetId: null, haulPhase: 'idle', haulTicksLeft: 0, carrying: 0 });
+    expect(hauler()).toMatchObject({
+      haulTargetId: null, haulPhase: 'idle', haulTicksLeft: 0, haulLegTicks: 0,
+      haulPickupCol: 0, haulPickupRow: 0, carrying: 0,
+    });
   });
 
   it('reports a relocating building as relocating, with its remaining ticks', async () => {

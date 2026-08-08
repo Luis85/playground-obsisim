@@ -55,6 +55,24 @@ export interface WorkerSnapshot {
   haulPhase: HaulPhase;
   /** Ticks remaining on the current leg — the dot's position is derived from it. */
   haulTicksLeft: number;
+  /**
+   * Ticks the CURRENT leg was charged when it began — the denominator
+   * `haulTicksLeft` counts down against. Published so the layout can read the
+   * leg's length instead of recomputing `haulTicks` from the building's LIVE
+   * tile: a returning trip is deliberately left alone when its building moves,
+   * so a recomputed total would silently disagree with the leg the sim is
+   * actually running (OBS-5-01).
+   */
+  haulLegTicks: number;
+  /**
+   * The tile a returning hauler's current leg began from, frozen at pickup.
+   * Meaningful only while `haulPhase` is 'returning'. Published for the same
+   * reason as `haulLegTicks`: the building the hauler loaded at can move
+   * mid-leg, and re-asking it for its door would draw the walk to a point
+   * this hauler never actually stood at (OBS-5-01).
+   */
+  haulPickupCol: number;
+  haulPickupRow: number;
   /** Units in hand (0 unless carrying a load home). */
   carrying: number;
   /** Remaining ticks of this worker's tool coverage (0 = none). */

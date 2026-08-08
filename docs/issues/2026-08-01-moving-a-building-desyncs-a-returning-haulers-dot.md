@@ -1,11 +1,12 @@
 ---
 id: OBS-5-01
 title: Moving a building desyncs the dot of a hauler already returning from it
-status: open
+status: resolved
 severity: minor
 area: world
 increment: 5
 created: 2026-08-01
+resolved: 2026-08-08
 source: Codex review on PR #7 (P2), traced against the engine and clamping verified
 affects:
   - src/shared/snapshot.ts
@@ -99,3 +100,18 @@ this is straightforwardly testable — unlike the `renderer.ts` pacing it feeds,
 which no vitest test may import. A test would set a `haulTargetId` building at
 one tile, publish a returning hauler whose `haulTicksLeft` exceeds that tile's
 `haulTicks`, and assert the dot's position. That test fails today.
+
+## Resolved
+
+Fixed in `2db6d2e`. `HaulTrip` now freezes `legTicks` and the return leg's pickup
+tile at each of the three sites that begin or retarget a leg, and the snapshot
+publishes them; `haulSpot` reads them instead of recomputing anything from the
+building's live tile. The outbound endpoint is unchanged — the engine does
+retarget an outbound trip on a move, so renderer and simulation still agree there.
+
+Confirmed no save migration was needed, as this note predicted: `HaulTrip` is not
+persisted.
+
+The load-bearing test in `tests/app/world-layout.test.ts` was run against the old
+code first and failed (5.3077 against the expected 5.25) before the fix made it
+pass — the test this note asked for, shown failing for the reason it names.

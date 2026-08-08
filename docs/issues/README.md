@@ -39,7 +39,15 @@ folder being tidy.
 
 | id | severity | title |
 | --- | --- | --- |
+
+*Nothing open.*
+
+## Resolved — increment 5
+
+| id | severity | title |
+| --- | --- | --- |
 | OBS-5-01 | minor | [Moving a building desyncs the dot of a hauler already returning from it](2026-08-01-moving-a-building-desyncs-a-returning-haulers-dot.md) |
+| OBS-5-02 | important | [The quality gate was the least-gated thing in the repo](2026-08-01-the-quality-gate-was-the-least-gated-thing-in-the-repo.md) |
 
 ## Open — increment 4 (logistics)
 

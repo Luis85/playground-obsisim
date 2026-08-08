@@ -80,6 +80,14 @@ export const ProductionSystem = () => createSystem({
       // exist regardless of whether the crew is working.
       if (relocation.ticksLeft > 0) {
         relocation.ticksLeft--;
+        // Decrementing here means the tick that brings this to 0 is
+        // worked-through-zero: this tick's work is still skipped (continue,
+        // below) but the snapshot published right after already reads 0
+        // ticks left, i.e. "not relocating". A one-tick relocation therefore
+        // never visibly reports `relocating` at all — its only tick resolves
+        // to 0 before anything reads it. Not a bug: "0 ticks left" is true
+        // the moment it's read. Just the one genuinely-charged tick nothing
+        // ever displays as in-flight.
         continue;
       }
       const workPower = powerByBuilding.get(building.id) ?? 0;

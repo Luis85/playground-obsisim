@@ -1,4 +1,4 @@
-import type { TileRef } from './placement';
+import { ticksForDistance, type TileRef } from './placement';
 
 /**
  * The colony's store: where every hauled good ends up, and the point every
@@ -26,7 +26,7 @@ export function haulDistance(col: number, row: number): number {
  * is ever free and no hauler can complete a round trip inside one tick.
  */
 export function haulTicks(col: number, row: number, tilesPerTick: number): number {
-  return Math.max(1, Math.ceil(haulDistance(col, row) / tilesPerTick));
+  return ticksForDistance(haulDistance(col, row), tilesPerTick);
 }
 
 /**
@@ -46,8 +46,12 @@ export type HaulPhase = 'idle' | 'outbound' | 'returning';
  * (OBS-4-09). Deriving the dot's position from the trip's own remaining ticks
  * keeps the two clocks identical at every game speed by construction.
  *
- * `totalTicks` is the leg's full length — recomputed from the building's tile
- * rather than stored, since `haulTicks` is deterministic. A leg that somehow
+ * `totalTicks` is the leg's full length. Callers must pass what `haulTicks`
+ * actually charged when the leg began (`HaulTrip.legTicks`, published on the
+ * snapshot as `haulLegTicks`), never a fresh `haulTicks` recomputed from the
+ * building's CURRENT tile: a returning trip is deliberately left alone when
+ * its building moves, so a recomputed total can disagree with the leg the sim
+ * is actually running (OBS-5-01 — the "somehow" below, now named). A leg that
  * reports more ticks left than its length clamps to 0 rather than running
  * backwards past the camp.
  */

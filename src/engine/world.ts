@@ -328,7 +328,9 @@ function buildInitialSnapshot(save: SaveGameV4): Snapshot {
       buildingId: saved.buildingId,
       hauling: saved.hauling,
       // a restored colony's haulers start at the camp: HaulTrip never enters the save
-      haulTargetId: null, haulPhase: 'idle' as const, haulTicksLeft: 0, carrying: 0, carryingResource: null,
+      haulTargetId: null, haulPhase: 'idle' as const, haulTicksLeft: 0,
+      haulLegTicks: 0, haulPickupCol: 0, haulPickupRow: 0,
+      carrying: 0, carryingResource: null,
       toolTicks,
     };
   });

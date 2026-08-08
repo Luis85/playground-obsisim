@@ -2916,6 +2916,13 @@ In `src/engine/world.ts`'s `initialSave`, replace `buildings: []`:
 - `buildInitialSnapshot`: read all three from the save through `clampedAge` / `clampedStarving`, and derive `stage`, `homeless`, `beds`, and `mealsPerHead` through `buildEntitySections` as the live path does.
 - `savedColonistOf`: add the three fields.
 
+**Two transitional exemptions from earlier tasks come due here.** Both were added because a field or export had no consumer yet; this task is the consumer, so leaving them would permanently exempt live code from the gates that exist to catch it:
+
+- `tests/engine/world.test.ts:684` — remove `'starvingTicks'` from the "live-world projections agree" opt-out list. Task 4 added it there because the field was real persistent state that the save did not yet carry; once v5 persists it, the guard rail should cover it again. Confirm the test still passes with it removed — if it does not, `starvingTicks` is not round-tripping and that is a genuine bug, not a reason to restore the exemption.
+- `.fallowrc.json` — remove the `clampedStarving` entry from `ignoreExports`, and its note in `docs/build-ci/quality-gates.md`. Task 9's spawn path is its cross-file consumer. Confirm `npm run check:quality` still reports `deadCodeIssues: 0` without it.
+
+**Commit both files by pathspec** — `.fallowrc.json` and `docs/build-ci/quality-gates.md` are outside `src`/`tests`, so a `git commit src tests` pathspec silently leaves them behind and the exemptions survive in the repo.
+
 - [ ] **Step 7: Run the tests to verify they pass**
 
 Run: `npm run typecheck && npx vitest run`

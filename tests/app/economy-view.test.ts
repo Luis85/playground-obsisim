@@ -110,11 +110,12 @@ describe('EconomyView', () => {
     const snapshot = makeSnapshot({
       buildings: [{ ...baseBuilding, id: 1, defId: 'forester', workers: 2, buffered: 12, state: 'producing' }],
     });
-    // Made 12 units into the buffer, delivered none: no haulers on duty. The
-    // three rates are deliberately distinct — 0 delivered against 0.50
-    // consumed and 4 in stock — so the column binding to consumptionRate or
-    // to stock would change this assertion rather than coincide with it.
-    snapshot.stockpile.wood = { stock: 4, deliveredRate: 0, madeRate: 0, consumptionRate: 0.5, netFlow: -0.5, stockValue: 0 };
+    // Made 12 units into the buffer, delivered none: no haulers on duty.
+    // madeRate, deliveredRate, consumptionRate, and stock are deliberately
+    // all distinct — 1, 0, 0.50, 4 — so the delivered column binding to any
+    // of the other three (madeRate included) would change this assertion
+    // rather than coincide with it.
+    snapshot.stockpile.wood = { stock: 4, deliveredRate: 0, madeRate: 1, consumptionRate: 0.5, netFlow: -0.5, stockValue: 0 };
     const wrapper = mountWith(EconomyView, snapshot);
     await wrapper.vm.$nextTick();
     expect(wrapper.find('[data-test="status-forester"]').text()).toBe('ok');

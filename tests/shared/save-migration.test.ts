@@ -253,7 +253,11 @@ describe('migrateSaveToLatest (v2 -> v3)', () => {
     expect(out.tick).toBe(40);
     expect(out.map).toEqual({ cols: 24, rows: 16 });
     expect(out.buildings.map((b) => `${b.col},${b.row}`)).toEqual(['4,1', '6,1']);
-    expect(before.buildings[0]).not.toHaveProperty('buffer'); // input untouched
+    // Deep, not just the buildings[0]/buffer spot-check: same standard as
+    // the v1 "does not mutate its input" case above. A migrateV2toV3 that
+    // mutated a worker in place (e.g. setting hauling = false instead of
+    // spreading) would pass a narrower check but fails this one.
+    expect(before).toEqual(v2Save());
   });
 
   it('migrates a v1 save all the way to v4 in one call', () => {

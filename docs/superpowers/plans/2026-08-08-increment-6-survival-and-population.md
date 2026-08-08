@@ -1456,7 +1456,17 @@ export function rehome(ctx: PopulationContext): void {
       row.home.buildingId = null;
       continue;
     }
-    free.set(homeId, (free.get(homeId) ?? 0) - 1);
+    // Over capacity evicts rather than overflowing. A save can legitimately
+    // arrive this way — lowering houseBeds in a retune leaves every existing
+    // house one resident over — and the load principle says clamp a
+    // balance-coupled value, never reject the save for it. Ascending id means
+    // the highest ids are the ones displaced, deterministically.
+    const remaining = free.get(homeId) ?? 0;
+    if (remaining <= 0) {
+      row.home.buildingId = null;
+      continue;
+    }
+    free.set(homeId, remaining - 1);
   }
 
   const openings = [...free.entries()].filter(([, beds]) => beds > 0).sort((a, b) => a[0] - b[0]);
@@ -2532,7 +2542,45 @@ export interface SaveGameV5 extends Omit<SaveGameV4, 'version' | 'workers'> {
 export const LATEST_SAVE_VERSION = 5;
 ```
 
-Change `SaveGameV4.workers` to `SavedColonistV4[]` and write `isSaveGameV5` mirroring `isSaveGameV4` plus the three new per-record fields and `lastBirthTick`.
+Change `SaveGameV4.workers` to `SavedColonistV4[]`.
+
+**`isSaveGameV5` cannot simply mirror `isSaveGameV4` — the shared guard hard-codes the roster key.** `isValidSaveArrays` (`src/shared/save.ts:176`) checks `save.workers` by name, and `isCommonSaveShape` calls it for **every** version guard. A v5 save has `colonists` and no `workers` at all, so a mirrored guard would reject every v5 save ever written, *including `migrateV4toV5`'s own output* — the migration would run, its result would fail `guards[5]`, and `migrateSaveToLatest` would return null, sending every existing colony to the corrupt-save backup path. Nothing downstream would catch this: the failure is total and silent.
+
+Parameterise the key instead of duplicating the guard:
+
+```ts
+function isValidSaveArrays(save: Record<string, unknown>, rosterKey: 'workers' | 'colonists', isRecord: (r: unknown) => boolean): boolean {
+  const roster = save[rosterKey];
+  return (
+    Array.isArray(save.buildings) &&
+    save.buildings.length <= MAX_SAVED_ENTITIES &&
+    Array.isArray(roster) &&
+    roster.length <= MAX_SAVED_ENTITIES &&
+    roster.every(isRecord)
+  );
+}
+```
+
+`isCommonSaveShape` takes and forwards both. v1–v4 pass `'workers'` and the existing record predicate; v5 passes `'colonists'` and a new `isSavedColonistShape` that additionally requires `ageTicks` and `starvingTicks` to be safe non-negative integers and `homeId` to be `number | null`. Then add `lastBirthTick` to `isSaveGameV5` with the same treatment `lastRecruitTick` gets (safe integer, not ahead of `tick`).
+
+**A `homeId` must name a building that actually shelters.** Add to `isLoadableSave`: every non-null `homeId` names a building present in the save **whose def has `beds > 0`**. A `homeId` pointing at a forester is a record no engine version could write, which is precisely this guard's stated criterion.
+
+**But over-capacity is NOT rejected — it is repaired.** A save with five colonists in a four-bed house is exactly what a `houseBeds` retune from 5 to 4 produces, and rejecting it would orphan a save for a balance change, which this project's load principle forbids ("balance-coupled values are clamped or grandfathered on load"). So `rehome` **evicts the excess** instead: when a house's occupancy exceeds its beds, the highest colonist ids lose their home and re-enter the homeless pool for reassignment. Deterministic, and it repairs both the retune case and any hand-edited save through the same path.
+
+```ts
+it('evicts down to capacity when a save puts more colonists in a house than it has beds', async () => {
+  // What a houseBeds retune from 5 to 4 produces. Rejecting would orphan the
+  // save for a balance change; the load principle says clamp, not refuse.
+  const save = saveWithColonistsInOneHouse({ beds: BALANCE.houseBeds, colonists: BALANCE.houseBeds + 1 });
+  const world = await createColonyWorld(save);
+  await stepTick(world);
+
+  const snap = world.getResource(SnapshotStore).latest!;
+  const house = snap.buildings.find((b) => b.beds > 0)!;
+  expect(house.occupants).toBe(BALANCE.houseBeds);
+  expect(snap.homeless).toBe(1);              // the surplus, not silently over capacity
+});
+```
 
 - [ ] **Step 4: Write the migration**
 

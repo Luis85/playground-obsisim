@@ -109,6 +109,12 @@ export class ProductionLedger {
 export class SimClock {
   tick = 0;
   lastRecruitTick = -BALANCE.recruitCooldownTicks; // first recruit available immediately
+  /** Tick of the last birth. Persisted (Task 9) for the reason lastRecruitTick
+   * is: without it, reopening a save written just after a birth either grants
+   * a free extra birth or blocks one that is due, so save-and-reload would
+   * change population growth. Starts a full cooldown in the past, so a fresh
+   * colony's first birth is gated on food and beds rather than on patience. */
+  lastBirthTick = -BALANCE.birthCooldownTicks;
 }
 
 /**

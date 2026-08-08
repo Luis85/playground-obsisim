@@ -377,7 +377,9 @@ function buildInitialSnapshot(save: SaveGameV4): Snapshot {
       relocatingTicks: clampedRelocation(saved.relocatingTicks ?? 0),
     };
   });
-  const { colonists, buildings, population, idleAdults, homeless, beds, demographics } = buildEntitySections(workerFacts, buildingFacts);
+  const {
+    colonists, buildings, population, idleAdults, homeless, beds, demographics, mealsPerHead,
+  } = buildEntitySections(workerFacts, buildingFacts, save.stockpile as Record<string, number>);
   const stockpile = {} as Record<ResourceId, ResourceStats>;
   let colonyWealth = 0;
   for (const resourceId of RESOURCE_IDS) {
@@ -389,6 +391,10 @@ function buildInitialSnapshot(save: SaveGameV4): Snapshot {
   return {
     tick: Math.min(save.tick, MAX_SAVED_COUNTER), // same clamp as the spawned clock
     lastRecruitTick: Math.min(save.lastRecruitTick, Math.min(save.tick, MAX_SAVED_COUNTER)),
+    // Not yet a saved field (Task 9 adds it): a restored colony's first birth
+    // is gated on food and beds, never on a cooldown it cannot remember.
+    lastBirthTick: -BALANCE.birthCooldownTicks,
+    mealsPerHead,
     map: { cols: save.map.cols, rows: save.map.rows },
     stockpile,
     colonyWealth,
@@ -417,7 +423,8 @@ export function refreshEntitySections(world: IRuntimeWorld): void {
   const store = world.getResource(SnapshotStore);
   if (store.latest === null) return;
   const { workers, buildings } = gatherEntityFacts(world);
-  store.latest = { ...store.latest, ...buildEntitySections(workers, buildings) };
+  const stock = world.getResource(Stockpile).toJSON() as Record<string, number>;
+  store.latest = { ...store.latest, ...buildEntitySections(workers, buildings, stock) };
 }
 
 /**

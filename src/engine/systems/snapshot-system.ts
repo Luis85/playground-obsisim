@@ -41,8 +41,8 @@ export const SnapshotSystem = () => createSystem({
     }
 
     const {
-      colonists: workerSnaps, buildings: buildingSnaps, population, idleAdults, homeless, beds, demographics,
-    } = buildEntitySections(workerFacts, buildingFacts);
+      colonists: workerSnaps, buildings: buildingSnaps, population, idleAdults, homeless, beds, demographics, mealsPerHead,
+    } = buildEntitySections(workerFacts, buildingFacts, stockpile.toJSON());
 
     const stockpileStats = {} as Record<ResourceId, ResourceStats>;
     let colonyWealth = 0;
@@ -64,6 +64,8 @@ export const SnapshotSystem = () => createSystem({
     store.latest = {
       tick: clock.tick,
       lastRecruitTick: clock.lastRecruitTick,
+      lastBirthTick: clock.lastBirthTick,
+      mealsPerHead,
       map: { cols: map.cols, rows: map.rows },
       stockpile: stockpileStats,
       colonyWealth,

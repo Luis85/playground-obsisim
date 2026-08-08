@@ -20,7 +20,8 @@ export function stockedWith(stocks: Partial<Record<ResourceId, number>> = {}): R
 /** A minimal, valid Snapshot for app-layer tests, overridable field by field. */
 export function makeSnapshot(overrides: Partial<Snapshot> = {}): Snapshot {
   return {
-    tick: 0, lastRecruitTick: -30, map: { cols: 24, rows: 16 }, stockpile: stockedWith(), colonyWealth: 0,
+    tick: 0, lastRecruitTick: -30, lastBirthTick: -50, map: { cols: 24, rows: 16 }, stockpile: stockedWith(), colonyWealth: 0,
+    mealsPerHead: 0,
     population: 0, idleAdults: 0, homeless: 0, beds: { total: 0, occupied: 0 },
     demographics: { children: 0, adults: 0, elders: 0 },
     buildings: [], colonists: [], notices: [],

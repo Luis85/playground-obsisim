@@ -130,6 +130,15 @@ export interface ResourceStats {
 export interface Snapshot {
   tick: number;
   lastRecruitTick: number;
+  /** Tick of the last birth, for the same reason lastRecruitTick is published:
+   * the view derives "how long until the next one" rather than being told. */
+  lastBirthTick: number;
+  /**
+   * Meals the store holds per colonist, counting one MORE colonist than there
+   * are — the number both arrival gates test, published so the view shows the
+   * figure the engine actually gates on rather than a second derivation of it.
+   */
+  mealsPerHead: number;
   /** The colony's world dimensions in tiles. */
   map: WorldMapSize;
   stockpile: Record<ResourceId, ResourceStats>;

@@ -4,8 +4,9 @@ import type { SavedBuilding, SavedColonist } from '../shared/save';
 import type { BuildingSnapshot, BuildingState, ColonistSnapshot } from '../shared/snapshot';
 import type { TileRef } from '../shared/placement';
 import { CAMP_TILE } from '../shared/haul';
-import { commuteFactor, stageOf } from '../shared/population';
+import { commuteFactor, mealsPerHead, stageOf } from '../shared/population';
 import { BALANCE, workerWorkPower } from './content/balance';
+import { MEAL_WEIGHTS } from './content/resources';
 import { batchOutputUnits, BUILDINGS } from './content/buildings';
 import {
   Age, Building, Efficiency, HaulTrip, Home, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Colonist,
@@ -58,6 +59,7 @@ export interface EntitySections {
   homeless: number;
   beds: { total: number; occupied: number };
   demographics: { children: number; adults: number; elders: number };
+  mealsPerHead: number;
 }
 
 /**
@@ -126,7 +128,11 @@ function workTileOf(c: ColonistFacts, tileById: ReadonlyMap<number, TileRef>): T
 }
 
 /** Pure aggregation shared by SnapshotSystem, the initial-snapshot seed, and the post-step refresh. */
-export function buildEntitySections(workers: readonly ColonistFacts[], buildings: readonly BuildingFacts[]): EntitySections {
+export function buildEntitySections(
+  workers: readonly ColonistFacts[],
+  buildings: readonly BuildingFacts[],
+  stock: Readonly<Record<string, number>>,
+): EntitySections {
   const staffCount = new Map<number, number>();
   const powerByBuilding = new Map<number, number>();
   const tooledByBuilding = new Map<number, number>();
@@ -221,6 +227,14 @@ export function buildEntitySections(workers: readonly ColonistFacts[], buildings
     // sections rather than recomputed in each view: the Population view and
     // the Dashboard both show them, and two independent reductions over the
     // roster are two chances to disagree about what a stage is.
+    // Computed HERE, not in SnapshotSystem. That system runs before the
+    // post-step sync, so on any tick with a birth, a nomad or a death,
+    // refreshEntitySections replaces the population sections afterwards while
+    // a separately-computed ratio keeps the OLD denominator — a paused manual
+    // step would then show the new population against the previous tick's
+    // figure indefinitely. Beside population/demographics/beds, it is
+    // refreshed by the same pass that changes what it divides by.
+    mealsPerHead: mealsPerHead(stock, MEAL_WEIGHTS, workerSnaps.length),
     demographics: {
       children: workerSnaps.filter((c) => c.stage === 'child').length,
       adults: workerSnaps.filter((c) => c.stage === 'adult').length,

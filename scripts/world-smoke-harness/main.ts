@@ -45,7 +45,9 @@ function snap(tick: number, buildings: BuildingSnapshot[], colonists: ColonistSn
   return {
     // the world renderer never reads the stockpile — an empty cast keeps this
     // smoke fixture decoupled from the resource catalog
-    tick, lastRecruitTick: -30, map: { cols: 24, rows: 16 }, stockpile: {} as Snapshot['stockpile'], colonyWealth: 0,
+    tick, lastRecruitTick: -30, lastBirthTick: -50, map: { cols: 24, rows: 16 }, stockpile: {} as Snapshot['stockpile'], colonyWealth: 0,
+    // the world renderer never reads mealsPerHead either
+    mealsPerHead: 0,
     population: colonists.length, idleAdults: 0,
     // the world renderer never reads these either — static zeros for the
     // same reason the stockpile cast above is empty

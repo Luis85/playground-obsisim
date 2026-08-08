@@ -1,5 +1,6 @@
 import type { BuildingDefId, ResourceId } from './content-types';
 import type { HaulPhase } from './haul';
+import type { LifeStage } from './population';
 import type { WorldMapSize } from './placement';
 
 export type BuildingState = 'producing' | 'waitingForInput' | 'unstaffed' | 'outputFull' | 'relocating';
@@ -77,6 +78,10 @@ export interface ColonistSnapshot {
   carrying: number;
   /** Remaining ticks of this worker's tool coverage (0 = none). */
   toolTicks: number;
+  /** Ticks alive. Years are a display unit only — divide by BALANCE.yearTicks. */
+  ageTicks: number;
+  /** Derived from ageTicks, never stored: only an adult can be assigned. */
+  stage: LifeStage;
 }
 
 export interface ResourceStats {
@@ -105,7 +110,7 @@ export interface Snapshot {
   stockpile: Record<ResourceId, ResourceStats>;
   colonyWealth: number;
   population: number;
-  idleWorkers: number;
+  idleAdults: number;
   buildings: BuildingSnapshot[];
   colonists: ColonistSnapshot[];
   /** Per-tick feedback (success and rejection alike); cleared after each snapshot. */

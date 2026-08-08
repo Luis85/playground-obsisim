@@ -16,7 +16,7 @@ describe('SnapshotSystem', () => {
     const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 1.5, batchActive: true, col: 4, row: 1, relocatingTicks: 0 });
     const buildingId = building.getComponent(Building)!.id;
     spawnColonist(prep, ids, { buildingId, hunger: 20, toolTicks: 10 });
-    spawnColonist(prep, ids); // idle
+    spawnColonist(prep, ids, { ageTicks: BALANCE.lifeBands.matureTicks }); // idle adult
     getPrepResource(prep, NoticeBoard).reject('test notice');
 
     const world = await prep.prepareRun();
@@ -24,7 +24,7 @@ describe('SnapshotSystem', () => {
     const snapshot = world.getResource(SnapshotStore).latest!;
 
     expect(snapshot.population).toBe(2);
-    expect(snapshot.idleWorkers).toBe(1);
+    expect(snapshot.idleAdults).toBe(1);
     expect(snapshot.stockpile.wood.stock).toBe(10);
     expect(snapshot.colonyWealth).toBe(10 * 1 + 2 * 8); // wood@1 + bread@8
     expect(snapshot.notices).toEqual([{ kind: 'rejection', message: 'test notice' }]);

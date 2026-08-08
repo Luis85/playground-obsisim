@@ -97,6 +97,9 @@ export interface SavedColonist {
   toolTicks: number;
   /** True when this worker is assigned to hauling (save v3). */
   hauling: boolean;
+  /** Ticks alive (save v5). Optional here — a v4 save predates the field, so
+   * it is read as `?? BALANCE.startingAgeTicks` until save v5 makes it required. */
+  ageTicks?: number;
 }
 
 export interface SaveGameV1 {

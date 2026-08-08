@@ -98,7 +98,7 @@ describe('CommandSystem', () => {
     await dispatch({ type: 'unassignWorker', buildingId });
     expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Unassigned a worker from Forester.' }]);
     expect(snapshot().buildings[0].workers).toBe(1);
-    expect(snapshot().idleWorkers).toBe(2);
+    expect(snapshot().idleAdults).toBe(2);
   });
 
   it('falls back to a generic name when the building an assignment points at is gone', async () => {
@@ -253,7 +253,7 @@ describe('CommandSystem', () => {
     expect(world.getResource(Stockpile).get('wood')).toBe(30); // full refund
     await tick();
     expect(snapshot().buildings).toHaveLength(0);
-    expect(snapshot().idleWorkers).toBe(3);
+    expect(snapshot().idleAdults).toBe(3);
   });
 
   it('demolishing a building with buffered goods names the loss; the refund stays exactly the construction cost', async () => {
@@ -374,12 +374,12 @@ describe('CommandSystem', () => {
     await dispatch({ type: 'assignHauler' });
     expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Assigned a hauler.' }]);
     expect(snapshot().colonists.filter((w) => w.hauling)).toHaveLength(1);
-    expect(snapshot().idleWorkers).toBe(2); // 3 starting workers, one now hauling
+    expect(snapshot().idleAdults).toBe(2); // 3 starting workers, one now hauling
 
     await dispatch({ type: 'unassignHauler' });
     expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Unassigned a hauler.' }]);
     expect(snapshot().colonists.filter((w) => w.hauling)).toHaveLength(0);
-    expect(snapshot().idleWorkers).toBe(3);
+    expect(snapshot().idleAdults).toBe(3);
   });
 
   it('rejects hauler assignment with no idle worker, and unassignment with no hauler', async () => {
@@ -428,7 +428,7 @@ describe('CommandSystem', () => {
     await dispatch({ type: 'assignHauler' });
     // Verify all are hauling and none are idle
     expect(snapshot().colonists.filter((w) => w.hauling)).toHaveLength(3);
-    expect(snapshot().idleWorkers).toBe(0);
+    expect(snapshot().idleAdults).toBe(0);
     // Try to assign a worker to the building — should reject, not poach a hauler
     await dispatch({ type: 'assignWorker', buildingId });
     expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'No idle workers available.' }]);

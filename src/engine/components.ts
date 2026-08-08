@@ -25,6 +25,20 @@ export class Hunger {
   constructor(public value = 0) {}
 }
 
+/**
+ * How long this colonist has been alive, in ticks. The single source of their
+ * life stage — `stageOf` derives child/adult/elder from it, so there is no
+ * maturity flag beside the age that could disagree with it, and moving a band
+ * needs no migration.
+ *
+ * Saved (v5): plainly persistent state, not runtime scratch like HaulTrip.
+ * Magnitude is clamped at load by `clampedAge` rather than bounds-checked in
+ * the load guard, so a save written under a longer lifespan still opens.
+ */
+export class Age {
+  constructor(public ticks = 0) {}
+}
+
 export class JobAssignment {
   constructor(public buildingId: number | null = null, public hauling = false) {}
 }

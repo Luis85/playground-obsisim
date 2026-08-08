@@ -104,7 +104,7 @@ describe('full colony integration', () => {
     const snapshot = world.getResource(SnapshotStore).latest!;
     expect(snapshot.stockpile.wood.stock).toBe(30);
     expect(snapshot.population).toBe(3);
-    expect(snapshot.idleWorkers).toBe(3);
+    expect(snapshot.idleAdults).toBe(3);
     expect(snapshot.buildings).toHaveLength(0);
   });
 });

@@ -6,16 +6,18 @@ import type { SaveGameV4, SavedBuilding } from '../shared/save';
 import type { ResourceId } from '../shared/content-types';
 import type { ResourceStats, Snapshot } from '../shared/snapshot';
 import { DEFAULT_MAP } from '../shared/placement';
+import { stageOf } from '../shared/population';
 import { BALANCE, STARTING_STOCK, STARTING_COLONISTS, colonistEfficiency } from './content/balance';
 import { BUILDINGS } from './content/buildings';
 import { RESOURCES, RESOURCE_IDS } from './content/resources';
 import {
-  Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Colonist,
+  Age, Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Colonist,
   WorkerSlots,
 } from './components';
 import { isBuffersValid, isBuildingsValid, isIdsValid, isPositionsValid, isStockpileValid, isColonistsValid } from './save-guard';
 import {
-  buildingComponents, clampedBuffer, clampedHunger, clampedProgress, clampedRelocation, clampedToolTicks, colonistComponents,
+  buildingComponents, clampedAge, clampedBuffer, clampedHunger, clampedProgress, clampedRelocation, clampedToolTicks,
+  colonistComponents,
 } from './spawn';
 import {
   CommandQueue, IdCounter, NoticeBoard, ProductionLedger, RemovalLedger, SimClock, SnapshotStore, StatsHistory, Stockpile, WorldMap,
@@ -24,6 +26,7 @@ import type { BuildingFacts, ColonistFacts } from './snapshot-builder';
 import { buildEntitySections, gatherEntityFacts } from './snapshot-builder';
 import { CommandSystem } from './systems/command-system';
 import { HungerSystem } from './systems/hunger-system';
+import { PopulationSystem } from './systems/population-system';
 import { EfficiencySystem } from './systems/efficiency-system';
 import { ProductionSystem } from './systems/production-system';
 import { HaulSystem } from './systems/haul-system';
@@ -49,6 +52,7 @@ export type TColonySystemFactory = () => TColonySystem;
 export const ALL_SYSTEMS: TColonySystemFactory[] = [
   CommandSystem,
   HungerSystem,
+  PopulationSystem,
   EfficiencySystem,
   ProductionSystem,
   HaulSystem,
@@ -83,7 +87,7 @@ export function getPrepResource<T extends object>(prep: IPreptimeWorld, type: ne
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors sim-ecs's own TTypeProto<T> constructor-parameter shape exactly
 export const COMPONENT_TYPES: (new (...args: any[]) => object)[] = [
   Building, WorkerSlots, Production, Colonist, Hunger, JobAssignment, Efficiency, ToolCoverage, Position, OutputBuffer, HaulTrip,
-  Relocation,
+  Relocation, Age,
 ];
 
 export function initialSave(): SaveGameV4 {
@@ -216,7 +220,10 @@ export function spawnBuilding(
 export function spawnColonist(
   prep: IPreptimeWorld,
   ids: IdCounter,
-  opts: { id?: number; hunger?: number; buildingId?: number | null; hauling?: boolean; efficiency?: number; toolTicks?: number } = {},
+  opts: {
+    id?: number; hunger?: number; buildingId?: number | null; hauling?: boolean; efficiency?: number; toolTicks?: number;
+    ageTicks?: number;
+  } = {},
 ): IEntity {
   return attach(prep, colonistComponents({ ...opts, id: opts.id ?? ids.take() }));
 }
@@ -305,6 +312,7 @@ export function buildColonyPrepWorld(
       toolTicks: saved.toolTicks,
       buildingId: saved.buildingId,
       hauling: saved.hauling,
+      ageTicks: saved.ageTicks,
     });
   }
   // The UI must never see a null snapshot: a reset or freshly created engine is
@@ -321,6 +329,11 @@ function buildInitialSnapshot(save: SaveGameV4): Snapshot {
     // the entities buildColonyPrepWorld actually spawns (see src/engine/spawn.ts).
     const hunger = clampedHunger(saved.hunger);
     const toolTicks = clampedToolTicks(saved.toolTicks);
+    // Same fallback colonistComponents uses (src/engine/spawn.ts): an
+    // unspecified age defaults to a founder's starting age, not 0, or this
+    // seed would disagree with the entity buildColonyPrepWorld actually
+    // spawns for the very same save record the moment the first tick refreshes.
+    const ageTicks = clampedAge(saved.ageTicks ?? BALANCE.startingAgeTicks);
     return {
       id: saved.id,
       hunger,
@@ -332,6 +345,7 @@ function buildInitialSnapshot(save: SaveGameV4): Snapshot {
       haulLegTicks: 0, haulPickupCol: 0, haulPickupRow: 0,
       carrying: 0, carryingResource: null,
       toolTicks,
+      ageTicks, stage: stageOf(ageTicks, BALANCE.lifeBands),
     };
   });
   const buildingFacts: BuildingFacts[] = save.buildings.map((saved) => {
@@ -351,7 +365,7 @@ function buildInitialSnapshot(save: SaveGameV4): Snapshot {
       relocatingTicks: clampedRelocation(saved.relocatingTicks ?? 0),
     };
   });
-  const { colonists, buildings, population, idleWorkers } = buildEntitySections(workerFacts, buildingFacts);
+  const { colonists, buildings, population, idleAdults } = buildEntitySections(workerFacts, buildingFacts);
   const stockpile = {} as Record<ResourceId, ResourceStats>;
   let colonyWealth = 0;
   for (const resourceId of RESOURCE_IDS) {
@@ -367,7 +381,7 @@ function buildInitialSnapshot(save: SaveGameV4): Snapshot {
     stockpile,
     colonyWealth,
     population,
-    idleWorkers,
+    idleAdults,
     buildings,
     colonists,
     notices: [],

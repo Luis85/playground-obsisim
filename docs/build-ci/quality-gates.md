@@ -303,16 +303,6 @@ component-side types from `useGameStore()` without it) — but unlike the
 three above, nothing referenced it as intentional public API, so it was
 simply un-exported rather than tuned around.
 
-`MAX_AGE_TICKS` (`src/engine/content/balance.ts`) is the same shape but
-transitional rather than permanent: Increment 6 Task 2 exports it because
-Task 3's `clampedAge` (`src/engine/spawn.ts`) imports it, and the two land
-as separate commits (see the increment plan). Until Task 3's commit gives
-fallow a real consumer to see, the export is genuine intentional public API
-with no importer yet, not dead code — the same distinction as the two
-engine seams above. Task 3 should remove this entry once it adds the
-import; an entry that outlives its reason is what `ignoreExports` staying
-"minimal and honest" (see the LOC baseline's own rule, above) means here.
-
 ## Boundary zones (`.fallowrc.json`)
 
 Machine-checked version of the plan's §2.1 one-way layer dependencies.

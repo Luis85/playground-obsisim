@@ -2,6 +2,7 @@ import type { IEntity } from 'sim-ecs';
 import type { Command } from '../../shared/commands';
 import type { ResourceId } from '../../shared/content-types';
 import { haulTicks } from '../../shared/haul';
+import type { LifeStage } from '../../shared/population';
 import { autoPlacePosition, isTileBuildable, relocationTicks, type TileRef } from '../../shared/placement';
 import { BALANCE } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
@@ -29,6 +30,7 @@ export interface BuildingRow {
 export interface WorkerRow {
   job: JobAssignment;
   trip: HaulTrip;
+  stage: LifeStage;
 }
 
 /**
@@ -136,10 +138,11 @@ export function handleAssignWorker(ctx: CommandContext, command: Extract<Command
   }
   let assigned = 0;
   let idle: JobAssignment | null = null;
-  for (const { job } of ctx.workers) {
+  for (const { job, stage } of ctx.workers) {
     if (job.buildingId === command.buildingId) assigned++;
-    // A hauler is staffed work, not spare capacity — never poach it.
-    else if (job.buildingId === null && !job.hauling && idle === null) idle = job;
+    // A hauler is staffed work, not spare capacity — never poach it. A child
+    // or elder is not spare capacity either: they are ineligible.
+    else if (stage === 'adult' && job.buildingId === null && !job.hauling && idle === null) idle = job;
   }
   if (assigned >= found.slots.max) {
     ctx.notices.reject('No free worker slots at this building.');
@@ -281,8 +284,9 @@ export function handleMoveBuilding(ctx: CommandContext, command: Extract<Command
 
 export function handleAssignHauler(ctx: CommandContext): void {
   // The first idle worker, matching handleAssignWorker's selection rule. A
-  // worker already on a building is never poached: the player staffed it.
-  const idle = ctx.workers.find(({ job }) => job.buildingId === null && !job.hauling);
+  // worker already on a building is never poached: the player staffed it. A
+  // child or elder is not spare capacity either: they are ineligible.
+  const idle = ctx.workers.find(({ job, stage }) => stage === 'adult' && job.buildingId === null && !job.hauling);
   if (idle === undefined) {
     ctx.notices.reject('No idle workers available.');
     return;

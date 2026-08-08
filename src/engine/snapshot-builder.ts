@@ -2,10 +2,11 @@ import type { IRuntimeWorld } from 'sim-ecs';
 import type { BuildingDefId, ResourceId } from '../shared/content-types';
 import type { SavedBuilding, SavedColonist } from '../shared/save';
 import type { BuildingSnapshot, BuildingState, ColonistSnapshot } from '../shared/snapshot';
+import { stageOf } from '../shared/population';
 import { BALANCE, workerWorkPower } from './content/balance';
 import { batchOutputUnits, BUILDINGS } from './content/buildings';
 import {
-  Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Colonist,
+  Age, Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Colonist,
   WorkerSlots,
 } from './components';
 
@@ -45,7 +46,7 @@ export interface EntitySections {
   colonists: ColonistSnapshot[];
   buildings: BuildingSnapshot[];
   population: number;
-  idleWorkers: number;
+  idleAdults: number;
 }
 
 /** Pure aggregation shared by SnapshotSystem, the initial-snapshot seed, and the post-step refresh. */
@@ -70,7 +71,7 @@ export function buildEntitySections(workers: readonly ColonistFacts[], buildings
       id: w.id, hunger: w.hunger, efficiency: w.efficiency, buildingId: w.buildingId, hauling: w.hauling,
       haulTargetId: w.haulTargetId, haulPhase: w.haulPhase, haulTicksLeft: w.haulTicksLeft,
       haulLegTicks: w.haulLegTicks, haulPickupCol: w.haulPickupCol, haulPickupRow: w.haulPickupRow,
-      carrying: w.carrying, toolTicks: w.toolTicks,
+      carrying: w.carrying, toolTicks: w.toolTicks, ageTicks: w.ageTicks, stage: w.stage,
     }))
     .sort((a, b) => a.id - b.id);
 
@@ -112,9 +113,9 @@ export function buildEntitySections(workers: readonly ColonistFacts[], buildings
     colonists: workerSnaps,
     buildings: buildingSnaps,
     population: workerSnaps.length,
-    // Idle, on-a-building, and hauling are mutually exclusive states: a
-    // hauler's buildingId is null too, so idle must also exclude hauling.
-    idleWorkers: workerSnaps.filter((w) => w.buildingId === null && !w.hauling).length,
+    // Children and elders are not idle, they are ineligible — counting them
+    // here would advertise labour the assign command will refuse.
+    idleAdults: workerSnaps.filter((c) => c.stage === 'adult' && c.buildingId === null && !c.hauling).length,
   };
 }
 
@@ -130,7 +131,7 @@ export function buildEntitySections(workers: readonly ColonistFacts[], buildings
  * entity exists and maps SavedColonist/SavedBuilding instead.
  */
 export function colonistFactsOf(
-  worker: Colonist, hunger: Hunger, job: JobAssignment, efficiency: Efficiency, coverage: ToolCoverage, trip: HaulTrip,
+  worker: Colonist, hunger: Hunger, job: JobAssignment, efficiency: Efficiency, coverage: ToolCoverage, trip: HaulTrip, age: Age,
 ): ColonistFacts {
   return {
     id: worker.id,
@@ -138,6 +139,8 @@ export function colonistFactsOf(
     efficiency: efficiency.value,
     buildingId: job.buildingId,
     hauling: job.hauling,
+    ageTicks: age.ticks,
+    stage: stageOf(age.ticks, BALANCE.lifeBands),
     // Published on BOTH legs now: the layout interpolates the dot along the
     // camp<->building line, so a returning hauler still needs to know which
     // building it is walking back from (OBS-4-09). `trip.targetId` survives the
@@ -187,6 +190,12 @@ export function savedColonistOf(facts: ColonistFacts): SavedColonist {
   return {
     id: facts.id, hunger: facts.hunger, buildingId: facts.buildingId,
     toolTicks: facts.toolTicks, hauling: facts.hauling,
+    // Unlike efficiency/stage, ageTicks is NOT recomputed from anything else —
+    // it is the source PopulationSystem ages and stage is derived from, so
+    // dropping it here would reset every colonist to the default starting age
+    // on every save/reload, silently undoing however much of a lifespan it
+    // had already lived.
+    ageTicks: facts.ageTicks,
   };
 }
 
@@ -233,6 +242,7 @@ export function gatherEntityFacts(world: IRuntimeWorld): EntityFacts {
         entity.getComponent(Efficiency)!,
         entity.getComponent(ToolCoverage)!,
         entity.getComponent(HaulTrip)!,
+        entity.getComponent(Age)!,
       ));
     }
   }

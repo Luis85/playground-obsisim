@@ -32,7 +32,7 @@ function worker(id: number, overrides: Partial<ColonistSnapshot> = {}): Colonist
     id, hunger: 0, efficiency: 1, buildingId: null, hauling: false,
     haulTargetId: null, haulPhase: 'idle', haulTicksLeft: 0,
     haulLegTicks: 0, haulPickupCol: 0, haulPickupRow: 0,
-    carrying: 0, toolTicks: 0,
+    carrying: 0, toolTicks: 0, ageTicks: 0, stage: 'adult',
     ...overrides,
   };
 }
@@ -42,7 +42,7 @@ function snap(tick: number, buildings: BuildingSnapshot[], colonists: ColonistSn
     // the world renderer never reads the stockpile — an empty cast keeps this
     // smoke fixture decoupled from the resource catalog
     tick, lastRecruitTick: -30, map: { cols: 24, rows: 16 }, stockpile: {} as Snapshot['stockpile'], colonyWealth: 0,
-    population: colonists.length, idleWorkers: 0, buildings, colonists, notices: [],
+    population: colonists.length, idleAdults: 0, buildings, colonists, notices: [],
   };
 }
 

@@ -1,9 +1,9 @@
 import type { BuildingDefId, ResourceId } from '../shared/content-types';
-import { BALANCE } from './content/balance';
+import { BALANCE, MAX_AGE_TICKS } from './content/balance';
 import { BUILDINGS } from './content/buildings';
 import { RESOURCE_IDS } from './content/resources';
 import {
-  Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Colonist,
+  Age, Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Colonist,
   WorkerSlots,
 } from './components';
 
@@ -61,6 +61,10 @@ export function clampedRelocation(ticksLeft: number): number {
   return Math.max(0, Math.min(ticksLeft, BALANCE.maxRelocationTicks));
 }
 
+export function clampedAge(ticks: number): number {
+  return Math.max(0, Math.min(ticks, MAX_AGE_TICKS));
+}
+
 /**
  * A saved buffer trimmed to the CURRENT cap, counted across all resources in
  * catalog order. An over-cap buffer loads and trims rather than being refused.
@@ -112,6 +116,7 @@ export interface ColonistSpec {
   hauling?: boolean;
   efficiency?: number;
   toolTicks?: number;
+  ageTicks?: number;
 }
 
 /** Every component a worker needs, in one list. Order is not significant. */
@@ -125,5 +130,12 @@ export function colonistComponents(spec: ColonistSpec): object[] {
     // Runtime-only, never saved — but every worker carries one, so a hauler can
     // be assigned without the snapshot query losing sight of them.
     new HaulTrip(),
+    // Defaults to a founder's starting age, not 0: an unspecified age means
+    // "a save/spec that predates this field", and BALANCE.startingAgeTicks
+    // (spec 2.2) is already the documented age new founders begin at. 0 would
+    // make every colonist created without an explicit age a child — including
+    // every pre-Task-9 save reload and every existing test's fixture colonist —
+    // silently ineligible for the assign command this same task adds.
+    new Age(clampedAge(spec.ageTicks ?? BALANCE.startingAgeTicks)),
   ];
 }

@@ -1,6 +1,8 @@
 import { Actions, createSystem, queryComponents, Read, ReadEntity, ReadResource, Write, WriteResource } from 'sim-ecs';
 import type { Command } from '../../shared/commands';
-import { Building, HaulTrip, JobAssignment, OutputBuffer, Position, Relocation, WorkerSlots } from '../components';
+import { stageOf } from '../../shared/population';
+import { BALANCE } from '../content/balance';
+import { Age, Building, HaulTrip, JobAssignment, OutputBuffer, Position, Relocation, WorkerSlots } from '../components';
 import { CommandQueue, IdCounter, NoticeBoard, RemovalLedger, SimClock, Stockpile, WorldMap } from '../resources';
 import {
   type CommandContext,
@@ -38,7 +40,7 @@ export const CommandSystem = () => createSystem({
   }),
   // JobAssignment alone identifies a worker entity — the Colonist component
   // added nothing the handlers read.
-  workers: queryComponents({ job: Write(JobAssignment), trip: Write(HaulTrip) }),
+  workers: queryComponents({ job: Write(JobAssignment), trip: Write(HaulTrip), age: Read(Age) }),
 })
   .withName('CommandSystem')
   // Handlers live in command-handlers.ts, one small function per command
@@ -48,7 +50,7 @@ export const CommandSystem = () => createSystem({
     const ctx: CommandContext = {
       clock, stockpile, ids, notices, map,
       buildings: [...buildings.iter()].map(({ entity, building, slots, position, buffer, relocation }) => ({ entity, building, slots, position, buffer, relocation })),
-      workers: [...workers.iter()].map(({ job, trip }) => ({ job, trip })),
+      workers: [...workers.iter()].map(({ job, trip, age }) => ({ job, trip, stage: stageOf(age.ticks, BALANCE.lifeBands) })),
       spawn: (...components) => {
         let entity = actions.commands.buildEntity();
         for (const component of components) entity = entity.with(component);

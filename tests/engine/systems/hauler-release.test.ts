@@ -11,7 +11,9 @@ import type { HaulPhase } from '../../../src/engine/components';
 
 let nextId = 1;
 function hauler(phase: HaulPhase, ticksLeft: number, hauling = true): WorkerRow & { id: number } {
-  return { id: nextId++, job: new JobAssignment(null, hauling), trip: new HaulTrip(phase, null, ticksLeft) };
+  // stage is irrelevant to release cost (phase/ticksLeft only) — 'adult' is a
+  // valid, arbitrary fixture value, not a case this file is testing.
+  return { id: nextId++, job: new JobAssignment(null, hauling), trip: new HaulTrip(phase, null, ticksLeft), stage: 'adult' };
 }
 
 describe('cheapestHaulerToRelease', () => {

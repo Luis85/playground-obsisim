@@ -30,7 +30,7 @@ const store = useGameStore();
           <td>
             <button :data-test="`unassign-${b.id}`" :disabled="b.workers === 0" @click="engine.dispatch({ type: 'unassignWorker', buildingId: b.id })">−</button>
             {{ b.workers }} / {{ b.workerSlots }}
-            <button :data-test="`assign-${b.id}`" :disabled="b.workers >= b.workerSlots || store.snapshot.idleWorkers === 0" @click="engine.dispatch({ type: 'assignWorker', buildingId: b.id })">+</button>
+            <button :data-test="`assign-${b.id}`" :disabled="b.workers >= b.workerSlots || store.snapshot.idleAdults === 0" @click="engine.dispatch({ type: 'assignWorker', buildingId: b.id })">+</button>
           </td>
           <td>{{ BUILDING_STATE_LABELS[b.state] }}</td>
           <td>{{ b.progressPct }}%</td>

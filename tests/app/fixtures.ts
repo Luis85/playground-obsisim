@@ -1,5 +1,6 @@
 import type { ResourceStats, Snapshot } from '../../src/shared/snapshot';
 import { RESOURCE_IDS } from '../../src/engine/content/resources';
+import { BALANCE } from '../../src/engine/content/balance';
 import type { ResourceId } from '../../src/shared/content-types';
 import type { BuildingSnapshot, ColonistSnapshot } from '../../src/shared/snapshot';
 
@@ -20,7 +21,7 @@ export function stockedWith(stocks: Partial<Record<ResourceId, number>> = {}): R
 export function makeSnapshot(overrides: Partial<Snapshot> = {}): Snapshot {
   return {
     tick: 0, lastRecruitTick: -30, map: { cols: 24, rows: 16 }, stockpile: stockedWith(), colonyWealth: 0,
-    population: 0, idleWorkers: 0, buildings: [], colonists: [], notices: [],
+    population: 0, idleAdults: 0, buildings: [], colonists: [], notices: [],
     ...overrides,
   };
 }
@@ -41,7 +42,7 @@ export function makeWorker(id: number, overrides: Partial<ColonistSnapshot> = {}
     id, hunger: 0, efficiency: 1, buildingId: null, hauling: false,
     haulTargetId: null, haulPhase: 'idle', haulTicksLeft: 0,
     haulLegTicks: 0, haulPickupCol: 0, haulPickupRow: 0,
-    carrying: 0, toolTicks: 0,
+    carrying: 0, toolTicks: 0, ageTicks: BALANCE.lifeBands.matureTicks, stage: 'adult',
     ...overrides,
   };
 }

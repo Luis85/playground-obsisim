@@ -580,7 +580,7 @@ describe('createColonyWorld', () => {
     const snapshot = world.getResource(SnapshotStore).latest!;
     expect(snapshot.tick).toBe(0);
     expect(snapshot.population).toBe(3);
-    expect(snapshot.idleWorkers).toBe(3);
+    expect(snapshot.idleAdults).toBe(3);
     expect(snapshot.stockpile.wood.stock).toBe(30);
     expect(snapshot.colonyWealth).toBe(50); // 30 wood@1 + 20 berries@1
     expect(snapshot.notices).toEqual([]);
@@ -629,7 +629,9 @@ describe('live-world projections agree', () => {
   // Facts DERIVED each tick and deliberately not persisted. Everything else must
   // be persisted AND survive save -> restore, so a new fact is covered by
   // default and opting out is a visible, deliberate edit to this list.
-  // `efficiency` is recomputed from hunger every tick, never stored.
+  // `efficiency` is recomputed from hunger every tick, never stored. `stage`
+  // is the same shape: recomputed from `ageTicks` (which IS stored) every
+  // tick by stageOf, never itself persisted (Task 3).
   // `haulTargetId`, `haulPhase`, `haulTicksLeft` and `carrying` are real state
   // too, but HaulTrip (Task 4) is deliberately runtime-only for good: a hauler
   // caught mid-trip banks its carried load into the saved stockpile instead
@@ -642,7 +644,7 @@ describe('live-world projections agree', () => {
   // building's LIVE tile, which desyncs once the building moves mid-leg
   // (OBS-5-01) — still HaulTrip, still never saved.
   const DERIVED = [
-    'efficiency', 'haulTargetId', 'haulPhase', 'haulTicksLeft', 'haulLegTicks', 'haulPickupCol', 'haulPickupRow',
+    'efficiency', 'stage', 'haulTargetId', 'haulPhase', 'haulTicksLeft', 'haulLegTicks', 'haulPickupCol', 'haulPickupRow',
     'carrying',
   ] as const;
 

@@ -25,7 +25,7 @@ function mountView(
   });
   const snapshot = makeSnapshot({
     buildings: [makeBuilding(7, { defId: 'forester', workers: 1, workerSlots: 2, state, progress: 1, batchActive: true, progressPct: 33, workPower: 1, col: 5, row: 2, ...building })],
-    idleWorkers: 2,
+    idleAdults: 2,
   });
   snapshot.stockpile.wood.stock = stock.wood ?? 0;
   useGameStore().ingest(snapshot, { paused: true, speed: 1, error: null });

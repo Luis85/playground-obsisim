@@ -2725,17 +2725,33 @@ Expected: FAIL — `LATEST_SAVE_VERSION` is 4 and `SaveGameV5` does not exist.
 In `src/shared/save.ts`:
 
 ```ts
-/** The v3-and-v4 colonist record — frozen legacy shape, pre-demographics. */
+/**
+ * The v3-and-v4 colonist record.
+ *
+ * `ageTicks` and `starvingTicks` are OPTIONAL here, and that is not an
+ * oversight: Tasks 3 and 4 added them to the live v4 record so an in-progress
+ * lifespan or starvation would survive a save before v5 existed. A v4 file
+ * written by any build from Task 3 onward therefore carries them, while one
+ * written earlier does not — optional is exactly that shape. Declaring them
+ * absent would also break the v4->v5 migration below, which reads both to
+ * avoid discarding them.
+ */
 export interface SavedColonistV4 {
   id: number;
   hunger: number;
   buildingId: number | null;
   toolTicks: number;
   hauling: boolean;
+  ageTicks?: number;
+  starvingTicks?: number;
 }
 
-/** The current record: v4 plus age, home, and the starvation clock (save v5). */
-export interface SavedColonist extends SavedColonistV4 {
+/**
+ * The current record (save v5): `homeId` is new, and the two transitional
+ * fields above are promoted from optional to REQUIRED — v5 always writes
+ * them, so nothing downstream needs a fallback.
+ */
+export interface SavedColonist extends Omit<SavedColonistV4, 'ageTicks' | 'starvingTicks'> {
   ageTicks: number;
   homeId: number | null;
   starvingTicks: number;

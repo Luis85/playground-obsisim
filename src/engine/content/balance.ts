@@ -1,5 +1,6 @@
 import type { ResourceId } from '../../shared/content-types';
 import { MAX_MAP } from '../../shared/placement';
+import type { LifeBands } from '../../shared/population';
 
 /** Building relocation speed — half the hauler rate, because carrying a
  * building is harder than carrying goods. Extracted so maxRelocationTicks
@@ -23,6 +24,16 @@ const RELOCATION_TILES_PER_TICK = 1;
  */
 const MAX_RELOCATION_TICKS = Math.ceil(Math.hypot(MAX_MAP.cols, MAX_MAP.rows) / RELOCATION_TILES_PER_TICK);
 
+/**
+ * Ticks per game year. Years are an authoring and display unit only — this is
+ * the one place the conversion happens, and nothing downstream of BALANCE ever
+ * sees a year (spec 2.8). Matches statsWindowTicks and autosaveEveryTicks, and
+ * makes tick->age arithmetic readable: tick 4,200 is year 42.
+ */
+const YEAR_TICKS = 100;
+
+const years = (n: number): number => n * YEAR_TICKS;
+
 export const BALANCE = {
   hungerPerTick: 1,
   hungerMax: 100,
@@ -43,8 +54,32 @@ export const BALANCE = {
    * corner of the default map is 13, so distance is a real investment. */
   haulTilesPerTick: 2,
   relocationTilesPerTick: RELOCATION_TILES_PER_TICK,
+  yearTicks: YEAR_TICKS,
+  /** Age bands in ticks (spec 2.2): child 0-9, adult 10-54, elder 55+,
+   * dying at 65 +/- 8 years. */
+  lifeBands: {
+    matureTicks: years(10),
+    retireTicks: years(55),
+    lifespanTicks: years(65),
+    spreadTicks: years(8),
+  } as LifeBands,
+  /** Founders' age, jittered per id under SALT.startingAge. */
+  startingAgeTicks: years(25),
+  /** A nomad arrives with most of a working life ahead — which is what makes
+   * its higher food gate a fair price. */
+  nomadArrivalTicks: years(20),
   maxRelocationTicks: MAX_RELOCATION_TICKS,
 } as const;
+
+/**
+ * Clamp for a saved age (spec 2.10). The oldest a colonist can legally be is
+ * the longest lifespan current balance can draw — one tick past that and the
+ * next PopulationSystem tick kills them anyway, so a save written under a
+ * longer lifespan loads with its colonists brought down to what this balance
+ * allows rather than being rejected. Same principle as clampedProgress and
+ * clampedRelocation.
+ */
+export const MAX_AGE_TICKS = BALANCE.lifeBands.lifespanTicks + BALANCE.lifeBands.spreadTicks;
 
 /** Spec 3.5: fed = 1.0 up to the meal threshold, then linear down to 0.2 at max hunger. */
 export function colonistEfficiency(hunger: number): number {

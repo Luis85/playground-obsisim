@@ -25,6 +25,10 @@
     {
       "file": "src/engine/world.ts",
       "exports": ["ALL_SYSTEMS"]
+    },
+    {
+      "file": "src/engine/content/balance.ts",
+      "exports": ["MAX_AGE_TICKS"]
     }
   ],
   "usedClassMembers": [

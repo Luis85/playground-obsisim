@@ -3258,6 +3258,18 @@ describe('population balance', () => {
     const long = await runPopulationScenario({ houses: 6, startingAdults: 2, foodPerTick: 8, ticks: 9000, sampleEvery: 100 });
     const peakChildren = long.samples.reduce((best, s, i) => (s.children > long.samples[best].children ? i : best), 0);
     const peakElders = long.samples.reduce((best, s, i) => (s.elders > long.samples[best].elders ? i : best), 0);
+
+    // Non-vacuity FIRST. With no births at all, every sample ties at
+    // children === 0, peakChildren stays pinned at index 0, and the two
+    // FOUNDERS becoming elders around tick 4,500 clears the gap threshold on
+    // their own — so the test would pass without a single birth cohort ever
+    // reaching old age, which is the entire behaviour its name claims.
+    expect(long.births).toBeGreaterThan(0);
+    expect(long.samples[peakChildren].children).toBeGreaterThan(0);
+    // And the elder peak must belong to that cohort, not to the founders:
+    // it has to arrive at least a maturity-to-retirement span after the
+    // children peaked, and outnumber the founders who were alive at tick 0.
+    expect(long.samples[peakElders].elders).toBeGreaterThan(2);
     const gapTicks = (peakElders - peakChildren) * 100;
     expect(gapTicks).toBeGreaterThan(BALANCE.lifeBands.retireTicks * 0.6);
   }, 180000);
@@ -3388,7 +3400,7 @@ function foodDripSystem(perTick: number): TColonySystemFactory {
  * here as a limitation, in the same spirit as the FED berry stock: this models
  * an *attentive* player, so it measures the best case the balance allows.
  */
-function autoStaffSystem(): TColonySystemFactory {
+function autoStaffSystem(targetHaulers: number): TColonySystemFactory {
   return () => createSystem({
     colonists: queryComponents({ age: Read(Age), job: Write(JobAssignment) }),
     buildings: queryComponents({ building: Read(Building), slots: Read(WorkerSlots) }),
@@ -3399,6 +3411,20 @@ function autoStaffSystem(): TColonySystemFactory {
       const rows = [...colonists.iter()];
       for (const { job } of rows) {
         if (job.buildingId !== null) staffed.set(job.buildingId, (staffed.get(job.buildingId) ?? 0) + 1);
+      }
+
+      // HAULERS FIRST, and topped back up as they retire. The founding
+      // haulers all start at matureTicks, so they are stood down together
+      // about 4,500 ticks in; if nobody replaces them, delivery stops for the
+      // remaining two-thirds of a 12,000-tick run and the colony starves
+      // because of the harness rather than the balance under measurement.
+      const isAdult = (age: Age) => stageOf(age.ticks, BALANCE.lifeBands) === 'adult';
+      let haulers = rows.filter(({ age, job }) => job.hauling && isAdult(age)).length;
+      for (const { age, job } of rows) {
+        if (haulers >= targetHaulers) break;
+        if (job.hauling || job.buildingId !== null || !isAdult(age)) continue;
+        job.hauling = true;
+        haulers++;
       }
       const openings = [...buildings.iter()]
         .filter(({ building, slots }) => (staffed.get(building.id) ?? 0) < slots.max)
@@ -3423,7 +3449,7 @@ export async function runPopulationScenario(scenario: PopulationScenario): Promi
   const statsIndex = ALL_SYSTEMS.indexOf(StatsSystem);
   const systems: TColonySystemFactory[] = [
     ...ALL_SYSTEMS.slice(0, statsIndex),
-    ...(chain ? [autoStaffSystem()] : [foodDripSystem(foodPerTick)]),
+    ...(chain ? [autoStaffSystem(scenario.haulers ?? 2)] : [foodDripSystem(foodPerTick)]),
     ...ALL_SYSTEMS.slice(statsIndex),
   ];
   const prep = buildColonyPrepWorld({ save, systems });

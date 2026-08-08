@@ -73,6 +73,17 @@ export function resolveOldAge(ctx: PopulationContext): void {
   }
 }
 
+export function resolveStarvation(ctx: PopulationContext): void {
+  for (const row of livingRows(ctx)) {
+    if (row.hunger.starvingTicks < BALANCE.starvationDeathTicks) continue;
+    standDown(ctx, row);
+    ctx.remove(row.entity);
+    ctx.deadIds.add(row.colonist.id);
+    ctx.removals.dirty = true;
+    ctx.notices.succeed(`Colonist #${row.colonist.id} starved.`);
+  }
+}
+
 export function standDownNonAdults(ctx: PopulationContext): void {
   for (const row of livingRows(ctx)) {
     const stage = stageOf(row.age.ticks, BALANCE.lifeBands);

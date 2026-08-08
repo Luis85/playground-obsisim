@@ -39,7 +39,7 @@ export function makeBuilding(id: number, overrides: Partial<BuildingSnapshot> = 
 
 export function makeWorker(id: number, overrides: Partial<ColonistSnapshot> = {}): ColonistSnapshot {
   return {
-    id, hunger: 0, efficiency: 1, buildingId: null, hauling: false,
+    id, hunger: 0, starvingTicks: 0, efficiency: 1, buildingId: null, hauling: false,
     haulTargetId: null, haulPhase: 'idle', haulTicksLeft: 0,
     haulLegTicks: 0, haulPickupCol: 0, haulPickupRow: 0,
     carrying: 0, toolTicks: 0, ageTicks: BALANCE.lifeBands.matureTicks, stage: 'adult',

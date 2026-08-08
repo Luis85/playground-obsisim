@@ -40,6 +40,8 @@ export interface BuildingSnapshot {
 export interface ColonistSnapshot {
   id: number;
   hunger: number;
+  /** Consecutive ticks pinned at hungerMax; death follows at BALANCE.starvationDeathTicks. */
+  starvingTicks: number;
   efficiency: number;
   buildingId: number | null;
   /** True while this worker is assigned to hauling rather than to a building. */

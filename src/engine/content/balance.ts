@@ -40,6 +40,9 @@ export const BALANCE = {
   mealThreshold: 50,
   berriesHungerRestore: 30,
   starvingEfficiency: 0.2,
+  /** Ticks pinned at hungerMax before a colonist dies — one year, so
+   * starvation is a slow visible slide the player can still pull out of. */
+  starvationDeathTicks: 100,
   toolMultiplier: 1.5,
   toolDurationTicks: 300,
   recruitCooldownTicks: 30,

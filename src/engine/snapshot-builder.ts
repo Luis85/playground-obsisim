@@ -68,8 +68,8 @@ export function buildEntitySections(workers: readonly ColonistFacts[], buildings
 
   const workerSnaps: ColonistSnapshot[] = workers
     .map((w) => ({
-      id: w.id, hunger: w.hunger, efficiency: w.efficiency, buildingId: w.buildingId, hauling: w.hauling,
-      haulTargetId: w.haulTargetId, haulPhase: w.haulPhase, haulTicksLeft: w.haulTicksLeft,
+      id: w.id, hunger: w.hunger, starvingTicks: w.starvingTicks, efficiency: w.efficiency, buildingId: w.buildingId,
+      hauling: w.hauling, haulTargetId: w.haulTargetId, haulPhase: w.haulPhase, haulTicksLeft: w.haulTicksLeft,
       haulLegTicks: w.haulLegTicks, haulPickupCol: w.haulPickupCol, haulPickupRow: w.haulPickupRow,
       carrying: w.carrying, toolTicks: w.toolTicks, ageTicks: w.ageTicks, stage: w.stage,
     }))
@@ -136,6 +136,7 @@ export function colonistFactsOf(
   return {
     id: worker.id,
     hunger: hunger.value,
+    starvingTicks: hunger.starvingTicks,
     efficiency: efficiency.value,
     buildingId: job.buildingId,
     hauling: job.hauling,

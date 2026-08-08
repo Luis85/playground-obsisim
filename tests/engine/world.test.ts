@@ -674,9 +674,14 @@ describe('live-world projections agree', () => {
   // layout re-deriving a leg's length and a returning hauler's origin from the
   // building's LIVE tile, which desyncs once the building moves mid-leg
   // (OBS-5-01) — still HaulTrip, still never saved.
+  // `starvingTicks` differs from the rest of this list: it IS real persistent
+  // state (Hunger's own doc comment explains why — a save/reload must not
+  // cancel a starvation in progress), just not yet saved. SavedColonist gains
+  // it once save v5 lands; remove this entry then, rather than leaving a live
+  // fact permanently exempted the way the others above are.
   const DERIVED = [
     'efficiency', 'stage', 'haulTargetId', 'haulPhase', 'haulTicksLeft', 'haulLegTicks', 'haulPickupCol', 'haulPickupRow',
-    'carrying',
+    'carrying', 'starvingTicks',
   ] as const;
 
   function persisted(workers: readonly object[]): Record<string, unknown>[] {

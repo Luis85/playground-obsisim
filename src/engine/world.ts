@@ -337,6 +337,9 @@ function buildInitialSnapshot(save: SaveGameV4): Snapshot {
     return {
       id: saved.id,
       hunger,
+      // Not yet read from the save (Task 9): SavedColonist has no field for
+      // it, so every restored colonist starts with a clean starvation clock.
+      starvingTicks: 0,
       efficiency: colonistEfficiency(hunger),
       buildingId: saved.buildingId,
       hauling: saved.hauling,

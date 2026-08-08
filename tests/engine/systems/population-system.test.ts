@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Building, JobAssignment } from '../../../src/engine/components';
-import { IdCounter, SnapshotStore } from '../../../src/engine/resources';
+import { IdCounter, SnapshotStore, Stockpile } from '../../../src/engine/resources';
 import {
   ALL_SYSTEMS, buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist,
 } from '../../../src/engine/world';
@@ -67,5 +67,49 @@ describe('PopulationSystem — aging', () => {
     const alive = world.getResource(SnapshotStore).latest!.colonists.map((c) => c.id);
     expect(alive).toHaveLength(1);
     expect(alive[0]).toBe(span1 < span2 ? 2 : 1); // the longer-lived one survives
+  });
+});
+
+describe('PopulationSystem — starvation', () => {
+  it('kills a colonist pinned at max hunger, but not before the counter runs out', async () => {
+    // Empty store: nothing to eat, ever. Fixture values discriminate — the
+    // colonist starts BELOW hungerMax so the first ticks raise hunger without
+    // touching the starvation clock, which is what separates "hungry" from
+    // "starving".
+    const save = { ...initialSave(), workers: [], stockpile: {}, nextEntityId: 100 };
+    const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
+    const ids = getPrepResource(prep, IdCounter);
+    spawnColonist(prep, ids, { id: 1, ageTicks: BALANCE.lifeBands.matureTicks, hunger: BALANCE.hungerMax - 2 });
+    const world = await prep.prepareRun();
+
+    const step = () => stepTick(world);
+    const me = () => world.getResource(SnapshotStore).latest!.colonists.find((c) => c.id === 1);
+
+    await step();
+    expect(me()!.starvingTicks).toBe(0);          // hunger 99: hungry, not starving
+    await step();
+    expect(me()!.starvingTicks).toBe(1);          // pinned at the cap: the clock starts
+    for (let i = 0; i < BALANCE.starvationDeathTicks - 2; i++) await step();
+    expect(me()).toBeDefined();                    // still alive one tick short
+    await step();
+    expect(me()).toBeUndefined();                  // and now dead
+  });
+
+  it('resets the starvation clock the moment a colonist eats', async () => {
+    const save = { ...initialSave(), workers: [], stockpile: {}, nextEntityId: 100 };
+    const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
+    const ids = getPrepResource(prep, IdCounter);
+    spawnColonist(prep, ids, { id: 1, ageTicks: BALANCE.lifeBands.matureTicks, hunger: BALANCE.hungerMax });
+    const world = await prep.prepareRun();
+    const step = () => stepTick(world);
+    const me = () => world.getResource(SnapshotStore).latest!.colonists.find((c) => c.id === 1)!;
+
+    await step();
+    await step();
+    expect(me().starvingTicks).toBe(2);
+    world.getResource(Stockpile).add('bread', 1);
+    await step();
+    expect(me().starvingTicks).toBe(0);
+    expect(me().hunger).toBe(0);
   });
 });

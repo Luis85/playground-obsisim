@@ -83,12 +83,16 @@ describe('full colony integration', () => {
     expect(final.colonyWealth).toBeGreaterThan(0);
   });
 
-  it('starvation drops efficiency toward 0.2 and food restores it (nobody dies)', async () => {
+  it('starvation drops efficiency toward 0.2 and food restores it, short of the death threshold', async () => {
     const save = initialSave(); // 20 berries, 3 workers, no production
     const world = await createColonyWorld(save);
-    await run(world, 400); // berries run out, workers starve
+    // 350: berries run out and hunger bottoms every colonist's efficiency at
+    // 0.2 well before this, and it stays short of BALANCE.starvationDeathTicks
+    // (100 ticks pinned at the cap) killing anyone — that transition belongs to
+    // PopulationSystem's starvation suite, not this integration test.
+    await run(world, 350); // berries run out, workers starve
     const snapshot = () => world.getResource(SnapshotStore).latest!;
-    expect(snapshot().population).toBe(3); // nobody dies
+    expect(snapshot().population).toBe(3); // nobody has starved to death yet
     expect(snapshot().colonists.every((w) => w.efficiency <= 0.21)).toBe(true);
 
     // hand the colony bread: everyone recovers within a meal cycle

@@ -29,7 +29,7 @@ function building(id: number, defId: BuildingSnapshot['defId'], col: number, row
 
 function worker(id: number, overrides: Partial<ColonistSnapshot> = {}): ColonistSnapshot {
   return {
-    id, hunger: 0, efficiency: 1, buildingId: null, hauling: false,
+    id, hunger: 0, starvingTicks: 0, efficiency: 1, buildingId: null, hauling: false,
     haulTargetId: null, haulPhase: 'idle', haulTicksLeft: 0,
     haulLegTicks: 0, haulPickupCol: 0, haulPickupRow: 0,
     carrying: 0, toolTicks: 0, ageTicks: 0, stage: 'adult',

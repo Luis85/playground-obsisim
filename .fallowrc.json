@@ -25,6 +25,10 @@
     {
       "file": "src/engine/world.ts",
       "exports": ["ALL_SYSTEMS"]
+    },
+    {
+      "file": "src/engine/spawn.ts",
+      "exports": ["clampedStarving"]
     }
   ],
   "usedClassMembers": [

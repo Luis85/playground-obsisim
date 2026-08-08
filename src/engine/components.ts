@@ -22,7 +22,19 @@ export class Colonist {
 }
 
 export class Hunger {
-  constructor(public value = 0) {}
+  /**
+   * `starvingTicks` counts consecutive ticks pinned at `hungerMax` with
+   * nothing eaten. HungerSystem is its ONLY writer — it already owns this
+   * component and is the one place that knows whether this colonist ate this
+   * tick; PopulationSystem only reads it. Two systems writing one counter is
+   * how a starvation clock ends up advancing twice on a tick where a colonist
+   * both starved and was fed.
+   *
+   * Saved (v5) for the reason relocatingTicks is: it is a penalty already
+   * incurred, and dropping it would let save-and-reload cancel a starvation
+   * in progress.
+   */
+  constructor(public value = 0, public starvingTicks = 0) {}
 }
 
 /**

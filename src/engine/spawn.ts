@@ -44,6 +44,10 @@ export function clampedHunger(hunger: number): number {
   return Math.min(hunger, BALANCE.hungerMax);
 }
 
+export function clampedStarving(ticks: number): number {
+  return Math.max(0, Math.min(ticks, BALANCE.starvationDeathTicks));
+}
+
 export function clampedToolTicks(toolTicks: number): number {
   return Math.min(toolTicks, BALANCE.toolDurationTicks);
 }
@@ -112,6 +116,7 @@ export function buildingComponents(spec: BuildingSpec): object[] {
 export interface ColonistSpec {
   id: number;
   hunger?: number;
+  starvingTicks?: number;
   buildingId?: number | null;
   hauling?: boolean;
   efficiency?: number;
@@ -123,7 +128,7 @@ export interface ColonistSpec {
 export function colonistComponents(spec: ColonistSpec): object[] {
   return [
     new Colonist(spec.id),
-    new Hunger(clampedHunger(spec.hunger ?? 0)),
+    new Hunger(clampedHunger(spec.hunger ?? 0), clampedStarving(spec.starvingTicks ?? 0)),
     new JobAssignment(spec.buildingId ?? null, spec.hauling ?? false),
     new Efficiency(spec.efficiency ?? 1),
     new ToolCoverage(clampedToolTicks(spec.toolTicks ?? 0)),

@@ -1,7 +1,7 @@
 import { Actions, createSystem, queryComponents, Read, ReadEntity, Write, WriteResource } from 'sim-ecs';
 import { Age, Colonist, HaulTrip, Hunger, JobAssignment } from '../components';
 import { IdCounter, NoticeBoard, RemovalLedger, SimClock, Stockpile } from '../resources';
-import { ageEveryone, resolveOldAge, standDownNonAdults, type PopulationContext } from './population-handlers';
+import { ageEveryone, resolveOldAge, resolveStarvation, standDownNonAdults, type PopulationContext } from './population-handlers';
 
 /**
  * Spec 2.9 places this third, and both neighbours are load-bearing: AFTER
@@ -41,6 +41,7 @@ export const PopulationSystem = () => createSystem({
     };
     ageEveryone(ctx);
     resolveOldAge(ctx);
+    resolveStarvation(ctx);
     standDownNonAdults(ctx);
   })
   .build();

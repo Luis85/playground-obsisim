@@ -1,6 +1,6 @@
 import type { IRuntimeWorld } from 'sim-ecs';
 import type { BuildingDefId, RecipeDef, ResourceId } from '../shared/content-types';
-import type { SavedBuilding, SavedColonist } from '../shared/save';
+import type { SavedBuilding, SavedColonistV4 } from '../shared/save';
 import type { BuildingSnapshot, BuildingState, ColonistSnapshot } from '../shared/snapshot';
 import type { TileRef } from '../shared/placement';
 import { CAMP_TILE } from '../shared/haul';
@@ -313,7 +313,7 @@ export function buildingFactsOf(
  * means the persist decision for a new fact is one obvious edit rather than a
  * whitelist buried inside the serializer.
  */
-export function savedColonistOf(facts: ColonistFacts): SavedColonist {
+export function savedColonistOf(facts: ColonistFacts): SavedColonistV4 {
   return {
     id: facts.id, hunger: facts.hunger, buildingId: facts.buildingId,
     toolTicks: facts.toolTicks, hauling: facts.hauling,

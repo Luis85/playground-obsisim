@@ -90,23 +90,42 @@ export interface SavedWorkerV2 {
   toolTicks: number;
 }
 
-export interface SavedColonist {
+/**
+ * The v3-and-v4 colonist record — frozen legacy shape.
+ *
+ * `ageTicks` and `starvingTicks` are OPTIONAL here, and that is not an
+ * oversight: increment 6 added them to the live v4 record so an in-progress
+ * lifespan or starvation would survive a save before v5 existed. A v4 file
+ * written by any build from that point on therefore carries them, while one
+ * written earlier does not — optional is exactly that shape. Declaring them
+ * absent would also break the v4->v5 migration, which reads both to avoid
+ * discarding them.
+ */
+export interface SavedColonistV4 {
   id: number;
   hunger: number;
   buildingId: number | null;
   toolTicks: number;
   /** True when this worker is assigned to hauling (save v3). */
   hauling: boolean;
-  /** Ticks alive (save v5). Optional here — a v4 save predates the field, so
-   * it is read as `?? BALANCE.startingAgeTicks` until save v5 makes it required. */
+  /** Ticks alive. */
   ageTicks?: number;
-  /** Consecutive ticks pinned at max hunger (save v5). Optional here for the
-   * same reason `ageTicks` is — a v4 save predates the field, so it is read
-   * as `?? 0` until save v5 makes it required. It is saved for the same
-   * reason `relocatingTicks` is (increment 5 §2.4): a penalty already
-   * incurred, and omitting it would let save-and-reload cancel a starvation
-   * in progress. */
+  /** Consecutive ticks pinned at max hunger. Saved for the same reason
+   * `relocatingTicks` is (increment 5 §2.4): a penalty already incurred, and
+   * omitting it would let save-and-reload cancel a starvation in progress. */
   starvingTicks?: number;
+}
+
+/**
+ * The current colonist record (save v5): `homeId` is new, and the two
+ * transitional fields above are promoted from optional to REQUIRED — v5 always
+ * writes them, so nothing downstream needs a fallback.
+ */
+export interface SavedColonist extends Omit<SavedColonistV4, 'ageTicks' | 'starvingTicks'> {
+  ageTicks: number;
+  /** The house this colonist sleeps in, or null when homeless. */
+  homeId: number | null;
+  starvingTicks: number;
 }
 
 export interface SaveGameV1 {
@@ -138,7 +157,7 @@ export interface SaveGameV3 {
   stockpile: Partial<Record<ResourceId, number>>;
   map: WorldMapSize;
   buildings: SavedBuildingV3[];
-  workers: SavedColonist[];
+  workers: SavedColonistV4[];
   nextEntityId: number;
 }
 
@@ -149,8 +168,23 @@ export interface SaveGameV4 {
   stockpile: Partial<Record<ResourceId, number>>;
   map: WorldMapSize;
   buildings: SavedBuilding[];
-  workers: SavedColonist[];
+  workers: SavedColonistV4[];
   nextEntityId: number;
+}
+
+/**
+ * The current save (v5): demographics arrive. The roster is renamed from
+ * `workers` to `colonists` — a v4 colony was a workforce, a v5 one is a
+ * population that ages, sleeps somewhere and can starve — and the birth clock
+ * joins the recruit clock as persisted state.
+ */
+export interface SaveGameV5 extends Omit<SaveGameV4, 'version' | 'workers'> {
+  version: 5;
+  /** Tick of the last birth — see SimClock.lastBirthTick. Persisted for the
+   * reason lastRecruitTick is: a cooldown a reload could cancel is not a
+   * cooldown. */
+  lastBirthTick: number;
+  colonists: SavedColonist[];
 }
 
 function isSavedBuildingV1Shape(b: unknown): boolean {
@@ -166,10 +200,42 @@ function isSavedBuildingV1Shape(b: unknown): boolean {
 function isSavedWorkerShape(w: unknown): boolean {
   return (
     typeof w === 'object' && w !== null &&
-    Number.isFinite((w as SavedColonist).id) &&
-    Number.isFinite((w as SavedColonist).hunger) &&
-    Number.isFinite((w as SavedColonist).toolTicks) &&
-    ((w as SavedColonist).buildingId === null || Number.isFinite((w as SavedColonist).buildingId))
+    Number.isFinite((w as SavedColonistV4).id) &&
+    Number.isFinite((w as SavedColonistV4).hunger) &&
+    Number.isFinite((w as SavedColonistV4).toolTicks) &&
+    ((w as SavedColonistV4).buildingId === null || Number.isFinite((w as SavedColonistV4).buildingId))
+  );
+}
+
+/**
+ * A non-negative safe integer, the shape every tick counter a colonist carries
+ * must have. NOT bounds-checked against current balance: magnitude is
+ * balance-coupled and clamped at spawn (clampedAge / clampedStarving), so a
+ * save written under a longer lifespan or starvation window still loads.
+ *
+ * The lower bound is what closes a NaN path with teeth: `clampedAge(NaN)` is
+ * `Math.max(0, Math.min(NaN, MAX_AGE_TICKS))` — still NaN — and
+ * `resolveOldAge`'s `age.ticks < lifespanFor(...)` guard is false either way
+ * for NaN, so its `continue` never fires and the colonist is removed on the
+ * first tick after load rather than the save taking the corrupt-backup path.
+ */
+function isTickCounter(value: unknown): boolean {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+/**
+ * The v5 colonist record: everything a v4 one needed, plus the three fields v5
+ * promotes to required. `homeId` is a reference, so only its SHAPE is checked
+ * here — that it names a real, sheltering, settled building is a cross-field
+ * truth and lives in `isLoadableSave` beside the id and position checks.
+ */
+function isSavedColonistShape(w: unknown): boolean {
+  if (!isSavedWorkerShape(w)) return false;
+  const colonist = w as SavedColonist;
+  return (
+    isTickCounter(colonist.ageTicks) &&
+    isTickCounter(colonist.starvingTicks) &&
+    (colonist.homeId === null || Number.isFinite(colonist.homeId))
   );
 }
 
@@ -182,35 +248,55 @@ function isValidStockpile(stockpile: unknown): boolean {
   );
 }
 
-/** Validate bounded entity arrays with per-record checks for both collections. */
-function isValidSaveArrays(save: Record<string, unknown>): boolean {
+/**
+ * Validate bounded entity arrays with per-record checks for both collections.
+ *
+ * The roster key is a PARAMETER, not the literal `workers`, because v5 renamed
+ * it to `colonists`. Hard-coding it here — with `isCommonSaveShape` calling
+ * this for every version guard — is what would make a mirrored v5 guard reject
+ * every v5 save ever written, including the v4->v5 migration's own output:
+ * the migration would run, its result would fail `guards[5]`, and
+ * `migrateSaveToLatest` would return null, sending every existing colony down
+ * the corrupt-save backup path with nothing downstream able to notice.
+ */
+function isValidSaveArrays(
+  save: Record<string, unknown>, rosterKey: 'workers' | 'colonists', isRecord: (r: unknown) => boolean,
+): boolean {
+  const roster = save[rosterKey];
   return (
     Array.isArray(save.buildings) &&
     save.buildings.length <= MAX_SAVED_ENTITIES &&
     save.buildings.every(isSavedBuildingV1Shape) &&
-    Array.isArray(save.workers) &&
-    save.workers.length <= MAX_SAVED_ENTITIES &&
-    save.workers.every(isSavedWorkerShape)
+    Array.isArray(roster) &&
+    roster.length <= MAX_SAVED_ENTITIES &&
+    roster.every(isRecord)
   );
 }
 
-/** The shape both versions share: counters, stockpile object, bounded entity
+/** The shape every version shares: counters, stockpile object, bounded entity
  * arrays with per-record checks. Number.isFinite, never typeof: NaN
  * and Infinity pass typeof === 'number' and would poison sim arithmetic. */
-function isCommonSaveShape(save: Record<string, unknown>): boolean {
+function isCommonSaveShape(
+  save: Record<string, unknown>, rosterKey: 'workers' | 'colonists', isRecord: (r: unknown) => boolean,
+): boolean {
   return (
     Number.isFinite(save.tick) &&
     Number.isFinite(save.lastRecruitTick) &&
     Number.isFinite(save.nextEntityId) &&
     isValidStockpile(save.stockpile) &&
-    isValidSaveArrays(save)
+    isValidSaveArrays(save, rosterKey, isRecord)
   );
+}
+
+/** What v1 through v4 pass: the legacy roster key and the legacy record. */
+function isLegacyShape(save: Record<string, unknown>): boolean {
+  return isCommonSaveShape(save, 'workers', isSavedWorkerShape);
 }
 
 export function isSaveGameV1(data: unknown): data is SaveGameV1 {
   if (typeof data !== 'object' || data === null) return false;
   const save = data as Record<string, unknown>;
-  return save.version === 1 && isCommonSaveShape(save);
+  return save.version === 1 && isLegacyShape(save);
 }
 
 function isMapShape(map: unknown): map is WorldMapSize {
@@ -237,7 +323,7 @@ export function isSaveGameV2(data: unknown): data is SaveGameV2 {
   const save = data as Record<string, unknown>;
   return (
     save.version === 2 &&
-    isCommonSaveShape(save) &&
+    isLegacyShape(save) &&
     isMapShape(save.map) &&
     (save.buildings as unknown[]).every(hasSavedPosition)
   );
@@ -255,15 +341,31 @@ function isBufferShape(buffer: unknown): boolean {
   return Object.values(buffer).every((amount) => Number.isSafeInteger(amount) && (amount as number) >= 0);
 }
 
+/** Every record in `roster` declares whether it hauls — the save-v3 addition. */
+function everyRecordHauls(roster: unknown): boolean {
+  return (roster as unknown[]).every((w) => typeof (w as SavedColonistV4).hauling === 'boolean');
+}
+
+/** The v4-and-later building record: positioned, buffered, and carrying a
+ * relocation countdown. Shared by both guards rather than repeated, so the two
+ * cannot drift about what a current building record is. */
+function isSavedBuildingV4Shape(b: unknown): boolean {
+  return (
+    hasSavedPosition(b) &&
+    isBufferShape((b as SavedBuilding).buffer) &&
+    Number.isFinite((b as SavedBuilding).relocatingTicks)
+  );
+}
+
 export function isSaveGameV3(data: unknown): data is SaveGameV3 {
   if (typeof data !== 'object' || data === null) return false;
   const save = data as Record<string, unknown>;
   return (
     save.version === 3 &&
-    isCommonSaveShape(save) &&
+    isLegacyShape(save) &&
     isMapShape(save.map) &&
     (save.buildings as unknown[]).every((b) => hasSavedPosition(b) && isBufferShape((b as SavedBuildingV3).buffer)) &&
-    (save.workers as unknown[]).every((w) => typeof (w as SavedColonist).hauling === 'boolean')
+    everyRecordHauls(save.workers)
   );
 }
 
@@ -272,12 +374,28 @@ export function isSaveGameV4(data: unknown): data is SaveGameV4 {
   const save = data as Record<string, unknown>;
   return (
     save.version === 4 &&
-    isCommonSaveShape(save) &&
+    isLegacyShape(save) &&
     isMapShape(save.map) &&
-    (save.buildings as unknown[]).every(
-      (b) => hasSavedPosition(b) && isBufferShape((b as SavedBuilding).buffer)
-        && Number.isFinite((b as SavedBuilding).relocatingTicks),
-    ) &&
-    (save.workers as unknown[]).every((w) => typeof (w as SavedColonist).hauling === 'boolean')
+    (save.buildings as unknown[]).every(isSavedBuildingV4Shape) &&
+    everyRecordHauls(save.workers)
+  );
+}
+
+/**
+ * The current structural guard. Same building rules as v4; the roster moves to
+ * `colonists` and carries the three fields v5 requires, and `lastBirthTick`
+ * gets exactly the treatment `lastRecruitTick` gets (finite here, safe-integer
+ * and not-ahead-of-`tick` in isLoadableSave, which can see the whole save).
+ */
+export function isSaveGameV5(data: unknown): data is SaveGameV5 {
+  if (typeof data !== 'object' || data === null) return false;
+  const save = data as Record<string, unknown>;
+  return (
+    save.version === 5 &&
+    isCommonSaveShape(save, 'colonists', isSavedColonistShape) &&
+    Number.isFinite(save.lastBirthTick) &&
+    isMapShape(save.map) &&
+    (save.buildings as unknown[]).every(isSavedBuildingV4Shape) &&
+    everyRecordHauls(save.colonists)
   );
 }

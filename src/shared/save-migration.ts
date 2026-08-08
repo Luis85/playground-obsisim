@@ -1,5 +1,5 @@
 import type { SaveGameV1, SaveGameV2, SaveGameV3, SaveGameV4 } from './save';
-import { isSaveGameV1, isSaveGameV2, isSaveGameV3, isSaveGameV4, LATEST_SAVE_VERSION } from './save';
+import { isSaveGameV1, isSaveGameV2, isSaveGameV3, isSaveGameV4, isSaveGameV5, LATEST_SAVE_VERSION } from './save';
 import { autoPlaceSequence, mapThatFits } from './placement';
 
 /**
@@ -27,7 +27,9 @@ export interface MigrationStep {
  */
 export type SaveGuards = Partial<Record<number, (data: unknown) => boolean>>;
 
-const SAVE_GUARDS: SaveGuards = { 1: isSaveGameV1, 2: isSaveGameV2, 3: isSaveGameV3, 4: isSaveGameV4 };
+const SAVE_GUARDS: SaveGuards = {
+  1: isSaveGameV1, 2: isSaveGameV2, 3: isSaveGameV3, 4: isSaveGameV4, 5: isSaveGameV5,
+};
 
 /**
  * v1 -> v2: space arrives. Every building gets the position increment 2's

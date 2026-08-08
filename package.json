@@ -21,7 +21,8 @@
     "check:all": "npm run lint && npm run check:loc && npm run check:css && npm run check:quality && npm run typecheck && npm run test && npm run build && npm run check:artifacts",
     "smoke:world": "node scripts/world-smoke.mjs",
     "test-build": "node scripts/test-build.mjs",
-    "balance:report": "BALANCE_REPORT=1 vitest run tests/engine/balance.test.ts"
+    "balance:report": "BALANCE_REPORT=1 vitest run tests/engine/balance.test.ts",
+    "balance:population": "BALANCE_REPORT=1 vitest run tests/engine/balance.test.ts -t population"
   },
   "dependencies": {
     "excalibur": "0.32.0",

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { BALANCE } from '../../src/engine/content/balance';
 import { CAMP_TILE } from '../../src/shared/haul';
 import { runScenario } from '../support/balance-harness';
-import { runPopulationScenario } from '../support/population-harness';
+import { runPopulationScenario, type PopulationResult } from '../support/population-harness';
 
 // The measured shape of increment 4's haul constants, pinned so a later change
 // to outputBufferCap / haulCarryCapacity / haulTilesPerTick cannot quietly
@@ -300,4 +300,54 @@ describe('population balance — the long curve', () => {
     const gapTicks = long.samples[peakElders].tick - long.samples[peakChildren].tick;
     expect(gapTicks).toBeGreaterThan(BALANCE.lifeBands.retireTicks * 0.6);
   }, 180000);
+});
+
+/** One curve, as a block of fixed-width rows. Deliberately NOT the sweep's
+ * `(col,row)` shape: increment 5's regression procedure extracts its 16 rows
+ * with `grep -E '^\(\s*[0-9]+,'`, and a population row that matched would be
+ * diffed against a haul row. */
+function curveLines(title: string, result: PopulationResult): string[] {
+  const lines = ['', title, '   tick  child  adult  elder    pop  meals/head  starving'];
+  for (const s of result.samples) {
+    lines.push(
+      `  ${String(s.tick).padStart(5)}  ${String(s.children).padStart(5)}  ${String(s.adults).padStart(5)}` +
+      `  ${String(s.elders).padStart(5)}  ${String(s.children + s.adults + s.elders).padStart(5)}` +
+      `  ${s.mealsPerHead.toFixed(1).padStart(10)}  ${String(s.starving).padStart(8)}`,
+    );
+  }
+  const final = result.samples.at(-1)!;
+  lines.push(
+    `  births ${result.births}, died of old age ${result.deathsByOldAge}, starved ${result.deathsByStarvation},` +
+    ` peak ${peakOf(result)}, final ${populationOf(final)}, dependency ${result.dependencyRatio.toFixed(2)},` +
+    ` frozen steps ${result.frozenSteps}`,
+  );
+  return lines;
+}
+
+describe('population report', () => {
+  it('prints the population curve when BALANCE_REPORT is set', async () => {
+    if (!process.env.BALANCE_REPORT) return;
+    // The three curves behind section 4 of the increment-6 spec, printed beside
+    // the distance/hauler sweep. Re-run rather than shared with the assertions
+    // above: a memo across `it` blocks would make one test's numbers depend on
+    // whether another ran, and `-t` filtering makes that reachable by accident.
+    const roomy = await runPopulationScenario({ ...chain, ...LONG, houses: ROOMY_HOUSES });
+    const capped = await runPopulationScenario({ ...chain, ...LONG, houses: 1 });
+    const drip = await runPopulationScenario({ houses: 6, startingAdults: 2, foodPerTick: 8, ticks: 9000, sampleEvery: 500 });
+    const starved = await runPopulationScenario({ houses: 2, startingAdults: 3, foodPerTick: 0, ticks: 300, sampleEvery: 1 });
+    const tickWhere = (predicate: (s: PopulationResult['samples'][number]) => boolean) =>
+      starved.samples.find(predicate)?.tick ?? -1;
+    const firstStarving = tickWhere((s) => s.starving > 0);
+    const firstDeath = tickWhere((s) => s.adults + s.children + s.elders < 3);
+
+    console.log([
+      ...curveLines(`self-feeding chain, ${ROOMY_HOUSES} houses / ${chain.huts} huts / ${chain.haulers} haulers`, roomy),
+      ...curveLines(`self-feeding chain, 1 house / ${chain.huts} huts / ${chain.haulers} haulers (bed-capped control)`, capped),
+      ...curveLines('bread drip 8/tick, 6 houses, 2 founders', drip),
+      '',
+      'starvation warning, 3 colonists, no food at all',
+      `  first starvingTicks at ${firstStarving}, first death at ${firstDeath},` +
+      ` window ${firstDeath - firstStarving} ticks against an autosave interval of ${BALANCE.autosaveEveryTicks}`,
+    ].join('\n'));
+  }, 600000);
 });

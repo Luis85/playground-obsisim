@@ -603,16 +603,98 @@ outcome "validated, unchanged", which is a legitimate result.
 | `homelessFactor` | 0.5 | Equal to the commute floor: being homeless is exactly as bad as the worst commute, so the player has one number to beat. |
 | `houseBeds` | 4 | Three founders plus one spare, so the opening has a free bed and the second house is the first growth decision. |
 
-The specific questions the harness must answer, rather than the values being
-adjusted until they feel right in a browser:
+### 4.1 What the harness measured
 
-- Does a colony left alone with a working food chain reach a **stable
-  population**, or does it oscillate? An oscillation with a period near
-  `lifespanYears` is the demographic wave working; an unbounded ramp means
-  `birthFoodPerHead` is too low.
-- How many ticks of warning does the player get between the first
-  `starvingTicks` climbing and the first death, at a realistic colony size?
-  Under one autosave interval is too few.
-- Is the commute penalty large enough to change a placement decision, and small
-  enough that it is not simply always correct to cluster everything at the
-  camp — which would reintroduce the exact failure increment 5 §1.2 closed?
+Task 12 built the instrument (`tests/support/population-harness.ts`,
+`runPopulationScenario`) and ran the three questions above. Reproduce any of
+this with `npm run balance:population`. **No constant in the table above was
+changed.** Two of the three questions came back clean; the first did not, and
+what it returned is recorded here rather than tuned away.
+
+**1. Does a colony left alone with a working food chain reach a stable
+population, or does it oscillate?**
+
+**Neither. It overshoots and dies.** Twelve houses (48 beds), two gatherers'
+huts, two haulers, four founders, 12,000 ticks, the colony feeding itself:
+
+| tick | 1,000 | 2,200 | 3,200 | 5,200 | 7,000 | 7,800 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| population | 22 | **41** | 41 | 41 | 27 | **0** |
+| meals/head | 6.0 | 5.7 | 4.1 | 0.1 | 6.9 | – |
+
+44 births, 24 deaths of old age, **24 starvation deaths**, extinct by tick
+7,800.
+
+The ceiling is genuinely food and not housing — 41 against 48 beds — and it is
+the chain *producing*, not the harness under-hauling: adding a third hauler
+does not move the peak, while cutting `haulCarryCapacity` to 1 moves it by 8.
+A one-house control takes 0 births and 0 starvation deaths, so beds gate births
+exactly as §2.6 says.
+
+The mechanism is that **`birthFoodPerHead` is a stock test, not a flow test.**
+`mealsPerHead` measures what is in the store; a young colony banks that faster
+than it eats, so births continue past the population the chain can feed. The
+store then drains (meals/head 5.7 → 0.1 over 3,000 ticks), births stop for
+longer than a maturity span, and the age pyramid empties from the bottom. When
+the single synchronised cohort retires — from tick 4,600 onward — there is
+nobody behind it, production stops, and the colony starves.
+
+So the diagnosis the table above anticipated — "an unbounded ramp means
+`birthFoodPerHead` is too low" — is half right. The ramp is bounded, by
+starvation. Raising `birthFoodPerHead` would delay the overshoot without
+removing it, because no value of a store threshold answers "is there work for
+this colonist". The candidate fixes, for a later increment to choose between:
+
+- gate births on `netFlow` for edibles as well as on stock, so a colony that is
+  eating into its store stops breeding before the store is gone;
+- or gate on idle adults, so a colony with no work for its people stops making
+  more of them.
+
+Neither is a constant change, which is why nothing in the table moved.
+
+**2. How many ticks of warning between `starvingTicks` climbing and the first
+death?**
+
+**99 ticks — one short of the `autosaveEveryTicks` bar this section set.**
+Measured at tick resolution: the countdown starts at tick 100 (hunger reaches
+`hungerMax`) and the first death lands at tick 199.
+
+This is a fencepost, not a tuning error. A colonist is pinned at max hunger for
+the whole of `starvationDeathTicks`, but the tick the counter *reaches* the
+limit is the tick they die on, so the last snapshot a player can still act on is
+one earlier. `starvationDeathTicks` stays at 100. Note that the window measures
+99 only when sampled every tick; the first draft of this measurement sampled
+every ten ticks and reported exactly 100, clearing its own bar on a rounding
+artefact.
+
+The whole slide is much longer than the countdown — hunger has to climb from 0
+to `hungerMax` before the countdown starts at all — so a player watching the
+Population view has ~199 ticks, or two autosave intervals, from a colony's last
+meal to its first death.
+
+**3. Is the commute penalty large enough to change a placement decision, and
+small enough that clustering is not simply always right?**
+
+**Yes to both, and it shows up in delivered goods rather than only in a unit
+test of `commuteFactor`.** Two runs of the same forester with the same crew and
+haulers, differing only in where the crew sleeps:
+
+| measurement | delivered | ratio |
+| --- | ---: | ---: |
+| forester at (6,5), crew housed adjacent | 264 | – |
+| forester at (6,5), crew housed at (22,15) | 130 | 0.49 |
+| forester at (20,13), crew housed on site | 384 | – |
+| forester at (20,13), crew housed beside the camp | 195 | 0.51 |
+
+A bad commute halves a crew, which is `commuteFloor` doing exactly what it says.
+And the second pair is the half that matters for §1.2: housing beside a distant
+producer beats housing at the camp by 1.9x, so "cluster everything at the camp"
+is a real decision with a real cost, not a dominant strategy.
+
+### 4.2 Not a balance value, but found while measuring
+
+`OBS-6-02`: two colonists dying on the same tick freeze the simulation for one
+tick each — sim-ecs 0.6.4 throws inside `removeEntity` on the second removal of
+a batch, swallows the error, and drains the rest one per step with no system
+running. It distorts any per-tick tally taken from `SnapshotStore.latest`, which
+is how it was found. See `docs/issues/`.

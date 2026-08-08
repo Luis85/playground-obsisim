@@ -15,6 +15,7 @@
 - **Every component must be attached in `buildingComponents`/`colonistComponents` in `src/engine/spawn.ts`** — the single shared list. Adding a component also means appending its type to `COMPONENT_TYPES` in `src/engine/world.ts` for save round-tripping. Forgetting this is silent and has bitten twice (OBS-4-02).
 - **No vitest test may import `src/app/world/renderer.ts` or `src/app/world/graphics-cache.ts`.** Excalibur throws on import outside a browser. Their only coverage is `npm run smoke:world`.
 - **Mutation-test every test:** break the feature, confirm the named test fails, restore. Fixture values must *discriminate* — if the wrong field holds the same value, the assertion proves nothing.
+- **Confirm every mutation actually applied before trusting its result.** `sed` exits 0 when its pattern matches nothing, so a stale pattern leaves the file untouched, the test passes against the *unmutated* implementation, and the mutation check reports the assertion as discriminating when nothing was ever tested. The patterns below are transcribed from code written in the same task and can drift from what you actually wrote. After each `sed`, verify the file changed — `git diff --quiet <file> && echo "MUTATION DID NOT APPLY"` — and fix the pattern rather than moving on. A mutation that silently no-ops is worse than skipping the check, because it produces false confidence.
 - **Never `--update` a quality baseline to make a gate pass.** `check:quality --update` refuses a loosened value without `--allow-regression`, and refuses pinned-at-zero breaches outright.
 - **Never pad comments to buy maintainability points.** Fallow's MI has no length term.
 - **Commit by pathspec** (`git commit <path> -m …`), never `git add` + bare `git commit`. A new file needs one `git add` immediately before its commit.
@@ -35,7 +36,8 @@
    * change and pass or fail for reasons unrelated to what they name.
    */
   export async function stepTick(world: IRuntimeWorld): Promise<void> {
-    await stepTick(world);
+    world.getResource(SimClock).tick++;
+    await world.step();
     refreshEntitySections(world);
   }
   ```
@@ -808,8 +810,12 @@ npx vitest run tests/engine/systems/population-system.test.ts -t "ages every col
 cp "$SP/population-handlers.ts" src/engine/systems/population-handlers.ts
 
 # Retirement must actually unassign
-sed -i 's|    standDown(ctx, row);\n    ctx.notices.succeed(`Colonist #${row.colonist.id} retired.`);|    ctx.notices.succeed("retired");|' src/engine/systems/population-handlers.ts
-# (if the multiline sed does not apply, delete the standDown call inside retireElders by hand)
+# `sed` is line-based: a pattern containing \n matches nothing and exits 0, so
+# the earlier multiline form left the file untouched and the test "passed"
+# against unmutated code. Target the ONE line that does the work instead, and
+# check it applied.
+perl -0pi -e 's/(export function retireElders[\s\S]*?)    standDown\(ctx, row\);/$1/' src/engine/systems/population-handlers.ts
+git diff --quiet src/engine/systems/population-handlers.ts && { echo "MUTATION DID NOT APPLY"; exit 1; }
 npx vitest run tests/engine/systems/population-system.test.ts -t "retires an adult"      # expect FAIL
 cp "$SP/population-handlers.ts" src/engine/systems/population-handlers.ts
 
@@ -1578,8 +1584,13 @@ cp src/engine/systems/population-handlers.ts "$SP/population-handlers.ts"
 cp src/engine/systems/command-handlers.ts "$SP/command-handlers.ts"
 
 # A relocating house must stop sheltering
+# Two edits, because a relocating house is skipped in both halves of rehome.
+# NOTE the second one uses `#` as the delimiter: inside a |-delimited s|||,
+# GNU sed reads `\|` as ALTERNATION, not a literal pipe, so the obvious
+# escaping of `||` silently matches nothing and exits 0.
 sed -i 's|    if (!shelter.relocating) free.set(shelter.id, shelter.beds);|    free.set(shelter.id, shelter.beds);|' src/engine/systems/population-handlers.ts
-sed -i 's|    if (shelter === undefined \|\| shelter.relocating) {|    if (shelter === undefined) {|' src/engine/systems/population-handlers.ts
+sed -i 's#    if (shelter === undefined || shelter.relocating) {#    if (shelter === undefined) {#' src/engine/systems/population-handlers.ts
+git diff --stat src/engine/systems/population-handlers.ts | grep -q '2 +' || echo "CHECK: expected both edits to apply"
 npx vitest run tests/engine/systems/population-system.test.ts -t "evicts when the house relocates"  # expect FAIL
 cp "$SP/population-handlers.ts" src/engine/systems/population-handlers.ts
 
@@ -2807,7 +2818,8 @@ SP=/tmp/obsisim-mutation && mkdir -p $SP
 cp src/shared/save-migration.ts "$SP/save-migration.ts"
 
 # The migration must assign homes, not leave them to the first tick
-sed -i 's|homeId: house !== null \&\& index < HOUSE_BEDS ? houseId : null,|homeId: null,|' src/shared/save-migration.ts
+sed -i 's|homeId: house !== null \&\& index < MIGRATION_CONSTANTS.houseBeds ? houseId : null,|homeId: null,|' src/shared/save-migration.ts
+grep -q 'homeId: null,' src/shared/save-migration.ts || { echo "MUTATION DID NOT APPLY — fix the pattern"; exit 1; }
 npx vitest run tests/shared/save-migration.test.ts -t "SEEDED snapshot"        # expect FAIL
 cp "$SP/save-migration.ts" src/shared/save-migration.ts
 

@@ -5,17 +5,17 @@ import type { GhostPreview } from './renderer-key';
 import { TILE, type PlacedBuilding } from './layout';
 import type { WorldTheme } from './theme';
 
-export const WORKER_RADIUS = 7;
+export const COLONIST_RADIUS = 7;
 export const BUILDING_SIZE = TILE - 4;
 
 /**
- * Building and worker looks are shared, lazily-built graphics: seven defs x
+ * Building and colonist looks are shared, lazily-built graphics: seven defs x
  * three states and five efficiency buckets x tooled-or-not. Actors swap
  * between cached variants instead of re-rasterizing anything per entity.
  */
 export class GraphicCache {
   private buildings = new Map<string, GraphicsGroup>();
-  private workers = new Map<string, Circle>();
+  private colonists = new Map<string, Circle>();
   private ghosts = new Map<string, GraphicsGroup>();
 
   constructor(private theme: WorldTheme) {}
@@ -54,17 +54,17 @@ export class GraphicCache {
     return group;
   }
 
-  worker(bucket: number, tooled: boolean): Circle {
+  colonist(bucket: number, tooled: boolean): Circle {
     const key = `${bucket}/${tooled}`;
-    let circle = this.workers.get(key);
+    let circle = this.colonists.get(key);
     if (!circle) {
       circle = new Circle({
-        radius: WORKER_RADIUS,
-        color: Color.fromHex(this.theme.workerColors[bucket]),
+        radius: COLONIST_RADIUS,
+        color: Color.fromHex(this.theme.colonistColors[bucket]),
         strokeColor: tooled ? Color.fromHex(this.theme.workerToolRing) : undefined,
         lineWidth: tooled ? 2 : 0,
       });
-      this.workers.set(key, circle);
+      this.colonists.set(key, circle);
     }
     return circle;
   }

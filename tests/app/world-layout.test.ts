@@ -13,8 +13,8 @@ import { makeBuilding, makeSnapshot, makeWorker } from './fixtures';
 /** Every worker present in both layouts and unmoved — the stability check. */
 function unmoved(before: ReturnType<typeof layoutWorld>, after: ReturnType<typeof layoutWorld>, ids: number[]) {
   for (const id of ids) {
-    const was = before.workers.find((w) => w.id === id)!;
-    expect(after.workers.find((w) => w.id === id)).toMatchObject({ x: was.x, y: was.y });
+    const was = before.colonists.find((w) => w.id === id)!;
+    expect(after.colonists.find((w) => w.id === id)).toMatchObject({ x: was.x, y: was.y });
   }
 }
 
@@ -59,8 +59,8 @@ describe('layoutWorld', () => {
       colonists: [makeWorker(10, { buildingId: 1 }), makeWorker(11, { buildingId: 1 })],
     }), before);
     for (const id of [10, 11]) {
-      const was = before.workers.find((w) => w.id === id)!;
-      const now = after.workers.find((w) => w.id === id)!;
+      const was = before.colonists.find((w) => w.id === id)!;
+      const now = after.colonists.find((w) => w.id === id)!;
       expect(now.slot).toBe(was.slot); // slot memory survives the move
       expect(now.x - was.x).toBeCloseTo(4); // 9 - 5
       expect(now.y - was.y).toBeCloseTo(4); // 7 - 3
@@ -71,7 +71,7 @@ describe('layoutWorld', () => {
     const crowd = Array.from({ length: 40 }, (_, i) => makeWorker(i + 1));
     const layout = layoutWorld(makeSnapshot({ colonists: crowd }));
     const spots = new Set<string>();
-    for (const w of layout.workers) {
+    for (const w of layout.colonists) {
       expect(w.x).toBeGreaterThan(0);
       expect(w.x).toBeLessThan(3); // CAMP_COLS
       expect(w.y).toBeGreaterThan(0);
@@ -88,13 +88,13 @@ describe('layoutWorld', () => {
     });
     const layout = layoutWorld(snapshot);
     const cell = layout.buildings[0];
-    for (const w of layout.workers) {
+    for (const w of layout.colonists) {
       expect(w.x).toBeGreaterThan(cell.col);
       expect(w.x).toBeLessThan(cell.col + 1);
       expect(w.y).toBeGreaterThan(cell.row);
       expect(w.y).toBeLessThan(cell.row + 1);
     }
-    expect(layout.workers[0].x).not.toBe(layout.workers[1].x);
+    expect(layout.colonists[0].x).not.toBe(layout.colonists[1].x);
   });
 
   it('staffing another slot never moves the workers already there', () => {
@@ -122,7 +122,7 @@ describe('layoutWorld', () => {
       colonists: [makeWorker(1, { buildingId: 2 }), makeWorker(5, { buildingId: 2 }), makeWorker(9, { buildingId: 2 })],
     }), before);
     unmoved(before, after, [5, 9]);
-    const spots = after.workers.map((w) => `${w.x},${w.y}`);
+    const spots = after.colonists.map((w) => `${w.x},${w.y}`);
     expect(new Set(spots).size).toBe(3);
   });
 
@@ -148,15 +148,15 @@ describe('layoutWorld', () => {
       colonists: crew,
     }));
     const cell = layout.buildings[0];
-    for (const w of layout.workers) {
+    for (const w of layout.colonists) {
       expect(w.x).toBeGreaterThan(cell.col);
       expect(w.x).toBeLessThan(cell.col + 1);
       expect(w.y).toBeGreaterThan(cell.row);
       expect(w.y).toBeLessThan(cell.row + 1);
     }
     // pairwise center distance >= 0.2 tiles (~10 px): individually pickable
-    for (const a of layout.workers) {
-      for (const b of layout.workers) {
+    for (const a of layout.colonists) {
+      for (const b of layout.colonists) {
         if (a.id >= b.id) continue;
         const distance = Math.hypot(a.x - b.x, a.y - b.y);
         expect(distance, `workers ${a.id}/${b.id} too close`).toBeGreaterThanOrEqual(0.2);
@@ -172,7 +172,7 @@ describe('layoutWorld', () => {
     }));
     const cell = layout.buildings[0];
     const spots = new Set<string>();
-    for (const w of layout.workers) {
+    for (const w of layout.colonists) {
       expect(w.x).toBeGreaterThan(cell.col);
       expect(w.x).toBeLessThan(cell.col + 1);
       expect(w.y).toBeGreaterThan(cell.row);
@@ -201,9 +201,9 @@ describe('layoutWorld', () => {
     });
     const layout = layoutWorld(snapshot);
     const minPlotCol = Math.min(...layout.buildings.map((b) => b.col));
-    const spots = layout.workers.map((w) => `${w.x},${w.y}`);
+    const spots = layout.colonists.map((w) => `${w.x},${w.y}`);
     expect(new Set(spots).size).toBe(3);
-    for (const w of layout.workers) {
+    for (const w of layout.colonists) {
       expect(w.x).toBeLessThan(minPlotCol);
     }
     // the camp anchor sits with its campers, inside the grid
@@ -217,7 +217,7 @@ describe('layoutWorld', () => {
     const before = layoutWorld(makeSnapshot({ colonists: six }));
     const after = layoutWorld(makeSnapshot({ colonists: [...six, makeWorker(30)] }), before);
     unmoved(before, after, [3, 7, 12, 15, 21, 26]);
-    const spots = after.workers.map((w) => `${w.x},${w.y}`);
+    const spots = after.colonists.map((w) => `${w.x},${w.y}`);
     expect(new Set(spots).size).toBe(7);
   });
 
@@ -234,7 +234,7 @@ describe('layoutWorld', () => {
     });
     const layout = layoutWorld(snapshot);
     expect(layout.buildings[0]).toMatchObject({ state: 'producing', progressPct: 40, batchActive: true });
-    expect(layout.workers[0]).toMatchObject({ efficiency: 0.5, tooled: true, at: 1 });
+    expect(layout.colonists[0]).toMatchObject({ efficiency: 0.5, tooled: true, at: 1 });
     expect(layout.tile).toBe(TILE);
   });
 
@@ -243,7 +243,7 @@ describe('layoutWorld', () => {
       buildings: [makeBuilding(1)],
       colonists: [makeWorker(10, { buildingId: 1 }), makeWorker(11), makeWorker(12, { buildingId: 99 })],
     }));
-    const at = new Map(layout.workers.map((w) => [w.id, w.at]));
+    const at = new Map(layout.colonists.map((w) => [w.id, w.at]));
     expect(at.get(10)).toBe(1);
     expect(at.get(11)).toBeNull(); // idle
     expect(at.get(12)).toBeNull(); // orphaned assignment falls back to camp
@@ -268,7 +268,7 @@ describe('layoutWorld', () => {
       expect(b.row).toBeGreaterThanOrEqual(0);
       expect(b.row).toBeLessThan(layout.rows);
     }
-    for (const w of layout.workers) {
+    for (const w of layout.colonists) {
       expect(w.x).toBeGreaterThan(0);
       expect(w.x).toBeLessThan(layout.cols);
       expect(w.y).toBeGreaterThan(0);
@@ -296,11 +296,11 @@ describe('hauler placement', () => {
     })],
   });
   const haulerIn = (snapshot: ReturnType<typeof makeSnapshot>) =>
-    layoutWorld(snapshot).workers.find((w) => w.id === 20)!;
+    layoutWorld(snapshot).colonists.find((w) => w.id === 20)!;
 
   it('stands an arrived outbound hauler at the building it walked to', () => {
     const layout = layoutWorld(haulSnapshot({ haulTargetId: 1 }));
-    const hauler = layout.workers.find((w) => w.id === 20)!;
+    const hauler = layout.colonists.find((w) => w.id === 20)!;
     const cell = layout.buildings.find((b) => b.id === 1)!;
     expect(hauler.at).toBe(1);
     expect(hauler.x).toBeCloseTo(cell.col + 0.5);
@@ -375,7 +375,7 @@ describe('hauler placement', () => {
       buildings: [building],
       colonists: [makeWorker(20, { hauling: true, haulTargetId: 1, haulPhase: 'outbound', haulTicksLeft: 0 })],
     }));
-    const doorstep = haulerAlone.workers.find((w) => w.id === 20)!;
+    const doorstep = haulerAlone.colonists.find((w) => w.id === 20)!;
 
     const layout = layoutWorld(makeSnapshot({
       buildings: [building],
@@ -386,12 +386,12 @@ describe('hauler placement', () => {
       ],
     }));
 
-    const hauler = layout.workers.find((w) => w.id === 20)!;
+    const hauler = layout.colonists.find((w) => w.id === 20)!;
     expect(hauler.x).toBeCloseTo(doorstep.x); // exactly the doorstep, crew or no crew
     expect(hauler.y).toBeCloseTo(doorstep.y);
 
     const crewSpots = new Set(
-      layout.workers.filter((w) => w.id !== 20).map((w) => `${w.x.toFixed(2)},${w.y.toFixed(2)}`),
+      layout.colonists.filter((w) => w.id !== 20).map((w) => `${w.x.toFixed(2)},${w.y.toFixed(2)}`),
     );
     expect(crewSpots.size).toBe(2); // the crew occupy their own distinct spots
     expect(crewSpots.has(`${hauler.x.toFixed(2)},${hauler.y.toFixed(2)}`)).toBe(false); // ...and the hauler stands apart from all of them
@@ -399,13 +399,13 @@ describe('hauler placement', () => {
 
   it('parks an outbound hauler at the camp only once its target has vanished (present-target control)', () => {
     const present = layoutWorld(haulSnapshot({ haulTargetId: 1 }));
-    const stillOutbound = present.workers.find((w) => w.id === 20)!;
+    const stillOutbound = present.colonists.find((w) => w.id === 20)!;
     const cell = present.buildings.find((b) => b.id === 1)!;
     expect(stillOutbound.at).toBe(1); // control: a standing target keeps the hauler at its doorstep...
     expect(stillOutbound.y).toBeGreaterThan(cell.row + 0.5); // ...not camped
 
     const vanished = layoutWorld(haulSnapshot({ haulTargetId: 99 }));
-    expect(vanished.workers.find((w) => w.id === 20)!.at).toBeNull(); // only the vanished target falls back to camp
+    expect(vanished.colonists.find((w) => w.id === 20)!.at).toBeNull(); // only the vanished target falls back to camp
   });
 
   it('a former hauler joining the crew at its old target never keeps the hauler sentinel slot', () => {
@@ -418,7 +418,7 @@ describe('hauler placement', () => {
       buildings: [building],
       colonists: [makeWorker(20, { hauling: true, haulTargetId: 1, haulPhase: 'outbound', haulTicksLeft: 0 })],
     }));
-    const wasHauler = before.workers.find((w) => w.id === 20)!;
+    const wasHauler = before.colonists.find((w) => w.id === 20)!;
     expect(wasHauler.at).toBe(1); // sanity: this frame is the doorstep case, its placement carries the sentinel
 
     const after = layoutWorld(makeSnapshot({
@@ -426,7 +426,7 @@ describe('hauler placement', () => {
       colonists: [makeWorker(20, { buildingId: 1 })], // same id, now genuine crew at the same building
     }), before);
 
-    const crew = after.workers.find((w) => w.id === 20)!;
+    const crew = after.colonists.find((w) => w.id === 20)!;
     const cell = after.buildings.find((b) => b.id === 1)!;
     expect(crew.slot).toBeGreaterThanOrEqual(0); // a real crew slot, never the hauler sentinel (-1)
     expect(crew.x).toBeGreaterThan(cell.col); // a crew spot inside the cell (the sentinel collapses x to cell.col)
@@ -449,7 +449,7 @@ describe('hauler placement', () => {
         haulLegTicks: LEG_TICKS, haulPickupCol: 8, haulPickupRow: 4, // frozen at the ORIGINAL (8,4) pickup
       })],
     });
-    const hauler = layoutWorld(snapshot).workers.find((w) => w.id === 20)!;
+    const hauler = layoutWorld(snapshot).colonists.find((w) => w.id === 20)!;
     // Halfway through the ORIGINAL 4-tick leg (2 of 4 remain), walking the
     // pickup(8,4)<->camp line. The old, buggy computation re-derives both
     // endpoint and total from the building's CURRENT tile: haulTicks(23, 15,

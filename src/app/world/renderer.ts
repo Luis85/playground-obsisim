@@ -6,9 +6,9 @@ import type { Snapshot } from '../../shared/snapshot';
 import type { GhostPreview, WorldRendererFactory } from './renderer-key';
 import {
   layoutWorld, pickBuildingAt, TILE,
-  type PlacedBuilding, type PlacedWorker, type WorldLayout, type WorldPick,
+  type PlacedBuilding, type PlacedColonist, type WorldLayout, type WorldPick,
 } from './layout';
-import { BUILDING_SIZE, GraphicCache, WORKER_RADIUS } from './graphics-cache';
+import { BUILDING_SIZE, GraphicCache, COLONIST_RADIUS } from './graphics-cache';
 import { efficiencyBucket, resolveWorldTheme, type WorldTheme } from './theme';
 
 // The Excalibur end of the renderer seam: the only module that imports
@@ -19,8 +19,8 @@ import { efficiencyBucket, resolveWorldTheme, type WorldTheme } from './theme';
 // (`npm run smoke:world`): boot-and-draw, walking, clock stop/start,
 // pick() through the live camera, and clean dispose.
 
-const WORKER_PICK_RADIUS = 11; // SCREEN px hover tolerance, world-converted per live zoom
-const WORKER_SPEED = 90; // px/s walk speed toward a new post (cosmetic reassignment only)
+const COLONIST_PICK_RADIUS = 11; // SCREEN px hover tolerance, world-converted per live zoom
+const COLONIST_SPEED = 90; // px/s walk speed toward a new post (cosmetic reassignment only)
 // Assumed gap before a second sync has been seen: BALANCE.baseTicksPerSecond is
 // 2, so one tick at 1x. Only ever used for a hauler's very first step.
 const DEFAULT_TICK_MS = 500;
@@ -38,10 +38,10 @@ const BAR_WIDTH = TILE * 0.8;
 const BAR_HEIGHT = 5;
 
 // Draw order, back to front: ground tilemap (default z 0), building tiles and
-// the camp tent (z 1), progress bars and the selection ring (z 2), workers
+// the camp tent (z 1), progress bars and the selection ring (z 2), colonists
 // (z 3), the placement ghost on top of everything (z 4).
 interface BuildingBundle { root: Actor; bar: Actor; track: Actor; }
-interface WorkerBundle { actor: Actor; target: Vector; load: Actor; }
+interface ColonistBundle { actor: Actor; target: Vector; load: Actor; }
 
 /**
  * Owns the scene contents: diffs each layout against the live actors by
@@ -53,7 +53,7 @@ class WorldScene {
   private groundKey = '';
   private camp: Actor | null = null;
   private buildings = new Map<number, BuildingBundle>();
-  private workers = new Map<number, WorkerBundle>();
+  private colonists = new Map<number, ColonistBundle>();
   private lastSyncAt = 0;
   private tickMs = DEFAULT_TICK_MS;
   private cache: GraphicCache;
@@ -79,9 +79,9 @@ class WorldScene {
     this.syncGround(layout);
     this.syncCamp(layout);
     for (const b of layout.buildings) this.upsertBuilding(b);
-    for (const w of layout.workers) this.upsertWorker(w);
+    for (const w of layout.colonists) this.upsertColonist(w);
     this.prune(this.buildings, layout.buildings, (bundle) => bundle.root.kill());
-    this.prune(this.workers, layout.workers, (bundle) => bundle.actor.kill());
+    this.prune(this.colonists, layout.colonists, (bundle) => bundle.actor.kill());
     this.fitCamera(layout);
     this.applySelection();
   }
@@ -90,9 +90,9 @@ class WorldScene {
    * replacement colony must not inherit this scene's identity state. */
   clear(): void {
     for (const bundle of this.buildings.values()) bundle.root.kill();
-    for (const bundle of this.workers.values()) bundle.actor.kill();
+    for (const bundle of this.colonists.values()) bundle.actor.kill();
     this.buildings.clear();
-    this.workers.clear();
+    this.colonists.clear();
     this.setGhost(null);
     this.selectionRing?.kill();
     this.selectionRing = null;
@@ -105,13 +105,13 @@ class WorldScene {
   }
 
   /**
-   * The worker under a world-space point, tested against LIVE actor
+   * The colonist under a world-space point, tested against LIVE actor
    * positions — a walking dot is picked where it is drawn, not at the
    * layout target it has not reached yet (review round 7). Nearest wins.
    */
-  workerAt(worldX: number, worldY: number): number | null {
+  colonistAt(worldX: number, worldY: number): number | null {
     let bestId: number | null = null;
-    // WORKER_PICK_RADIUS is a screen-space hover tolerance converted to the
+    // COLONIST_PICK_RADIUS is a screen-space hover tolerance converted to the
     // live camera's zoom here — world-space distances shrink relative to a
     // fixed screen radius as the camera zooms out, so comparing against a
     // flat world-space radius made hover/pick accuracy zoom-dependent (only
@@ -119,8 +119,8 @@ class WorldScene {
     // fitCamera bug below). The || 1 guards a 0x0-measured host: fitCamera
     // would yield zoom 0 there, and dividing by it turns the radius infinite.
     const zoom = this.engine.currentScene.camera.zoom || 1;
-    let bestD2 = (WORKER_PICK_RADIUS / zoom) ** 2;
-    for (const [id, bundle] of this.workers) {
+    let bestD2 = (COLONIST_PICK_RADIUS / zoom) ** 2;
+    for (const [id, bundle] of this.colonists) {
       const d2 = (bundle.actor.pos.x - worldX) ** 2 + (bundle.actor.pos.y - worldY) ** 2;
       if (d2 <= bestD2) {
         bestD2 = d2;
@@ -253,26 +253,26 @@ class WorldScene {
     return bundle;
   }
 
-  private upsertWorker(w: PlacedWorker): void {
+  private upsertColonist(w: PlacedColonist): void {
     const target = vec(w.x * TILE, w.y * TILE);
-    const bundle = this.workers.get(w.id) ?? this.spawnColonist(w.id, target);
-    bundle.actor.graphics.use(this.cache.worker(efficiencyBucket(w.efficiency), w.tooled));
+    const bundle = this.colonists.get(w.id) ?? this.spawnColonist(w.id, target);
+    bundle.actor.graphics.use(this.cache.colonist(efficiencyBucket(w.efficiency), w.tooled));
     // A carrying hauler reads as "loaded" at a glance, which is what makes the
     // flow direction legible: dots going out are empty, dots coming back are not.
     bundle.load.graphics.visible = w.carrying;
-    this.walkWorker(bundle, target, w.travelling);
+    this.walkColonist(bundle, target, w.travelling);
   }
 
-  /** New workers appear in place — only reassignments walk (spec §2.4). */
-  private spawnColonist(id: number, target: Vector): WorkerBundle {
+  /** New colonists appear in place — only reassignments walk (spec §2.4). */
+  private spawnColonist(id: number, target: Vector): ColonistBundle {
     const actor = new Actor({ pos: target, z: 3 });
     this.engine.currentScene.add(actor);
-    const load = new Actor({ pos: vec(0, -WORKER_RADIUS - 3), z: 3 });
+    const load = new Actor({ pos: vec(0, -COLONIST_RADIUS - 3), z: 3 });
     load.graphics.use(new Circle({ radius: 3, color: Color.fromHex(this.theme.carriedLoad) }));
     load.graphics.visible = false;
     actor.addChild(load);
     const bundle = { actor, target, load };
-    this.workers.set(id, bundle);
+    this.colonists.set(id, bundle);
     return bundle;
   }
 
@@ -282,7 +282,7 @@ class WorldScene {
    *
    * Two speeds, because the two motions mean different things. A reassignment
    * is instantaneous in the simulation, so its walk is pure decoration and any
-   * plausible pace will do — WORKER_SPEED. A haul leg has a *simulated*
+   * plausible pace will do — COLONIST_SPEED. A haul leg has a *simulated*
    * duration, and the layout advances the dot one tick's worth per sync, so the
    * dot must cover the actor's actual remaining distance before the next sync
    * lands or it drifts behind its own trip and reverses in open ground
@@ -295,12 +295,12 @@ class WorldScene {
    * speed, including after the player changes speed mid-walk: the next sync
    * simply re-derives it.
    */
-  private walkWorker(bundle: WorkerBundle, target: Vector, travelling: boolean): void {
+  private walkColonist(bundle: ColonistBundle, target: Vector, travelling: boolean): void {
     if (bundle.target.equals(target)) return;
     const step = target.distance(bundle.actor.pos);
     bundle.target = target;
     bundle.actor.actions.clearActions();
-    bundle.actor.actions.moveTo(target, travelling ? step / (this.tickMs / 1000) : WORKER_SPEED);
+    bundle.actor.actions.moveTo(target, travelling ? step / (this.tickMs / 1000) : COLONIST_SPEED);
   }
 
   /** Frame the whole grid with a small margin, re-checked every sync.
@@ -404,8 +404,8 @@ export const createExcaliburWorldRenderer: WorldRendererFactory = (host) => {
     pick(pageX, pageY): WorldPick | null {
       if (disposed || last === undefined) return null;
       const world = engine.screen.pageToWorldCoordinates(vec(pageX, pageY));
-      const workerId = scene.workerAt(world.x, world.y);
-      if (workerId !== null) return { kind: 'worker', id: workerId };
+      const colonistId = scene.colonistAt(world.x, world.y);
+      if (colonistId !== null) return { kind: 'worker', id: colonistId };
       return pickBuildingAt(last, world.x / TILE, world.y / TILE);
     },
     tileAt(pageX, pageY) {

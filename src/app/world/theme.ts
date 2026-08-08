@@ -9,7 +9,7 @@ export interface WorldTheme {
   buildingFill: Record<BuildingDefId, string>;
   buildingGlyph: Record<BuildingDefId, string>;
   stateRing: Record<BuildingState, string>;
-  workerColors: string[];
+  colonistColors: string[];
   workerToolRing: string;
   /** Batch progress fill — bright cream so it reads on green tiles. */
   progressFill: string;
@@ -27,7 +27,7 @@ export interface WorldTheme {
   /** Interactive accent — the selection ring and the valid-ghost tint. */
   accent: string;
   /** Danger — the blocked-ghost tint (the same resolved red the
-   * starving-worker gradient starts from). */
+   * starving-colonist gradient starts from). */
   danger: string;
 }
 
@@ -61,12 +61,12 @@ function mixHex(from: string, to: string, t: number): string {
   return mixed;
 }
 
-const WORKER_BUCKETS = 5;
+const COLONIST_BUCKETS = 5;
 const BUCKET_CEILINGS = [0.35, 0.55, 0.75, 0.95];
 
 export function efficiencyBucket(efficiency: number): number {
   const index = BUCKET_CEILINGS.findIndex((ceiling) => efficiency < ceiling);
-  return index === -1 ? WORKER_BUCKETS - 1 : index;
+  return index === -1 ? COLONIST_BUCKETS - 1 : index;
 }
 
 export function resolveWorldTheme(read: VarReader): WorldTheme {
@@ -99,7 +99,7 @@ export function resolveWorldTheme(read: VarReader): WorldTheme {
       // needed now, not deferred to the task that draws the house on canvas.
       housing: pick(read, '--color-blue', '#4c8bf5'),
     },
-    workerColors: Array.from({ length: WORKER_BUCKETS }, (_, i) => mixHex(red, green, i / (WORKER_BUCKETS - 1))),
+    colonistColors: Array.from({ length: COLONIST_BUCKETS }, (_, i) => mixHex(red, green, i / (COLONIST_BUCKETS - 1))),
     workerToolRing: '#f2ecdd',
     progressFill: '#f5efdc',
     carriedLoad: pick(read, '--color-cyan', '#4bbfd4'),

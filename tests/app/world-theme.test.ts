@@ -53,7 +53,7 @@ describe('resolveWorldTheme', () => {
     expect(theme.stateRing.producing).toMatch(HEX);
     expect(theme.stateRing.waitingForInput).toMatch(HEX);
     expect(theme.stateRing.unstaffed).toMatch(HEX);
-    for (const color of theme.workerColors) expect(color).toMatch(HEX);
+    for (const color of theme.colonistColors) expect(color).toMatch(HEX);
     expect(theme.workerToolRing).toMatch(HEX);
     expect(theme.progressFill).toMatch(HEX);
     expect(theme.ground[0]).toMatch(HEX);
@@ -71,7 +71,7 @@ describe('resolveWorldTheme', () => {
   it('danger is the resolved red', () => {
     const themed = resolveWorldTheme((name) => (name === '--color-red' ? '#aa1122' : ''));
     expect(themed.danger).toBe('#aa1122');
-    expect(themed.workerColors[0]).toBe('#aa1122'); // same source as starving-worker red
+    expect(themed.colonistColors[0]).toBe('#aa1122'); // same source as starving-worker red
   });
 
   it('gives the output-full stall its own ring, distinct from every other state', () => {
@@ -109,7 +109,7 @@ describe('efficiencyBucket', () => {
   it('maps starving to the first bucket and healthy to the last', () => {
     const theme = resolveWorldTheme(none);
     expect(efficiencyBucket(0.2)).toBe(0);
-    expect(efficiencyBucket(1.5)).toBe(theme.workerColors.length - 1);
+    expect(efficiencyBucket(1.5)).toBe(theme.colonistColors.length - 1);
   });
 
   it('is monotonic in efficiency', () => {

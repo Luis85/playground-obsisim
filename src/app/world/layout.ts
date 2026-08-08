@@ -7,7 +7,7 @@ export const TILE = 48;
 
 // Geography is sim truth now (increment 3): buildings render at their
 // snapshot col/row, and the grid dims come from snapshot.map. Only the
-// worker spots stay derived — id-keyed and slot-stable (spec §2.3 of
+// colonist spots stay derived — id-keyed and slot-stable (spec §2.3 of
 // increment 2 still governs them).
 const CAMP_COL0 = 1;
 const CAMP_PER_ROW = 2;
@@ -22,12 +22,12 @@ export interface PlacedBuilding {
   batchActive: boolean;
 }
 
-export interface PlacedWorker {
+export interface PlacedColonist {
   id: number;
   /** Tile-space coordinates (fractional): px = x * TILE. */
   x: number;
   y: number;
-  /** The worker's post: a building id, or null for the idle camp. */
+  /** The colonist's post: a building id, or null for the idle camp. */
   at: number | null;
   /** The slot held at that post — fed back via `previous` to stay put. */
   slot: number;
@@ -35,7 +35,7 @@ export interface PlacedWorker {
   tooled: boolean;
   carrying: boolean;
   /**
-   * True while this worker is mid-haul. The renderer walks these at whatever
+   * True while this colonist is mid-haul. The renderer walks these at whatever
    * speed reaches the next point before the next snapshot, instead of the fixed
    * pixel rate it uses for a cosmetic reassignment walk — the trip has a
    * simulated duration and the dot must respect it (OBS-4-09).
@@ -50,7 +50,7 @@ export interface WorldLayout {
   /** Tile-space anchor of the idle camp, for the renderer's camp marker. */
   camp: { x: number; y: number };
   buildings: PlacedBuilding[];
-  workers: PlacedWorker[];
+  colonists: PlacedColonist[];
 }
 
 interface Spot { x: number; y: number; }
@@ -76,10 +76,10 @@ function placeBuildings(snapshot: Snapshot): Map<number, PlacedBuilding> {
   return cellById;
 }
 
-/** The slots each worker held at each post in the previous layout. */
+/** The slots each colonist held at each post in the previous layout. */
 function heldSlots(previous?: WorldLayout): Map<number | null, Map<number, number>> {
   const held = new Map<number | null, Map<number, number>>();
-  for (const w of previous?.workers ?? []) {
+  for (const w of previous?.colonists ?? []) {
     if (w.slot === HAULER_SLOT) continue;
     const post = held.get(w.at) ?? new Map<number, number>();
     post.set(w.id, w.slot);
@@ -89,7 +89,7 @@ function heldSlots(previous?: WorldLayout): Map<number | null, Map<number, numbe
 }
 
 /**
- * Slot allocation with memory: a worker still at the same post keeps the
+ * Slot allocation with memory: a colonist still at the same post keeps the
  * exact slot it held; only newcomers allocate, id-keyed (id modulo span,
  * probing upward across free slots in id order). Positions derive from the
  * slot alone (never from roster size), so holders stand still through any
@@ -133,7 +133,7 @@ function vanDerCorput(n: number): number {
  * which would move colleagues when staffing changes. Regular slots line the
  * cell's south edge. Overflow slots (grandfathered over-capacity saves,
  * legal after a slot retuning) fill a 3-wide grid of shelf rows spaced for
- * the rendered dot diameter, so up to nine extra workers stay individually
+ * the rendered dot diameter, so up to nine extra colonists stay individually
  * visible and hoverable. Rosters even further past capacity fall back to
  * unique low-discrepancy spots on their own band: still contained and
  * distinct, though no longer diameter-spaced — a 48 px cell cannot hold a
@@ -179,7 +179,7 @@ export function describePick(snapshot: Snapshot, pick: WorldPick): string[] {
 /**
  * Hit-test the tile under a tile-space point against the buildings' cells.
  * Buildings are 1-tile visuals now that adjacency is legal, so an exact
- * floor-and-match is correct — workers are still hit-tested live by the
+ * floor-and-match is correct — colonists are still hit-tested live by the
  * renderer first, since they walk.
  */
 export function pickBuildingAt(layout: WorldLayout, x: number, y: number): WorldPick | null {
@@ -203,7 +203,7 @@ function campSpot(slot: number, rows: number): Spot {
 /**
  * Where a hauler stands at a given tile: on the doorstep, below the crew's
  * spots. Deliberately outside the slot machinery — a hauler is a visitor, not
- * staff, and must never displace a worker's remembered slot.
+ * staff, and must never displace a colonist's remembered slot.
  *
  * Takes a bare tile rather than a PlacedBuilding so `haulSpot` can also use it
  * for a returning hauler's frozen pickup point, which is a remembered tile,
@@ -292,7 +292,7 @@ export function layoutWorld(snapshot: Snapshot, previous?: WorldLayout): WorldLa
     placements.set(id, { at: null, slot, spot: campSpot(slot, rows) });
   }
 
-  const workers: PlacedWorker[] = sorted.map((w) => {
+  const colonists: PlacedColonist[] = sorted.map((w) => {
     const p = placements.get(w.id)!;
     return {
       id: w.id, x: p.spot.x, y: p.spot.y, at: p.at, slot: p.slot,
@@ -300,5 +300,5 @@ export function layoutWorld(snapshot: Snapshot, previous?: WorldLayout): WorldLa
       travelling: p.slot === HAULER_SLOT,
     };
   });
-  return { tile: TILE, cols, rows, camp: CAMP_ANCHOR, buildings: [...cellById.values()], workers };
+  return { tile: TILE, cols, rows, camp: CAMP_ANCHOR, buildings: [...cellById.values()], colonists };
 }

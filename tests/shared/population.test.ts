@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { lifespanFor, SALT, spreadFor, stageOf, type LifeBands } from '../../src/shared/population';
+import {
+  commuteFactor, lifespanFor, SALT, spreadFor, stageOf, type CommuteRates, type LifeBands,
+} from '../../src/shared/population';
 
 // Deliberately not BALANCE's real numbers: this module takes bands as
 // parameters precisely so it can be tested independent of tuning.
@@ -63,6 +65,38 @@ describe('spreadFor', () => {
     const wide = Array.from({ length: 200 }, (_, i) => spreadFor(i + 1, 1_000_000, SALT.lifespan));
     const consecutiveGaps = new Set(wide.slice(1).map((v, i) => v - wide[i]));
     expect(consecutiveGaps.size).toBeGreaterThan(190); // 199 possible; a bare multiplicative hash collapses to ~150
+  });
+});
+
+// Same principle as BANDS above: not BALANCE's real numbers, because the
+// module takes its rates as a parameter precisely so the law can be tested
+// independent of tuning.
+const RATES: CommuteRates = { freeTiles: 2, penaltyPerTile: 0.03, floor: 0.5 };
+
+describe('commuteFactor', () => {
+  it('is free inside the free radius', () => {
+    // THE property that keeps increment 5's measurements intact: the harness
+    // houses its crews adjacent to their building, and adjacent must cost
+    // nothing. ticksForDistance would have charged them — it floors at 1 by
+    // design, so no haul is free — which is why this charges tiles instead.
+    expect(commuteFactor(0, RATES, 0.5)).toBe(1);
+    expect(commuteFactor(1, RATES, 0.5)).toBe(1);
+    expect(commuteFactor(2, RATES, 0.5)).toBe(1);
+  });
+
+  it('charges only the tiles beyond the free radius', () => {
+    expect(commuteFactor(3, RATES, 0.5)).toBeCloseTo(0.97, 5);
+    expect(commuteFactor(10, RATES, 0.5)).toBeCloseTo(0.76, 5);
+  });
+
+  it('never falls below the floor', () => {
+    expect(commuteFactor(100, RATES, 0.5)).toBe(0.5);
+  });
+
+  it('gives the homeless factor to a colonist with no home', () => {
+    // Distinct from the floor on purpose in this fixture (0.4 vs 0.5) so the
+    // assertion cannot pass by the two happening to be equal.
+    expect(commuteFactor(null, RATES, 0.4)).toBe(0.4);
   });
 });
 

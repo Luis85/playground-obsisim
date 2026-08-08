@@ -4,7 +4,7 @@ import { CommandQueue, IdCounter, MAX_PENDING_COMMANDS, SimClock, SnapshotStore,
 import { BALANCE } from '../../../src/engine/content/balance';
 import { Building, HaulTrip, OutputBuffer, Relocation, Colonist } from '../../../src/engine/components';
 import { CommandSystem } from '../../../src/engine/systems/command-system';
-import { HaulSystem } from '../../../src/engine/systems/haul-system';
+import { HaulSystem, haulerCapacity } from '../../../src/engine/systems/haul-system';
 import { HungerSystem } from '../../../src/engine/systems/hunger-system';
 import { ProductionSystem } from '../../../src/engine/systems/production-system';
 import { SnapshotSystem } from '../../../src/engine/systems/snapshot-system';
@@ -13,6 +13,24 @@ import { buildSaveFromWorld } from '../../../src/engine/game-engine';
 import { buildColonyPrepWorld, COMPONENT_TYPES, getPrepResource, initialSave, spawnBuilding, spawnColonist } from '../../../src/engine/world';
 import type { Command } from '../../../src/shared/commands';
 import type { SaveGameV4 } from '../../../src/shared/save';
+
+/**
+ * What a hauler in this file's fixtures carries per trip.
+ *
+ * NOT BALANCE.haulCarryCapacity, which is what a hauler with a neutral commute
+ * carries. `setup()` runs `initialSave()`, a colony with no house in it and no
+ * planks to build one, so its haulers are homeless and Task 7's carry scaling
+ * gives them `haulerCapacity(null)` instead. Named once and used by every case
+ * below that seeds "exactly one load" AND every case that asserts a full
+ * delivery: if the seed and the assertion ever read different numbers, the
+ * fixture silently becomes a two-trip run and the case stops testing what its
+ * name says.
+ *
+ * Housing them is not the fix here the way it is in haul-system.test.ts: this
+ * file asserts on `snapshot().buildings[0]` and on building COUNTS throughout,
+ * so an extra house entity would break a dozen unrelated cases.
+ */
+const ONE_LOAD = haulerCapacity(null);
 
 async function setup(save: SaveGameV4 = initialSave()) {
   const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, HaulSystem, SnapshotSystem] });
@@ -504,7 +522,7 @@ describe('CommandSystem', () => {
     const carrier = [...world.getEntities()].find((e) => (e.getComponent(HaulTrip)?.amount ?? 0) > 0)!;
     const before = world.getResource(Stockpile).get('wood');
     await dispatch({ type: 'unassignHauler' });
-    expect(world.getResource(Stockpile).get('wood')).toBe(before + BALANCE.haulCarryCapacity);
+    expect(world.getResource(Stockpile).get('wood')).toBe(before + ONE_LOAD);
     expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Unassigned a hauler.' }]);
     // The trip must be reset, not merely handed off: buildSaveFromWorld banks a
     // carried load into the save filtered on `carrying`, NOT on `hauling`, so a
@@ -516,7 +534,7 @@ describe('CommandSystem', () => {
     expect(carrier.getComponent(HaulTrip)!).toMatchObject({
       phase: 'idle', targetId: null, resource: null, amount: 0, legTicks: 0, pickupCol: 0, pickupRow: 0,
     });
-    expect(buildSaveFromWorld(world).stockpile.wood).toBe(before + BALANCE.haulCarryCapacity);
+    expect(buildSaveFromWorld(world).stockpile.wood).toBe(before + ONE_LOAD);
   });
 
   // OBS-4-08: the old rule took the first hauler in entity-iteration order, so
@@ -534,7 +552,7 @@ describe('CommandSystem', () => {
       // Exactly one load: the first hauler empties the buffer, so the second has
       // nothing to fetch and stays idle at the camp instead of going outbound.
       if (entity.getComponent(Building)?.id === buildingId) {
-        entity.getComponent(OutputBuffer)!.add('wood', BALANCE.haulCarryCapacity);
+        entity.getComponent(OutputBuffer)!.add('wood', ONE_LOAD);
       }
     }
     await dispatch({ type: 'assignHauler' });
@@ -593,7 +611,7 @@ describe('CommandSystem', () => {
     // hauler must actually arrive, load, walk home and deposit.
     await tick(); await tick(); await tick();
     expect(trip().phase).toBe('idle'); // arrived, loaded, walked home, delivered
-    expect(world.getResource(Stockpile).get('wood')).toBe(before + BALANCE.haulCarryCapacity); // the goods actually reached the stockpile
+    expect(world.getResource(Stockpile).get('wood')).toBe(before + ONE_LOAD); // the goods actually reached the stockpile
   });
 
   it('a move does not disturb a hauler already on its return leg', async () => {
@@ -604,7 +622,7 @@ describe('CommandSystem', () => {
     const before = world.getResource(Stockpile).get('wood'); // 30 starting - 10 forester cost
     for (const entity of world.getEntities()) {
       const building = entity.getComponent(Building);
-      if (building?.id === buildingId) entity.getComponent(OutputBuffer)!.add('wood', BALANCE.haulCarryCapacity);
+      if (building?.id === buildingId) entity.getComponent(OutputBuffer)!.add('wood', ONE_LOAD);
     }
     await dispatch({ type: 'assignHauler' }); // dispatched this same tick: outbound, ticksLeft 3
     const hauler = [...world.getEntities()].find((e) => e.getComponent(HaulTrip)?.phase === 'outbound')!;
@@ -612,7 +630,7 @@ describe('CommandSystem', () => {
     await tick(); await tick(); await tick(); // walks the 3 ticks out and loads
     expect(trip()).toMatchObject({
       phase: 'returning', ticksLeft: 3, legTicks: 3, pickupCol: 5, pickupRow: 4,
-      resource: 'wood', amount: BALANCE.haulCarryCapacity,
+      resource: 'wood', amount: ONE_LOAD,
     });
 
     // The building it loaded from moves elsewhere. A returning hauler walks to
@@ -626,12 +644,12 @@ describe('CommandSystem', () => {
     // the OLD (5,4), never the new (9,6) the building moved to.
     expect(trip()).toMatchObject({
       phase: 'returning', ticksLeft: 2, legTicks: 3, pickupCol: 5, pickupRow: 4,
-      resource: 'wood', amount: BALANCE.haulCarryCapacity,
+      resource: 'wood', amount: ONE_LOAD,
     });
 
     await tick(); await tick(); // the same 2 ticks it would have taken without the move
     expect(trip().phase).toBe('idle');
-    expect(world.getResource(Stockpile).get('wood')).toBe(before + BALANCE.haulCarryCapacity); // still delivers in full
+    expect(world.getResource(Stockpile).get('wood')).toBe(before + ONE_LOAD); // still delivers in full
   });
 
   // The buildings-side companion to the worker parity test below. OBS-4-02
@@ -726,7 +744,7 @@ describe('CommandSystem', () => {
     const buildingId = snapshot().buildings[0].id;
     for (const entity of world.getEntities()) {
       if (entity.getComponent(Building)?.id === buildingId) {
-        entity.getComponent(OutputBuffer)!.add('wood', BALANCE.haulCarryCapacity);
+        entity.getComponent(OutputBuffer)!.add('wood', ONE_LOAD);
       }
     }
     await dispatch({ type: 'assignHauler' });
@@ -739,7 +757,7 @@ describe('CommandSystem', () => {
 
     const before = world.getResource(Stockpile).get('wood');
     for (let i = 0; i < 40; i++) await tick();
-    expect(world.getResource(Stockpile).get('wood')).toBe(before + BALANCE.haulCarryCapacity);
+    expect(world.getResource(Stockpile).get('wood')).toBe(before + ONE_LOAD);
     expect(snapshot().buildings[0].buffered).toBe(0); // the buffer genuinely drained
   });
 

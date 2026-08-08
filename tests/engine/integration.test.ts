@@ -20,12 +20,32 @@ async function run(world: Awaited<ReturnType<typeof createColonyWorld>>, ticks: 
  * tests/engine/systems/haul-system.test.ts pins in isolation, since a
  * downstream building's input is paid from the Stockpile, never straight
  * from an upstream building's buffer.
+ *
+ * It also houses all 18, because since increment 6 a colony that houses
+ * nobody is a colony working at half power (BALANCE.homelessFactor) and
+ * hauling at half capacity — and this case is about whether the two CHAINS
+ * bootstrap, not about what homelessness costs. Housing is the end-to-end
+ * exercise of the new mechanic here: PopulationSystem's rehome hands out
+ * these beds itself, and every commute lands well inside the floor.
+ *
+ * The tiles are odd-numbered columns, which the legacy plot sequence
+ * autoPlacePosition walks (cols 4,6,8,10,12) never visits — so the seven
+ * buildings constructed below still land on exactly the tiles they always
+ * did, and this fixture adds housing without also moving the economy.
  */
+const HOUSE_TILES = [{ col: 5, row: 1 }, { col: 7, row: 1 }, { col: 9, row: 1 }, { col: 11, row: 1 }, { col: 5, row: 3 }];
+
 function richSave(): SaveGameV4 {
   const save = initialSave();
   save.stockpile = { wood: 500, planks: 200, berries: 200 };
   save.workers = Array.from({ length: 18 }, (_, i) => ({ id: i + 1, hunger: 0, buildingId: null, toolTicks: 0, hauling: false }));
-  save.nextEntityId = 19;
+  // 5 houses x BALANCE.houseBeds is 20 beds for 18 colonists, so nobody is
+  // left homeless by a bed shortage this fixture never meant to create.
+  save.buildings = HOUSE_TILES.map((tile, i) => ({
+    id: 19 + i, defId: 'house' as const, col: tile.col, row: tile.row,
+    progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0,
+  }));
+  save.nextEntityId = 19 + HOUSE_TILES.length;
   return save;
 }
 

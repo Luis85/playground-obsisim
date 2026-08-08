@@ -91,6 +91,22 @@ export interface ColonistSnapshot {
   stage: LifeStage;
   /** The house this colonist sleeps in, or null when homeless. */
   homeId: number | null;
+  /**
+   * Straight-line tiles from this colonist's bed to the tile they work at —
+   * their assigned building, or the camp store for a hauler (whose trips both
+   * begin and end there). 0 when they are housed with no job to walk to, and
+   * 0 for a homeless colonist, who has no bed to measure from: their penalty
+   * arrives through `commuteFactor` below instead.
+   */
+  commuteTiles: number;
+  /**
+   * The share of their work this colonist's placement actually delivers —
+   * `commuteFactor` over `commuteTiles` when housed, `BALANCE.homelessFactor`
+   * when not. Published rather than left for a view to re-derive: the distance
+   * needs two entities' tiles, so anything recomputing it would be a second
+   * source of truth for a number the simulation has already spent.
+   */
+  commuteFactor: number;
 }
 
 export interface ResourceStats {

@@ -734,9 +734,16 @@ describe('live-world projections agree', () => {
   // "Saved (v5)"), just not yet saved. Task 6 stops short of the save-format
   // bump; a future task adds SavedColonist.homeId and this graduates out of
   // the list, the same way starvingTicks did.
+  // `commuteTiles` and `commuteFactor` are in the list for the FIRST reason,
+  // not `homeId`'s: they are recomputed every tick from two entities' live
+  // positions, exactly like `efficiency` and `stage`, so there is nothing to
+  // persist and nothing awaiting a save bump. (They will still change when
+  // `homeId` graduates — a restored colonist starts homeless until rehome
+  // runs — but that is a consequence of homeId's absence, not a second field
+  // waiting on the same bump.)
   const DERIVED = [
     'efficiency', 'stage', 'haulTargetId', 'haulPhase', 'haulTicksLeft', 'haulLegTicks', 'haulPickupCol', 'haulPickupRow',
-    'carrying', 'homeId',
+    'carrying', 'homeId', 'commuteTiles', 'commuteFactor',
   ] as const;
 
   function persisted(workers: readonly object[]): Record<string, unknown>[] {

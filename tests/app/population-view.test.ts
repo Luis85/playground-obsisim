@@ -18,6 +18,9 @@ function worker(overrides: Partial<ColonistSnapshot> = {}): ColonistSnapshot {
     haulTargetId: null, haulPhase: 'idle', haulTicksLeft: 0,
     haulLegTicks: 0, haulPickupCol: 0, haulPickupRow: 0,
     carrying: 0, toolTicks: 0, ageTicks: BALANCE.lifeBands.matureTicks, stage: 'adult', homeId: null,
+    // Matches `homeId: null`: no bed, so no distance to report and the flat
+    // homeless charge instead of a commute.
+    commuteTiles: 0, commuteFactor: BALANCE.homelessFactor,
     ...overrides,
   };
 }

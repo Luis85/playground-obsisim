@@ -2,7 +2,9 @@ import type { IRuntimeWorld } from 'sim-ecs';
 import type { BuildingDefId, RecipeDef, ResourceId } from '../shared/content-types';
 import type { SavedBuilding, SavedColonist } from '../shared/save';
 import type { BuildingSnapshot, BuildingState, ColonistSnapshot } from '../shared/snapshot';
-import { stageOf } from '../shared/population';
+import type { TileRef } from '../shared/placement';
+import { CAMP_TILE } from '../shared/haul';
+import { commuteFactor, stageOf } from '../shared/population';
 import { BALANCE, workerWorkPower } from './content/balance';
 import { batchOutputUnits, BUILDINGS } from './content/buildings';
 import {
@@ -17,15 +19,21 @@ import {
  * either source so the worker/building snapshot derivation logic — tool
  * multiplier, staffing state, progress percent — exists exactly once.
  *
- * A worker's facts ARE its published snapshot, field for field: unlike a
- * building, nothing about one worker's own snapshot is aggregated across
- * other entities (compare BuildingFacts below, which is a genuinely smaller
- * set — staffing and power are counted from the whole roster). ColonistFacts
- * therefore extends ColonistSnapshot instead of repeating its field list, plus
- * the one thing a snapshot never needed: which resource is in hand (the
- * amount alone, `carrying`, is what the app and the save both actually use).
+ * A worker's facts ARE its published snapshot, field for field, with two
+ * exceptions: unlike a building, nothing about one worker's own snapshot is
+ * aggregated across other entities (compare BuildingFacts below, which is a
+ * genuinely smaller set — staffing and power are counted from the whole
+ * roster). ColonistFacts therefore extends ColonistSnapshot instead of
+ * repeating its field list, plus the one thing a snapshot never needed: which
+ * resource is in hand (the amount alone, `carrying`, is what the app and the
+ * save both actually use).
+ *
+ * `commuteTiles`/`commuteFactor` are the exception, and the reason this is an
+ * Omit rather than a bare extends: they need the HOME's tile and the
+ * WORKPLACE's, which no single entity can supply, so buildEntitySections
+ * computes them below where both are already in hand.
  */
-export interface ColonistFacts extends ColonistSnapshot {
+export interface ColonistFacts extends Omit<ColonistSnapshot, 'commuteTiles' | 'commuteFactor'> {
   carryingResource: ResourceId | null;
 }
 
@@ -89,22 +97,59 @@ function progressPercent(recipe: RecipeDef | null, progress: number): number {
   return recipe === null ? 0 : Math.min(100, Math.round((progress / recipe.ticksPerBatch) * 100));
 }
 
+/**
+ * THE bed-to-job distance, in tiles. Null means "no bed" — the homeless case
+ * `commuteFactor` charges flat, kept distinct from 0 because a colonist living
+ * next door and a colonist living nowhere are opposite ends of the same scale.
+ * 0 means housed with nowhere to walk to (unassigned), which costs nothing.
+ *
+ * Exported because ProductionSystem measures the same commute from live
+ * components while this module measures it from facts, and the two must never
+ * disagree — the UI would then report a work power the simulation never used.
+ * Same reason `workerWorkPower` lives in exactly one place.
+ */
+export function commuteTiles(homeTile: TileRef | null, workTile: TileRef | null): number | null {
+  if (homeTile === null) return null;
+  if (workTile === null) return 0;
+  return Math.hypot(homeTile.col - workTile.col, homeTile.row - workTile.row);
+}
+
+/**
+ * The tile a colonist's job is at. A hauler's round trip begins and ends at
+ * the camp store, so that — not whichever building they happen to be walking
+ * to this tick — is what their commute is measured to; anything else would
+ * make one colonist's work power depend on another building's backlog.
+ */
+function workTileOf(c: ColonistFacts, tileById: ReadonlyMap<number, TileRef>): TileRef | null {
+  if (c.hauling) return CAMP_TILE;
+  return c.buildingId === null ? null : tileById.get(c.buildingId) ?? null;
+}
+
 /** Pure aggregation shared by SnapshotSystem, the initial-snapshot seed, and the post-step refresh. */
 export function buildEntitySections(workers: readonly ColonistFacts[], buildings: readonly BuildingFacts[]): EntitySections {
   const staffCount = new Map<number, number>();
   const powerByBuilding = new Map<number, number>();
   const tooledByBuilding = new Map<number, number>();
 
+  const tileById = new Map(buildings.map((b): [number, TileRef] => [b.id, { col: b.col, row: b.row }]));
+  // Measured ONCE per colonist and read by both the aggregation below and the
+  // published snapshot, so the multiplier the player is shown is literally the
+  // number the aggregation spent, not a second computation that mirrors it.
+  const tilesById = new Map(workers.map((w): [number, number | null] => [
+    w.id, commuteTiles(w.homeId === null ? null : tileById.get(w.homeId) ?? null, workTileOf(w, tileById)),
+  ]));
+  const factorOf = (id: number) => commuteFactor(tilesById.get(id) ?? null, BALANCE.commute, BALANCE.homelessFactor);
+
   for (const w of workers) {
     if (w.buildingId === null) continue;
     const tooled = w.toolTicks > 0;
     staffCount.set(w.buildingId, (staffCount.get(w.buildingId) ?? 0) + 1);
-    // Mirrors ProductionSystem's own placementFactor read, so the displayed
-    // workPower never disagrees with the power the simulation actually used.
-    const placementFactor = w.homeId === null ? BALANCE.homelessFactor : 1;
+    // Mirrors ProductionSystem's own commute read (both go through
+    // commuteTiles above), so the displayed workPower never disagrees with
+    // the power the simulation actually used.
     powerByBuilding.set(
       w.buildingId,
-      (powerByBuilding.get(w.buildingId) ?? 0) + workerWorkPower(w.efficiency, w.toolTicks, placementFactor),
+      (powerByBuilding.get(w.buildingId) ?? 0) + workerWorkPower(w.efficiency, w.toolTicks, factorOf(w.id)),
     );
     if (tooled) tooledByBuilding.set(w.buildingId, (tooledByBuilding.get(w.buildingId) ?? 0) + 1);
   }
@@ -115,6 +160,9 @@ export function buildEntitySections(workers: readonly ColonistFacts[], buildings
       hauling: w.hauling, haulTargetId: w.haulTargetId, haulPhase: w.haulPhase, haulTicksLeft: w.haulTicksLeft,
       haulLegTicks: w.haulLegTicks, haulPickupCol: w.haulPickupCol, haulPickupRow: w.haulPickupRow,
       carrying: w.carrying, toolTicks: w.toolTicks, ageTicks: w.ageTicks, stage: w.stage, homeId: w.homeId,
+      // Null tiles are the homeless case: there is no distance to report, and
+      // the whole charge lands in the factor instead.
+      commuteTiles: tilesById.get(w.id) ?? 0, commuteFactor: factorOf(w.id),
     }))
     .sort((a, b) => a.id - b.id);
 

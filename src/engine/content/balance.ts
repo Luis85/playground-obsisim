@@ -1,6 +1,6 @@
 import type { ResourceId } from '../../shared/content-types';
 import { MAX_MAP } from '../../shared/placement';
-import type { LifeBands } from '../../shared/population';
+import type { CommuteRates, LifeBands } from '../../shared/population';
 
 /** Building relocation speed — half the hauler rate, because carrying a
  * building is harder than carrying goods. Extracted so maxRelocationTicks
@@ -78,9 +78,13 @@ export const BALANCE = {
   houseBeds: 4,
   /** Work power multiplier for a colonist with nowhere to live. Equal to
    * commute.floor (spec 4): homelessness is exactly as bad as the worst
-   * possible commute, so the player has one number to beat. Task 7 adds the
-   * content test pinning the two together. */
+   * possible commute, so the player has one number to beat. The two cannot
+   * reference each other inside one object literal, so a content test pins
+   * them together instead. */
   homelessFactor: 0.5,
+  /** Commute tuning (spec 2.4). freeTiles is what makes an adjacent home
+   * genuinely free, which is what keeps increment 5's measurements intact. */
+  commute: { freeTiles: 2, penaltyPerTile: 0.03, floor: 0.5 } as CommuteRates,
 } as const;
 
 /**

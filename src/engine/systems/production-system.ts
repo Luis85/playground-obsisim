@@ -1,8 +1,11 @@
 import { createSystem, queryComponents, Read, Write, WriteResource } from 'sim-ecs';
 import type { RecipeDef, ResourceId } from '../../shared/content-types';
+import type { TileRef } from '../../shared/placement';
+import { commuteFactor } from '../../shared/population';
 import { BALANCE, workerWorkPower } from '../content/balance';
 import { batchOutputUnits, BUILDINGS } from '../content/buildings';
-import { Building, Efficiency, Home, JobAssignment, OutputBuffer, Production, Relocation, ToolCoverage } from '../components';
+import { commuteTiles } from '../snapshot-builder';
+import { Building, Efficiency, Home, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage } from '../components';
 import { ProductionLedger, Stockpile } from '../resources';
 
 /**
@@ -48,23 +51,41 @@ function completeBatches(
 }
 
 /**
+ * How much of this worker's effort survives the walk from their bed. Split out
+ * of sumWorkPower so that loop keeps its flat shape (and its CRAP score) while
+ * the two map lookups the distance needs live somewhere named.
+ *
+ * `commuteTiles` is imported rather than re-derived: buildEntitySections
+ * measures the same walk from ColonistFacts, and a second copy of the
+ * arithmetic here is exactly how a displayed work power drifts away from the
+ * simulated one.
+ */
+function placementFactorOf(homeId: number | null, buildingId: number, tileById: ReadonlyMap<number, TileRef>): number {
+  const homeTile = homeId === null ? null : tileById.get(homeId) ?? null;
+  const tiles = commuteTiles(homeTile, tileById.get(buildingId) ?? null);
+  return commuteFactor(tiles, BALANCE.commute, BALANCE.homelessFactor);
+}
+
+/**
  * Every currently-assigned worker's contribution to its building's work
  * power this tick, summed by building id. Extracted out of the run function
  * purely to keep ITS OWN complexity (fallow scores CRAP per function, which
  * reads cyclomatic, not just cognitive) under the gate — same principle as
  * startBatch/completeBatches already being split out above.
+ *
+ * Haulers never reach the accumulation: their `buildingId` is null, and their
+ * commute is charged against carry capacity in HaulSystem instead, because
+ * their output is goods moved rather than batches produced.
  */
 function sumWorkPower(
   workers: Iterable<{ job: JobAssignment; efficiency: Efficiency; coverage: ToolCoverage; home: Home }>,
+  tileById: ReadonlyMap<number, TileRef>,
 ): Map<number, number> {
   const powerByBuilding = new Map<number, number>();
   for (const { job, efficiency, coverage, home } of workers) {
     if (job.buildingId === null) continue;
-    // Homelessness costs exactly what the worst possible commute costs
-    // (BALANCE.homelessFactor) — Task 7 replaces this binary read with the
-    // full commute factor.
-    const placementFactor = home.buildingId === null ? BALANCE.homelessFactor : 1;
-    const contribution = workerWorkPower(efficiency.value, coverage.remainingTicks, placementFactor);
+    const factor = placementFactorOf(home.buildingId, job.buildingId, tileById);
+    const contribution = workerWorkPower(efficiency.value, coverage.remainingTicks, factor);
     powerByBuilding.set(job.buildingId, (powerByBuilding.get(job.buildingId) ?? 0) + contribution);
   }
   return powerByBuilding;
@@ -74,13 +95,19 @@ export const ProductionSystem = () => createSystem({
   stockpile: WriteResource(Stockpile),
   ledger: WriteResource(ProductionLedger),
   buildings: queryComponents({
-    building: Read(Building), production: Write(Production), buffer: Write(OutputBuffer), relocation: Write(Relocation),
+    building: Read(Building), position: Read(Position), production: Write(Production), buffer: Write(OutputBuffer),
+    relocation: Write(Relocation),
   }),
   workers: queryComponents({ job: Read(JobAssignment), efficiency: Read(Efficiency), coverage: Read(ToolCoverage), home: Read(Home) }),
 })
   .withName('ProductionSystem')
   .withRunFunction(({ stockpile, ledger, buildings, workers }) => {
-    const powerByBuilding = sumWorkPower(workers.iter());
+    // Materialized because the rows are needed twice: once to map every
+    // building's tile (a worker's commute is measured against their HOUSE's
+    // tile, which is another row in this same query) and once to advance them.
+    const buildingRows = [...buildings.iter()];
+    const tileById = new Map(buildingRows.map((row): [number, TileRef] => [row.building.id, row.position]));
+    const powerByBuilding = sumWorkPower(workers.iter(), tileById);
 
     // Isolated so the run function itself stays a flat dispatch loop.
     const advanceBatches = (building: Building, production: Production, buffer: OutputBuffer, workPower: number) => {
@@ -96,7 +123,7 @@ export const ProductionSystem = () => createSystem({
       completeBatches(production, buffer, stockpile, recipe, perBatch, ledger);
     };
 
-    for (const { building, production, buffer, relocation } of buildings.iter()) {
+    for (const { building, production, buffer, relocation } of buildingRows) {
       // A relocating building is out of action: its crew are carrying it, not
       // working. Haulers still collect from its buffer — goods already made
       // exist regardless of whether the crew is working.

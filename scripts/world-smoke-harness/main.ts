@@ -34,6 +34,9 @@ function worker(id: number, overrides: Partial<ColonistSnapshot> = {}): Colonist
     haulTargetId: null, haulPhase: 'idle', haulTicksLeft: 0,
     haulLegTicks: 0, haulPickupCol: 0, haulPickupRow: 0,
     carrying: 0, toolTicks: 0, ageTicks: 0, stage: 'adult', homeId: null,
+    // The world renderer never reads the commute either — static zeros, same
+    // reason as `homeless` and the empty stockpile cast below.
+    commuteTiles: 0, commuteFactor: 1,
     ...overrides,
   };
 }

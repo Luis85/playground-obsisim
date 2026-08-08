@@ -86,6 +86,12 @@ describe('content catalog', () => {
     }
   });
 
+  it('homelessness is exactly as bad as the worst commute', () => {
+    // Spec 4: one number for the player to beat. A drift between these two
+    // would make being homeless quietly better than living far away.
+    expect(BALANCE.homelessFactor).toBe(BALANCE.commute.floor);
+  });
+
   it('the house shelters and never produces', () => {
     expect(BUILDINGS.house.recipe).toBeNull();
     expect(BUILDINGS.house.beds).toBe(BALANCE.houseBeds);

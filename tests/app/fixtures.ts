@@ -46,6 +46,11 @@ export function makeWorker(id: number, overrides: Partial<ColonistSnapshot> = {}
     haulTargetId: null, haulPhase: 'idle', haulTicksLeft: 0,
     haulLegTicks: 0, haulPickupCol: 0, haulPickupRow: 0,
     carrying: 0, toolTicks: 0, ageTicks: BALANCE.lifeBands.matureTicks, stage: 'adult', homeId: null,
+    // Consistent with `homeId: null` above: a homeless colonist has no bed to
+    // measure a distance from, and takes the flat homeless charge instead. A
+    // fixture claiming full work power for a homeless worker would be a lie
+    // the next case built on.
+    commuteTiles: 0, commuteFactor: BALANCE.homelessFactor,
     ...overrides,
   };
 }

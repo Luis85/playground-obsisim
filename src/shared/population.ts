@@ -76,3 +76,31 @@ export function stageOf(ageTicks: number, bands: LifeBands): LifeStage {
 export function lifespanFor(id: number, bands: LifeBands): number {
   return bands.lifespanTicks + spreadFor(id, bands.spreadTicks, SALT.lifespan);
 }
+
+/** Commute tuning, supplied by BALANCE. */
+export interface CommuteRates {
+  /** Tiles between home and work that cost nothing. */
+  freeTiles: number;
+  /** Fraction of work power lost per charged tile. */
+  penaltyPerTile: number;
+  /** The worst a commute can make a colonist. */
+  floor: number;
+}
+
+/**
+ * How much of their work a colonist actually delivers, given the distance
+ * between where they sleep and where they work. `tiles` is null for a colonist
+ * with no home, who takes `homelessFactor` instead.
+ *
+ * Charges TILES, not `ticksForDistance`. Reusing that is the obvious move and
+ * it is wrong here: it floors at 1 by design, so that no placement is free and
+ * no haul costs nothing. Applied to a commute that floor charges every
+ * colonist in the game permanently — including the balance harness's crews,
+ * which would shift every number increment 5 measured for a reason unrelated
+ * to hauling. A commute genuinely can be free: you live next door.
+ */
+export function commuteFactor(tiles: number | null, rates: CommuteRates, homelessFactor: number): number {
+  if (tiles === null) return homelessFactor;
+  const charged = Math.max(0, tiles - rates.freeTiles);
+  return Math.max(rates.floor, 1 - charged * rates.penaltyPerTile);
+}

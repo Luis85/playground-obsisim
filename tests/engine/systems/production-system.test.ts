@@ -8,6 +8,7 @@ import {
   ALL_SYSTEMS, buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist,
 } from '../../../src/engine/world';
 import type { BuildingDefId, ResourceId } from '../../../src/shared/content-types';
+import type { TileRef } from '../../../src/shared/placement';
 import { BALANCE } from '../../../src/engine/content/balance';
 import { BUILDINGS } from '../../../src/engine/content/buildings';
 import { stepTick } from '../fixtures';
@@ -92,6 +93,53 @@ describe('ProductionSystem', () => {
     expect(building.getComponent(OutputBuffer)!.total()).toBe(0);
     await world.step(); // 6 x 0.5 = 3
     expect(building.getComponent(OutputBuffer)!.total()).toBe(1);
+  });
+
+  it('a crew housed far from work banks less than one next door, and still more than one with no home', async () => {
+    // Task 7's whole point: WHERE the house goes is a decision, not a
+    // checkbox. Three otherwise-identical worlds differing in one thing —
+    // the tile the crew sleeps on — and BOTH gaps are asserted, because
+    // either half alone passes against a broken reading. A factor that
+    // ignored distance (1 for anyone housed) still beats homeless; a factor
+    // that ignored `homeId` still falls off with distance.
+    const bankedIn30Ticks = async (houseAt: TileRef | null) => {
+      const save = initialSave();
+      save.workers = [];
+      save.stockpile = {};
+      const prep = buildColonyPrepWorld({ save, systems: [ProductionSystem] });
+      const ids = getPrepResource(prep, IdCounter);
+      const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 0 });
+      // A REAL house, so this measures the mechanic and not a stray id: the
+      // tile is all ProductionSystem reads, but a sentinel would be evicted
+      // the moment PopulationSystem is in the pipeline.
+      const home = houseAt === null
+        ? null
+        : spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: houseAt.col, row: houseAt.row, relocatingTicks: 0 });
+      spawnColonist(prep, ids, {
+        buildingId: building.getComponent(Building)!.id,
+        homeId: home === null ? null : home.getComponent(Building)!.id,
+      });
+      const world = await prep.prepareRun();
+      for (let i = 0; i < 30; i++) await world.step();
+      return building.getComponent(OutputBuffer)!.total();
+    };
+
+    // (5,1) is 1 tile from work — inside BALANCE.commute.freeTiles, so a full
+    // 1.0. (14,1) is 10 tiles: 8 charged tiles, 0.76, deliberately chosen to
+    // land strictly BETWEEN 1.0 and the 0.5 floor. Anything past ~19 tiles
+    // clamps to the floor and would read identically to homeless, which would
+    // make the second assertion below unfalsifiable.
+    const near = await bankedIn30Ticks({ col: 5, row: 1 });
+    const far = await bankedIn30Ticks({ col: 14, row: 1 });
+    const homeless = await bankedIn30Ticks(null);
+
+    expect(near).toBeGreaterThan(far);
+    expect(far).toBeGreaterThan(homeless);
+    // Exact, not merely ordered: 30 ticks x 1.0 / 0.76 / 0.5 power over a
+    // 3-tick batch. Ordering alone would hold for a factor an order of
+    // magnitude off, and 30 ticks stays under the 12-unit output cap in the
+    // fastest of the three, so none of them is silently stalled instead.
+    expect([near, far, homeless]).toEqual([10, 7, 5]);
   });
 
   it('only covered workers get the multiplier (mixed staffing)', async () => {

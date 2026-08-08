@@ -2838,7 +2838,12 @@ function isValidSaveArrays(save: Record<string, unknown>, rosterKey: 'workers' |
 
 `isCommonSaveShape` takes and forwards both. v1–v4 pass `'workers'` and the existing record predicate; v5 passes `'colonists'` and a new `isSavedColonistShape` that additionally requires `ageTicks` and `starvingTicks` to be safe non-negative integers and `homeId` to be `number | null`. Then add `lastBirthTick` to `isSaveGameV5` with the same treatment `lastRecruitTick` gets (safe integer, not ahead of `tick`).
 
-**A `homeId` must name a building that actually shelters.** Add to `isLoadableSave`: every non-null `homeId` names a building present in the save **whose def has `beds > 0`**. A `homeId` pointing at a forester is a record no engine version could write, which is precisely this guard's stated criterion.
+**A `homeId` must name a shelter, and a `buildingId` must name a producer.** Add both to `isLoadableSave`, because they are one rule seen from two sides — a colonist lives in a house and works at a workshop, and neither reference may point at the other kind.
+
+- Every non-null `homeId` names a building present in the save **whose def has `beds > 0`**. A `homeId` pointing at a forester is a record no engine version could write.
+- Every non-null `buildingId` names a building **whose def has a `recipe`**. Today the guard only checks the id exists, so a save assigning a colonist to a house is accepted — and the result is permanent and silent: the colonist publishes as `1 / 0` workers on a zero-slot building, drops out of `idleAdults`, and produces nothing forever, because `ProductionSystem` skips recipe-less buildings. No command can create that assignment, which is exactly what makes it structural rather than balance-coupled.
+
+Both are the guard's stated criterion — reject only what no engine version could have written — as distinct from the over-capacity case below, which a retune *can* produce legitimately and so is repaired instead.
 
 **But over-capacity is NOT rejected — it is repaired, at load.** The repair belongs in the shared spawn/seed path (`colonistComponents` and `buildInitialSnapshot`), not only in `rehome`: a restored engine is paused until the player advances it, so a repair that waits for the first tick leaves the seeded snapshot advertising a state the engine will immediately revoke.
 

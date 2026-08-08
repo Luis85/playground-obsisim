@@ -784,6 +784,12 @@ In `src/engine/snapshot-builder.ts`: add `age: Age` to `colonistFactsOf`'s param
     idleAdults: colonistSnaps.filter((c) => c.stage === 'adult' && c.buildingId === null && !c.hauling).length,
 ```
 
+**Persist `ageTicks` in this task — not in Task 9.** `stage` is derived from it every tick and must never be stored, but the age itself is the source `PopulationSystem` advances, so dropping it resets every colonist to the default starting age on each save/reload, silently undoing however much of a lifespan it had lived. Three edits, all needed before this task's own `npm run typecheck` and test run:
+
+- `src/shared/save.ts` — add `ageTicks?: number` to the current colonist record. **Optional**, so saves written before this task still load.
+- `src/engine/snapshot-builder.ts` — write it in `savedColonistOf`, and read it back through the spawn path.
+- `tests/engine/world.test.ts` — add **`'stage'`, and only `'stage'`,** to the `DERIVED` list. That list names facts the projection recomputes and deliberately does not persist; putting `ageTicks` there too would tell the guard rail to ignore exactly the field this section exists to protect. The existing round-trip test will fail if `ageTicks` is not persisted — that failure is the guard working, not a reason to add it to `DERIVED`.
+
 In `src/engine/world.ts`'s `buildInitialSnapshot`, add `ageTicks` and `stage` to each seeded fact and rename the destructured `idleWorkers`. Read the age as `clampedAge(saved.ageTicks ?? BALANCE.startingAgeTicks)` — **the same fallback as `colonistComponents`, for the same reason** (see Step 3). The two must move in lockstep: the seeded snapshot has to match the entities actually spawned, or a restored colony's stage counts disagree with its own roster before the first tick runs.
 
 - [ ] **Step 7: Reject assigning a non-adult**

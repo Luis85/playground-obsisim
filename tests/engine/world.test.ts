@@ -5,14 +5,19 @@ import { Building, Hunger, JobAssignment, Relocation, ToolCoverage, Colonist } f
 import { IdCounter, SimClock, SnapshotStore, Stockpile } from '../../src/engine/resources';
 import type { IRuntimeWorld } from 'sim-ecs';
 import { GameEngine } from '../../src/engine/game-engine';
-import { ALL_SYSTEMS, buildColonyPrepWorld, createColonyWorld, getPrepResource, initialSave, isLoadableSave, prepareLoadedSave, refreshEntitySections } from '../../src/engine/world';
+import {
+  ALL_SYSTEMS, buildColonyPrepWorld, createColonyWorld, decideLoad, getPrepResource, initialSave, isLoadableSave, prepareLoadedSave,
+  refreshEntitySections,
+} from '../../src/engine/world';
 import { buildSaveFromWorld } from '../../src/engine/game-engine';
 import { CommandSystem } from '../../src/engine/systems/command-system';
 import { HaulSystem } from '../../src/engine/systems/haul-system';
 import { SnapshotSystem } from '../../src/engine/systems/snapshot-system';
 import type { SavedColonist, SaveGameV5 } from '../../src/shared/save';
 import { isSaveGameV4, MAX_SAVED_ENTITIES } from '../../src/shared/save';
-import { MAX_MAP, relocationTicks } from '../../src/shared/placement';
+import { autoPlaceSequence, DEFAULT_MAP, MAX_MAP, relocationTicks, type TileRef } from '../../src/shared/placement';
+import type { Command } from '../../src/shared/commands';
+import type { Snapshot } from '../../src/shared/snapshot';
 import { stepTick } from './fixtures';
 
 describe('initialSave', () => {
@@ -53,6 +58,65 @@ describe('initialSave', () => {
     expect(initialSave().lastBirthTick).toBe(-BALANCE.birthCooldownTicks);
   });
 });
+
+/** The producer `dispatchMixedDrain` staffs, in the fixture right below. */
+const MIXED_FORESTER_ID = 7;
+
+/**
+ * A colony with the slack to accept all five commands in one tick: three
+ * shelters (so a relocation and a demolition can each take one and a bed is
+ * still left for the nomad), a producer to staff, food past the nomad gate and
+ * materials for a house.
+ */
+function colonyWithRoomToDoEverything(): SaveGameV5 {
+  const save = initialSave();
+  const plot = (id: number, defId: 'house' | 'forester', col: number) =>
+    ({ id, defId, progress: 0, batchActive: false, col, row: 1, buffer: {}, relocatingTicks: 0 }) as const;
+  save.buildings.push(plot(5, 'house', 6), plot(6, 'house', 8), plot(MIXED_FORESTER_ID, 'forester', 10));
+  save.stockpile = { wood: 500, planks: 500, bread: 5000 };
+  save.nextEntityId = MIXED_FORESTER_ID + 1;
+  return save;
+}
+
+/** The first `count` buildable tiles nothing stands on, in placement order. */
+function freeTiles(snap: Snapshot, count: number): TileRef[] {
+  const taken = new Set(snap.buildings.map((b) => `${b.col},${b.row}`));
+  const found: TileRef[] = [];
+  for (const tile of autoPlaceSequence(DEFAULT_MAP)) {
+    if (!taken.has(`${tile.col},${tile.row}`)) found.push(tile);
+    if (found.length === count) return found;
+  }
+  throw new Error('no free tile left for the mixed drain');
+}
+
+/**
+ * Five commands into ONE drain: construct, relocate, demolish, recruit and
+ * assign.
+ *
+ * The house that moves is the one an arrival would be offered — the lowest id
+ * with a bed free, which is exactly what `shelterWithRoom` picks — because a
+ * relocation and an arrival contending for the SAME house is the pairing that
+ * produced the dangling `homeId`. Moving any other house leaves the two
+ * commands independent and the drain proves nothing. `recruitFirst` puts the
+ * nomad on either side of that relocation: one order needs the move to evict
+ * an arrival it cannot see in its query, the other needs the arrival to see a
+ * relocation started moments earlier in the same drain.
+ */
+function dispatchMixedDrain(engine: GameEngine, snap: Snapshot, recruitFirst: boolean): void {
+  const settled = snap.buildings.filter((b) => b.beds > 0 && b.relocatingTicks === 0);
+  const contended = settled.filter((b) => b.occupants < b.beds).sort((a, b) => a.id - b.id)[0];
+  const doomed = settled.filter((b) => b.id !== contended.id).sort((a, b) => b.id - a.id)[0];
+  const [buildAt, moveTo] = freeTiles(snap, 2);
+  const recruit: Command = { type: 'recruitWorker' };
+  const move: Command = { type: 'moveBuilding', buildingId: contended.id, to: moveTo };
+  const drain: Command[] = [
+    { type: 'constructBuilding', buildingDefId: 'house', at: buildAt },
+    ...(recruitFirst ? [recruit, move] : [move, recruit]),
+    { type: 'assignWorker', buildingId: MIXED_FORESTER_ID },
+    { type: 'demolishBuilding', buildingId: doomed.id },
+  ];
+  for (const command of drain) engine.dispatch(command);
+}
 
 describe('isLoadableSave', () => {
   it('accepts a fresh initial save', () => {
@@ -132,6 +196,54 @@ describe('isLoadableSave', () => {
       const staffingAHouse = withForester();
       staffingAHouse.colonists[0].buildingId = 1; // the starter house
       expect(isLoadableSave(staffingAHouse)).toBe(false);
+    });
+
+    // Every test above is a HAND-BUILT fixture, so between them they pin the
+    // four rules and not the premise the rules rest on — that no version of
+    // the engine could write the states they refuse. A fixture cannot check
+    // that premise, because it is built from the same assumption the guard
+    // encodes; only the engine's own output can. And the premise was FALSE for
+    // rule 3: a nomad drained alongside a `moveBuilding` produced exactly the
+    // `homeId` -> relocating-house pairing it rejects (fixed in 4012dd2), so
+    // `decideLoad` answered `{kind:'backup'}` and the shell would have moved a
+    // live colony aside and started a fresh one.
+    //
+    // Commands INTERACTING inside one drain is what breaks the circularity —
+    // one command at a time is what the fixtures already model. Driven through
+    // GameEngine, so the assertion covers `serialize()`, the very call the
+    // autosave listener is handed.
+    it('accepts every autosave a live mixed command drain produces', async () => {
+      const engine = await GameEngine.create(colonyWithRoomToDoEverything());
+      const step = async () => {
+        await engine.stepOnce();
+        // isLoadableSave, per tick, over what the autosave would have written.
+        expect(isLoadableSave(engine.serialize())).toBe(true);
+      };
+      const said = (pattern: RegExp) => engine.snapshot!.notices.some((n) => pattern.test(n.message));
+
+      // Ordinary running first, and again between and after the drains: an
+      // autosave lands on whatever tick the modulo picks, not only on the
+      // interesting ones.
+      for (let i = 0; i < 3; i++) await step();
+      for (const recruitFirst of [true, false]) {
+        dispatchMixedDrain(engine, engine.snapshot!, recruitFirst);
+        await step();
+        // Not vacuous: all five commands must have been ACCEPTED on this one
+        // tick. A drain whose nomad was quietly refused for want of a bed
+        // never puts an arrival and a relocation in contention at all, which
+        // is the whole interaction under test.
+        expect({
+          built: said(/Built a House/), joined: said(/joined the colony/), moved: said(/Moved the/),
+          assigned: said(/Assigned a worker/), demolished: said(/Demolished the/),
+        }).toEqual({ built: true, joined: true, moved: true, assigned: true, demolished: true });
+        // Past the recruit cooldown before the second drain, so its nomad is
+        // gated on beds — the thing under test — and not on patience.
+        for (let i = 0; i < BALANCE.recruitCooldownTicks + 1; i++) await step();
+      }
+
+      // And the consequence the rules exist to avoid, named: the shell restores
+      // this colony rather than filing it as corrupt.
+      expect(decideLoad(engine.serialize()).kind).toBe('restore');
     });
   });
 

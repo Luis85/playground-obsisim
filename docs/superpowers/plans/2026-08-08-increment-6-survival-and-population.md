@@ -2113,11 +2113,31 @@ In `src/engine/resources.ts`, beside `RemovalLedger`:
  * entities are in the query and counting them again would double them.
  */
 export class ArrivalLedger {
-  pending = 0;
+  /** One entry per colonist spawned this tick, carrying the bed it took. */
+  readonly pending: { homeId: number | null }[] = [];
 }
 ```
 
-Register it in `buildColonyPrepWorld`'s `instances` array, and have `handleRecruitWorker` increment it on success.
+**A reservation must name the bed, not just count one.** Both spawn paths pass a `homeId` into `colonistComponents`, because neither arrival gets homed this tick: a nomad is invisible to `PopulationSystem` entirely, and a birth happens *after* the homing phase has already run. Reserving a bare count would leave the arrival homeless for a tick while the bed it consumed still reads free — the count and the assignment disagreeing is the same class of bug as storing occupancy on the building instead of deriving it.
+
+Add one shared helper in `population-handlers.ts`, used by both paths:
+
+```ts
+/** The lowest-id shelter with a bed to spare, or null. Ascending id, like
+ * every other assignment order here, so the choice is reproducible. */
+export function freeShelterId(
+  shelters: readonly ShelterRow[],
+  occupancy: ReadonlyMap<number, number>,
+): number | null {
+  for (const shelter of [...shelters].sort((a, b) => a.id - b.id)) {
+    if (shelter.relocating) continue;
+    if ((occupancy.get(shelter.id) ?? 0) < shelter.beds) return shelter.id;
+  }
+  return null;
+}
+```
+
+Register `ArrivalLedger` in `buildColonyPrepWorld`'s `instances` array. `handleRecruitWorker` builds the same shelter/occupancy view its `nomadBlocker` gate already needs, picks a bed via `freeShelterId`, passes it as `homeId`, and pushes `{ homeId }` onto the ledger.
 
 Then:
 
@@ -2128,7 +2148,7 @@ export function tryBirth(ctx: PopulationContext): void {
   const beds = ctx.shelters.filter((s) => !s.relocating).reduce((sum, s) => sum + s.beds, 0);
   // A nomad welcomed earlier this tick holds a bed and eats, but is not in
   // `rows` yet — count them, or both arrivals take the same last bed.
-  const pending = ctx.arrivals.pending;
+  const pending = ctx.arrivals.pending.length;
   const housed = rows.filter((row) => row.home.buildingId !== null).length;
   const blocker = birthBlocker({
     stock: ctx.stockpile.toJSON(),
@@ -2144,12 +2164,24 @@ export function tryBirth(ctx: PopulationContext): void {
   if (blocker !== null) return;
   ctx.clock.lastBirthTick = ctx.clock.tick;
   const id = ctx.ids.take();
-  ctx.spawn(...colonistComponents({ id, ageTicks: 0 }));
+  // Born INTO a bed. The homing phase already ran this tick, so a child
+  // spawned without a homeId would spend its first tick homeless while the
+  // bed the gate just counted against still read free.
+  const occupancy = new Map<number, number>();
+  for (const row of rows) {
+    if (row.home.buildingId !== null) occupancy.set(row.home.buildingId, (occupancy.get(row.home.buildingId) ?? 0) + 1);
+  }
+  for (const arrival of ctx.arrivals.pending) {
+    if (arrival.homeId !== null) occupancy.set(arrival.homeId, (occupancy.get(arrival.homeId) ?? 0) + 1);
+  }
+  const homeId = freeShelterId(ctx.shelters, occupancy);
+  ctx.spawn(...colonistComponents({ id, ageTicks: 0, homeId }));
+  ctx.arrivals.pending.push({ homeId });
   ctx.notices.succeed(`Colonist #${id} was born.`);
 }
 ```
 
-`PopulationSystem` resets `ctx.arrivals.pending = 0` after `tryBirth`, and `PopulationContext` gains `arrivals: ArrivalLedger`.
+`PopulationSystem` clears `ctx.arrivals.pending` (`length = 0`) after `tryBirth` — by the next tick the real entities are in the query, and counting them twice would double them — and `PopulationContext` gains `arrivals: ArrivalLedger`.
 
 Pin the interaction — this is the whole reason the ledger exists:
 
@@ -2354,7 +2386,7 @@ it('v4 -> v5: colonists become adults, a starter house appears, and its beds are
   const homed = v5.colonists.filter((c) => c.homeId === house!.id);
   expect(homed).toHaveLength(3);
 
-  expect(v5.lastBirthTick).toBe(0);
+  expect(v5.lastBirthTick).toBe(-MIGRATION_CONSTANTS.birthCooldownTicks);
   expect(v5.colonists.every((c) => c.starvingTicks === 0)).toBe(true);
 });
 
@@ -2456,7 +2488,15 @@ const migrateV4toV5: MigrationStep = {
   migrate: (save) => {
     const v4 = save as SaveGameV4;
     const occupied = v4.buildings.map((b) => ({ col: b.col, row: b.row }));
-    const at = autoPlacePosition(v4.map, occupied);
+    // Grow the map if the colony has filled it, exactly as v1 -> v2 does with
+    // mapThatFits. Without this, a v4 save with every buildable tile occupied
+    // silently gets NO starter house and every colonist loads homeless —
+    // the precise outcome this migration exists to prevent, reached through
+    // the one branch that quietly does nothing.
+    const map = v4.buildings.length < (v4.map.cols - CAMP_COLS) * v4.map.rows
+      ? v4.map
+      : mapThatFits(v4.buildings.length + 1);
+    const at = autoPlacePosition(map, occupied);
     const houseId = Math.max(0, ...v4.buildings.map((b) => b.id), ...v4.workers.map((w) => w.id)) + 1;
     const house = at === null ? null : {
       id: houseId, defId: 'house' as const, col: at.col, row: at.row,
@@ -2478,6 +2518,7 @@ const migrateV4toV5: MigrationStep = {
       // because it was reopened, which is the save-alters-growth defect
       // lastBirthTick exists to prevent.
       lastBirthTick: -MIGRATION_CONSTANTS.birthCooldownTicks,
+      map,
       buildings: house === null ? v4.buildings : [...v4.buildings, house],
       colonists,
       nextEntityId: Math.max(v4.nextEntityId, houseId + 1),
@@ -2507,7 +2548,7 @@ export const MIGRATION_CONSTANTS = {
 const jitter = (id: number) => spreadFor(id, MIGRATION_CONSTANTS.spreadTicks, SALT.startingAge);
 ```
 
-Import `spreadFor` and `SALT` from `./population` and `autoPlacePosition` from `./placement` (already imported), register `migrateV4toV5` in `SAVE_MIGRATIONS`, and add `5: isSaveGameV5` to `SAVE_GUARDS`.
+Import `spreadFor` and `SALT` from `./population`, and `autoPlacePosition`, `mapThatFits` and `CAMP_COLS` from `./placement`, register `migrateV4toV5` in `SAVE_MIGRATIONS`, and add `5: isSaveGameV5` to `SAVE_GUARDS`.
 
 Pin every duplicated constant against its real counterpart in `tests/engine/content.test.ts` — the test file that CAN import both sides:
 
@@ -2532,6 +2573,23 @@ it('a v4 save written before the cooldown elapsed can still give birth immediate
   // Discriminating: 0 would block a tick-0 colony's first birth for 50 ticks
   // purely because the save was reopened.
   expect(v5.lastBirthTick).toBeLessThanOrEqual(-BALANCE.birthCooldownTicks);
+});
+
+it('grows the map when a full v4 colony leaves no room for the starter house', () => {
+  // The no-house branch is the one that fails silently: every colonist would
+  // load homeless, which is exactly what this migration exists to prevent.
+  const full = { ...v4WithThreeWorkers(), map: { cols: 8, rows: 6 } };
+  full.buildings = Array.from({ length: (8 - 3) * 6 }, (_, i) => ({
+    id: 100 + i, defId: 'forester' as const,
+    col: 3 + (i % 5), row: Math.floor(i / 5),
+    progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0,
+  }));
+  full.nextEntityId = 1000;
+  const v5 = migrateSaveToLatest(full) as SaveGameV5;
+
+  expect(v5).not.toBeNull();
+  expect(v5.buildings.some((b) => b.defId === 'house')).toBe(true);
+  expect(v5.colonists.some((c) => c.homeId !== null)).toBe(true);
 });
 ```
 

@@ -2294,7 +2294,7 @@ Both helpers take `PendingChanges` rather than a bare count precisely so the dem
 
 **An arrival names its bed, and `rehome` must honour that.** Neither arrival is homed on its own tick — a nomad is invisible to `PopulationSystem`, a birth happens after homing — so each passes a `homeId` into `colonistComponents` and pushes `{ homeId }` onto the ledger. `rehome` then counts pending arrivals against their houses when computing per-shelter room, or it will fill the very bed an arrival reserved.
 
-`PendingChanges` is already registered (Task 6). Here, `handleRecruitWorker` gates on `freeBeds(ctx.shelters, population, ctx.pending) > 0`, picks its bed with `shelterWithRoom(ctx.shelters, claimed, ctx.pending)`, and pushes `{ homeId }` onto `ctx.pending.arrivals`.
+`PendingChanges` is already registered (Task 6). `CommandContext` gains two things `handleRecruitWorker` needs, both built in `command-system.ts` from query rows it already materialises: `shelters: ShelterRow[]` (the same shape `PopulationContext` uses) and `occupancy(): Map<number, number>`, counting colonists per `home.buildingId`. `nomadGate()` derives its `freeBeds` from the same `freeBeds(ctx.shelters, population, ctx.pending)` helper, so the gate and the bed it then picks cannot disagree.
 
 **Pin the invariant, not just the three known cases.** All three defects violated one property, and a property test catches the next variant:
 
@@ -2419,10 +2419,18 @@ export function handleRecruitWorker(ctx: CommandContext): void {
   }
   ctx.clock.lastRecruitTick = ctx.clock.tick;
   const id = ctx.ids.take();
+  // Take the bed AND record the arrival. Both matter, for the same reason:
+  // this entity does not exist to any query until the post-step sync, so
+  // PopulationSystem — which runs later this very tick — would otherwise see
+  // the bed as free and let tryBirth hand it to a child as well. The tick
+  // would end with five colonists in four beds and the nomad homeless.
+  const homeId = shelterWithRoom(ctx.shelters, ctx.occupancy(), ctx.pending);
   ctx.spawn(...colonistComponents({
     id,
+    homeId,
     ageTicks: BALANCE.nomadArrivalTicks + spreadFor(id, BALANCE.lifeBands.spreadTicks, SALT.arrivalAge),
   }));
+  ctx.pending.arrivals.push({ homeId });
   ctx.notices.succeed(`Colonist #${id} joined the colony.`);
 }
 
@@ -3184,22 +3192,31 @@ Putting the label *inside* the chip is what rendered two increment-4 entries as 
 
 Add four fixture phases to the `phases` table in `scripts/world-smoke-harness/main.ts`, and four checks to the runner in `scripts/world-smoke.mjs`. Each phase changes **exactly one** thing.
 
-**Append to the END of that table and use the next free indices.** It already holds 18 entries (0–17), and 9 through 12 are the carrying marker, relocation state, ghost activation and ghost tint — reusing those indices would compare unrelated existing transitions, so all four new checks would pass with demographic rendering entirely removed. That is the precise failure one-change-per-phase exists to prevent. Confirm the count first (`grep -c 'snap(' scripts/world-smoke-harness/main.ts`) and renumber if the table has grown since this was written.
+**Insert them immediately BEFORE the final `renderer.dispose()` phase, and renumber dispose.** The table holds 17 entries, 0–16, and **index 16 is `dispose()`** — so appending to the end would put every demographic phase after the renderer has been destroyed, and they would draw nothing. The four new phases therefore take 16–19 and `dispose()` moves to 20.
+
+Do NOT reuse indices 9–12: those are the carrying marker, relocation state, ghost activation and ghost tint. Pointing the new checks at them would compare unrelated existing transitions, so all four would pass with demographic rendering entirely removed — the precise failure one-change-per-phase exists to prevent.
+
+Confirm the table's real shape before renumbering, rather than trusting these numbers:
+
+```bash
+start=$(grep -n '^const phases' scripts/world-smoke-harness/main.ts | cut -d: -f1)
+awk -v s="$start" 'NR>s && /^\];/{exit} NR>s && /^  \(\) =>/{printf "index %d: %.60s\n", i++, $0}' scripts/world-smoke-harness/main.ts
+```
 
 ```js
-await step(18);  // a house appears — nothing else moves
+await step(16);  // a house appears — nothing else moves
 const withHouse = await shot();
 check('a house is drawn on the canvas', !withHouse.equals(preHouse));
 
-await step(19); // ONE colonist's stage becomes 'child'
+await step(17); // ONE colonist's stage becomes 'child'
 const withChild = await shot();
 check('a child is drawn differently from an adult', !withChild.equals(withHouse));
 
-await step(20); // that SAME colonist becomes 'elder' — one field, one frame
+await step(18); // that SAME colonist becomes 'elder' — one field, one frame
 const withElder = await shot();
 check('an elder is drawn differently from a child', !withElder.equals(withChild));
 
-await step(21); // that same colonist's homeId becomes null
+await step(19); // that same colonist's homeId becomes null
 const homeless = await shot();
 check('a homeless colonist carries its mark', !homeless.equals(withElder));
 ```

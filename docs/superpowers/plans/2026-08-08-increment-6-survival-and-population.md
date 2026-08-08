@@ -847,7 +847,7 @@ All three must fail.
 
 ```bash
 rm -rf coverage && git add src/engine/systems/population-system.ts src/engine/systems/population-handlers.ts tests/engine/systems/population-system.test.ts && npm run check:all
-git commit src tests -m "feat(engine): colonists age, retire, and die of old age
+git commit src tests .fallowrc.json docs/build-ci/quality-gates.md -m "feat(engine): colonists age, retire, and die of old age
 
 PopulationSystem runs third: after HungerSystem so a death reads this
 tick's hunger, before Efficiency/Production so a retiree or a corpse is
@@ -2310,11 +2310,21 @@ export function shelterWithRoom(
   claimed: ReadonlyMap<number, number>,
   pending: PendingChanges,
 ): number | null {
+  // Fold pending arrivals in HERE rather than trusting each caller to merge
+  // them. Two recruitWorker commands can drain in one tick, and
+  // CommandContext.occupancy() cannot see the first nomad — so a caller
+  // passing only visible occupancy would hand both the same lowest-id house
+  // and overfill it while another still had room. Counting them in the one
+  // place that answers "which house has room" means no caller can forget.
+  const spokenFor = new Map(claimed);
+  for (const { home } of pending.arrivals) {
+    if (home.buildingId !== null) spokenFor.set(home.buildingId, (spokenFor.get(home.buildingId) ?? 0) + 1);
+  }
   for (const shelter of [...shelters].sort((a, b) => a.id - b.id)) {
     // Both exclusions, or a nomad drained on the same tick as a demolition
     // gets a bed in a house that vanishes at the sync.
     if (shelter.relocating || pending.demolished.has(shelter.id)) continue;
-    if ((claimed.get(shelter.id) ?? 0) < shelter.beds) return shelter.id;
+    if ((spokenFor.get(shelter.id) ?? 0) < shelter.beds) return shelter.id;
   }
   return null;
 }
@@ -2386,9 +2396,8 @@ export function tryBirth(ctx: PopulationContext): void {
   for (const row of rows) {
     if (row.home.buildingId !== null) claimed.set(row.home.buildingId, (claimed.get(row.home.buildingId) ?? 0) + 1);
   }
-  for (const { home } of ctx.pending.arrivals) {
-    if (home.buildingId !== null) claimed.set(home.buildingId, (claimed.get(home.buildingId) ?? 0) + 1);
-  }
+  // No pending merge here: shelterWithRoom folds ctx.pending.arrivals in
+  // itself, and doing it twice would double-count this tick's nomad.
   const homeId = shelterWithRoom(ctx.shelters, claimed, ctx.pending);
   const components = colonistComponents({ id, ageTicks: 0, homeId });
   ctx.spawn(...components);
@@ -3020,7 +3029,7 @@ Both must fail.
 
 ```bash
 rm -rf coverage && npm run check:all
-git commit src tests -m "feat(save): v5 — age, home, starvation clock, and a starter house
+git commit src tests .fallowrc.json docs/build-ci/quality-gates.md -m "feat(save): v5 — age, home, starvation clock, and a starter house
 
 The v4 migration synthesises the state the new mechanic needs rather than
 deferring it, as v1->v2 did for positions: it places the same starter house

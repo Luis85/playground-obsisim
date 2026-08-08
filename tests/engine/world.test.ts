@@ -69,6 +69,70 @@ describe('isLoadableSave', () => {
     expect(isLoadableSave(save)).toBe(false);
   });
 
+  // A colonist WORKS at a producer and SLEEPS in a settled shelter, and
+  // neither reference may name the other kind. All four rules below reject
+  // rather than repair, because no engine version could have written them —
+  // as distinct from the over-capacity and non-adult cases further down,
+  // which a BALANCE retune genuinely produces and which are clamped at load.
+  //
+  // One test per rule, each against an otherwise-identical control: a fixture
+  // that trips two at once proves neither.
+  describe('a home and a job must each name the right kind of building', () => {
+    /** initialSave() plus one producer, off the starter house's tile. */
+    function withForester() {
+      const save = initialSave();
+      save.buildings.push({
+        id: 5, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0,
+      });
+      save.nextEntityId = 6;
+      return save;
+    }
+
+    it('rejects a homeId naming a building the save does not contain', () => {
+      expect(isLoadableSave(initialSave())).toBe(true); // control
+      const dangling = initialSave();
+      dangling.colonists[0].homeId = 99;
+      expect(isLoadableSave(dangling)).toBe(false);
+    });
+
+    it('rejects a homeId naming a building with no beds', () => {
+      // The building IS in the save, so the presence rule above is satisfied
+      // and only "it has beds" can fail: a colonist cannot live in a forester.
+      expect(isLoadableSave(withForester())).toBe(true); // control
+      const inAForester = withForester();
+      inAForester.colonists[0].homeId = 5;
+      expect(isLoadableSave(inAForester)).toBe(false);
+    });
+
+    it('rejects a homeId naming a house that is mid-relocation', () => {
+      // A house in transit has no usable beds: `beds.total` excludes it and
+      // rehome evicts its residents on sight. handleMoveBuilding sets the
+      // countdown and never touches homes — eviction is rehome's, running
+      // later in the same tick and before the end-of-tick autosave — so the
+      // pairing cannot reach a save file. Nothing in BALANCE can turn an
+      // evicted resident back into a housed one, which is why this rejects
+      // where over-capacity repairs.
+      expect(isLoadableSave(initialSave())).toBe(true); // control: same house, settled
+      const moving = initialSave();
+      moving.buildings[0].relocatingTicks = 6;
+      expect(isLoadableSave(moving)).toBe(false);
+    });
+
+    it('rejects a buildingId naming a building with no recipe', () => {
+      // The house exists, so the id-membership check alone accepts this. The
+      // result would be permanent and silent: the colonist publishes as
+      // `1 / 0` workers on a zero-slot building, drops out of idleAdults, and
+      // produces nothing forever, because ProductionSystem skips recipe-less
+      // buildings. No command can create the assignment.
+      const control = withForester();
+      control.colonists[0].buildingId = 5;
+      expect(isLoadableSave(control)).toBe(true);
+      const staffingAHouse = withForester();
+      staffingAHouse.colonists[0].buildingId = 1; // the starter house
+      expect(isLoadableSave(staffingAHouse)).toBe(false);
+    });
+  });
+
   it('rejects a worker holding both a valid buildingId and hauling: true (one worker, two jobs)', () => {
     const save = initialSave();
     const building = { id: 5, defId: 'forester' as const, progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0 };

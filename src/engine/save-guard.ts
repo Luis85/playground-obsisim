@@ -56,40 +56,45 @@ export function isBuildingsValid(buildings: SaveGameV5['buildings']): boolean {
 }
 
 /**
- * ageTicks is OPTIONAL: a v4 save predates the field until Task 9 makes it
- * required, and `undefined` means exactly that — colonistComponents reads it
- * as BALANCE.startingAgeTicks, same as every pre-Task-3 save. Present, it
- * must be a non-negative safe integer: a non-integer or negative value is a
- * record no engine version could write, structural like the id checks, not
- * balance. This specifically closes a NaN path: `Math.max(0, Math.min(NaN,
- * MAX_AGE_TICKS))` is NaN, and resolveOldAge's `row.age.ticks <
- * lifespanFor(...)` guard is false either way for NaN, so its `continue`
- * never fires and the colonist is removed on the very first tick after load.
- * Upper bound intentionally NOT checked against the current lifespan: that is
- * balance-coupled and clamped at spawn instead (clampedAge), same principle
- * as hunger/toolTicks below — a save written under a longer lifespan must
- * still load.
+ * The two kinds of building a colonist may point at, gathered once per save.
  *
- * Split out of isColonistRecordValid (rather than inlined as one more `if`)
- * so that function's own CRAP score stays down — see the file-level comment
- * on keeping extracted helpers trivial.
+ * You WORK at a producer and you SLEEP in a settled shelter, and neither
+ * reference may name the other kind. Precomputed as sets rather than resolved
+ * per record because the structural guard admits 10,000 buildings and 10,000
+ * colonists, and a per-record scan over the building list would be O(n^2) on a
+ * hand-edited save (the flooded-save principle: cheap checks before expensive
+ * walks).
+ *
+ * A relocating shelter is deliberately absent from `shelters`: a house in
+ * transit has no usable beds — `beds.total` excludes it and `rehome` evicts
+ * its residents on sight — so a record pairing the two is one no engine
+ * version could write. `handleMoveBuilding` sets the countdown and never
+ * touches homes; eviction is `rehome`'s job, running later in the same tick
+ * and before the end-of-tick autosave, so the pairing cannot reach a save
+ * file. Note the asymmetry with the over-capacity case, which IS repaired at
+ * load: over-capacity follows from retuning `houseBeds`, a balance value,
+ * while nothing in BALANCE can turn an evicted resident back into a housed one.
  */
-function isValidAgeTicks(ageTicks: number | undefined): boolean {
-  return ageTicks === undefined || (Number.isSafeInteger(ageTicks) && ageTicks >= 0);
+interface ColonistTargets {
+  /** Buildings with a recipe: the only ones a job assignment may name. */
+  workplaces: ReadonlySet<number>;
+  /** Buildings with beds and no relocation in progress. */
+  shelters: ReadonlySet<number>;
 }
 
-/**
- * starvingTicks is OPTIONAL for the identical reason ageTicks is: a v4 save
- * predates the field until save v5 makes it required, and `undefined` means
- * exactly that — colonistComponents reads it as 0, a clean starvation clock,
- * same as every pre-this-change save. Present, it must be a non-negative safe
- * integer — structural, like ageTicks — not bounds-checked against the
- * CURRENT BALANCE.starvationDeathTicks: that is balance-coupled and clamped
- * at spawn instead (clampedStarving), so a save written under a longer
- * starvationDeathTicks still loads.
- */
-function isValidStarvingTicks(starvingTicks: number | undefined): boolean {
-  return starvingTicks === undefined || (Number.isSafeInteger(starvingTicks) && starvingTicks >= 0);
+function colonistTargets(buildings: SaveGameV5['buildings']): ColonistTargets {
+  const workplaces = new Set<number>();
+  const shelters = new Set<number>();
+  for (const b of buildings) {
+    // isBuildingsValid has already refused an unknown defId by the time
+    // isLoadableSave gets here; skipping rather than indexing keeps this
+    // total if the composition order ever changes.
+    if (!Object.hasOwn(BUILDINGS, b.defId)) continue;
+    const def = BUILDINGS[b.defId];
+    if (def.recipe !== null) workplaces.add(b.id);
+    if (def.beds > 0 && b.relocatingTicks === 0) shelters.add(b.id);
+  }
+  return { workplaces, shelters };
 }
 
 // Upper bound intentionally NOT checked against current BALANCE.hungerMax:
@@ -107,11 +112,14 @@ function isValidToolTicks(toolTicks: number): boolean {
   return Number.isSafeInteger(toolTicks) && toolTicks >= 0 && toolTicks <= MAX_SAVED_COUNTER;
 }
 
-function isColonistRecordValid(c: SaveGameV5['colonists'][number], buildingIds: ReadonlySet<number>): boolean {
+function isColonistRecordValid(c: SaveGameV5['colonists'][number], targets: ColonistTargets): boolean {
   if (!isValidHunger(c.hunger)) return false;
   if (!isValidToolTicks(c.toolTicks)) return false;
-  if (!isValidAgeTicks(c.ageTicks)) return false;
-  if (!isValidStarvingTicks(c.starvingTicks)) return false;
+  // Present, sheltering AND settled, all three in one membership test — see
+  // ColonistTargets for why each is a record no engine version could write.
+  // (ageTicks and starvingTicks are checked structurally by isSavedColonistShape
+  // in src/shared/save.ts, which isLoadableSave runs first.)
+  if (c.homeId !== null && !targets.shelters.has(c.homeId)) return false;
   if (c.buildingId === null) return true;
   // A worker is staffed XOR hauling, never both — handleAssignWorker refuses to
   // poach a hauler and handleAssignHauler refuses to poach a staffed worker, so
@@ -120,12 +128,16 @@ function isColonistRecordValid(c: SaveGameV5['colonists'][number], buildingIds: 
   // playthrough could produce), not a balance-coupled value to clamp: there is
   // no "current" amount of double-staffing to grandfather down to.
   if (c.hauling) return false;
-  return buildingIds.has(c.buildingId);
+  // A PRODUCER, not merely a building that exists. A colonist assigned to a
+  // house publishes as `1 / 0` workers on a zero-slot building, drops out of
+  // idleAdults, and produces nothing forever — ProductionSystem skips
+  // recipe-less buildings — and no command can create that assignment.
+  return targets.workplaces.has(c.buildingId);
 }
 
 export function isColonistsValid(data: SaveGameV5): boolean {
-  const buildingIds = new Set(data.buildings.map((b) => b.id));
-  return data.colonists.every((c) => isColonistRecordValid(c, buildingIds));
+  const targets = colonistTargets(data.buildings);
+  return data.colonists.every((c) => isColonistRecordValid(c, targets));
 }
 
 // Cross-array id validity: positive integers, unique across buildings AND

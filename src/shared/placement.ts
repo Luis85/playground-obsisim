@@ -3,8 +3,12 @@
 // consumers must never disagree — the engine's command handlers
 // (authoritative validation), the app's ghost preview (cosmetic pre-check),
 // and the v1->v2 save migration (position synthesis for pre-spatial saves).
-// Imports nothing, so src/shared/ siblings (save.ts, save-migration.ts) can
-// import from it without cycles.
+// relocationTicks (the relocation-downtime law) and ticksForDistance (the
+// floor-and-ceiling arithmetic it shares with haulTicks in haul.ts) live
+// here too, but are a separate law with a single caller
+// (command-handlers.ts) — not part of the three-consumer contract above.
+// Imports nothing, so src/shared/ siblings (save.ts, save-migration.ts,
+// haul.ts) can import from it without cycles.
 
 /** Map dimensions in tiles. Persisted per colony since save v2. */
 export interface WorldMapSize {
@@ -135,6 +139,19 @@ export function* autoPlaceSequence(map: WorldMapSize): Generator<TileRef> {
 }
 
 /**
+ * Ticks to cover `distance` at `tilesPerTick`, floored at one so a
+ * distance-scaled cost is never free. The law both `relocationTicks` below
+ * and `haulTicks` (src/shared/haul.ts) charge for a move — factored out so
+ * the floor-and-ceiling rule lives in one place rather than two copies that
+ * could quietly drift apart. Not itself a public API: the meaningful
+ * surface is the two named functions that call it, which keep their own
+ * signatures and doc comments.
+ */
+export function ticksForDistance(distance: number, tilesPerTick: number): number {
+  return Math.max(1, Math.ceil(distance / tilesPerTick));
+}
+
+/**
  * Ticks a building is out of action after being moved `tilesMoved` tiles.
  *
  * `tilesPerTick` arrives as an argument rather than an import, for the same
@@ -148,5 +165,5 @@ export function* autoPlaceSequence(map: WorldMapSize): Generator<TileRef> {
  * iterating on a layout cheap.
  */
 export function relocationTicks(tilesMoved: number, tilesPerTick: number): number {
-  return Math.max(1, Math.ceil(tilesMoved / tilesPerTick));
+  return ticksForDistance(tilesMoved, tilesPerTick);
 }

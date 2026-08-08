@@ -1,4 +1,4 @@
-import type { TileRef } from './placement';
+import { ticksForDistance, type TileRef } from './placement';
 
 /**
  * The colony's store: where every hauled good ends up, and the point every
@@ -26,7 +26,7 @@ export function haulDistance(col: number, row: number): number {
  * is ever free and no hauler can complete a round trip inside one tick.
  */
 export function haulTicks(col: number, row: number, tilesPerTick: number): number {
-  return Math.max(1, Math.ceil(haulDistance(col, row) / tilesPerTick));
+  return ticksForDistance(haulDistance(col, row), tilesPerTick);
 }
 
 /**

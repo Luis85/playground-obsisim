@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { IRuntimeWorld } from 'sim-ecs';
 import { CommandQueue, IdCounter, MAX_PENDING_COMMANDS, SimClock, SnapshotStore, Stockpile } from '../../../src/engine/resources';
 import { BALANCE } from '../../../src/engine/content/balance';
-import { Building, HaulTrip, OutputBuffer, Relocation, Colonist } from '../../../src/engine/components';
+import { Building, HaulTrip, Home, OutputBuffer, Relocation, Colonist } from '../../../src/engine/components';
 import { CommandSystem } from '../../../src/engine/systems/command-system';
 import { HaulSystem, haulerCapacity } from '../../../src/engine/systems/haul-system';
 import { HungerSystem } from '../../../src/engine/systems/hunger-system';
@@ -163,6 +163,35 @@ describe('CommandSystem', () => {
     await dispatch({ type: 'recruitWorker' });
     expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'Not enough food stored to feed another colonist.' }]);
     expect(snapshot().population).toBe(3);
+  });
+
+  it('re-seats a nomad in the other house when the one it landed in moves in the same drain', async () => {
+    // The relocation twin of the demolition case. recruitWorker seats the
+    // nomad in house 90 (lowest id with room), then moveBuilding starts 90
+    // relocating LATER IN THE SAME DRAIN. Nulling the homeId is necessary —
+    // a homeId naming a relocating house is the dangling reference the v5 load
+    // guard refuses — but it is not sufficient: rehome cannot repair it,
+    // because a colonist spawned earlier in this drain is invisible to every
+    // query until the post-step sync, so PopulationSystem has no row for them
+    // this tick. Without the re-seat the nomad ends the tick homeless while
+    // house 91 stands with four empty beds, and a paused player sees that
+    // contradiction until they step again.
+    const { world, dispatch, snapshot } = await setup(saveThatCanHouseArrivals());
+    await dispatch(
+      { type: 'recruitWorker' },
+      { type: 'moveBuilding', buildingId: 90, to: { col: 12, row: 9 } },
+    );
+    // Both commands genuinely applied: a drain that rejected the recruit would
+    // otherwise leave nothing to find below and fail for the wrong reason.
+    expect(snapshot().notices).toEqual([
+      { kind: 'success', message: 'Colonist #100 joined the colony.' },
+      { kind: 'success', message: 'Moved the House.' },
+    ]);
+    const nomad = [...world.getEntities()].find((e) => e.getComponent(Colonist)?.id === 100);
+    expect(nomad, 'the recruited nomad never reached the world').toBeDefined();
+    // 91 specifically, not merely "not null": the whole point is that the free
+    // bed it takes belongs to a house that is standing still.
+    expect(nomad!.getComponent(Home)!.buildingId).toBe(91);
   });
 
   it('assigns and unassigns workers within slot limits', async () => {

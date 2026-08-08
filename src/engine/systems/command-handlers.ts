@@ -311,6 +311,37 @@ export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Com
   ctx.notices.succeed(notice);
 }
 
+/**
+ * Move this drain's own arrivals out of a house that just stopped sheltering,
+ * into whichever house still has room.
+ *
+ * A nomad welcomed EARLIER THIS SAME DRAIN is invisible to `ctx.workers` — the
+ * query cannot see an entity until the post-step sync — so `rehome`
+ * (PopulationSystem, later this tick) has no row for them and can neither
+ * evict nor re-house them: it walks `ctx.colonists`, which this arrival is not
+ * yet part of. Only the pending ledger can still reach them.
+ *
+ * Both halves are load-bearing. Nulling alone stops the dangling homeId the v5
+ * load guard refuses (and the phantom occupant it would add to a house nobody
+ * lives in) but leaves the arrival homeless for the rest of the tick even when
+ * another house stands empty — a paused player watches that contradiction
+ * until they step again. Re-seating alone would leave the old id in place when
+ * no bed is left anywhere.
+ *
+ * Null first, then re-seat, in that order: `shelterWithRoom` folds
+ * `ctx.pending.arrivals` in itself and reads them LIVE, so an arrival still
+ * pointing at its old house would be counted against a bed it no longer holds.
+ * The same liveness is what makes this safe for several displaced arrivals at
+ * once — each one re-seated counts against its new house on the next call.
+ */
+function reseatArrivalsOf(ctx: CommandContext, buildingId: number): void {
+  for (const { home } of ctx.pending.arrivals) {
+    if (home.buildingId !== buildingId) continue;
+    home.buildingId = null;
+    home.buildingId = shelterWithRoom(ctx.shelters(), ctx.occupancy(), ctx.pending);
+  }
+}
+
 export function handleMoveBuilding(ctx: CommandContext, command: Extract<Command, { type: 'moveBuilding' }>): void {
   const found = findBuilding(ctx, command.buildingId);
   if (found === null) {
@@ -337,19 +368,7 @@ export function handleMoveBuilding(ctx: CommandContext, command: Extract<Command
   // remaining downtime rather than adding to it — accumulating would let a
   // player trap a building by accident.
   found.relocation.ticksLeft = relocationTicks(moved, BALANCE.relocationTilesPerTick);
-  // A nomad welcomed EARLIER THIS SAME DRAIN is invisible to ctx.workers --
-  // the query cannot see an entity until the post-step sync -- so rehome
-  // (PopulationSystem, later this tick) has no row for them and cannot evict
-  // them from a house that just started relocating: it only walks ctx.colonists,
-  // which this arrival is not yet part of. Only the pending ledger can still
-  // reach them. Same failure mode, same fix, as handleDemolishBuilding's
-  // identical loop below in this file -- without it, a nomad seated here by an
-  // earlier command in this drain keeps a homeId naming a relocating house,
-  // which both overcounts that house's occupants for the rest of the tick and
-  // writes a dangling reference the v5 load guard refuses on the next save.
-  for (const { home } of ctx.pending.arrivals) {
-    if (home.buildingId === command.buildingId) home.buildingId = null;
-  }
+  reseatArrivalsOf(ctx, command.buildingId);
   // Haulers already walking to this building now have a different journey:
   // recompute from the new tile so the ticks charged match the line the dot
   // visibly travels. legTicks is refreshed the same way, from the same call —

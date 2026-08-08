@@ -3,6 +3,10 @@ import { computed, inject } from 'vue';
 import { ENGINE_KEY } from '../engine-key';
 import { useGameStore } from '../stores/game-store';
 import { BALANCE, BUILDINGS } from '../../engine/content';
+// Presentation lives in labels.ts, never in the template: LIFE_STAGE_LABELS is
+// a Record keyed by the LifeStage union, so a stage added without a label is a
+// type error here rather than a raw union member in the rendered cell.
+import { ageLabel, commuteLabel, LIFE_STAGE_LABELS, starvingLabel } from '../labels';
 
 const engine = inject(ENGINE_KEY)!;
 const store = useGameStore();
@@ -48,6 +52,21 @@ function hungerClass(hunger: number): string {
   if (hunger >= BALANCE.mealThreshold) return 'obsisim-warning';
   return '';
 }
+
+// Warning, not negative: a homeless colonist is losing half their work power
+// (BALANCE.homelessFactor), which is a standing cost the player should fix —
+// but unlike the starvation clock below, nothing is counting down to a death.
+function commuteClass(homeId: number | null): string {
+  return homeId === null ? 'obsisim-warning' : '';
+}
+
+// The starvation clock is the one cell on this screen that names a deadline, so
+// it goes straight to negative the moment it starts rather than passing through
+// a warning tier: by the time starvingTicks is above zero the colonist is
+// already pinned at hungerMax, and the hunger cell beside it is red too.
+function starvingClass(starvingTicks: number): string {
+  return starvingTicks > 0 ? 'obsisim-negative' : '';
+}
 </script>
 
 <template>
@@ -64,13 +83,17 @@ function hungerClass(hunger: number): string {
     </div>
     <table class="obsisim-table">
       <thead>
-        <tr><th>Colonist</th><th>Job</th><th>Hunger</th><th>Efficiency</th><th>Tool</th></tr>
+        <tr><th>Colonist</th><th>Age</th><th>Stage</th><th>Home</th><th>Job</th><th>Hunger</th><th>Starving</th><th>Efficiency</th><th>Tool</th></tr>
       </thead>
       <tbody>
         <tr v-for="w in store.snapshot.colonists" :key="w.id">
           <td>#{{ w.id }}</td>
+          <td :data-test="`age-${w.id}`">{{ ageLabel(w.ageTicks) }}</td>
+          <td :data-test="`stage-${w.id}`">{{ LIFE_STAGE_LABELS[w.stage] }}</td>
+          <td :data-test="`commute-${w.id}`" :class="commuteClass(w.homeId)">{{ commuteLabel(w.homeId, w.commuteTiles, w.commuteFactor) }}</td>
           <td>{{ jobLabel(w.buildingId, w.hauling) }}</td>
           <td :data-test="`hunger-${w.id}`" :class="hungerClass(w.hunger)">{{ w.hunger }} / {{ BALANCE.hungerMax }}</td>
+          <td :data-test="`starving-${w.id}`" :class="starvingClass(w.starvingTicks)">{{ starvingLabel(w.starvingTicks) }}</td>
           <td>{{ (w.efficiency * 100).toFixed(0) }}%</td>
           <td>{{ toolLabel(w.toolTicks) }}</td>
         </tr>

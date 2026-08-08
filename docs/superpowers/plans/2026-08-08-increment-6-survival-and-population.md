@@ -2675,7 +2675,10 @@ lastRecruitTick is: without it a reload changes population growth."
 - Modify: `src/shared/save-migration.ts` (`migrateV4toV5`)
 - Modify: `src/engine/world.ts` (`initialSave` + the starter house, guards, `buildInitialSnapshot`)
 - Modify: `src/engine/save-guard.ts`, `src/engine/snapshot-builder.ts` (`savedColonistOf`)
+- Modify: `src/engine/game-engine.ts` — **the serializer and its whole API surface**
 - Test: `tests/shared/save-migration.test.ts`, `tests/engine/save.test.ts`
+
+**`game-engine.ts` is not optional and is easy to miss.** Six declarations there name `SaveGameV4`: `buildSaveFromWorld`'s return type, `serialize()`, `autosaveListener`, `onAutosave`, `GameEngine.create`'s parameter, and the import. The serializer also emits a `workers` key. Leave them and the v5 object stops satisfying its own declared return type, the round-trip test cannot read `round.colonists` or `round.lastBirthTick`, and autosave keeps writing v4 records. Retype all six to the current save type, emit `colonists`, and persist `lastBirthTick`. Check the Obsidian storage path in `src/main.ts` and `src/view/` for the same annotation.
 
 **Interfaces:**
 - Consumes: everything from Tasks 3, 4, 6, 8.
@@ -3241,7 +3244,18 @@ describe('PopulationView', () => {
   });
 
   it('enables the nomad button when every gate is clear', () => {
-    const view = mountView(PopulationView, snapshotWith({ ...ROSTER, mealsPerHead: 99, homeless: 0 }));
+    // Seed the STOCKPILE, not mealsPerHead. The store getter calls the shared
+    // nomadBlocker, which recomputes the ratio from stock and population —
+    // mealsPerHead is a published output of that calculation, not an input to
+    // it, so overriding the number alone leaves the gate reading an empty
+    // store and the button stays disabled for a reason the test never names.
+    const view = mountView(PopulationView, snapshotWith({
+      ...ROSTER,
+      stockpile: { ...ROSTER.stockpile, bread: { ...ROSTER.stockpile.bread, stock: 5000 } },
+      mealsPerHead: 1000,
+      homeless: 0,
+      beds: { total: 12, occupied: 4 },
+    }));
     expect(view.get('[data-test="recruit"]').attributes('disabled')).toBeUndefined();
   });
 });
@@ -3832,6 +3846,13 @@ import type { SaveGameV5 } from '../../src/shared/save';
 ```
 
 `SaveGameV4` stays only if something in the file still references it after Task 9's rename; typecheck will say.
+
+**`tests/engine/balance.test.ts` needs its own imports too** — it currently pulls only `BALANCE` and `runScenario`, while the new block uses the runner, its result type, and the camp tile:
+
+```ts
+import { runPopulationScenario, runScenario, type PopulationResult } from '../support/balance-harness';
+import { CAMP_TILE } from '../../src/shared/haul';
+```
 
 - [ ] **Step 4: Print it in the report**
 

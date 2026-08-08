@@ -2559,7 +2559,11 @@ const NOMAD_REJECTIONS: Record<Exclude<PopulationBlocker, null>, string> = {
 
 - [ ] **Step 8: Publish `mealsPerHead`**
 
-Add `mealsPerHead: number` to `Snapshot`, computed in `SnapshotSystem` and `buildInitialSnapshot` as `mealsPerHead(stock, MEAL_WEIGHTS, population)`.
+Add `mealsPerHead: number` to `Snapshot` — and compute it **inside `buildEntitySections`**, not in `SnapshotSystem`.
+
+That placement is the whole point. `SnapshotSystem` runs before the post-step sync, so on any tick with a birth, a nomad, or a death, `refreshEntitySections` afterwards replaces the population sections while leaving a separately-computed `mealsPerHead` holding the *old* denominator. A paused manual step would then display the new population against the previous tick's ratio indefinitely, and Task 12's samples would record a food ratio for a colony size that no longer exists. Computing it beside `population`, `demographics` and `beds` — the other cross-entity aggregates — means it is refreshed by the same pass that changes what it divides by.
+
+`buildEntitySections` therefore takes the stockpile as a third argument: `SnapshotSystem` and `refreshEntitySections` pass `stockpile.toJSON()`, `buildInitialSnapshot` passes `save.stockpile`. Keeping the value and its denominator in one function is what stops them disagreeing.
 
 - [ ] **Step 9: Write the engine-level birth test**
 
@@ -3766,7 +3770,17 @@ export async function runPopulationScenario(scenario: PopulationScenario): Promi
 }
 ```
 
-Add `WriteResource` to the `sim-ecs` import and `autoPlaceSequence` from `../../src/shared/placement`.
+The runner uses more than the file currently imports. `balance-harness.ts` today pulls only `createSystem` and `ReadResource` from `sim-ecs`, `Building` from components, and `SaveGameV4` — so add every one of these or the task cannot reach its own typecheck:
+
+```ts
+import { createSystem, queryComponents, Read, ReadResource, Write, WriteResource } from 'sim-ecs';
+import { Age, Building, JobAssignment, WorkerSlots } from '../../src/engine/components';
+import { stageOf } from '../../src/shared/population';
+import { autoPlaceSequence } from '../../src/shared/placement';
+import type { SaveGameV5 } from '../../src/shared/save';
+```
+
+`SaveGameV4` stays only if something in the file still references it after Task 9's rename; typecheck will say.
 
 - [ ] **Step 4: Print it in the report**
 

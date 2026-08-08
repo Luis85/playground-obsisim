@@ -10,7 +10,7 @@ import { ProductionSystem } from '../../../src/engine/systems/production-system'
 import { SnapshotSystem } from '../../../src/engine/systems/snapshot-system';
 import { enqueue } from '../fixtures';
 import { buildSaveFromWorld } from '../../../src/engine/game-engine';
-import { buildColonyPrepWorld, COMPONENT_TYPES, getPrepResource, initialSave, spawnColonist } from '../../../src/engine/world';
+import { buildColonyPrepWorld, COMPONENT_TYPES, getPrepResource, initialSave, spawnBuilding, spawnColonist } from '../../../src/engine/world';
 import type { Command } from '../../../src/shared/commands';
 import type { SaveGameV4 } from '../../../src/shared/save';
 
@@ -286,6 +286,59 @@ describe('CommandSystem', () => {
     const buildingId = snapshot().buildings[0].id;
     await dispatch({ type: 'demolishBuilding', buildingId });
     expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Demolished the Forester — cost refunded.' }]);
+  });
+
+  it('names exactly one displaced resident, singular wording', async () => {
+    const save = initialSave();
+    save.workers = [];
+    const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, HaulSystem, SnapshotSystem] });
+    const ids = getPrepResource(prep, IdCounter);
+    const house = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: 5, row: 3, relocatingTicks: 0 });
+    const houseId = house.getComponent(Building)!.id;
+    spawnColonist(prep, ids, { id: 1, homeId: houseId });
+    const world = await prep.prepareRun();
+    enqueue(world, { type: 'demolishBuilding', buildingId: houseId });
+    world.getResource(SimClock).tick++;
+    await world.step();
+    expect(world.getResource(SnapshotStore).latest!.notices).toEqual([
+      { kind: 'success', message: 'Demolished the House — cost refunded. — 1 colonist(s) displaced.' },
+    ]);
+  });
+
+  it('names the exact count of several displaced residents', async () => {
+    const save = initialSave();
+    save.workers = [];
+    const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, HaulSystem, SnapshotSystem] });
+    const ids = getPrepResource(prep, IdCounter);
+    const house = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: 5, row: 3, relocatingTicks: 0 });
+    const houseId = house.getComponent(Building)!.id;
+    for (const id of [1, 2, 3]) spawnColonist(prep, ids, { id, homeId: houseId });
+    const world = await prep.prepareRun();
+    enqueue(world, { type: 'demolishBuilding', buildingId: houseId });
+    world.getResource(SimClock).tick++;
+    await world.step();
+    expect(world.getResource(SnapshotStore).latest!.notices).toEqual([
+      { kind: 'success', message: 'Demolished the House — cost refunded. — 3 colonist(s) displaced.' },
+    ]);
+  });
+
+  it('demolishing a house with no residents gains no displaced clause', async () => {
+    // The empty case is how a clause like this grows noise: pinned directly
+    // against a house (the one building type residents ever point home at),
+    // not just the Forester the byte-identical test above already covers.
+    const save = initialSave();
+    save.workers = [];
+    const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, HaulSystem, SnapshotSystem] });
+    const ids = getPrepResource(prep, IdCounter);
+    const house = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: 5, row: 3, relocatingTicks: 0 });
+    const houseId = house.getComponent(Building)!.id;
+    const world = await prep.prepareRun();
+    enqueue(world, { type: 'demolishBuilding', buildingId: houseId });
+    world.getResource(SimClock).tick++;
+    await world.step();
+    expect(world.getResource(SnapshotStore).latest!.notices).toEqual([
+      { kind: 'success', message: 'Demolished the House — cost refunded.' },
+    ]);
   });
 
   it('rejects demolishing a building that does not exist', async () => {

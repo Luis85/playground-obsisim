@@ -41,19 +41,18 @@ export const PopulationSystem = () => createSystem({
           beds: BUILDINGS[building.defId].beds,
           col: position.col,
           row: position.row,
-          // > 1, not > 0: ProductionSystem decrements this same countdown
-          // LATER in this same tick (it runs after PopulationSystem in
-          // ALL_SYSTEMS order). At ticksLeft === 1, the house is about to land
-          // — by the time SnapshotSystem publishes, ProductionSystem will
-          // already have brought it to 0, so the snapshot reports it as
-          // landed. Reading `> 0` here would evict its residents THIS tick on
-          // the strength of a countdown that reaches 0 before the tick ends,
-          // publishing a landed house with empty beds beside colonists shown
-          // homeless — a contradiction that only self-corrects next tick, and
-          // sits on screen indefinitely if the player is paused. `> 1` asks
-          // the question homing actually needs answered: will this house
-          // still be relocating once this tick is done?
-          relocating: relocation.ticksLeft > 1,
+          // > 0: is this house relocating RIGHT NOW? The decrement to 0 happens
+          // LATER this same tick, in ProductionSystem — relocation downtime is
+          // a production stall (increment 5 §2.4), which is why that system
+          // owns the countdown. So on the tick ticksLeft counts down from 1 to
+          // 0, homing still reads the pre-decrement 1 and keeps residents
+          // homeless through it, rehoming them only the tick after — a
+          // one-tick lag, accepted deliberately. The alternative (`> 1`) reads
+          // that same landing tick as already-not-relocating and rehomes a
+          // tick early, handing sumWorkPower's full placementFactor to
+          // residents whose house is still mid-move for a tick genuinely
+          // charged as downtime.
+          relocating: relocation.ticksLeft > 0,
         })),
       spawn: (...components) => {
         let entity = actions.commands.buildEntity();

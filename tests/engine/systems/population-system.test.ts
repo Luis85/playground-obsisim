@@ -252,7 +252,12 @@ describe('PopulationSystem — homing', () => {
 
     for (let i = 0; i < 12; i++) await step(); // ride out the remaining 12 charged ticks
     expect(snap().buildings.find((b) => b.id === houseId)!.relocatingTicks).toBe(0); // landed
-    expect(snap().colonists[0].homeId).toBe(houseId); // rehomed the same tick it lands
+    // Not yet rehomed: homing this tick read ticksLeft BEFORE ProductionSystem's
+    // own decrement brought it to 0, so it still saw the house as relocating.
+    expect(snap().colonists[0].homeId).toBeNull();
+
+    await step(); // the tick after landing: homing now reads the already-0 countdown
+    expect(snap().colonists[0].homeId).toBe(houseId);
     expect(snap().homeless).toBe(0);
     expect(snap().buildings.find((b) => b.id === houseId)!.occupants).toBe(1);
   });
@@ -302,17 +307,14 @@ describe('PopulationSystem — homing', () => {
   });
 
   // PopulationSystem runs before ProductionSystem (ALL_SYSTEMS order), and
-  // ProductionSystem is what decrements Relocation.ticksLeft. So on the tick
-  // ticksLeft counts down from 1 to 0 — the tick the house actually lands —
-  // rehome sees it BEFORE that decrement, still reading 1. Reading `> 0`
-  // there would misclassify a house on its landing tick as still relocating,
-  // evicting residents rehome would immediately be entitled to re-admit next
-  // tick anyway: a one-tick, self-correcting eviction that is pure display
-  // noise (or, worse, a lasting contradiction if the player is paused right
-  // then). This pins the fix at the exact boundary: a one-tile move costs
-  // exactly one relocation tick (relocationTicks' floor-of-one), so the same
-  // tick that starts the move is also the tick it lands.
-  it('keeps a colonist housed through the one tick a short relocation both starts and lands on', async () => {
+  // ProductionSystem is what decrements Relocation.ticksLeft — homing sees
+  // ticksLeft BEFORE that decrement. So on the tick ticksLeft counts down from
+  // 1 to 0 — the tick the house both starts and finishes its one charged
+  // relocation tick on — homing still reads 1 and must NOT treat it as already
+  // landed: sumWorkPower reads the same Home component this same tick, and an
+  // early readmit would hand the resident its full placementFactor for a tick
+  // still genuinely charged as relocation downtime.
+  it('does not readmit a colonist until the tick after its relocating house lands', async () => {
     const save = { ...initialSave(), workers: [], stockpile: { berries: 100_000 }, nextEntityId: 100 };
     const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
     const ids = getPrepResource(prep, IdCounter);
@@ -326,11 +328,15 @@ describe('PopulationSystem — homing', () => {
     expect(snap().colonists[0].homeId).toBe(houseId); // precondition: actually housed first
 
     // One tile away: relocationTicks floors distance-scaled cost at 1, so this
-    // relocation starts and lands on the very same tick.
+    // relocation both starts and finishes its one charged tick right here.
     enqueue(world, { type: 'moveBuilding', buildingId: houseId, to: { col: 6, row: 3 } });
     await step();
-    expect(snap().buildings.find((b) => b.id === houseId)!.relocatingTicks).toBe(0); // already landed
-    expect(snap().colonists[0].homeId).toBe(houseId);   // never evicted
+    expect(snap().buildings.find((b) => b.id === houseId)!.relocatingTicks).toBe(0); // already landed...
+    expect(snap().colonists[0].homeId).toBeNull(); // ...but still evicted THIS tick
+    expect(snap().homeless).toBe(1);
+
+    await step(); // the tick after landing
+    expect(snap().colonists[0].homeId).toBe(houseId);
     expect(snap().homeless).toBe(0);
     expect(snap().buildings.find((b) => b.id === houseId)!.occupants).toBe(1);
   });

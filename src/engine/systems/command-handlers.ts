@@ -225,8 +225,13 @@ export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Com
   const displaced = ctx.workers.filter(({ home }) => home.buildingId === command.buildingId).length;
   for (const { job, trip, home } of ctx.workers) {
     if (job.buildingId === command.buildingId) job.buildingId = null;
-    // The house is gone now, not at the post-step sync — rehome would
-    // otherwise leave its residents nominally housed for one more tick.
+    // Defensive, not load-bearing: rehome (PopulationSystem, later this same
+    // tick) already zeroes a demolished shelter's residents on its own —
+    // freeBeds excludes ctx.pending.demolished, so settleExistingHome's
+    // free.get(homeId) ?? 0 falls through to eviction. Kept because it is
+    // cheap and harmless. The colonist this can't protect is one ctx.workers
+    // has no row for yet — spawned earlier this same tick — which the
+    // pending.arrivals loop below exists to catch.
     if (home.buildingId === command.buildingId) home.buildingId = null;
     // Spec §2.8: the trip cancels now, riding the same-tick demolishedIds
     // machinery, rather than lazily when the hauler reaches a tile with nothing
@@ -239,8 +244,11 @@ export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Com
   // Colonists spawned EARLIER THIS TICK are not in ctx.workers — the query
   // cannot see them until the post-step sync — so a nomad welcomed before
   // this demolition would keep a homeId pointing at the building being
-  // removed. The autosave at the end of the tick would then serialize a
-  // dangling reference, and the v5 load guard would refuse the save.
+  // removed, the autosave would serialize that dangling reference, and the
+  // v5 load guard would refuse the save. Same no-op as freeBeds' arrivals
+  // exclusion today, and for the same reason: nothing populates
+  // ctx.pending.arrivals until Task 8 wires nomad welcoming, so this loop
+  // currently has nothing to walk.
   for (const { home } of ctx.pending.arrivals) {
     if (home.buildingId === command.buildingId) home.buildingId = null;
   }
@@ -253,7 +261,7 @@ export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Com
   let notice = lost === ''
     ? `Demolished the ${def.name} — cost refunded.`
     : `Demolished the ${def.name} — cost refunded, ${lost} lost.`;
-  if (displaced > 0) notice += ` — ${displaced} colonist(s) now homeless.`;
+  if (displaced > 0) notice += ` — ${displaced} colonist(s) displaced.`;
   ctx.notices.succeed(notice);
 }
 

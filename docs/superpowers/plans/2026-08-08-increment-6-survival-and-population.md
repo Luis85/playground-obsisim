@@ -1594,7 +1594,13 @@ build the shelter rows in the context:
           beds: BUILDINGS[building.defId].beds,
           col: position.col,
           row: position.row,
-          relocating: relocation.ticksLeft > 0,
+          // `> 1`, not `> 0`: ProductionSystem decrements this countdown
+          // LATER in the same tick, so a house sitting at 1 has landed by the
+          // time SnapshotSystem publishes. Excluding it here would advertise a
+          // `housing` building with free beds while its former residents stay
+          // homeless until the next tick — indefinitely, if the player is
+          // paused. This means "still relocating once this tick is done".
+          relocating: relocation.ticksLeft > 1,
         })),
 ```
 
@@ -2386,7 +2392,20 @@ it('never ends a tick with more colonists housed than beds', async () => {
   // Property, not scenario. The three bugs found in review were all
   // different routes to the same broken state; a case-by-case test would
   // have caught whichever one it was written for.
-  const world = await busyColonyWithHousesAndFood();
+  // Three houses, twelve beds, a well-fed roster, and cooldowns already
+  // expired — so beds are the only thing arrivals can contend for, which is
+  // what this property is about.
+  const save = { ...initialSave(), workers: [], buildings: [], stockpile: { bread: 100_000 }, nextEntityId: 100 };
+  const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
+  const ids = getPrepResource(prep, IdCounter);
+  const spots = autoPlaceSequence(save.map);
+  for (let i = 0; i < 3; i++) {
+    const at = spots.next().value!;
+    spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: at.col, row: at.row });
+  }
+  for (let i = 0; i < 4; i++) spawnColonist(prep, ids, { ageTicks: BALANCE.lifeBands.matureTicks });
+  const world = await prep.prepareRun();
+  world.getResource(SimClock).tick = 1000;
   for (let t = 0; t < 600; t++) {
     if (t % 7 === 0) enqueue(world, { type: 'recruitWorker' });   // contend for beds
     await stepTick(world);   // refreshes entity sections — arrivals must be visible

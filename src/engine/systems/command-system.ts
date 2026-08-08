@@ -48,6 +48,20 @@ export const CommandSystem = () => createSystem({
   // type; this run function only materializes the query rows into a context
   // and drains the queue through dispatchCommand.
   .withRunFunction(({ actions, queue, clock, stockpile, ids, notices, removals, pending, map, buildings, workers }) => {
+    // Discard the PREVIOUS tick's pending changes, before anything populates
+    // this tick's. It used to happen at the end of PopulationSystem, on the
+    // reasoning that homing was the last reader — but it was not:
+    // ProductionSystem and HaulSystem run later still and resolve a
+    // colonist's homeId to a tile, so clearing at homing left them unable to
+    // see a house built this tick and charging its new residents
+    // homelessFactor on the very tick they were housed.
+    //
+    // Clearing at the START of the first system instead means every system in
+    // the tick sees the same pending set, and the invariant stops depending
+    // on which system happens to read last. CommandSystem is first in
+    // ALL_SYSTEMS and its handlers are the only writers, so nothing this
+    // clear discards was produced by the tick now beginning.
+    pending.clear();
     const ctx: CommandContext = {
       clock, stockpile, ids, notices, map,
       buildings: [...buildings.iter()].map(({ entity, building, slots, position, buffer, relocation }) => ({ entity, building, slots, position, buffer, relocation })),

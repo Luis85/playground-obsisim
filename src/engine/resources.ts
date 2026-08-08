@@ -1,7 +1,7 @@
 import type { BuildingDefId, CostMap, ResourceId } from '../shared/content-types';
 import type { Command } from '../shared/commands';
 import type { NoticeMessage, Snapshot } from '../shared/snapshot';
-import type { WorldMapSize } from '../shared/placement';
+import type { TileRef, WorldMapSize } from '../shared/placement';
 import { MAX_SAVED_COUNTER } from '../shared/save';
 import { BALANCE } from './content/balance';
 import type { Home } from './components';
@@ -307,6 +307,23 @@ export class PendingChanges {
    * the next one, publishing free beds beside homeless colonists.
    */
   readonly constructed: { id: number; defId: BuildingDefId; col: number; row: number }[] = [];
+
+  /**
+   * Where a building constructed earlier THIS tick stands, or null if no
+   * pending construction has that id.
+   *
+   * Every reader that resolves a building id to a tile needs this, not just
+   * homing. `rehome` seats a colonist in a house built this tick; if
+   * `ProductionSystem` and `HaulSystem` then resolve that `homeId` against
+   * their own pre-sync queries alone, they find nothing and charge the
+   * colonist `homelessFactor` on the very tick they were housed — while the
+   * post-sync `refreshEntitySections` publishes them as housed. One method,
+   * so the three readers cannot drift apart on what "pending" means.
+   */
+  tileOf(id: number): TileRef | null {
+    const built = this.constructed.find((b) => b.id === id);
+    return built === undefined ? null : { col: built.col, row: built.row };
+  }
 
   // Called through an interface-typed value (PopulationContext.pending,
   // CommandContext.pending), which fallow's static analysis cannot trace

@@ -429,4 +429,44 @@ describe('PopulationSystem — homing', () => {
   // check is exercised by the existing "makes a demolished house homeless
   // immediately" test above instead, against a building that already existed
   // before the tick — the only way a demolish can ever reach one.
+
+  // Housing a colonist and CHARGING them as housed are two different things,
+  // and for a while only the first was true. rehome seats the colonist in the
+  // pending house, but ProductionSystem resolves a homeId to a TILE, and its
+  // own query cannot see that house until the post-step sync — so it fell
+  // through to homelessFactor and charged the colonist half power on the very
+  // tick they were housed, while refreshEntitySections published them housed
+  // moments later. Same defect as the two tests above, one layer down.
+  it('charges a colonist housed by a same-tick construction as housed, not homeless', async () => {
+    const save = { ...initialSave(), workers: [], stockpile: { wood: 100, planks: 100 }, nextEntityId: 100 };
+    const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
+    const ids = getPrepResource(prep, IdCounter);
+    const forester = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 5, row: 2, relocatingTicks: 0 });
+    const buildingId = forester.getComponent(Building)!.id;
+    spawnColonist(prep, ids, { id: 1, ageTicks: BALANCE.lifeBands.matureTicks, buildingId });
+    const world = await prep.prepareRun();
+    const snap = () => world.getResource(SnapshotStore).latest!;
+
+    // Adjacent to the workplace, so the commute is inside commute.freeTiles
+    // and a correctly-resolved home scores exactly 1.0 against
+    // homelessFactor's 0.5 — the separation the assertion below rests on.
+    enqueue(world, { type: 'constructBuilding', buildingDefId: 'house', at: { col: 6, row: 2 } });
+    await stepTick(world);
+    expect(snap().colonists[0].homeId).not.toBeNull();   // precondition, not the point
+
+    // Asserts on PRODUCTION, not on the published workPower. The snapshot's
+    // workPower comes from buildEntitySections, which runs after the
+    // post-step sync and could always see the new house — it was never the
+    // broken reader, so asserting on it passes with the fix reverted. Only
+    // ProductionSystem's own pre-sync lookup was wrong, and the sole place
+    // that surfaces is the batch it advances.
+    //
+    // forester is 3 worker-ticks per batch. Charged as housed, this colonist
+    // contributes 1.0/tick and banks a unit on the third tick. Charged as
+    // homeless for the construction tick only, they contribute
+    // 0.5 + 1.0 + 1.0 = 2.5 and bank nothing.
+    await stepTick(world);
+    await stepTick(world);
+    expect(snap().buildings.find((b) => b.id === buildingId)!.buffered).toBe(1);
+  });
 });

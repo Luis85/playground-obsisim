@@ -80,12 +80,11 @@ export const PopulationSystem = () => createSystem({
     resolveStarvation(ctx);
     standDownNonAdults(ctx);
     rehome(ctx);
-    // By the next tick, real entities are in the query — an arrival is no
-    // longer pending-only, and a demolished building is gone rather than
-    // merely marked. Counting either again would double-count the arrival and
-    // keep the demolished building's beds excluded forever. Through ctx (not
-    // the raw destructured resource), matching every other mutation in this
-    // function.
-    ctx.pending.clear();
+    // Homing does NOT clear ctx.pending, though it used to. ProductionSystem
+    // and HaulSystem run later in the same tick and resolve a colonist's
+    // homeId to a tile; clearing here left them blind to a house built this
+    // tick, so they charged its brand-new residents homelessFactor on the
+    // tick homing had just housed them. CommandSystem clears at the top of
+    // the next tick instead — see the comment there.
   })
   .build();

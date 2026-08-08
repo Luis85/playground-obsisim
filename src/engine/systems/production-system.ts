@@ -1,4 +1,4 @@
-import { createSystem, queryComponents, Read, Write, WriteResource } from 'sim-ecs';
+import { createSystem, queryComponents, Read, ReadResource, Write, WriteResource } from 'sim-ecs';
 import type { RecipeDef, ResourceId } from '../../shared/content-types';
 import type { TileRef } from '../../shared/placement';
 import { commuteFactor } from '../../shared/population';
@@ -6,7 +6,7 @@ import { BALANCE, workerWorkPower } from '../content/balance';
 import { batchOutputUnits, BUILDINGS } from '../content/buildings';
 import { commuteTiles } from '../snapshot-builder';
 import { Building, Efficiency, Home, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage } from '../components';
-import { ProductionLedger, Stockpile } from '../resources';
+import { PendingChanges, ProductionLedger, Stockpile } from '../resources';
 
 /**
  * Try to start a new batch when idle. Checked BEFORE paying inputs: a
@@ -99,14 +99,23 @@ export const ProductionSystem = () => createSystem({
     relocation: Write(Relocation),
   }),
   workers: queryComponents({ job: Read(JobAssignment), efficiency: Read(Efficiency), coverage: Read(ToolCoverage), home: Read(Home) }),
+  pending: ReadResource(PendingChanges),
 })
   .withName('ProductionSystem')
-  .withRunFunction(({ stockpile, ledger, buildings, workers }) => {
+  .withRunFunction(({ stockpile, ledger, buildings, workers, pending }) => {
     // Materialized because the rows are needed twice: once to map every
     // building's tile (a worker's commute is measured against their HOUSE's
     // tile, which is another row in this same query) and once to advance them.
     const buildingRows = [...buildings.iter()];
     const tileById = new Map(buildingRows.map((row): [number, TileRef] => [row.building.id, row.position]));
+    // Buildings constructed earlier THIS tick are absent from the query until
+    // the post-step sync, but homing has already seated colonists in them, so
+    // resolving a homeId against the query alone would charge a colonist
+    // homelessFactor on the very tick they were housed. Folded into the map
+    // rather than handled at each lookup: placementFactorOf resolves a home
+    // tile and a workplace tile, and neither has any business knowing which
+    // side of the sync its building came from.
+    for (const built of pending.constructed) tileById.set(built.id, { col: built.col, row: built.row });
     const powerByBuilding = sumWorkPower(workers.iter(), tileById);
 
     // Isolated so the run function itself stays a flat dispatch loop.

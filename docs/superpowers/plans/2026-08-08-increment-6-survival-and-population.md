@@ -1976,7 +1976,8 @@ So `runScenario` defaults `houseCrew` to `moveTo === undefined`: distance scenar
     const crewTile = scenario.crewHouseAt ?? { col: adjacentCol(save.map, col), row };
     const crewHouse = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: crewTile.col, row: crewTile.row });
     crewHomeId = crewHouse.getComponent(Building)!.id;
-    const haulerHouse = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: CAMP_TILE.col + 1, row: CAMP_TILE.row });
+    const haulerTile = campAdjacentFreeTile([{ col, row }, crewTile]);
+    const haulerHouse = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: haulerTile.col, row: haulerTile.row });
     haulerHomeId = haulerHouse.getComponent(Building)!.id;
   }
   for (let i = 0; i < crew; i++) spawnColonist(prep, ids, { buildingId, homeId: crewHomeId, ageTicks: BALANCE.lifeBands.matureTicks });
@@ -1986,6 +1987,32 @@ So `runScenario` defaults `houseCrew` to `moveTo === undefined`: distance scenar
 with this module-level helper beside `runScenario`:
 
 ```ts
+/**
+ * A commute-neutral tile for the hauler house that nothing else is standing on.
+ *
+ * Only THREE tiles are both buildable (col >= CAMP_COLS) and inside
+ * `commuteFreeTiles` of the camp: (3,0), (3,1) and (4,0). Hardcoding (3,0) —
+ * `CAMP_TILE.col + 1` — collides with the haul sweep's own nearest case,
+ * `forester(3, 0, 1)`, and `spawnBuilding` writes tiles directly without
+ * consulting `isTileBuildable`, so the two would silently stack. That would
+ * put an unreachable layout inside the very measurements increment 5 pinned
+ * as this increment's regression net.
+ *
+ * Throws rather than falling back to a distant tile: a hauler housed outside
+ * the free radius pays a commute, which would move those numbers for a reason
+ * having nothing to do with hauling.
+ */
+function campAdjacentFreeTile(taken: readonly TileRef[]): TileRef {
+  const candidates: TileRef[] = [
+    { col: CAMP_TILE.col + 1, row: CAMP_TILE.row },
+    { col: CAMP_TILE.col + 1, row: CAMP_TILE.row + 1 },
+    { col: CAMP_TILE.col + 2, row: CAMP_TILE.row },
+  ];
+  const free = candidates.find((t) => !taken.some((u) => u.col === t.col && u.row === t.row));
+  if (free === undefined) throw new Error('No commute-neutral tile left for the hauler house');
+  return free;
+}
+
 /**
  * A buildable tile adjacent to `col` — where the crew house goes. Adjacency is
  * the point: it lands inside BALANCE.commute.freeTiles, so commuteFactor is

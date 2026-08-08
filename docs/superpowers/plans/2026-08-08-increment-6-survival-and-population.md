@@ -1560,7 +1560,13 @@ set `occupants: occupantsByHouse.get(b.id) ?? 0` on each building snapshot, and 
 ```ts
     homeless: colonistSnaps.filter((c) => c.homeId === null).length,
     beds: {
-      total: buildingSnaps.reduce((sum, b) => sum + b.beds, 0),
+      // Relocating houses are excluded, because homing and both admission
+      // gates already exclude them. Counting their beds here would let the
+      // Population view read "0 / 4 free" while the engine refuses a nomad
+      // for want of a bed — the display contradicting the rule it exists to
+      // explain. `total` therefore means beds you can actually sleep in
+      // tonight, which is the only number a player can act on.
+      total: buildingSnaps.filter((b) => b.state !== 'relocating').reduce((sum, b) => sum + b.beds, 0),
       occupied: buildingSnaps.reduce((sum, b) => sum + b.occupants, 0),
     },
     // Spec 2.13's stage counts. Aggregated here beside the other cross-entity
@@ -2716,7 +2722,14 @@ const migrateV4toV5: MigrationStep = {
     };
     const colonists = [...v4.workers].sort((a, b) => a.id - b.id).map((w, index) => ({
       ...w,
-      ageTicks: MIGRATION_CONSTANTS.startingAgeTicks + jitter(w.id),
+      // Keep an age the save already carries. Task 3 made `savedColonistOf`
+      // write the optional `ageTicks` onto v4 records, so a colony saved by
+      // any build after that point holds real accumulated ages — and
+      // overwriting them would hand every colonist a fresh founder age,
+      // postponing retirement and death by thousands of ticks purely because
+      // the save was upgraded. Synthesize only for genuinely legacy records
+      // that never had the field.
+      ageTicks: w.ageTicks ?? MIGRATION_CONSTANTS.startingAgeTicks + jitter(w.id),
       homeId: house !== null && index < MIGRATION_CONSTANTS.houseBeds ? houseId : null,
       starvingTicks: 0,
     }));

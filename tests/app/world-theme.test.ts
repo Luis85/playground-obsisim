@@ -94,6 +94,15 @@ describe('resolveWorldTheme', () => {
     expect(minChannelDistance(theme.carriedLoad, theme.workerToolRing)).toBeGreaterThan(3);
     expect(minChannelDistance(theme.carriedLoad, theme.progressFill)).toBeGreaterThan(3);
   });
+
+  // Deliberate, not a coincidence: carriedLoad's doc comment (theme.ts) and
+  // the relocating case in resolveWorldTheme both say "in transit" and
+  // intentionally resolve to the same --color-cyan. Pinned as equality so a
+  // future palette edit can't quietly split the two apart.
+  it('gives the relocating state the same colour as a carried load, on purpose', () => {
+    const theme = resolveWorldTheme(none);
+    expect(theme.stateRing.relocating).toBe(theme.carriedLoad);
+  });
 });
 
 describe('efficiencyBucket', () => {

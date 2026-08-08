@@ -30,7 +30,9 @@ simulated production chains — in tables and, since Increment 2, a live
   preview follows the cursor (accent = buildable, red = blocked), click to
   place — placement stays armed for repeat building
 - Select any building on the canvas: move it (workers walk after it, batch
-  intact) or demolish it (confirmed, full cost refund, workers walk home)
+  intact — free and instant in its day; Increment 5 gave moving
+  distance-scaled downtime) or demolish it (confirmed, full cost refund,
+  workers walk home)
 - Positions are sim truth on a fixed 24×16 map (camp band on the left),
   persisted as save v2 — old saves migrate onto exactly the layout
   increment 2 derived; they stopped being merely cosmetic in Increment 4,
@@ -98,6 +100,8 @@ simulated production chains — in tables and, since Increment 2, a live
 - Increment 4 plan: `docs/superpowers/plans/2026-07-31-increment-4-logistics.md`
 - Increment 5 spec: `docs/superpowers/specs/2026-08-01-increment-5-validated-balance.md`
 - Increment 5 plan: `docs/superpowers/plans/2026-08-01-increment-5-validated-balance.md`
+- Process: `docs/process/agent-workflow.md` — working agreements for
+  agent-driven increments
 
 ## Architecture (one paragraph)
 

@@ -16,10 +16,13 @@ export interface WorldTheme {
   /** A hauler's carried load. The world palette's production language is
    * already spoken for — red/orange/green for building health and state,
    * purple for the output-full stall, cream for tools and progress,
-   * blue-violet for interaction (accent) — so cyan, the one hue nothing
-   * else claims, is deliberate: a load dot can never be mistaken for any of
-   * them, including the cream tool ring it sits flush against on a tooled
-   * hauler. */
+   * blue-violet for interaction (accent) — so cyan is the in-transit hue,
+   * distinct from all of them. It is deliberately the SAME cyan as
+   * stateRing.relocating (see resolveWorldTheme): a carried load and a
+   * relocating building are both "in transit" and share a colour on
+   * purpose — that match is not a coincidence to be tidied away. Still
+   * never mistaken for the cream tool ring it sits flush against on a
+   * tooled hauler. */
   carriedLoad: string;
   /** Interactive accent — the selection ring and the valid-ghost tint. */
   accent: string;

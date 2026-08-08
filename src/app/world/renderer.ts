@@ -27,8 +27,11 @@ const DEFAULT_TICK_MS = 500;
 // The measured gap is clamped before it becomes a walking pace. A pause, a
 // hidden tab, or a stalled frame makes the next gap arbitrarily large, and an
 // unclamped reading would turn that into a dot crawling across the map for
-// minutes. The upper bound is one tick at the slowest speed the game offers;
-// the lower keeps a burst of syncs from asking for an effectively infinite pace.
+// minutes. The upper bound is a deliberate ceiling, not a derived value: the
+// slowest real tick is 500ms (BALANCE.baseTicksPerSecond is 2, and 1x is the
+// slowest of the 1/2/4 speeds), so 1000 leaves headroom above it rather than
+// clamping flush against it. The lower keeps a burst of syncs from asking
+// for an effectively infinite pace.
 const MIN_TICK_MS = 50;
 const MAX_TICK_MS = 1000;
 const BAR_WIDTH = TILE * 0.8;

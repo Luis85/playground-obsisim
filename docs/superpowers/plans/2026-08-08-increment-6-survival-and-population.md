@@ -1429,6 +1429,12 @@ export function rehome(ctx: PopulationContext): void {
   for (const shelter of ctx.shelters) {
     if (!shelter.relocating) free.set(shelter.id, shelter.beds);
   }
+  // A nomad welcomed earlier this tick already reserved its bed and is not in
+  // `rows` — without this, homing hands that same bed to a homeless colonist
+  // and the house ends the tick over capacity.
+  for (const arrival of ctx.arrivals.pending) {
+    if (arrival.homeId !== null) free.set(arrival.homeId, (free.get(arrival.homeId) ?? 0) - 1);
+  }
 
   for (const row of rows) {
     const homeId = row.home.buildingId;
@@ -2118,26 +2124,74 @@ export class ArrivalLedger {
 }
 ```
 
-**A reservation must name the bed, not just count one.** Both spawn paths pass a `homeId` into `colonistComponents`, because neither arrival gets homed this tick: a nomad is invisible to `PopulationSystem` entirely, and a birth happens *after* the homing phase has already run. Reserving a bare count would leave the arrival homeless for a tick while the bed it consumed still reads free — the count and the assignment disagreeing is the same class of bug as storing occupancy on the building instead of deriving it.
+#### Read this before writing any of it: beds are fungible
 
-Add one shared helper in `population-handlers.ts`, used by both paths:
+Three separate defects were found in this one interaction while the plan was being reviewed, each in the fix for the last. All three shared a root cause: **a bed gate that asked "which houses have room right now?"** That question depends on how far the homing phase has got, and the two systems that create colonists sit on opposite sides of it — `CommandSystem` runs before homing, `tryBirth` runs after, and a spawned entity is invisible to every query until the post-step sync.
+
+The fix is to stop asking it. Every living colonist needs exactly one bed and beds are interchangeable, so:
+
+```
+freeBeds = (beds in non-relocating houses) − population − pendingArrivals
+```
+
+This is **independent of homing state**, which is what makes it correct from either side of the phase. Both gates use it, and neither builds an occupancy map.
+
+The bot-found scenario that broke the occupancy version: a house becomes visible with 4 beds and 4 already-homeless colonists. An occupancy view sees 4 empty beds and admits a nomad; `rehome` then houses all 4 homeless, and five colonists reference a four-bed house. Under the rule above, `4 − 4 − 0 = 0`, and the nomad is correctly refused.
+
+Two places consume it:
 
 ```ts
-/** The lowest-id shelter with a bed to spare, or null. Ascending id, like
- * every other assignment order here, so the choice is reproducible. */
-export function freeShelterId(
+/** Beds nobody living has a claim on. See the note above — this deliberately
+ * does not ask which house has room, because that answer changes across the
+ * homing phase and the two callers sit on opposite sides of it. */
+export function freeBeds(shelters: readonly ShelterRow[], population: number, pending: number): number {
+  const total = shelters.filter((s) => !s.relocating).reduce((sum, s) => sum + s.beds, 0);
+  return total - population - pending;
+}
+
+/** Which house an arrival moves into, given what is already spoken for.
+ * Ascending id, like every other assignment order here, so it is
+ * reproducible. Only ever called once `freeBeds` has confirmed one exists. */
+export function shelterWithRoom(
   shelters: readonly ShelterRow[],
-  occupancy: ReadonlyMap<number, number>,
+  claimed: ReadonlyMap<number, number>,
 ): number | null {
   for (const shelter of [...shelters].sort((a, b) => a.id - b.id)) {
     if (shelter.relocating) continue;
-    if ((occupancy.get(shelter.id) ?? 0) < shelter.beds) return shelter.id;
+    if ((claimed.get(shelter.id) ?? 0) < shelter.beds) return shelter.id;
   }
   return null;
 }
 ```
 
-Register `ArrivalLedger` in `buildColonyPrepWorld`'s `instances` array. `handleRecruitWorker` builds the same shelter/occupancy view its `nomadBlocker` gate already needs, picks a bed via `freeShelterId`, passes it as `homeId`, and pushes `{ homeId }` onto the ledger.
+**An arrival names its bed, and `rehome` must honour that.** Neither arrival is homed on its own tick — a nomad is invisible to `PopulationSystem`, a birth happens after homing — so each passes a `homeId` into `colonistComponents` and pushes `{ homeId }` onto the ledger. `rehome` then counts pending arrivals against their houses when computing per-shelter room, or it will fill the very bed an arrival reserved.
+
+Register `ArrivalLedger` in `buildColonyPrepWorld`'s `instances` array. `handleRecruitWorker` gates on `freeBeds(...) > 0`, picks its bed with `shelterWithRoom`, and pushes onto the ledger.
+
+**Pin the invariant, not just the three known cases.** All three defects violated one property, and a property test catches the next variant:
+
+```ts
+it('never ends a tick with more colonists housed than beds', async () => {
+  // Property, not scenario. The three bugs found in review were all
+  // different routes to the same broken state; a case-by-case test would
+  // have caught whichever one it was written for.
+  const world = await busyColonyWithHousesAndFood();
+  for (let t = 0; t < 600; t++) {
+    world.getResource(SimClock).tick++;
+    if (t % 7 === 0) enqueue(world, { type: 'recruitWorker' });   // contend for beds
+    await world.step();
+    const snap = world.getResource(SnapshotStore).latest!;
+    expect(snap.beds.occupied).toBeLessThanOrEqual(snap.beds.total);
+    const perHouse = new Map<number, number>();
+    for (const c of snap.colonists) {
+      if (c.homeId !== null) perHouse.set(c.homeId, (perHouse.get(c.homeId) ?? 0) + 1);
+    }
+    for (const house of snap.buildings.filter((b) => b.beds > 0)) {
+      expect(perHouse.get(house.id) ?? 0).toBeLessThanOrEqual(house.beds);
+    }
+  }
+}, 60000);
+```
 
 Then:
 
@@ -2145,17 +2199,15 @@ Then:
 export function tryBirth(ctx: PopulationContext): void {
   if (ctx.ids.exhausted()) return; // silent: this is not a player action to refuse
   const rows = livingRows(ctx);
-  const beds = ctx.shelters.filter((s) => !s.relocating).reduce((sum, s) => sum + s.beds, 0);
   // A nomad welcomed earlier this tick holds a bed and eats, but is not in
   // `rows` yet — count them, or both arrivals take the same last bed.
   const pending = ctx.arrivals.pending.length;
-  const housed = rows.filter((row) => row.home.buildingId !== null).length;
   const blocker = birthBlocker({
     stock: ctx.stockpile.toJSON(),
     weights: MEAL_WEIGHTS,
     population: rows.length + pending,
     adults: rows.filter((row) => stageOf(row.age.ticks, BALANCE.lifeBands) === 'adult').length,
-    freeBeds: beds - housed - pending,
+    freeBeds: freeBeds(ctx.shelters, rows.length, pending),
     tick: ctx.clock.tick,
     lastBirthTick: ctx.clock.lastBirthTick,
     cooldown: BALANCE.birthCooldownTicks,
@@ -2167,14 +2219,14 @@ export function tryBirth(ctx: PopulationContext): void {
   // Born INTO a bed. The homing phase already ran this tick, so a child
   // spawned without a homeId would spend its first tick homeless while the
   // bed the gate just counted against still read free.
-  const occupancy = new Map<number, number>();
+  const claimed = new Map<number, number>();
   for (const row of rows) {
-    if (row.home.buildingId !== null) occupancy.set(row.home.buildingId, (occupancy.get(row.home.buildingId) ?? 0) + 1);
+    if (row.home.buildingId !== null) claimed.set(row.home.buildingId, (claimed.get(row.home.buildingId) ?? 0) + 1);
   }
   for (const arrival of ctx.arrivals.pending) {
-    if (arrival.homeId !== null) occupancy.set(arrival.homeId, (occupancy.get(arrival.homeId) ?? 0) + 1);
+    if (arrival.homeId !== null) claimed.set(arrival.homeId, (claimed.get(arrival.homeId) ?? 0) + 1);
   }
-  const homeId = freeShelterId(ctx.shelters, occupancy);
+  const homeId = shelterWithRoom(ctx.shelters, claimed);
   ctx.spawn(...colonistComponents({ id, ageTicks: 0, homeId }));
   ctx.arrivals.pending.push({ homeId });
   ctx.notices.succeed(`Colonist #${id} was born.`);
@@ -2488,14 +2540,23 @@ const migrateV4toV5: MigrationStep = {
   migrate: (save) => {
     const v4 = save as SaveGameV4;
     const occupied = v4.buildings.map((b) => ({ col: b.col, row: b.row }));
-    // Grow the map if the colony has filled it, exactly as v1 -> v2 does with
-    // mapThatFits. Without this, a v4 save with every buildable tile occupied
-    // silently gets NO starter house and every colonist loads homeless —
-    // the precise outcome this migration exists to prevent, reached through
-    // the one branch that quietly does nothing.
-    const map = v4.buildings.length < (v4.map.cols - CAMP_COLS) * v4.map.rows
-      ? v4.map
-      : mapThatFits(v4.buildings.length + 1);
+    // Grow the map if the colony has filled it. Without this, a v4 save with
+    // every buildable tile occupied silently gets NO starter house and every
+    // colonist loads homeless — the precise outcome this migration exists to
+    // prevent, reached through the one branch that quietly does nothing.
+    //
+    // Grown from v4.map, NOT from mapThatFits(count): that helper derives a
+    // shape from DEFAULT_MAP and would hand a full 50x6 colony a 24-column
+    // map, stranding every building at column 24+ outside the persisted
+    // bounds — isPositionsValid then rejects the migration and a valid save
+    // takes the corrupt-backup path. Existing dimensions are a floor, never
+    // a starting point to be replaced.
+    const map = { ...v4.map };
+    while (v4.buildings.length >= (map.cols - CAMP_COLS) * map.rows) {
+      if (map.rows < MAX_MAP.rows) map.rows += 1;
+      else if (map.cols < MAX_MAP.cols) map.cols += 1;
+      else break; // at MAX_MAP and still full: fall through to the no-house path
+    }
     const at = autoPlacePosition(map, occupied);
     const houseId = Math.max(0, ...v4.buildings.map((b) => b.id), ...v4.workers.map((w) => w.id)) + 1;
     const house = at === null ? null : {
@@ -2548,7 +2609,7 @@ export const MIGRATION_CONSTANTS = {
 const jitter = (id: number) => spreadFor(id, MIGRATION_CONSTANTS.spreadTicks, SALT.startingAge);
 ```
 
-Import `spreadFor` and `SALT` from `./population`, and `autoPlacePosition`, `mapThatFits` and `CAMP_COLS` from `./placement`, register `migrateV4toV5` in `SAVE_MIGRATIONS`, and add `5: isSaveGameV5` to `SAVE_GUARDS`.
+Import `spreadFor` and `SALT` from `./population`, and `autoPlacePosition`, `CAMP_COLS` and `MAX_MAP` from `./placement`, register `migrateV4toV5` in `SAVE_MIGRATIONS`, and add `5: isSaveGameV5` to `SAVE_GUARDS`.
 
 Pin every duplicated constant against its real counterpart in `tests/engine/content.test.ts` — the test file that CAN import both sides:
 
@@ -2590,6 +2651,28 @@ it('grows the map when a full v4 colony leaves no room for the starter house', (
   expect(v5).not.toBeNull();
   expect(v5.buildings.some((b) => b.defId === 'house')).toBe(true);
   expect(v5.colonists.some((c) => c.homeId !== null)).toBe(true);
+});
+
+it('grows a WIDE full map without stranding its buildings outside the new bounds', () => {
+  // Discriminating: a 50-column colony. A count-derived shape would hand it a
+  // 24-column map, put every building at column 24+ outside the persisted
+  // bounds, and isPositionsValid would reject a perfectly valid save into the
+  // corrupt-backup path. Existing dimensions are a floor, not a suggestion.
+  const wide = { ...v4WithThreeWorkers(), map: { cols: 50, rows: 6 } };
+  wide.buildings = Array.from({ length: (50 - 3) * 6 }, (_, i) => ({
+    id: 100 + i, defId: 'forester' as const,
+    col: 3 + (i % 47), row: Math.floor(i / 47),
+    progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0,
+  }));
+  wide.nextEntityId = 1000;
+  const v5 = migrateSaveToLatest(wide) as SaveGameV5;
+
+  expect(v5).not.toBeNull();               // NOT the corrupt-backup path
+  expect(v5.map.cols).toBeGreaterThanOrEqual(50);
+  for (const b of v5.buildings) {
+    expect(b.col).toBeLessThan(v5.map.cols);
+    expect(b.row).toBeLessThan(v5.map.rows);
+  }
 });
 ```
 

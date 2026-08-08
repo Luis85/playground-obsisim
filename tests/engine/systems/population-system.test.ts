@@ -3,12 +3,15 @@ import type { IRuntimeWorld } from 'sim-ecs';
 import { Building, Colonist, HaulTrip, JobAssignment } from '../../../src/engine/components';
 import { IdCounter, SimClock, SnapshotStore, Stockpile } from '../../../src/engine/resources';
 import {
-  ALL_SYSTEMS, buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist,
+  ALL_SYSTEMS, buildColonyPrepWorld, getPrepResource, initialSave, isLoadableSave, spawnBuilding, spawnColonist,
 } from '../../../src/engine/world';
+import { buildSaveFromWorld } from '../../../src/engine/game-engine';
 import { BALANCE } from '../../../src/engine/content/balance';
-import { autoPlaceSequence } from '../../../src/shared/placement';
+import { autoPlacePosition, autoPlaceSequence, DEFAULT_MAP } from '../../../src/shared/placement';
 import { lifespanFor } from '../../../src/shared/population';
+import type { Command } from '../../../src/shared/commands';
 import type { ResourceId } from '../../../src/shared/content-types';
+import type { Snapshot } from '../../../src/shared/snapshot';
 import { enqueue, stepTick } from '../fixtures';
 
 async function colonyWith(ages: { id: number; ageTicks: number; buildingId?: number | null }[]) {
@@ -472,10 +475,73 @@ describe('PopulationSystem — homing', () => {
   });
 });
 
+/** Shelters in ascending id — the order every seating rule here walks. */
+function housesOf(snap: Snapshot) {
+  return snap.buildings.filter((b) => b.beds > 0).sort((a, b) => a.id - b.id);
+}
+
+/**
+ * The construction, relocation or demolition a churn tick issues, or nothing.
+ *
+ * Three coprime periods, so beds appear and disappear out of phase with each
+ * other and with the two arrival cooldowns (30 and 50), instead of settling
+ * into one repeating alignment. Their rates are deliberately BELOW what the
+ * cooldowns could admit — a house every 61 ticks is +4 beds and a demolition
+ * every 101 is -4, against a colony that could take one arrival every 19 — so
+ * it spends most of the run with no spare bed at all. That is the only regime
+ * in which the admission gates decide anything: a colony with beds going spare
+ * admits everyone and proves nothing, which is how the predecessor of this
+ * test came to pass under a broken `spareBeds`.
+ *
+ * The relocation target is the house the NEXT arrival would be offered (lowest
+ * id with a bed free): a move and an arrival contending for one house in one
+ * drain is the interaction that produced `4012dd2`'s dangling `homeId`, and
+ * moving some other house would leave the two commands independent.
+ */
+function churnFor(t: number, snap: Snapshot): Command[] {
+  const houses = housesOf(snap);
+  if (t % 61 === 0) return [{ type: 'constructBuilding', buildingDefId: 'house' }];
+  if (t % 23 === 0) {
+    const target = houses.find((h) => h.relocatingTicks === 0 && h.occupants < h.beds) ?? houses[0];
+    const to = autoPlacePosition(DEFAULT_MAP, snap.buildings);
+    return target === undefined || to === null ? [] : [{ type: 'moveBuilding', buildingId: target.id, to }];
+  }
+  // Never below two shelters: a colony demolished down to none admits nobody,
+  // and the rest of the run would prove nothing.
+  if (t % 101 === 0 && houses.length >= 3) return [{ type: 'demolishBuilding', buildingId: houses[houses.length - 1].id }];
+  return [];
+}
+
+/** How often the run reached each state the assertions below depend on. */
+interface Exercised { joined: number; moved: number; demolished: number; saturated: number }
+
+/** Tally one tick against those states, from what the engine said it did. */
+function tally(seen: Exercised, snap: Snapshot): void {
+  const said = (pattern: RegExp) => snap.notices.some((n) => pattern.test(n.message));
+  if (said(/joined the colony/)) seen.joined++;
+  if (said(/Moved the/)) seen.moved++;
+  if (said(/Demolished the/)) seen.demolished++;
+  if (snap.beds.total <= snap.population) seen.saturated++;
+}
+
+/**
+ * Residents per house id, counted from who points at each house. Asked
+ * independently of `BuildingSnapshot.occupants`, which the snapshot builder
+ * derives the same way — so a builder that miscounts cannot also supply the
+ * expectation.
+ */
+function residentsByHouse(snap: Snapshot): Map<number, number> {
+  const perHouse = new Map<number, number>();
+  for (const c of snap.colonists) {
+    if (c.homeId !== null) perHouse.set(c.homeId, (perHouse.get(c.homeId) ?? 0) + 1);
+  }
+  return perHouse;
+}
+
 describe('PopulationSystem — births and the nomad gate', () => {
   /** A colony that can feed and shelter arrivals; `houses` four-bed shelters. */
-  async function fedColony(houses: number, colonists: number, bread = 5000) {
-    const save = { ...initialSave(), colonists: [], buildings: [], stockpile: { bread }, nextEntityId: 100 };
+  async function fedColony(houses: number, colonists: number, bread = 5000, extraStock: Partial<Record<ResourceId, number>> = {}) {
+    const save = { ...initialSave(), colonists: [], buildings: [], stockpile: { bread, ...extraStock }, nextEntityId: 100 };
     const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
     const ids = getPrepResource(prep, IdCounter);
     const spots = autoPlaceSequence(save.map);
@@ -550,23 +616,74 @@ describe('PopulationSystem — births and the nomad gate', () => {
     for (const c of snap().colonists) expect(c.homeId).toBeNull();               // and NOBODY points at it
   });
 
-  it('never ends a tick with more colonists housed than beds', async () => {
+  it('never over-houses, admits an arrival it has no bed for, or ends a tick it cannot reload', async () => {
     // Property, not scenario: the bed-contention defects found in review were
     // several routes to one broken state, and a case-by-case test would only
     // have caught whichever one it was written for.
-    const { world } = await fedColony(3, 4, 100_000);
-    for (let t = 0; t < 300; t++) {
-      if (t % 7 === 0) enqueue(world, { type: 'recruitWorker' });
+    //
+    // Its predecessor ran `recruitWorker` against three STATIC houses, and was
+    // therefore unfalsifiable in both of its assertions: with no relocation,
+    // demolition or construction, `rehome`'s per-house cap and
+    // `shelterWithRoom`'s `spokenFor < beds` mean an over-admission can only
+    // ever produce a homeless colonist — never an over-occupied house, and
+    // never more occupants than beds. It passed with `spareBeds` mutated to
+    // drop `pending.arrivals.length`. Three things changed: the churn above,
+    // so beds move under the arrivals; the third assertion below, which is
+    // what an over-admission actually violates; and the fourth, which is the
+    // only one that sees a `homeId` naming a house that is mid-relocation.
+    // The same contended colony the scenario test above uses — one house, one
+    // bed spare — ridden 600 ticks with materials and food to spare, so beds
+    // are the only thing that is ever scarce.
+    const { world } = await fedColony(1, 3, 1_000_000, { wood: 1_000_000, planks: 1_000_000 });
+    const snap = () => world.getResource(SnapshotStore).latest!;
+    const known = new Set(snap().colonists.map((c) => c.id));
+    const seen: Exercised = { joined: 0, moved: 0, demolished: 0, saturated: 0 };
+
+    for (let t = 0; t < 600; t++) {
+      const churn = churnFor(t, snap());
+      const recruit: Command = { type: 'recruitWorker' };
+      // Both drain orders across the run: `4012dd2` fixed one defect per order
+      // — a stale `shelters` snapshot seating a nomad in a house the SAME
+      // drain had already started moving (move first), and a move that could
+      // not evict a nomad welcomed moments earlier (recruit first).
+      enqueue(world, ...(t % 2 === 0 ? [recruit, ...churn] : [...churn, recruit]));
       await stepTick(world);
-      const snap = world.getResource(SnapshotStore).latest!;
-      expect(snap.beds.occupied).toBeLessThanOrEqual(snap.beds.total);
-      const perHouse = new Map<number, number>();
-      for (const c of snap.colonists) {
-        if (c.homeId !== null) perHouse.set(c.homeId, (perHouse.get(c.homeId) ?? 0) + 1);
-      }
-      for (const house of snap.buildings.filter((b) => b.beds > 0)) {
+
+      const s = snap();
+      expect(s.beds.occupied).toBeLessThanOrEqual(s.beds.total);
+      const perHouse = residentsByHouse(s);
+      for (const house of housesOf(s)) {
         expect(perHouse.get(house.id) ?? 0).toBeLessThanOrEqual(house.beds);
       }
+      // The tick's own end state must be one the engine can restore. This is
+      // the assertion that catches a `homeId` naming a relocating house: the
+      // v5 guard rejects that pairing outright, so an autosave written here
+      // would send a live colony down decideLoad's corrupt-backup path.
+      expect(isLoadableSave(buildSaveFromWorld(world))).toBe(true);
+      // Nobody is admitted into a bed that does not exist. Both gates promise
+      // this: `spareBeds` counts what is genuinely spare and `shelterWithRoom`
+      // then finds it, so a colonist created this tick ends the tick housed.
+      // Exempt only when this tick's own churn took beds away — a move or a
+      // demolition drained AFTER an arrival legitimately unseats it, and the
+      // engine cannot see a command it has not read yet.
+      const tookBedsAway = churn.some((c) => c.type === 'moveBuilding' || c.type === 'demolishBuilding');
+      for (const c of s.colonists) {
+        if (known.has(c.id)) continue;
+        known.add(c.id);
+        if (!tookBedsAway) expect(c.homeId).not.toBeNull();
+      }
+      tally(seen, s);
     }
+    // Vacuity guard, and the reason this test discriminates at all: every
+    // assertion above passes trivially against a colony that never admits
+    // anyone, never moves or demolishes a house, or always has a bed going
+    // spare. Bounds are well under what the run actually reaches (12 / 26 / 5
+    // / 412), so ordinary drift does not trip them — but a balance change that
+    // made this colony comfortable would fail HERE, loudly, instead of quietly
+    // turning the invariants above back into decoration.
+    expect(seen.joined).toBeGreaterThan(5);
+    expect(seen.moved).toBeGreaterThan(5);
+    expect(seen.demolished).toBeGreaterThan(2);
+    expect(seen.saturated).toBeGreaterThan(100);
   }, 60000);
 });

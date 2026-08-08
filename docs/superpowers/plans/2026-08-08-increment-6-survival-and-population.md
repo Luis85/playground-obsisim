@@ -23,6 +23,22 @@
 - **Balance constants live only in `src/engine/content/balance.ts`.** Shared law takes rates and bands as parameters — `src/shared/**` may import nothing outside itself. This is why `stageOf` takes bands and `commuteFactor` takes rates, exactly as `haulTicks` takes `tilesPerTick`.
 - **Everything age-shaped is in TICKS.** Years exist only where `BALANCE` declares them; the conversion happens there and nothing downstream sees a year (§2.8).
 - **`src/app/world/renderer.ts` is at 419 non-blank lines against a hard 500 cap** with nothing baselined. Task 11 owns keeping it under. The baseline is not loosened.
+- **A raw `await world.step()` does NOT refresh the snapshot's entity sections.** sim-ecs defers entity creation and removal to the post-step sync, which happens *after* `SnapshotSystem` has already run — so a colonist born, welcomed, or killed this tick is missing from (or stale in) `SnapshotStore.latest`. Production handles this in `GameEngine.runStep()`, which calls `refreshEntitySections(world)` when the id counter moved or `RemovalLedger.dirty` is set. **Increment 6 is the first increment whose tests assert on entities appearing and disappearing**, so every test that steps a world by hand and then reads colonist counts must do the same. Add this once to `tests/engine/fixtures.ts` and use it in Tasks 3, 4, 6, 8 and 12 rather than calling `world.step()` directly:
+
+  ```ts
+  /**
+   * One tick, the way GameEngine drives one. `world.step()` alone leaves the
+   * snapshot's entity sections stale for any birth, death or arrival that tick,
+   * because sim-ecs syncs new and removed entities only after every system —
+   * including SnapshotSystem — has run. Tests that assert on population
+   * changing MUST go through this, or they read a snapshot taken before the
+   * change and pass or fail for reasons unrelated to what they name.
+   */
+  export async function stepTick(world: IRuntimeWorld): Promise<void> {
+    await stepTick(world);
+    refreshEntitySections(world);
+  }
+  ```
 
 ---
 
@@ -484,10 +500,8 @@ async function colonyWith(ages: { id: number; ageTicks: number; buildingId?: num
 describe('PopulationSystem — aging', () => {
   it('ages every colonist one tick per tick', async () => {
     const { world } = await colonyWith([{ id: 1, ageTicks: 0 }]);
-    world.getResource(SimClock).tick++;
-    await world.step();
-    world.getResource(SimClock).tick++;
-    await world.step();
+    await stepTick(world);
+    await stepTick(world);
     const me = world.getResource(SnapshotStore).latest!.colonists.find((c) => c.id === 1)!;
     expect(me.ageTicks).toBe(2);
     expect(me.stage).toBe('child');
@@ -504,8 +518,7 @@ describe('PopulationSystem — aging', () => {
       const job = entity.getComponent(JobAssignment);
       if (job) job.buildingId = buildingId;
     }
-    world.getResource(SimClock).tick++;
-    await world.step();
+    await stepTick(world);
     const me = world.getResource(SnapshotStore).latest!.colonists.find((c) => c.id === 1)!;
     expect(me.stage).toBe('elder');
     expect(me.buildingId).toBeNull();       // unassigned by retirement
@@ -526,8 +539,7 @@ describe('PopulationSystem — aging', () => {
       { id: 1, ageTicks: younger - 1 },
       { id: 2, ageTicks: younger - 1 },
     ]);
-    world.getResource(SimClock).tick++;
-    await world.step();
+    await stepTick(world);
     const alive = world.getResource(SnapshotStore).latest!.colonists.map((c) => c.id);
     expect(alive).toHaveLength(1);
     expect(alive[0]).toBe(span1 < span2 ? 2 : 1); // the longer-lived one survives
@@ -859,7 +871,7 @@ describe('PopulationSystem — starvation', () => {
     spawnColonist(prep, ids, { id: 1, ageTicks: BALANCE.lifeBands.matureTicks, hunger: BALANCE.hungerMax - 2 });
     const world = await prep.prepareRun();
 
-    const step = async () => { world.getResource(SimClock).tick++; await world.step(); };
+    const step = () => stepTick(world);
     const me = () => world.getResource(SnapshotStore).latest!.colonists.find((c) => c.id === 1);
 
     await step();
@@ -878,7 +890,7 @@ describe('PopulationSystem — starvation', () => {
     const ids = getPrepResource(prep, IdCounter);
     spawnColonist(prep, ids, { id: 1, ageTicks: BALANCE.lifeBands.matureTicks, hunger: BALANCE.hungerMax });
     const world = await prep.prepareRun();
-    const step = async () => { world.getResource(SimClock).tick++; await world.step(); };
+    const step = () => stepTick(world);
     const me = () => world.getResource(SnapshotStore).latest!.colonists.find((c) => c.id === 1)!;
 
     await step();
@@ -1076,7 +1088,7 @@ it('a house never produces, even fully staffed', async () => {
   const houseId = house.getComponent(Building)!.id;
   spawnColonist(prep, ids, { id: 1, ageTicks: BALANCE.lifeBands.matureTicks, buildingId: houseId });
   const world = await prep.prepareRun();
-  for (let i = 0; i < 20; i++) { world.getResource(SimClock).tick++; await world.step(); }
+  for (let i = 0; i < 20; i++) await stepTick(world);
 
   const snap = world.getResource(SnapshotStore).latest!.buildings.find((b) => b.id === houseId)!;
   expect(snap.state).toBe('housing');
@@ -1316,7 +1328,7 @@ describe('PopulationSystem — homing', () => {
     const houseId = house.getComponent(Building)!.id;
     spawnColonist(prep, ids, { id: 1, ageTicks: BALANCE.lifeBands.matureTicks });
     const world = await prep.prepareRun();
-    const step = async () => { world.getResource(SimClock).tick++; await world.step(); };
+    const step = () => stepTick(world);
     const snap = () => world.getResource(SnapshotStore).latest!;
 
     await step();
@@ -1341,7 +1353,7 @@ describe('PopulationSystem — homing', () => {
     const houseId = house.getComponent(Building)!.id;
     spawnColonist(prep, ids, { id: 1, ageTicks: BALANCE.lifeBands.matureTicks });
     const world = await prep.prepareRun();
-    const step = async () => { world.getResource(SimClock).tick++; await world.step(); };
+    const step = () => stepTick(world);
     await step();
     expect(world.getResource(SnapshotStore).latest!.colonists[0].homeId).toBe(houseId);
 
@@ -1810,8 +1822,14 @@ In `tests/support/balance-harness.ts`, add to `Scenario`:
 
 and in `runScenario`, after spawning the measured building:
 
+**Relocation scenarios must opt OUT.** A `moveTo` scenario houses its crew beside the building's *starting* tile, and increment 5's relocation case moves from `(10,0)` to `(3,7)` — so after the move the crew carries a large commute penalty that neither stationary control pays. The existing assertion `moved.made < from.made` would then stay green **even if relocation downtime stopped reducing production at all**, which is worse than failing: a test that passes for the wrong reason is a test that has stopped protecting anything.
+
+So `runScenario` defaults `houseCrew` to `moveTo === undefined`: distance scenarios are housed and neutral (preserving increment 5's numbers exactly), relocation scenarios are unhoused so **every run in the comparison pays the same flat `homelessFactor`** and the only variable left between them is the downtime. Uniform scaling preserves the relational assertions those cases actually pin; it is neutrality of the *comparison*, which is what a control needs, rather than neutrality of the absolute number.
+
 ```ts
-  const housed = scenario.houseCrew ?? true;
+  // Default: housed for distance scenarios, unhoused for relocation ones —
+  // see the note above. An explicit houseCrew always wins.
+  const housed = scenario.houseCrew ?? (scenario.moveTo === undefined);
   let crewHomeId: number | null = null;
   let haulerHomeId: number | null = null;
   if (housed) {
@@ -2177,9 +2195,8 @@ it('never ends a tick with more colonists housed than beds', async () => {
   // have caught whichever one it was written for.
   const world = await busyColonyWithHousesAndFood();
   for (let t = 0; t < 600; t++) {
-    world.getResource(SimClock).tick++;
     if (t % 7 === 0) enqueue(world, { type: 'recruitWorker' });   // contend for beds
-    await world.step();
+    await stepTick(world);   // refreshes entity sections — arrivals must be visible
     const snap = world.getResource(SnapshotStore).latest!;
     expect(snap.beds.occupied).toBeLessThanOrEqual(snap.beds.total);
     const perHouse = new Map<number, number>();
@@ -2241,7 +2258,13 @@ Pin the interaction — this is the whole reason the ledger exists:
 it('a nomad and a birth cannot take the same last bed', async () => {
   // One house, 4 beds, 3 colonists: exactly one bed free, and the food and
   // cooldown gates are both clear so ONLY the bed is in contention.
-  const save = { ...initialSave(), colonists: [], buildings: [], stockpile: { bread: 5000 }, nextEntityId: 100 };
+  // `workers: []`, not `colonists: []` — the save is still v4 at this task and
+  // its roster key is `workers`. Setting the wrong key leaves initialSave()'s
+  // three founders in place, so this "3 colonists, 4 beds" colony would
+  // actually start with 6 (ids 1-3 duplicated) and already over capacity,
+  // rejecting the nomad for a reason the test does not name. Task 9 renames
+  // the key; until then every pre-v5 fixture here clears `workers`.
+  const save = { ...initialSave(), workers: [], buildings: [], stockpile: { bread: 5000 }, nextEntityId: 100 };
   const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
   const ids = getPrepResource(prep, IdCounter);
   const house = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: 5, row: 3 });
@@ -2251,8 +2274,7 @@ it('a nomad and a birth cannot take the same last bed', async () => {
   world.getResource(SimClock).tick = 1000;   // both cooldowns long expired
 
   enqueue(world, { type: 'recruitWorker' });
-  world.getResource(SimClock).tick++;
-  await world.step();
+  await stepTick(world);
 
   const snap = world.getResource(SnapshotStore).latest!;
   expect(snap.colonists).toHaveLength(4);          // the nomad, and NOT also a child
@@ -2317,7 +2339,7 @@ it('births a child when fed and housed, then holds off for the cooldown', async 
   spawnColonist(prep, ids, { id: 1, ageTicks: BALANCE.lifeBands.matureTicks });
   spawnColonist(prep, ids, { id: 2, ageTicks: BALANCE.lifeBands.matureTicks });
   const world = await prep.prepareRun();
-  const step = async () => { world.getResource(SimClock).tick++; await world.step(); };
+  const step = () => stepTick(world);
   const count = () => world.getResource(SnapshotStore).latest!.colonists.length;
 
   await step();  // tick 1: homing runs, then a birth
@@ -2558,7 +2580,15 @@ const migrateV4toV5: MigrationStep = {
       else break; // at MAX_MAP and still full: fall through to the no-house path
     }
     const at = autoPlacePosition(map, occupied);
-    const houseId = Math.max(0, ...v4.buildings.map((b) => b.id), ...v4.workers.map((w) => w.id)) + 1;
+    // The smallest unused positive id, NOT max + 1. A guard-valid v4 save may
+    // sit at nextEntityId === MAX_SAVED_COUNTER — IdCounter.exhausted() exists
+    // precisely to keep such a save playable — and max + 1 would push
+    // nextEntityId past the ceiling, so isIdsValid would reject a previously
+    // valid save straight into the corrupt-backup path. The arrays hold at
+    // most 20,000 records, so a gap below the ceiling always exists.
+    const used = new Set([...v4.buildings.map((b) => b.id), ...v4.workers.map((w) => w.id)]);
+    let houseId = 1;
+    while (used.has(houseId)) houseId++;
     const house = at === null ? null : {
       id: houseId, defId: 'house' as const, col: at.col, row: at.row,
       progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0,
@@ -2582,6 +2612,11 @@ const migrateV4toV5: MigrationStep = {
       map,
       buildings: house === null ? v4.buildings : [...v4.buildings, house],
       colonists,
+      // Never raised past what the save already claims: houseId fills a GAP
+      // below the ceiling, so the counter does not need to move at all.
+      // Safe now that houseId fills a gap: with at most 20,000 records the
+      // smallest unused id is at most 20,001, so this can never push the
+      // counter near MAX_SAVED_COUNTER.
       nextEntityId: Math.max(v4.nextEntityId, houseId + 1),
     };
   },
@@ -3181,8 +3216,7 @@ export async function runPopulationScenario(scenario: PopulationScenario): Promi
   let deathsByStarvation = 0;
 
   for (let t = 0; t < ticks; t++) {
-    world.getResource(SimClock).tick++;
-    await world.step();
+    await stepTick(world);
     // Notices are the engine's own account of what happened, and they are
     // cleared each snapshot — so they are counted here, per tick, not summed
     // at the end.

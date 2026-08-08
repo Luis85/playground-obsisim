@@ -823,6 +823,45 @@ describe('createColonyWorld', () => {
     expect(isLoadableSave(written)).toBe(true);
   });
 
+  it('round-trips a mid-starvation, mid-cooldown colony', async () => {
+    // Both are penalties already incurred: dropping either would let
+    // save-and-reload cancel it.
+    const save: SaveGameV5 = { ...initialSave(), tick: 910, lastBirthTick: 900 };
+    save.colonists = save.colonists.map((c, i) => (i === 0 ? { ...c, starvingTicks: 40 } : c));
+    const world = await createColonyWorld(save);
+    const round = buildSaveFromWorld(world);
+
+    expect(round.colonists.find((c) => c.id === save.colonists[0].id)!.starvingTicks).toBe(40);
+    expect(round.lastBirthTick).toBe(900);
+    // Discriminating: a second colonist's clock must NOT have picked up the 40,
+    // or this would pass with starvingTicks written from a single shared value.
+    expect(round.colonists.find((c) => c.id === save.colonists[1].id)!.starvingTicks).toBe(0);
+  });
+
+  it('round-trips who sleeps where, so a reload does not reshuffle the colony', async () => {
+    // The v5 field this whole bump is for. Two colonists in one house and one
+    // deliberately homeless: dropping homeId would restore all three homeless
+    // — at homelessFactor work power, on a paused engine — and the first
+    // homing pass would then hand out beds in an order the player never chose.
+    const save = initialSave();
+    save.buildings.push({
+      id: 5, defId: 'house', progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0,
+    });
+    save.nextEntityId = 6;
+    save.colonists[1].homeId = 5;
+    save.colonists[2].homeId = null;
+    expect(isLoadableSave(save)).toBe(true);
+
+    const world = await createColonyWorld(save);
+    const seeded = world.getResource(SnapshotStore).latest!;
+    expect(seeded.colonists.map((c) => c.homeId)).toEqual([1, 5, null]); // before any tick
+    expect(seeded.homeless).toBe(1);
+
+    const written = buildSaveFromWorld(world);
+    expect(written.colonists.map((c) => c.homeId)).toEqual([1, 5, null]);
+    expect(isLoadableSave(written)).toBe(true);
+  });
+
   it('grandfathers overstaffed buildings from a save (spec 4.5: slots retuned down must not orphan saves)', async () => {
     const save = initialSave();
     const building = { id: 5, defId: 'forester' as const, progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0 }; // 2 slots

@@ -303,17 +303,6 @@ component-side types from `useGameStore()` without it) — but unlike the
 three above, nothing referenced it as intentional public API, so it was
 simply un-exported rather than tuned around.
 
-`clampedStarving` (`src/engine/spawn.ts`) is a **transitional** entry, the
-same shape `MAX_AGE_TICKS` was before `clampedAge` gave it a consumer: the
-increment plan's save-v5 task reads a restored colonist's `starvingTicks`
-through it in `buildInitialSnapshot` (`src/engine/world.ts`), exactly how
-`clampedHunger`/`clampedAge`/`clampedToolTicks`/`clampedRelocation` are
-already used there — but that save-format work is deliberately out of this
-task's scope (a colonist restored today always starts with
-`starvingTicks: 0`, since `SavedColonist` has no field for it yet). Remove
-this entry once that consumer lands; leaving it afterward would permanently
-exempt a live export from the gate that exists to catch exactly this.
-
 ## Boundary zones (`.fallowrc.json`)
 
 Machine-checked version of the plan's §2.1 one-way layer dependencies.

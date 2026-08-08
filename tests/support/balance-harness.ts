@@ -40,17 +40,33 @@ export interface Scenario {
    * .freeTiles) and this instrument keeps measuring logistics rather than
    * housing. Same principle as the FED berry stock holding hunger neutral.
    *
-   * Defaults to `moveTo === undefined`: distance scenarios are housed and
-   * commute-neutral, preserving increment 5's numbers exactly, while
-   * relocation scenarios are deliberately UNhoused. A moveTo scenario would
-   * house its crew beside the building's STARTING tile, and increment 5's
-   * relocation case moves from (10,0) to (3,7) — so after the move the crew
-   * would carry a large commute penalty that neither stationary control pays,
-   * and `moved.made < from.made` would stay green even if relocation downtime
-   * stopped costing production at all. Unhoused, all three runs in that
-   * comparison pay the same flat homelessFactor and the only variable left is
-   * the downtime. Neutrality of the COMPARISON, which is what a control needs,
-   * rather than neutrality of the absolute number.
+   * Defaults to `true`: housed and commute-neutral, preserving increment 5's
+   * numbers exactly. Deliberately NOT keyed off `moveTo` — housing uniformity
+   * is a property of the COMPARISON a scenario is measured against, not of
+   * any single scenario, and no per-scenario default can supply that. A
+   * relocation comparison's stationary controls (`from`/`to`) carry no
+   * `moveTo` of their own, so a default keyed on "does THIS scenario have a
+   * moveTo" silently houses the controls while leaving only the mover
+   * unhoused — manufacturing, by construction, exactly the confound this
+   * field exists to rule out: `moved.made < from.made` would then compare a
+   * homeless run against two housed ones, and would stay green even if
+   * relocation downtime stopped costing production entirely, because most of
+   * the gap would be the homelessFactor penalty rather than the downtime.
+   *
+   * So a relocation comparison must pass `houseCrew: false` explicitly to
+   * EVERY call it makes (see `relocating` in balance.test.ts) — uniformity is
+   * the caller's job, because only the caller knows which runs belong to the
+   * same comparison. Uniform-UNhoused, not uniform-housed: a moveTo scenario
+   * houses its crew beside the building's STARTING tile, and increment 5's
+   * relocation case moves from (10,0) to (3,7), ~9.9 tiles apart — there is
+   * no tile inside BALANCE.commute.freeTiles of both endpoints, so after the
+   * move the crew would carry a large commute penalty neither stationary
+   * control pays, the same confound in the other direction. Unhoused,
+   * `commuteFactor` returns the flat `homelessFactor` regardless of tile (see
+   * production-system.ts), so all three runs in the comparison pay the exact
+   * same penalty and the only variable left is the downtime — neutrality of
+   * the COMPARISON, which is what a control needs, rather than neutrality of
+   * the absolute number.
    */
   houseCrew?: boolean;
   /**
@@ -236,10 +252,12 @@ function shelterPlan(
   prep: IPreptimeWorld, ids: IdCounter, map: WorldMapSize, scenario: Scenario,
 ): { crew: number[]; haulers: number[] } {
   const { col, row, crew, haulers, moveTo } = scenario;
-  // Housed for distance scenarios, unhoused for relocation ones — see
-  // Scenario.houseCrew for why a relocation control must NOT be housed. An
-  // explicit houseCrew always wins.
-  const housed = scenario.houseCrew ?? (moveTo === undefined);
+  // Commute-neutral by default — see Scenario.houseCrew for why this cannot
+  // be keyed off moveTo: uniformity is a property of the comparison the
+  // caller is building, not of this one scenario, so the caller (not this
+  // default) must pass houseCrew explicitly to every run in a comparison
+  // that needs uniform housing.
+  const housed = scenario.houseCrew ?? true;
   if (!housed) return { crew: [], haulers: [] };
   // One house holds BALANCE.houseBeds and the largest group this instrument
   // runs is 4, so a single commute-neutral house per group suffices. Asserted

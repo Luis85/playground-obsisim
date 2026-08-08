@@ -2588,7 +2588,7 @@ npx vitest run tests/shared/save-migration.test.ts -t "SEEDED snapshot"        #
 cp "$SP/save-migration.ts" src/shared/save-migration.ts
 
 # Ages must be staggered, not uniform
-sed -i 's|ageTicks: 2500 + jitter(w.id),|ageTicks: 2500,|' src/shared/save-migration.ts
+sed -i 's|ageTicks: MIGRATION_CONSTANTS.startingAgeTicks + jitter(w.id),|ageTicks: MIGRATION_CONSTANTS.startingAgeTicks,|' src/shared/save-migration.ts
 npx vitest run tests/shared/save-migration.test.ts -t "v4 -> v5"                # expect FAIL
 cp "$SP/save-migration.ts" src/shared/save-migration.ts
 ```

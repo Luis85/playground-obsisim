@@ -73,6 +73,22 @@ export function commuteLabel(homeId: number | null, tiles: number, factor: numbe
   return `#${homeId} · ${tiles.toFixed(1)} tiles · ${(factor * 100).toFixed(0)}%`;
 }
 
+/**
+ * Which tier the store's meals-per-head sits in, as a CSS class: below the
+ * birth bar the colony cannot grow at all, between the two bars it can only
+ * grow its own, and above both a nomad may join.
+ *
+ * A class rather than a label, and here rather than in a view, because BOTH
+ * the Dashboard and the Population view render this figure — the tiers are
+ * BALANCE's own two arrival thresholds, and two copies of the comparison are
+ * two chances for the screens to colour the same number differently.
+ */
+export function mealsClass(perHead: number): string {
+  if (perHead < BALANCE.birthFoodPerHead) return 'obsisim-negative';
+  if (perHead < BALANCE.nomadFoodPerHead) return 'obsisim-warning';
+  return 'obsisim-positive';
+}
+
 /** An em dash until the starvation clock starts, then the ticks LEFT before
  * this colonist dies — counting down, the way the player experiences it, not
  * the raw `starvingTicks` counting up. Same em-dash convention as

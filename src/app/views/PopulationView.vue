@@ -11,6 +11,9 @@ import { NOMAD_REJECTIONS } from '../../shared/population';
 // a Record keyed by the LifeStage union, so a stage added without a label is a
 // type error here rather than a raw union member in the rendered cell.
 import { ageLabel, commuteLabel, LIFE_STAGE_LABELS, starvingLabel } from '../labels';
+// The stage/beds/homeless/meals block, shared with the Dashboard so the two
+// screens cannot disagree about a number the player compares across tabs.
+import PopulationSummary from '../components/PopulationSummary.vue';
 
 const engine = inject(ENGINE_KEY)!;
 const store = useGameStore();
@@ -71,46 +74,13 @@ function commuteClass(homeId: number | null): string {
 function starvingClass(starvingTicks: number): string {
   return starvingTicks > 0 ? 'obsisim-negative' : '';
 }
-
-// Both arrival thresholds at once, because the store crossing either one
-// changes what the colony can do: below the birth bar it cannot grow at all,
-// between the two it can only grow its own, and above both a nomad may join.
-// Reads BALANCE rather than repeating 6 and 10, so a retune moves the colours
-// with the rules.
-function mealsClass(perHead: number): string {
-  if (perHead < BALANCE.birthFoodPerHead) return 'obsisim-negative';
-  if (perHead < BALANCE.nomadFoodPerHead) return 'obsisim-warning';
-  return 'obsisim-positive';
-}
-
-// Homelessness is a standing cost (BALANCE.homelessFactor off every one of
-// their working ticks) rather than a countdown to a death, so it warns where
-// the starvation clock goes straight to negative.
-function homelessClass(homeless: number): string {
-  return homeless > 0 ? 'obsisim-warning' : '';
-}
 </script>
 
 <template>
   <div v-if="store.snapshot">
     <div class="obsisim-headline">
-      <span>
-        Population: <strong>{{ store.snapshot.population }}</strong> —
-        <strong data-test="stage-children">{{ store.snapshot.demographics.children }}</strong> children,
-        <strong data-test="stage-adults">{{ store.snapshot.demographics.adults }}</strong> adults,
-        <strong data-test="stage-elders">{{ store.snapshot.demographics.elders }}</strong> elders
-      </span>
-      <span data-test="beds">
-        Beds: <strong>{{ store.snapshot.beds.occupied }} / {{ store.snapshot.beds.total }}</strong>
-        ({{ store.bedsFree }} spare)
-      </span>
-      <span data-test="homeless" :class="homelessClass(store.snapshot.homeless)">
-        Homeless: <strong>{{ store.snapshot.homeless }}</strong>
-      </span>
-      <span data-test="meals" :class="mealsClass(store.snapshot.mealsPerHead)">
-        Meals/head: <strong>{{ store.snapshot.mealsPerHead.toFixed(1) }}</strong>
-        (birth at {{ BALANCE.birthFoodPerHead }}, nomad at {{ BALANCE.nomadFoodPerHead }})
-      </span>
+      <span>Population: <strong>{{ store.snapshot.population }}</strong></span>
+      <PopulationSummary />
       <button
         data-test="recruit"
         :disabled="store.nomadBlocker !== null"

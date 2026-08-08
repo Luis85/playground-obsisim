@@ -3,6 +3,11 @@ import { inject } from 'vue';
 import { ENGINE_KEY } from '../engine-key';
 import { useGameStore } from '../stores/game-store';
 import { RESOURCES, RESOURCE_IDS } from '../../engine/content';
+// Shared with the Population view rather than restated here: both screens show
+// the same stage counts, beds and meals-per-head, and two copies of that block
+// are two chances for them to disagree about a number the player is comparing
+// across tabs.
+import PopulationSummary from '../components/PopulationSummary.vue';
 
 const engine = inject(ENGINE_KEY)!;
 const store = useGameStore();
@@ -14,6 +19,7 @@ const fmt = (n: number) => n.toFixed(2);
     <div class="obsisim-headline">
       <span>Colony wealth: <strong>{{ store.snapshot.colonyWealth.toFixed(0) }}</strong></span>
       <span>Population: <strong>{{ store.snapshot.population }}</strong> ({{ store.snapshot.idleAdults }} idle)</span>
+      <PopulationSummary />
       <span>Buildings: <strong>{{ store.snapshot.buildings.length }}</strong></span>
       <span class="obsisim-haulers">
         Haulers: <strong data-test="hauler-count">{{ store.haulerCount }}</strong>

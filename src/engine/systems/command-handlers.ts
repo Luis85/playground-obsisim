@@ -58,8 +58,11 @@ export interface CommandContext {
    * the post-step sync, so queries still see them — every lookup must not. */
   demolishedIds: Set<number>;
   /** Shelters as the homing phase sees them, so the bed a nomad is given and
-   * the bed the gate counted come from one description. */
-  shelters: ShelterRow[];
+   * the bed the gate counted come from one description. A function, not a
+   * value — same reasoning as `occupancy` below: a relocation (or
+   * construction) started earlier in this same drain changes it, and a
+   * frozen array would bake in whatever was true at context construction. */
+  shelters: () => ShelterRow[];
   /** Colonists per home building id. A function, not a value: a demolition
    * earlier in the drain changes it. */
   occupancy: () => Map<number, number>;
@@ -162,7 +165,7 @@ export function handleRecruitWorker(ctx: CommandContext): void {
   // PopulationSystem — which runs later this very tick — would otherwise see
   // the bed as free and let tryBirth hand it to a child as well. The tick
   // would end with five colonists in four beds and the nomad homeless.
-  const homeId = shelterWithRoom(ctx.shelters, ctx.occupancy(), ctx.pending);
+  const homeId = shelterWithRoom(ctx.shelters(), ctx.occupancy(), ctx.pending);
   // spawnArrival, not a bare spawn: the same shared component list as the
   // restore path (a worker recruited in play once shipped without HaulTrip and
   // vanished from snapshots entirely — OBS-4-02), plus the pending-ledger push
@@ -334,6 +337,19 @@ export function handleMoveBuilding(ctx: CommandContext, command: Extract<Command
   // remaining downtime rather than adding to it — accumulating would let a
   // player trap a building by accident.
   found.relocation.ticksLeft = relocationTicks(moved, BALANCE.relocationTilesPerTick);
+  // A nomad welcomed EARLIER THIS SAME DRAIN is invisible to ctx.workers --
+  // the query cannot see an entity until the post-step sync -- so rehome
+  // (PopulationSystem, later this tick) has no row for them and cannot evict
+  // them from a house that just started relocating: it only walks ctx.colonists,
+  // which this arrival is not yet part of. Only the pending ledger can still
+  // reach them. Same failure mode, same fix, as handleDemolishBuilding's
+  // identical loop below in this file -- without it, a nomad seated here by an
+  // earlier command in this drain keeps a homeId naming a relocating house,
+  // which both overcounts that house's occupants for the rest of the tick and
+  // writes a dangling reference the v5 load guard refuses on the next save.
+  for (const { home } of ctx.pending.arrivals) {
+    if (home.buildingId === command.buildingId) home.buildingId = null;
+  }
   // Haulers already walking to this building now have a different journey:
   // recompute from the new tile so the ticks charged match the line the dot
   // visibly travels. legTicks is refreshed the same way, from the same call —

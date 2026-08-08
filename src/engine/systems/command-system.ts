@@ -82,15 +82,30 @@ export const CommandSystem = () => createSystem({
       // Same shape PopulationContext uses, from the same query rows, so the
       // bed the nomad gate counts and the bed rehome later honours are one
       // description rather than two that can drift.
-      shelters: [...buildings.iter()]
-        .filter(({ building }) => BUILDINGS[building.defId].beds > 0)
-        .map(({ building, position, relocation }) => ({
-          id: building.id,
-          beds: BUILDINGS[building.defId].beds,
-          col: position.col,
-          row: position.row,
-          relocating: relocation.ticksLeft > 0,
-        })),
+      //
+      // A function, not a value — the precedent is `occupancy` just below,
+      // whose own comment says a demolition earlier in the drain changes it;
+      // the same is true here for a relocation (mutates the live Relocation
+      // component `handleMoveBuilding` writes into) and a construction
+      // (invisible to the `buildings` query above until the post-step sync,
+      // which is why `pending.constructed` is folded in exactly as
+      // PopulationContext's shelters does). A frozen array baked in whatever
+      // was true at context construction and let a house drained into
+      // relocating THIS tick keep sheltering a nomad seated moments later.
+      shelters: () => [
+        ...ctx.buildings
+          .filter(({ building }) => BUILDINGS[building.defId].beds > 0)
+          .map(({ building, position, relocation }) => ({
+            id: building.id,
+            beds: BUILDINGS[building.defId].beds,
+            col: position.col,
+            row: position.row,
+            relocating: relocation.ticksLeft > 0,
+          })),
+        ...pending.constructed
+          .filter((c) => BUILDINGS[c.defId].beds > 0)
+          .map((c) => ({ id: c.id, beds: BUILDINGS[c.defId].beds, col: c.col, row: c.row, relocating: false })),
+      ],
       occupancy: () => {
         const byHouse = new Map<number, number>();
         for (const { home } of ctx.workers) {
@@ -104,7 +119,7 @@ export const CommandSystem = () => createSystem({
         stock: stockpile.toJSON(),
         weights: MEAL_WEIGHTS,
         population: ctx.workers.length + pending.arrivals.length,
-        freeBeds: spareBeds(ctx.shelters, ctx.workers.length, pending),
+        freeBeds: spareBeds(ctx.shelters(), ctx.workers.length, pending),
         tick: clock.tick,
         lastRecruitTick: clock.lastRecruitTick,
         cooldown: BALANCE.recruitCooldownTicks,

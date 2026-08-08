@@ -614,6 +614,12 @@ describe('PopulationSystem — births and the nomad gate', () => {
     expect(snap().buildings.find((b) => b.id === houseIds[0])).toBeUndefined();  // the house really went
     expect(snap().colonists).toHaveLength(2);                                    // the nomad really arrived
     for (const c of snap().colonists) expect(c.homeId).toBeNull();               // and NOBODY points at it
+    // The actual harm, not merely the mechanism: a `homeId` naming a building
+    // the save does not contain is one of the four reference states the v5
+    // guard refuses outright, so leaving the nomad unevicted does not just
+    // misreport occupancy — it makes this tick's autosave unloadable, and
+    // decideLoad answers `{kind:'backup'}` for a colony that was never corrupt.
+    expect(isLoadableSave(buildSaveFromWorld(world))).toBe(true);
   });
 
   it('never over-houses, admits an arrival it has no bed for, or ends a tick it cannot reload', async () => {

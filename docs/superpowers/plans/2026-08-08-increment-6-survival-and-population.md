@@ -2875,6 +2875,50 @@ it('evicts down to capacity when a save puts more colonists in a house than it h
 });
 ```
 
+**A non-adult holding a job is the SAME repair, at the same place, for the
+same reason.** Over-capacity housing is not the only balance-coupled state a
+save can arrive in. Raise `matureTicks` in a retune and an existing save
+restores a colonist who is now a child but still carries a `buildingId`;
+lower `retireTicks`, or clamp an over-long `ageTicks` down to
+`MAX_AGE_TICKS`, and it restores an elder holding one. `standDownNonAdults`
+repairs it — but only on the first tick, and `buildInitialSnapshot` copies
+`buildingId` and `hauling` straight from the record while computing `stage`
+right beside them without consulting it (`src/engine/world.ts`, the
+`workerFacts` map). Paused, the seeded snapshot therefore shows a child
+staffing a building, counted in `workers` and contributing to `workPower`,
+for as long as the player leaves it there.
+
+Clear `buildingId` and `hauling` for any colonist whose `stageOf(ageTicks,
+BALANCE.lifeBands)` is not `'adult'`, in `colonistComponents` **and** in
+`buildInitialSnapshot` — the same two places the over-capacity repair lands,
+so the seed keeps matching the entity `buildColonyPrepWorld` actually spawns.
+Repaired, not rejected: only a retune produces it, and the load principle
+clamps balance-coupled values rather than orphaning the save. Contrast the
+two structural rules above, which no engine version could have written.
+
+Note what this must NOT do to the existing tests. Nothing in the suite
+currently spawns a pre-invalid child-with-a-job — `population-system.test.ts`
+builds its stand-down case honestly, spawning an adult at
+`retireTicks - 1` **with** a job and aging them across the boundary during
+the run. Keep it that way. A test that spawned a non-adult already holding a
+job to prove `standDownNonAdults` clears it would become vacuous the moment
+this repair lands, and would then pass forever without exercising anything.
+
+```ts
+it('a retune that raises matureTicks does not seed a child as staff', async () => {
+  // Only a retune can produce this record, so it is repaired rather than
+  // rejected. Asserted BEFORE any tick: standDownNonAdults would fix it on
+  // tick 1, and a paused engine never reaches tick 1.
+  const save = saveWithColonist({ ageTicks: BALANCE.lifeBands.matureTicks - 1, buildingId: FORESTER_ID });
+  const world = await createColonyWorld(save);
+
+  const seeded = world.getResource(SnapshotStore).latest!;
+  expect(seeded.colonists[0].buildingId).toBeNull();
+  expect(seeded.buildings.find((b) => b.id === FORESTER_ID)!.workers).toBe(0);
+  expect(seeded.buildings.find((b) => b.id === FORESTER_ID)!.workPower).toBe(0);
+});
+```
+
 - [ ] **Step 4: Write the migration**
 
 In `src/shared/save-migration.ts`:

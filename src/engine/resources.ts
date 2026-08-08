@@ -307,8 +307,18 @@ export class PendingChanges {
    * — which requires every `homeId` to name a real shelter — would send that
    * save down the corrupt-backup path. Holding the component lets the
    * demolition null it in place.
+   *
+   * `ageTicks` rides along because `tryBirth` counts arrivals toward the
+   * POPULATION it must feed and toward the ADULTS who may parent, and those
+   * two answers differ: a nomad is both, a child born this tick is only the
+   * first. Deriving the second from `arrivals.length` — as this ledger's first
+   * version forced — is only correct while every arrival visible at that read
+   * happens to be an adult. That was true, but by accident of ordering rather
+   * than by anything stated: `tryBirth` is the only pusher of non-adults and
+   * it reads the ledger before its own push. Carrying the age states the fact
+   * instead of relying on the schedule to keep it true.
    */
-  readonly arrivals: { home: Home }[] = [];
+  readonly arrivals: { home: Home; ageTicks: number }[] = [];
   /** Buildings demolished this tick. Still in every query until the sync. */
   readonly demolished = new Set<number>();
   /**

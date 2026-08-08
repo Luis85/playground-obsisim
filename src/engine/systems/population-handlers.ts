@@ -288,7 +288,24 @@ export function spawnArrival(
 ): void {
   const components = colonistComponents(spec);
   ctx.spawn(...components);
-  ctx.pending.arrivals.push({ home: components.find((c): c is Home => c instanceof Home)! });
+  // The age comes off the SPAWNED component, not off `spec`: colonistComponents
+  // clamps a balance-coupled age on the way in, so the spec's number and the
+  // colonist's real age can differ, and the ledger must report the latter.
+  const age = components.find((c): c is Age => c instanceof Age)!;
+  ctx.pending.arrivals.push({ home: components.find((c): c is Home => c instanceof Home)!, ageTicks: age.ticks });
+}
+
+/** Adults among the colonists already visible to the queries. */
+function countAdults(rows: readonly ColonistRow[]): number {
+  return rows.filter((row) => stageOf(row.age.ticks, BALANCE.lifeBands) === 'adult').length;
+}
+
+/** Whether a colonist spawned earlier this tick counts toward the two-adult
+ * rule. Every current caller of `spawnArrival` produces either a nomad (adult)
+ * or a newborn (child), so this is the whole of the distinction — but it is
+ * asked of the record rather than assumed from which handler queued it. */
+function isAdultArrival(arrival: { ageTicks: number }): boolean {
+  return stageOf(arrival.ageTicks, BALANCE.lifeBands) === 'adult';
 }
 
 /**
@@ -304,7 +321,13 @@ export function tryBirth(ctx: PopulationContext): void {
     stock: ctx.stockpile.toJSON(),
     weights: MEAL_WEIGHTS,
     population: rows.length + ctx.pending.arrivals.length,
-    adults: rows.filter((row) => stageOf(row.age.ticks, BALANCE.lifeBands) === 'adult').length,
+    // Arrivals count on BOTH sides, or the gate charges for a mouth it will
+    // not credit as a parent. A nomad welcomed this tick is a grown adult who
+    // eats: counting them in `population` (the food cost) but not in `adults`
+    // (the parent benefit) made a one-adult colony that just welcomed a second
+    // fail on `noParents` and lose a whole birthCooldownTicks to a colonist
+    // who was standing right there.
+    adults: countAdults(rows) + ctx.pending.arrivals.filter(isAdultArrival).length,
     // The OBJECT, not a count: spareBeds reads `.demolished` as well as
     // `.arrivals`, and passing a number back would silently drop the
     // demolition exclusion — the "changed at one site of N" failure this

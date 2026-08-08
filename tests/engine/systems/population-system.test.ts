@@ -587,6 +587,25 @@ describe('PopulationSystem — births and the nomad gate', () => {
     expect(snap().colonists).toHaveLength(1);
   });
 
+  it('counts a nomad welcomed this tick as the second parent, not only as a second mouth', async () => {
+    // The pair for the test above: the SAME one-adult colony, differing only
+    // in that a nomad lands on the same tick. tryBirth folds pending arrivals
+    // into `population` (the food the gate must cover) and must fold them into
+    // `adults` too, or the same colonist is charged as a mouth and refused as
+    // a parent — and an eligible birth is lost for a whole birthCooldownTicks.
+    //
+    // One house is 4 beds against 1 founder, so the nomad and the child are
+    // not competing for the last one; 'a nomad and a birth cannot take the
+    // same last bed' below is the case where they are.
+    const { world, snap } = await fedColony(1, 1);
+    enqueue(world, { type: 'recruitWorker' });
+    await stepTick(world);
+
+    const stages = snap().colonists.map((c) => c.stage).sort();
+    expect(stages).toEqual(['adult', 'adult', 'child']); // founder, nomad, and the birth they enabled
+    expect(snap().homeless).toBe(0);
+  });
+
   it('a nomad and a birth cannot take the same last bed', async () => {
     // One house, 4 beds, 3 colonists: exactly one bed free, with food and both
     // cooldowns clear so ONLY the bed is in contention. CommandSystem runs

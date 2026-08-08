@@ -69,14 +69,9 @@ sed -i 's/\bSTARTING_WORKERS\b/STARTING_COLONISTS/g' $FILES
 sed -i 's/\bspawnWorker\b/spawnColonist/g'         $FILES
 ```
 
-**`SavedWorker` and `Worker` need care — `SavedWorkerV2` and `WorkerSlots` must NOT move.** Use word boundaries that exclude the suffixed forms:
+**`SavedWorker` and `Worker` need care — `SavedWorkerV2` and `WorkerSlots` must NOT move.**
 
-```bash
-sed -i 's/\bSavedWorker\b/SavedColonist/g' $FILES   # \b stops before SavedWorkerV2's "V2"? NO — verify below
-sed -i 's/\bWorker\b/Colonist/g'           $FILES   # \b does NOT protect WorkerSlots (no boundary) — verify below
-```
-
-`\b` matches between `r` and `V` in `SavedWorkerV2`, so the first command **would** corrupt it. Guard both explicitly instead — run these two *instead of* the pair above:
+The naive `s/\bSavedWorker\b/…/` does **not** work: `\b` matches between `r` and `V`, so it would rewrite `SavedWorkerV2` into `SavedColonistV2` and silently rename a frozen legacy shape. `\bWorker\b` is safe for the opposite reason — there is no word boundary between `Worker` and `Slots`, so `WorkerSlots` is untouched. Run exactly these two, then verify:
 
 ```bash
 sed -i 's/\bSavedWorker\([^V]\)/SavedColonist\1/g; s/\bSavedWorker$/SavedColonist/g' $FILES
@@ -1750,16 +1745,45 @@ In `src/engine/systems/production-system.ts`, add `position: Read(Position)` to 
 
 - [ ] **Step 6: A hauler's commute costs them carry, not work power**
 
-`workerWorkPower` never touches a hauler — their throughput is trips, not batches — so without this a hauler's commute would be decorative. In `src/engine/systems/haul-system.ts`, where a trip is loaded, replace `BALANCE.haulCarryCapacity` with:
+`workerWorkPower` never touches a hauler — their throughput is trips, not batches — so without this a hauler's commute would be decorative.
+
+**`BALANCE.haulCarryCapacity` appears at THREE sites in `src/engine/systems/haul-system.ts`, and all three must move together:** `buildClaimMap` (~line 21), the same-tick dispatch claim (~line 76), and the actual load (~line 88). Changing only the load leaves the two reservation sites claiming 6 for a hauler who will take 3 — so a building's `claimableAt` under-reports, other haulers are dispatched elsewhere, and output sits unclaimed. That is a scheduling penalty on top of the commute factor, which is not what this models.
+
+Add one exported helper and use it at every site:
 
 ```ts
-// A hauler's output is goods moved, so their commute costs them the same
-// fraction of it that a worker's costs them of production. Rounded, floored
-// at 1: a hauler who shows up at all carries something.
-const capacity = Math.max(1, Math.round(BALANCE.haulCarryCapacity * factor));
+/**
+ * What THIS hauler carries per trip. A hauler's output is goods moved, so
+ * their commute costs them the same fraction of it that a worker's costs them
+ * of production. Rounded, floored at 1: a hauler who shows up carries
+ * something.
+ *
+ * Every site that reserves or takes capacity must call this — buildClaimMap,
+ * the same-tick dispatch claim, and the load. A reservation computed from the
+ * flat BALANCE.haulCarryCapacity while the load uses this would claim 6 for a
+ * hauler taking 3, leaving goods unclaimed and other haulers sent away.
+ */
+export function haulerCapacity(homeTile: TileRef | null): number {
+  const tiles = homeTile === null
+    ? null
+    : Math.hypot(homeTile.col - CAMP_TILE.col, homeTile.row - CAMP_TILE.row);
+  const factor = commuteFactor(tiles, BALANCE.commute, BALANCE.homelessFactor);
+  return Math.max(1, Math.round(BALANCE.haulCarryCapacity * factor));
+}
 ```
 
-where `factor` is `commuteFactor(distance(home, CAMP_TILE), BALANCE.commute, BALANCE.homelessFactor)` for that hauler. Add `Home` to the system's colonists query.
+`buildClaimMap` and the dispatch path need each hauler's home tile, so add `Home` to the system's colonists query and thread the tile through `WorkerRow`. Pin the consistency with a test:
+
+```ts
+it('reserves exactly what a reduced-capacity hauler will actually take', async () => {
+  // A homeless hauler carries 3, not 6. If the claim map still reserves 6,
+  // a second hauler is sent elsewhere while half the buffer sits unclaimed.
+  const homeless = haulerCapacity(null);
+  expect(homeless).toBeLessThan(BALANCE.haulCarryCapacity);
+  // …run a two-hauler, one-full-buffer world and assert BOTH haulers are
+  // dispatched to it, which only holds if the claim matches the load.
+});
+```
 
 - [ ] **Step 7: House the harness's crews**
 
@@ -2072,17 +2096,46 @@ Add `lastBirthTick` to `Snapshot` beside `lastRecruitTick`, seeded in `buildInit
 
 In `src/engine/systems/population-handlers.ts`:
 
+**First, a resource for arrivals queued earlier in the same tick.** `CommandSystem` runs before `PopulationSystem`, and a nomad it spawns is invisible to queries until the post-step sync — so without this, a nomad and a birth can each take the *same* last bed and the tick ends over capacity. This is precisely the problem `CommandContext.claimedTiles` already solves for buildings ("an entity built this tick is invisible to queries until the post-step sync, but its tile must already count as occupied"), so it gets the same shape.
+
+In `src/engine/resources.ts`, beside `RemovalLedger`:
+
+```ts
+/**
+ * Colonists spawned earlier in THIS tick and not yet visible to any query —
+ * sim-ecs syncs new entities only after every system has run. PopulationSystem
+ * counts these against beds and population before deciding on a birth;
+ * without that, a nomad welcomed this tick and a child born this tick both
+ * claim the last bed. Same hazard, and same remedy, as
+ * CommandContext.claimedTiles.
+ *
+ * Reset by PopulationSystem after it has read it: by the next tick the real
+ * entities are in the query and counting them again would double them.
+ */
+export class ArrivalLedger {
+  pending = 0;
+}
+```
+
+Register it in `buildColonyPrepWorld`'s `instances` array, and have `handleRecruitWorker` increment it on success.
+
+Then:
+
 ```ts
 export function tryBirth(ctx: PopulationContext): void {
   if (ctx.ids.exhausted()) return; // silent: this is not a player action to refuse
   const rows = livingRows(ctx);
   const beds = ctx.shelters.filter((s) => !s.relocating).reduce((sum, s) => sum + s.beds, 0);
+  // A nomad welcomed earlier this tick holds a bed and eats, but is not in
+  // `rows` yet — count them, or both arrivals take the same last bed.
+  const pending = ctx.arrivals.pending;
+  const housed = rows.filter((row) => row.home.buildingId !== null).length;
   const blocker = birthBlocker({
-    stock: ctx.stockpile.snapshot(),
+    stock: ctx.stockpile.toJSON(),
     weights: MEAL_WEIGHTS,
-    population: rows.length,
+    population: rows.length + pending,
     adults: rows.filter((row) => stageOf(row.age.ticks, BALANCE.lifeBands) === 'adult').length,
-    freeBeds: beds - rows.filter((row) => row.home.buildingId !== null).length,
+    freeBeds: beds - housed - pending,
     tick: ctx.clock.tick,
     lastBirthTick: ctx.clock.lastBirthTick,
     cooldown: BALANCE.birthCooldownTicks,
@@ -2094,6 +2147,34 @@ export function tryBirth(ctx: PopulationContext): void {
   ctx.spawn(...colonistComponents({ id, ageTicks: 0 }));
   ctx.notices.succeed(`Colonist #${id} was born.`);
 }
+```
+
+`PopulationSystem` resets `ctx.arrivals.pending = 0` after `tryBirth`, and `PopulationContext` gains `arrivals: ArrivalLedger`.
+
+Pin the interaction — this is the whole reason the ledger exists:
+
+```ts
+it('a nomad and a birth cannot take the same last bed', async () => {
+  // One house, 4 beds, 3 colonists: exactly one bed free, and the food and
+  // cooldown gates are both clear so ONLY the bed is in contention.
+  const save = { ...initialSave(), colonists: [], buildings: [], stockpile: { bread: 5000 }, nextEntityId: 100 };
+  const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
+  const ids = getPrepResource(prep, IdCounter);
+  const house = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: 5, row: 3 });
+  const houseId = house.getComponent(Building)!.id;
+  for (const id of [1, 2, 3]) spawnColonist(prep, ids, { id, ageTicks: BALANCE.lifeBands.matureTicks, homeId: houseId });
+  const world = await prep.prepareRun();
+  world.getResource(SimClock).tick = 1000;   // both cooldowns long expired
+
+  enqueue(world, { type: 'recruitWorker' });
+  world.getResource(SimClock).tick++;
+  await world.step();
+
+  const snap = world.getResource(SnapshotStore).latest!;
+  expect(snap.colonists).toHaveLength(4);          // the nomad, and NOT also a child
+  expect(snap.homeless).toBe(0);                    // nobody ended the tick over capacity
+  expect(snap.beds.occupied).toBeLessThanOrEqual(snap.beds.total);
+});
 ```
 
 `ctx.stockpile.toJSON()` already returns `Partial<Record<ResourceId, number>>` — use it rather than adding a second accessor. Import `MEAL_WEIGHTS` from `../content/resources` and `birthBlocker`/`stageOf` from `../../shared/population`. Call `tryBirth(ctx)` last in `population-system.ts`.
@@ -2383,18 +2464,20 @@ const migrateV4toV5: MigrationStep = {
     };
     const colonists = [...v4.workers].sort((a, b) => a.id - b.id).map((w, index) => ({
       ...w,
-      ageTicks: 2500 + jitter(w.id),
-      homeId: house !== null && index < MIGRATION_HOUSE_BEDS ? houseId : null,
+      ageTicks: MIGRATION_CONSTANTS.startingAgeTicks + jitter(w.id),
+      homeId: house !== null && index < MIGRATION_CONSTANTS.houseBeds ? houseId : null,
       starvingTicks: 0,
     }));
     const { workers: _dropped, ...rest } = v4;
     return {
       ...rest,
       version: 5,
-      // 0, not the BALANCE sentinel: migrations may not import BALANCE, and
-      // any migrated colony is already past the cooldown, so the two are
-      // indistinguishable in effect.
-      lastBirthTick: 0,
+      // The sentinel, not 0. "Any migrated colony is already past the
+      // cooldown" is false for a v4 save written before tick 50 — a tick-0
+      // colony would have its first otherwise-eligible birth blocked purely
+      // because it was reopened, which is the save-alters-growth defect
+      // lastBirthTick exists to prevent.
+      lastBirthTick: -MIGRATION_CONSTANTS.birthCooldownTicks,
       buildings: house === null ? v4.buildings : [...v4.buildings, house],
       colonists,
       nextEntityId: Math.max(v4.nextEntityId, houseId + 1),
@@ -2402,27 +2485,53 @@ const migrateV4toV5: MigrationStep = {
   },
 };
 
-/** Beds the starter house provides. Duplicated from BALANCE.houseBeds because
- * migrations may not import it; a content test pins the two together. */
-export const MIGRATION_HOUSE_BEDS = 4;
+/**
+ * BALANCE values this migration needs but cannot import — `src/shared/**` may
+ * import nothing outside itself, and the plan's own Global Constraints say
+ * balance constants live only in `src/engine/content/balance.ts`. The
+ * duplication is forced, so every one of these is PINNED against its real
+ * counterpart by a content test rather than trusted. An unpinned duplicate
+ * would drift silently and house or age a migrated colony differently from a
+ * fresh one, for no stated reason.
+ */
+export const MIGRATION_CONSTANTS = {
+  houseBeds: 4,           // BALANCE.houseBeds
+  startingAgeTicks: 2500, // BALANCE.startingAgeTicks
+  spreadTicks: 800,       // BALANCE.lifeBands.spreadTicks
+  birthCooldownTicks: 50, // BALANCE.birthCooldownTicks
+} as const;
 
-/** Starting-age jitter, +/- 8 years at 100 ticks a year, decorrelated from
- * the lifespan draw. Mirrors spreadFor's finaliser; src/shared/population.ts
- * is importable from here (both are src/shared), so import it rather than
- * copying — see the import at the top of this file. */
-const jitter = (id: number) => spreadFor(id, 800, SALT.startingAge);
+/** Starting-age jitter, decorrelated from the lifespan draw by its salt.
+ * src/shared/population.ts is importable from here (both are src/shared), so
+ * the hash is imported rather than copied. */
+const jitter = (id: number) => spreadFor(id, MIGRATION_CONSTANTS.spreadTicks, SALT.startingAge);
 ```
 
 Import `spreadFor` and `SALT` from `./population` and `autoPlacePosition` from `./placement` (already imported), register `migrateV4toV5` in `SAVE_MIGRATIONS`, and add `5: isSaveGameV5` to `SAVE_GUARDS`.
 
-Export `HOUSE_BEDS` as `MIGRATION_HOUSE_BEDS` and pin it against the real value in `tests/engine/content.test.ts`:
+Pin every duplicated constant against its real counterpart in `tests/engine/content.test.ts` — the test file that CAN import both sides:
 
 ```ts
-it("the migration's starter house has as many beds as a real one", () => {
+it('the migration constants match the balance they duplicate', () => {
   // The duplication is forced — src/shared/save-migration.ts may not import
-  // BALANCE — so it is pinned instead of trusted. A drift would house a
-  // migrated colony differently from a fresh one for no stated reason.
-  expect(MIGRATION_HOUSE_BEDS).toBe(BALANCE.houseBeds);
+  // BALANCE — so each one is pinned instead of trusted. Drift here would age
+  // or house a migrated colony differently from a fresh one, silently.
+  expect(MIGRATION_CONSTANTS.houseBeds).toBe(BALANCE.houseBeds);
+  expect(MIGRATION_CONSTANTS.startingAgeTicks).toBe(BALANCE.startingAgeTicks);
+  expect(MIGRATION_CONSTANTS.spreadTicks).toBe(BALANCE.lifeBands.spreadTicks);
+  expect(MIGRATION_CONSTANTS.birthCooldownTicks).toBe(BALANCE.birthCooldownTicks);
+});
+```
+
+and add a migration test for the early-save case:
+
+```ts
+it('a v4 save written before the cooldown elapsed can still give birth immediately', () => {
+  const early = { ...v4WithThreeWorkers(), tick: 0, lastRecruitTick: 0 };
+  const v5 = migrateSaveToLatest(early) as SaveGameV5;
+  // Discriminating: 0 would block a tick-0 colony's first birth for 50 ticks
+  // purely because the save was reopened.
+  expect(v5.lastBirthTick).toBeLessThanOrEqual(-BALANCE.birthCooldownTicks);
 });
 ```
 
@@ -2806,12 +2915,19 @@ describe('population balance', () => {
     expect(capped.deathsByStarvation).toBe(0);
   }, 120000);
 
-  it('cutting food produces a visible decline before the first death', async () => {
+  it('the starvation countdown is visible for a real interval before the first death', async () => {
     const starved = await runPopulationScenario({ houses: 2, startingAdults: 3, foodPerTick: 0, ticks: 400, sampleEvery: 10 });
     const firstDeath = starved.samples.findIndex((s) => s.adults + s.children + s.elders < 3);
-    const firstWarning = starved.samples.findIndex((s) => s.mealsPerHead === 0);
-    expect(firstWarning).toBeGreaterThanOrEqual(0);
-    expect(firstDeath - firstWarning).toBeGreaterThan(BALANCE.autosaveEveryTicks / 10);
+    // Measured from starvingTicks CLIMBING, not from the store emptying. With
+    // foodPerTick 0 the store is empty from the first sample, so mealsPerHead
+    // would report a warning ~100 ticks before anyone is even at max hunger —
+    // inflating the window and letting this pass while the countdown the
+    // player actually sees is far too short.
+    const firstStarving = starved.samples.findIndex((s) => s.starving > 0);
+    expect(firstStarving).toBeGreaterThanOrEqual(0);
+    expect(firstDeath).toBeGreaterThan(firstStarving);
+    const warningTicks = (firstDeath - firstStarving) * 10;
+    expect(warningTicks).toBeGreaterThan(BALANCE.autosaveEveryTicks);
   }, 120000);
 
   it('a birth burst becomes a retirement bulge one generation later', async () => {
@@ -2862,6 +2978,10 @@ export interface PopulationSample {
   adults: number;
   elders: number;
   mealsPerHead: number;
+  /** Colonists whose starvation countdown is running. This, not an empty
+   * store, is when the player's warning actually begins: spec section 4 asks
+   * for the interval from starvingTicks climbing to the first death. */
+  starving: number;
 }
 
 export interface PopulationResult {
@@ -2938,6 +3058,7 @@ export async function runPopulationScenario(scenario: PopulationScenario): Promi
       adults: snapshot.colonists.filter((c) => c.stage === 'adult').length,
       elders: snapshot.colonists.filter((c) => c.stage === 'elder').length,
       mealsPerHead: snapshot.mealsPerHead,
+      starving: snapshot.colonists.filter((c) => c.starvingTicks > 0).length,
     });
   }
 

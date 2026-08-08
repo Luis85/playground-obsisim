@@ -2,7 +2,9 @@ import { Actions, createSystem, queryComponents, Read, ReadEntity, Write, WriteR
 import { BUILDINGS } from '../content/buildings';
 import { Age, Building, Colonist, HaulTrip, Home, Hunger, JobAssignment, Position, Relocation } from '../components';
 import { IdCounter, NoticeBoard, PendingChanges, RemovalLedger, SimClock, Stockpile } from '../resources';
-import { ageEveryone, rehome, resolveOldAge, resolveStarvation, standDownNonAdults, type PopulationContext } from './population-handlers';
+import {
+  ageEveryone, rehome, resolveOldAge, resolveStarvation, standDownNonAdults, tryBirth, type PopulationContext,
+} from './population-handlers';
 
 /**
  * Spec 2.9 places this third, and both neighbours are load-bearing: AFTER
@@ -80,6 +82,9 @@ export const PopulationSystem = () => createSystem({
     resolveStarvation(ctx);
     standDownNonAdults(ctx);
     rehome(ctx);
+    // Births LAST, after homing, so "a free bed exists" and "nobody is
+    // homeless" are the same condition and the gate can test either.
+    tryBirth(ctx);
     // Homing does NOT clear ctx.pending, though it used to. ProductionSystem
     // and HaulSystem run later in the same tick and resolve a colonist's
     // homeId to a tile; clearing here left them blind to a house built this

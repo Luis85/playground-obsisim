@@ -2,6 +2,9 @@ import { Actions, createSystem, queryComponents, Read, ReadEntity, ReadResource,
 import type { Command } from '../../shared/commands';
 import { stageOf } from '../../shared/population';
 import { BALANCE } from '../content/balance';
+import { BUILDINGS } from '../content/buildings';
+import { MEAL_WEIGHTS } from '../content/resources';
+import { spareBeds } from './population-handlers';
 import { Age, Building, HaulTrip, Home, JobAssignment, OutputBuffer, Position, Relocation, WorkerSlots } from '../components';
 import { CommandQueue, IdCounter, NoticeBoard, PendingChanges, RemovalLedger, SimClock, Stockpile, WorldMap } from '../resources';
 import {
@@ -76,6 +79,37 @@ export const CommandSystem = () => createSystem({
       pending,
       remove: (entity) => actions.commands.removeEntity(entity),
       demolishedIds: new Set<number>(),
+      // Same shape PopulationContext uses, from the same query rows, so the
+      // bed the nomad gate counts and the bed rehome later honours are one
+      // description rather than two that can drift.
+      shelters: [...buildings.iter()]
+        .filter(({ building }) => BUILDINGS[building.defId].beds > 0)
+        .map(({ building, position, relocation }) => ({
+          id: building.id,
+          beds: BUILDINGS[building.defId].beds,
+          col: position.col,
+          row: position.row,
+          relocating: relocation.ticksLeft > 0,
+        })),
+      occupancy: () => {
+        const byHouse = new Map<number, number>();
+        for (const { home } of ctx.workers) {
+          if (home.buildingId !== null) byHouse.set(home.buildingId, (byHouse.get(home.buildingId) ?? 0) + 1);
+        }
+        return byHouse;
+      },
+      // Derives freeBeds through the SAME helper tryBirth uses, so the two
+      // arrival paths cannot disagree about how many beds are spare.
+      nomadGate: () => ({
+        stock: stockpile.toJSON(),
+        weights: MEAL_WEIGHTS,
+        population: ctx.workers.length + pending.arrivals.length,
+        freeBeds: spareBeds(ctx.shelters, ctx.workers.length, pending),
+        tick: clock.tick,
+        lastRecruitTick: clock.lastRecruitTick,
+        cooldown: BALANCE.recruitCooldownTicks,
+        perHead: BALANCE.nomadFoodPerHead,
+      }),
     };
     for (const command of queue.drain()) dispatchCommand(ctx, command);
     const dropped = queue.takeDropped();

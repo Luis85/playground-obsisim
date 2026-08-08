@@ -113,7 +113,15 @@ export class SimClock {
    * is: without it, reopening a save written just after a birth either grants
    * a free extra birth or blocks one that is due, so save-and-reload would
    * change population growth. Starts a full cooldown in the past, so a fresh
-   * colony's first birth is gated on food and beds rather than on patience. */
+   * colony's first birth is gated on food and beds rather than on patience.
+   *
+   * Suppressed for the same reason PendingChanges.clear is: every reader
+   * reaches it through an interface-typed value (PopulationContext.clock) or
+   * through sim-ecs's ISystemResource intersection in SnapshotSystem, neither
+   * of which fallow's static analysis traces back to this class. Scoped to
+   * this one declaration rather than added to .fallowrc.json's
+   * usedClassMembers, which matches a bare name across the whole repo. */
+  // fallow-ignore-next-line unused-class-member
   lastBirthTick = -BALANCE.birthCooldownTicks;
 }
 

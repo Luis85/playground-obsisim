@@ -1,6 +1,8 @@
 import type { IEntity } from 'sim-ecs';
-import { lifespanFor, stageOf } from '../../shared/population';
+import { birthBlocker, lifespanFor, stageOf } from '../../shared/population';
 import { BALANCE } from '../content/balance';
+import { MEAL_WEIGHTS } from '../content/resources';
+import { colonistComponents } from '../spawn';
 import { Age, Colonist, HaulTrip, Home, Hunger, JobAssignment } from '../components';
 import type { IdCounter, NoticeBoard, PendingChanges, RemovalLedger, SimClock, Stockpile } from '../resources';
 
@@ -210,4 +212,122 @@ export function rehome(ctx: PopulationContext): void {
   for (const row of rows) {
     if (!claimOpening(row, openings)) return; // no beds left: the rest stay homeless
   }
+}
+
+/**
+ * Beds nobody living has a claim on.
+ *
+ * Deliberately does NOT ask which house has room. That question depends on
+ * how far the homing phase has got, and the two systems that create colonists
+ * sit on opposite sides of it — `CommandSystem` runs before homing, `tryBirth`
+ * after — so an occupancy-based answer is right for one caller and wrong for
+ * the other. Three separate defects were found in this one interaction while
+ * the plan was under review, each in the fix for the last, and all three were
+ * routes to the same broken state.
+ *
+ * Every living colonist needs exactly one bed and beds are interchangeable, so
+ * `total − population − pendingArrivals` is homing-independent and therefore
+ * correct from either side. The scenario that broke the occupancy version: a
+ * house becomes visible with 4 beds and 4 already-homeless colonists; an
+ * occupancy view sees 4 empty beds and admits a nomad, then rehome houses all
+ * 4 and five colonists reference a four-bed house. Here, 4 − 4 − 0 = 0.
+ *
+ * Named `spareBeds`, not `freeBeds`: the private `freeBeds` above answers the
+ * per-shelter question that rehome — and only rehome — legitimately needs.
+ */
+export function spareBeds(shelters: readonly ShelterRow[], population: number, pending: PendingChanges): number {
+  const total = shelters
+    .filter((s) => !s.relocating && !pending.demolished.has(s.id))
+    .reduce((sum, s) => sum + s.beds, 0);
+  return total - population - pending.arrivals.length;
+}
+
+/**
+ * Which house an arrival moves into, given what is already spoken for.
+ * Ascending id, like every other assignment order here, so it is
+ * reproducible. Only ever called once `spareBeds` has confirmed one exists.
+ */
+export function shelterWithRoom(
+  shelters: readonly ShelterRow[],
+  claimed: ReadonlyMap<number, number>,
+  pending: PendingChanges,
+): number | null {
+  // Pending arrivals are folded in HERE rather than at each call site. Two
+  // recruitWorker commands can drain in one tick and CommandContext.occupancy()
+  // cannot see the first nomad, so a caller passing only visible occupancy
+  // would hand both the same lowest-id house and overfill it while another
+  // still had room. Counting them in the one function that answers "which
+  // house has room" means no caller can forget.
+  const spokenFor = new Map(claimed);
+  for (const { home } of pending.arrivals) {
+    if (home.buildingId !== null) spokenFor.set(home.buildingId, (spokenFor.get(home.buildingId) ?? 0) + 1);
+  }
+  for (const shelter of [...shelters].sort((a, b) => a.id - b.id)) {
+    // Both exclusions, or a nomad drained on the same tick as a demolition
+    // gets a bed in a house that vanishes at the sync.
+    if (shelter.relocating || pending.demolished.has(shelter.id)) continue;
+    if ((spokenFor.get(shelter.id) ?? 0) < shelter.beds) return shelter.id;
+  }
+  return null;
+}
+
+/**
+ * Spawn a colonist who arrives THIS tick, and record them on the pending
+ * ledger — one function because doing half of it is the bug the ledger exists
+ * to prevent. An arrival is invisible to every query until the post-step sync,
+ * so a spawn without the ledger push leaves later phases counting a bed as
+ * free that is already taken, and a demolition later in the drain unable to
+ * evict a colonist it cannot see.
+ *
+ * The LIVE `Home` goes on the ledger, not a copied id, so that demolition can
+ * null it in place.
+ */
+export function spawnArrival(
+  ctx: Pick<PopulationContext, 'spawn' | 'pending'>,
+  spec: Parameters<typeof colonistComponents>[0],
+): void {
+  const components = colonistComponents(spec);
+  ctx.spawn(...components);
+  ctx.pending.arrivals.push({ home: components.find((c): c is Home => c instanceof Home)! });
+}
+
+/**
+ * A child, when the colony can shelter and feed one. Runs LAST, after homing,
+ * so "a free bed exists" and "nobody is homeless" are the same condition.
+ */
+export function tryBirth(ctx: PopulationContext): void {
+  if (ctx.ids.exhausted()) return; // silent: this is not a player action to refuse
+  const rows = livingRows(ctx);
+  // A nomad welcomed earlier this tick holds a bed and eats, but is not in
+  // `rows` yet — count them, or both arrivals take the same last bed.
+  const blocker = birthBlocker({
+    stock: ctx.stockpile.toJSON(),
+    weights: MEAL_WEIGHTS,
+    population: rows.length + ctx.pending.arrivals.length,
+    adults: rows.filter((row) => stageOf(row.age.ticks, BALANCE.lifeBands) === 'adult').length,
+    // The OBJECT, not a count: spareBeds reads `.demolished` as well as
+    // `.arrivals`, and passing a number back would silently drop the
+    // demolition exclusion — the "changed at one site of N" failure this
+    // signature exists to prevent.
+    freeBeds: spareBeds(ctx.shelters, rows.length, ctx.pending),
+    tick: ctx.clock.tick,
+    lastBirthTick: ctx.clock.lastBirthTick,
+    cooldown: BALANCE.birthCooldownTicks,
+    perHead: BALANCE.birthFoodPerHead,
+  });
+  if (blocker !== null) return;
+  ctx.clock.lastBirthTick = ctx.clock.tick;
+  const id = ctx.ids.take();
+  // Born INTO a bed. Homing already ran this tick, so a child spawned without
+  // a homeId would spend its first tick homeless while the bed the gate just
+  // counted against still read free.
+  const claimed = new Map<number, number>();
+  for (const row of rows) {
+    if (row.home.buildingId !== null) claimed.set(row.home.buildingId, (claimed.get(row.home.buildingId) ?? 0) + 1);
+  }
+  // No pending merge here: shelterWithRoom folds ctx.pending.arrivals in
+  // itself, and doing it twice would double-count this tick's nomad.
+  const homeId = shelterWithRoom(ctx.shelters, claimed, ctx.pending);
+  spawnArrival(ctx, { id, ageTicks: 0, homeId });
+  ctx.notices.succeed(`Colonist #${id} was born.`);
 }

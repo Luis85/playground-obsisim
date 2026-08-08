@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { IRuntimeWorld } from 'sim-ecs';
 import { Building, Colonist, HaulTrip, JobAssignment } from '../../../src/engine/components';
-import { IdCounter, SnapshotStore, Stockpile } from '../../../src/engine/resources';
+import { IdCounter, SimClock, SnapshotStore, Stockpile } from '../../../src/engine/resources';
 import {
   ALL_SYSTEMS, buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist,
 } from '../../../src/engine/world';
 import { BALANCE } from '../../../src/engine/content/balance';
+import { autoPlaceSequence } from '../../../src/shared/placement';
 import { lifespanFor } from '../../../src/shared/population';
 import type { ResourceId } from '../../../src/shared/content-types';
 import { enqueue, stepTick } from '../fixtures';
@@ -469,4 +470,103 @@ describe('PopulationSystem — homing', () => {
     await stepTick(world);
     expect(snap().buildings.find((b) => b.id === buildingId)!.buffered).toBe(1);
   });
+});
+
+describe('PopulationSystem — births and the nomad gate', () => {
+  /** A colony that can feed and shelter arrivals; `houses` four-bed shelters. */
+  async function fedColony(houses: number, colonists: number, bread = 5000) {
+    const save = { ...initialSave(), workers: [], buildings: [], stockpile: { bread }, nextEntityId: 100 };
+    const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
+    const ids = getPrepResource(prep, IdCounter);
+    const spots = autoPlaceSequence(save.map);
+    const houseIds: number[] = [];
+    for (let i = 0; i < houses; i++) {
+      const at = spots.next().value!;
+      const h = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: at.col, row: at.row, relocatingTicks: 0 });
+      houseIds.push(h.getComponent(Building)!.id);
+    }
+    for (let i = 0; i < colonists; i++) {
+      spawnColonist(prep, ids, { id: i + 1, ageTicks: BALANCE.lifeBands.matureTicks, homeId: houseIds[0] ?? null });
+    }
+    const world = await prep.prepareRun();
+    world.getResource(SimClock).tick = 1000;  // both cooldowns long expired
+    return { world, houseIds, snap: () => world.getResource(SnapshotStore).latest! };
+  }
+
+  it('births a child when fed and housed, then holds off for the cooldown', async () => {
+    const { world, snap } = await fedColony(1, 2);
+    const count = () => snap().colonists.length;
+
+    await stepTick(world);
+    expect(count()).toBe(3);                    // tick 1: homing, then a birth
+    for (let i = 0; i < BALANCE.birthCooldownTicks - 1; i++) await stepTick(world);
+    expect(count()).toBe(3);                    // still on cooldown, 4th bed free
+    await stepTick(world);
+    expect(count()).toBe(4);                    // cooldown expired, bed still free
+    await stepTick(world);
+    expect(count()).toBe(4);                    // beds full now: noBed, not cooldown
+  });
+
+  it('will not birth into a colony that cannot feed the child', async () => {
+    // Beds and parents both fine; only the store is short. Discriminating
+    // against the test above, which differs in this one input.
+    const { world, snap } = await fedColony(1, 2, 0);
+    await stepTick(world);
+    expect(snap().colonists).toHaveLength(2);
+  });
+
+  it('will not birth from a single adult', async () => {
+    const { world, snap } = await fedColony(1, 1);
+    await stepTick(world);
+    expect(snap().colonists).toHaveLength(1);
+  });
+
+  it('a nomad and a birth cannot take the same last bed', async () => {
+    // One house, 4 beds, 3 colonists: exactly one bed free, with food and both
+    // cooldowns clear so ONLY the bed is in contention. CommandSystem runs
+    // before PopulationSystem and its nomad is invisible to every query until
+    // the post-step sync, so without the pending ledger tryBirth would hand a
+    // child the very bed the nomad just took.
+    const { world, snap } = await fedColony(1, 3);
+    enqueue(world, { type: 'recruitWorker' });
+    await stepTick(world);
+
+    expect(snap().colonists).toHaveLength(4);   // the nomad, and NOT also a child
+    expect(snap().homeless).toBe(0);
+    expect(snap().beds.occupied).toBeLessThanOrEqual(snap().beds.total);
+  });
+
+  it('a nomad welcomed before a demolition does not keep a home in the demolished house', async () => {
+    // Command ORDER is the point: recruitWorker spawns a colonist CommandSystem's
+    // own worker query cannot see, so the demolition drained moments later walks
+    // right past it. Left unevicted, the tick's autosave writes a homeId naming a
+    // building that no longer exists.
+    const { world, houseIds, snap } = await fedColony(1, 1);
+    enqueue(world, { type: 'recruitWorker' }, { type: 'demolishBuilding', buildingId: houseIds[0] });
+    await stepTick(world);
+
+    expect(snap().buildings.find((b) => b.id === houseIds[0])).toBeUndefined();  // the house really went
+    expect(snap().colonists).toHaveLength(2);                                    // the nomad really arrived
+    for (const c of snap().colonists) expect(c.homeId).toBeNull();               // and NOBODY points at it
+  });
+
+  it('never ends a tick with more colonists housed than beds', async () => {
+    // Property, not scenario: the bed-contention defects found in review were
+    // several routes to one broken state, and a case-by-case test would only
+    // have caught whichever one it was written for.
+    const { world } = await fedColony(3, 4, 100_000);
+    for (let t = 0; t < 300; t++) {
+      if (t % 7 === 0) enqueue(world, { type: 'recruitWorker' });
+      await stepTick(world);
+      const snap = world.getResource(SnapshotStore).latest!;
+      expect(snap.beds.occupied).toBeLessThanOrEqual(snap.beds.total);
+      const perHouse = new Map<number, number>();
+      for (const c of snap.colonists) {
+        if (c.homeId !== null) perHouse.set(c.homeId, (perHouse.get(c.homeId) ?? 0) + 1);
+      }
+      for (const house of snap.buildings.filter((b) => b.beds > 0)) {
+        expect(perHouse.get(house.id) ?? 0).toBeLessThanOrEqual(house.beds);
+      }
+    }
+  }, 60000);
 });

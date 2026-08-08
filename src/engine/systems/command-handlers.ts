@@ -2,13 +2,14 @@ import type { IEntity } from 'sim-ecs';
 import type { Command } from '../../shared/commands';
 import type { ResourceId } from '../../shared/content-types';
 import { haulTicks } from '../../shared/haul';
-import type { LifeStage } from '../../shared/population';
+import { nomadBlocker, SALT, spreadFor, type LifeStage, type NomadGate, type PopulationBlocker } from '../../shared/population';
 import { autoPlacePosition, isTileBuildable, relocationTicks, type TileRef } from '../../shared/placement';
 import { BALANCE } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
 import { RESOURCES, RESOURCE_IDS } from '../content/resources';
 import { Building, HaulTrip, Home, JobAssignment, OutputBuffer, Position, Relocation, WorkerSlots } from '../components';
-import { buildingComponents, colonistComponents } from '../spawn';
+import { shelterWithRoom, spawnArrival, type ShelterRow } from './population-handlers';
+import { buildingComponents } from '../spawn';
 import type { IdCounter, NoticeBoard, PendingChanges, RemovalLedger, SimClock, Stockpile, WorldMap } from '../resources';
 
 // One small handler per command type (the complexity gate is why they live
@@ -56,6 +57,15 @@ export interface CommandContext {
   /** Buildings demolished earlier in this same drain: removal is deferred to
    * the post-step sync, so queries still see them — every lookup must not. */
   demolishedIds: Set<number>;
+  /** Shelters as the homing phase sees them, so the bed a nomad is given and
+   * the bed the gate counted come from one description. */
+  shelters: ShelterRow[];
+  /** Colonists per home building id. A function, not a value: a demolition
+   * earlier in the drain changes it. */
+  occupancy: () => Map<number, number>;
+  /** The nomad gate's inputs, built from the same rows — so the gate and the
+   * bed it then picks cannot disagree. */
+  nomadGate: () => NomadGate;
 }
 
 /** Occupancy truth for this drain: live rows plus this drain's own claims. */
@@ -119,22 +129,50 @@ export function handleConstructBuilding(ctx: CommandContext, command: Extract<Co
   ctx.notices.succeed(`Built a ${def.name}.`);
 }
 
+/** One message per gate, so the rejection the engine emits and the reason the
+ * button will show come from the same enumeration. */
+const NOMAD_REJECTIONS: Record<Exclude<PopulationBlocker, null>, string> = {
+  noBed: 'No free bed: build a house first.',
+  notEnoughFood: 'Not enough food stored to feed another colonist.',
+  cooldown: 'No one is passing through just yet.',
+  noParents: 'No one is passing through just yet.', // unreachable: nomadBlocker never returns it
+};
+
+/**
+ * Recruiting is now a nomad ARRIVING, gated on food and a bed (spec 2.7). It
+ * is the colony's recovery valve and deliberately also a trap: the food bar is
+ * higher than a birth's, so a colony that has starved itself cannot simply
+ * hire its way out.
+ */
 export function handleRecruitWorker(ctx: CommandContext): void {
   // Checked BEFORE the cooldown write: a refused recruit must not start it.
   if (ctx.ids.exhausted()) {
     ctx.notices.reject('Cannot create more entities: id space exhausted.');
     return;
   }
-  if (ctx.clock.tick < ctx.clock.lastRecruitTick + BALANCE.recruitCooldownTicks) {
-    ctx.notices.reject('Recruiting is still on cooldown.');
+  const blocker = nomadBlocker(ctx.nomadGate());
+  if (blocker !== null) {
+    ctx.notices.reject(NOMAD_REJECTIONS[blocker]);
     return;
   }
   ctx.clock.lastRecruitTick = ctx.clock.tick;
   const id = ctx.ids.take();
-  // Same shared list as the restore path — a worker recruited in play once
-  // shipped without HaulTrip and vanished from snapshots entirely (OBS-4-02).
-  ctx.spawn(...colonistComponents({ id }));
-  ctx.notices.succeed(`Recruited worker #${id}.`);
+  // Take the bed AND record the arrival. Both matter, for the same reason:
+  // this entity does not exist to any query until the post-step sync, so
+  // PopulationSystem — which runs later this very tick — would otherwise see
+  // the bed as free and let tryBirth hand it to a child as well. The tick
+  // would end with five colonists in four beds and the nomad homeless.
+  const homeId = shelterWithRoom(ctx.shelters, ctx.occupancy(), ctx.pending);
+  // spawnArrival, not a bare spawn: the same shared component list as the
+  // restore path (a worker recruited in play once shipped without HaulTrip and
+  // vanished from snapshots entirely — OBS-4-02), plus the pending-ledger push
+  // that lets a demolition later in this drain still evict them.
+  spawnArrival(ctx, {
+    id,
+    homeId,
+    ageTicks: BALANCE.nomadArrivalTicks + spreadFor(id, BALANCE.lifeBands.spreadTicks, SALT.arrivalAge),
+  });
+  ctx.notices.succeed(`Colonist #${id} joined the colony.`);
 }
 
 export function handleAssignWorker(ctx: CommandContext, command: Extract<Command, { type: 'assignWorker' }>): void {

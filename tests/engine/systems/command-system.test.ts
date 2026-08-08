@@ -49,6 +49,27 @@ async function setup(save: SaveGameV4 = initialSave()) {
   return { world, tick, dispatch, snapshot };
 }
 
+/**
+ * A colony that can actually take a nomad in: two houses (8 beds against 3
+ * founders) and food well past `nomadFoodPerHead`. Recruiting is gated on beds
+ * and food since Task 8, so a fixture that supplies neither can only ever test
+ * the rejection. Two houses, not one: a one-house colony has 4 - 3 = 1 spare
+ * bed, so the SECOND recruit below would be refused for want of a bed and the
+ * cooldown assertion would pass for the wrong reason.
+ */
+function saveThatCanHouseArrivals(): SaveGameV4 {
+  const base = initialSave();
+  return {
+    ...base,
+    buildings: [
+      { id: 90, defId: 'house', col: 5, row: 3, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 },
+      { id: 91, defId: 'house', col: 7, row: 3, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 },
+    ],
+    stockpile: { ...base.stockpile, bread: 5000 },
+    nextEntityId: 100,
+  };
+}
+
 // Relocation downtime is enforced by ProductionSystem, which the shared setup()
 // deliberately omits. Order matches ALL_SYSTEMS (buildColonyPrepWorld throws
 // otherwise).
@@ -88,18 +109,39 @@ describe('CommandSystem', () => {
     expect(snapshot().buildings).toHaveLength(0);
   });
 
-  it('recruits a worker and enforces the 30-tick cooldown', async () => {
-    const { tick, dispatch, snapshot } = await setup();
+  it('welcomes a nomad and enforces the 30-tick cooldown', async () => {
+    // Beds and food are both held far from their thresholds by the fixture, so
+    // the cooldown is the only gate in play — the same reason the balance
+    // harness seeds a berry stock to hold hunger neutral.
+    const { tick, dispatch, snapshot } = await setup(saveThatCanHouseArrivals());
     await dispatch({ type: 'recruitWorker' });
-    expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Recruited worker #4.' }]);
+    expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Colonist #100 joined the colony.' }]);
     await tick();
     expect(snapshot().population).toBe(4);
     await dispatch({ type: 'recruitWorker' }); // still on cooldown
-    expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'Recruiting is still on cooldown.' }]);
+    expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'No one is passing through just yet.' }]);
     for (let i = 0; i < 30; i++) await tick();
     await dispatch({ type: 'recruitWorker' });
     await tick();
     expect(snapshot().population).toBe(5);
+  });
+
+  it('refuses a nomad when there is nowhere to sleep, and says so', async () => {
+    // The discriminating half of the pair above: same command, same cooldown
+    // state, only the beds removed. initialSave() has no houses.
+    const { dispatch, snapshot } = await setup();
+    await dispatch({ type: 'recruitWorker' });
+    expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'No free bed: build a house first.' }]);
+    expect(snapshot().population).toBe(3);
+  });
+
+  it('refuses a nomad when the store cannot feed one', async () => {
+    // Beds available, food gone: the OTHER gate, named distinctly so a single
+    // catch-all rejection cannot satisfy both tests.
+    const { dispatch, snapshot } = await setup({ ...saveThatCanHouseArrivals(), stockpile: {} });
+    await dispatch({ type: 'recruitWorker' });
+    expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'Not enough food stored to feed another colonist.' }]);
+    expect(snapshot().population).toBe(3);
   });
 
   it('assigns and unassigns workers within slot limits', async () => {
@@ -681,7 +723,7 @@ describe('CommandSystem', () => {
   });
 
   it('a recruited worker carries the same components as a restored one', async () => {
-    const { world, tick, dispatch } = await setup();
+    const { world, tick, dispatch } = await setup(saveThatCanHouseArrivals());
     // The highest existing id, not just "the first worker found": entity
     // iteration order is not id-ordered, and comparing against an arbitrary
     // starting worker would let the id > before.id check below match another

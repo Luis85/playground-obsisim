@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { BALANCE } from '../../src/engine/content/balance';
+import { BALANCE, MAX_AGE_TICKS } from '../../src/engine/content/balance';
+import { lifespanFor } from '../../src/shared/population';
 import { RESOURCE_IDS } from '../../src/engine/content/resources';
 import { Building, Hunger, JobAssignment, Relocation, ToolCoverage, Colonist } from '../../src/engine/components';
 import { IdCounter, SimClock, SnapshotStore, Stockpile } from '../../src/engine/resources';
@@ -714,12 +715,12 @@ describe('isLoadableSave', () => {
   });
 });
 
-// Two states a save can arrive in that a BALANCE retune genuinely produces, so
-// the load principle clamps them instead of orphaning the save (contrast the
-// four reference rules above, which no engine version could write). Both are
-// repaired at LOAD rather than on the first tick: a restored engine starts
-// paused, so a repair that waits for tick 1 is a state the player looks at —
-// and acts on — for as long as they leave it there.
+// Three states a save can arrive in that a BALANCE retune genuinely produces,
+// so the load principle repairs them instead of orphaning the save (contrast
+// the four reference rules above, which no engine version could write). All
+// three are repaired at LOAD rather than on the first tick: a restored engine
+// starts paused, so a repair that waits for tick 1 is a state the player looks
+// at — and acts on — for as long as they leave it there.
 describe('balance-coupled states a save is repaired into, not rejected for', () => {
   // Well clear of the roster's ids below, so a fixture can add colonists
   // without ever colliding with it.
@@ -819,6 +820,62 @@ describe('balance-coupled states a save is repaired into, not rejected for', () 
     const seeded = world.getResource(SnapshotStore).latest!;
     expect(seeded.colonists[0].stage).toBe('elder'); // fixture precondition
     expect(seeded.colonists[0].hauling).toBe(false);
+  });
+
+  it('does not restore a colonist whose saved age has passed their OWN lifespan', async () => {
+    // The third instance of the same rule, and the one clampedAge cannot
+    // reach: it bounds a restored age to MAX_AGE_TICKS, the LONGEST lifespan
+    // current balance can draw, while each colonist's actual lifespan is drawn
+    // per id and lands anywhere below that. An age in between is a colonist
+    // the game's own rules have already killed — only a lifespan retune can
+    // produce it — so it is repaired, not rejected.
+    //
+    // Dropped, not clamped down to lifespan - 1. Keeping them is its own
+    // falsehood, and it does not even satisfy the principle: ageEveryone runs
+    // before resolveOldAge, so a colonist seeded at lifespan - 1 is still
+    // killed on tick 1 and the seeded snapshot still advertises someone the
+    // first tick removes.
+    const lifespan = lifespanFor(2, BALANCE.lifeBands);
+    expect(lifespan).toBeLessThan(MAX_AGE_TICKS); // fixture precondition: clampedAge lets this age through
+    const save = saveWith([{ ageTicks: lifespan }, {}]);
+    expect(isLoadableSave(save)).toBe(true); // accepted, then repaired — see above
+
+    const world = await createColonyWorld(save);
+    const seeded = world.getResource(SnapshotStore).latest!;
+    expect(seeded.colonists.map((c) => c.id)).toEqual([3]);
+    expect(seeded.population).toBe(1);
+    expect(seeded.demographics).toEqual({ children: 0, adults: 1, elders: 0 });
+
+    // The property that actually matters: the paused player's snapshot says
+    // the same thing the first tick does.
+    await stepTick(world);
+    const ticked = world.getResource(SnapshotStore).latest!;
+    expect(ticked.colonists.map((c) => c.id)).toEqual(seeded.colonists.map((c) => c.id));
+    expect(ticked.population).toBe(seeded.population);
+  });
+
+  it('does not let a colonist past their own lifespan hold a bed at load', async () => {
+    // Ordering, not just membership: the drop happens BEFORE the
+    // over-capacity eviction, or a colonist the rules have already killed
+    // occupies one of the four beds and displaces a living one — whom tick 1
+    // then rehomes into the bed the corpse vacated.
+    const save = saveWith([
+      { ageTicks: lifespanFor(2, BALANCE.lifeBands) },
+      ...Array.from({ length: BALANCE.houseBeds }, () => ({})),
+    ]);
+    expect(isLoadableSave(save)).toBe(true);
+
+    const world = await createColonyWorld(save);
+    const seeded = world.getResource(SnapshotStore).latest!;
+    expect(seeded.population).toBe(BALANCE.houseBeds);
+    expect(seeded.homeless).toBe(0); // the four living colonists fit exactly
+    expect(seeded.buildings.find((b) => b.beds > 0)!.occupants).toBe(BALANCE.houseBeds);
+
+    await stepTick(world);
+    const ticked = world.getResource(SnapshotStore).latest!;
+    expect(ticked.population).toBe(seeded.population);
+    expect(ticked.homeless).toBe(seeded.homeless);
+    expect(ticked.buildings.find((b) => b.beds > 0)!.occupants).toBe(seeded.buildings.find((b) => b.beds > 0)!.occupants);
   });
 
   it('leaves a working adult exactly as the save wrote them', async () => {

@@ -1,5 +1,5 @@
 import type { SavedColonist, SaveGameV5 } from '../shared/save';
-import { stageOf } from '../shared/population';
+import { lifespanFor, stageOf } from '../shared/population';
 import { BALANCE } from './content/balance';
 import { BUILDINGS } from './content/buildings';
 import { clampedAge, clampedHunger, clampedStarving, clampedToolTicks } from './spawn';
@@ -15,8 +15,8 @@ import { clampedAge, clampedHunger, clampedStarving, clampedToolTicks } from './
  * the player looks at until they unpause, at which point the first tick
  * silently changes it.
  *
- * Repairing rather than rejecting is the load principle (spec 4.5): both
- * states below are ones a BALANCE retune genuinely produces, unlike the
+ * Repairing rather than rejecting is the load principle (spec 4.5): every
+ * state below is one a BALANCE retune genuinely produces, unlike the
  * reference rules in save-guard.ts, which no engine version could write.
  *
  * Deliberately NOT folded into `colonistComponents`: that is also the LIVE
@@ -25,8 +25,13 @@ import { clampedAge, clampedHunger, clampedStarving, clampedToolTicks } from './
  * `standDownNonAdults` clears it — would become vacuous rather than fail.
  */
 export function restoredColonists(save: SaveGameV5): SavedColonist[] {
-  const evicted = overCapacityEvictions(save);
-  return save.colonists.map((saved) => {
+  // Before the bed count, not after: a colonist the rules have already killed
+  // must not hold one of the beds `overCapacityEvictions` is handing out, or
+  // the repair for one balance retune displaces a living colonist on behalf of
+  // a dead one — and tick 1 would rehome them into the bed it frees.
+  const living = save.colonists.filter(hasLifeLeft);
+  const evicted = overCapacityEvictions(living, save.buildings);
+  return living.map((saved) => {
     const ageTicks = clampedAge(saved.ageTicks);
     // Raise matureTicks in a retune and a save restores a colonist who is now
     // a CHILD but still carries a job; lower retireTicks (or clamp an
@@ -50,6 +55,46 @@ export function restoredColonists(save: SaveGameV5): SavedColonist[] {
 }
 
 /**
+ * Whether this saved colonist is someone the current rules still consider
+ * alive — the third balance-coupled repair, and the only one that removes the
+ * record rather than mending a field on it.
+ *
+ * `clampedAge` bounds a restored age to MAX_AGE_TICKS, the LONGEST lifespan
+ * current balance can draw (`lifespanTicks + spreadTicks`). But a colonist's
+ * actual lifespan is drawn per id by `lifespanFor` and lands anywhere in
+ * `[lifespanTicks - spreadTicks, lifespanTicks + spreadTicks]`, so an age
+ * between their own draw and MAX_AGE_TICKS survives the clamp and restores
+ * them ALIVE — for `resolveOldAge` to kill on the first tick. Only a lifespan
+ * (or spread) retune downward can write such a record, which is what makes it
+ * a repair rather than a rejection, exactly like the two below.
+ *
+ * DROPPED, not clamped down to `lifespan - 1`. Two reasons:
+ *
+ * 1. Clamping does not even satisfy the principle. `ageEveryone` runs BEFORE
+ *    `resolveOldAge` in the same tick, so a colonist seeded at `lifespan - 1`
+ *    turns `lifespan` on tick 1 and dies anyway — the seeded snapshot would
+ *    still advertise someone the first tick removes, which is the whole thing
+ *    this module exists to prevent.
+ * 2. By the game's own rules they are dead. An age is not a balance-coupled
+ *    magnitude like hunger or tool wear, where a smaller number is the honest
+ *    current-balance reading of the same fact; here the fact itself — that
+ *    this person is still in the colony — is what the retune revoked.
+ *
+ * Nothing downstream counts on the roster's length: `nextEntityId` is restored
+ * from the save's own header (so ids never shift or collide), and population,
+ * demographics, occupancy and meals-per-head are all derived from the roster
+ * this function returns, by both restore paths.
+ *
+ * A NaN age (only reachable through `createColonyWorld` — `isLoadableSave`
+ * refuses the save outright) fails this comparison and is dropped too, which
+ * is the same answer `resolveOldAge`'s identical comparison would reach on
+ * tick 1.
+ */
+function hasLifeLeft(saved: SavedColonist): boolean {
+  return clampedAge(saved.ageTicks) < lifespanFor(saved.id, BALANCE.lifeBands);
+}
+
+/**
  * Colonists a house cannot actually sleep, by id.
  *
  * A save with five colonists in a four-bed house is exactly what a `houseBeds`
@@ -64,9 +109,12 @@ export function restoredColonists(save: SaveGameV5): SavedColonist[] {
  * a RELOCATING shelter is left alone for exactly the same reason — see the
  * bed map below.
  */
-function overCapacityEvictions(save: SaveGameV5): ReadonlySet<number> {
+function overCapacityEvictions(
+  colonists: readonly SavedColonist[],
+  buildings: SaveGameV5['buildings'],
+): ReadonlySet<number> {
   const beds = new Map<number, number>();
-  for (const b of save.buildings) {
+  for (const b of buildings) {
     if (!Object.hasOwn(BUILDINGS, b.defId)) continue;
     const { beds: count } = BUILDINGS[b.defId];
     // Relocating shelters are excluded, as they already are from `spareBeds`,
@@ -83,7 +131,7 @@ function overCapacityEvictions(save: SaveGameV5): ReadonlySet<number> {
     if (count > 0 && b.relocatingTicks === 0) beds.set(b.id, count);
   }
   const evicted = new Set<number>();
-  for (const c of [...save.colonists].sort((a, b) => a.id - b.id)) {
+  for (const c of [...colonists].sort((a, b) => a.id - b.id)) {
     if (c.homeId === null) continue;
     const remaining = beds.get(c.homeId);
     if (remaining === undefined) continue;

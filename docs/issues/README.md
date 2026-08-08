@@ -35,6 +35,13 @@ When an issue is resolved, set `status: resolved`, add `resolved: <date>` and a
 line naming the commit. Keep the note — the reasoning is worth more than the
 folder being tidy.
 
+## Open — increment 6 (survival & population)
+
+| id | severity | title |
+| --- | --- | --- |
+| OBS-6-01 | minor | [A demolished tile is still occupied for the rest of the drain](2026-08-08-a-demolished-tile-is-still-occupied-for-the-rest-of-the-drain.md) |
+| OBS-6-02 | important | [Two colonists dying on the same tick freeze the whole simulation for a tick each](2026-08-08-simultaneous-deaths-freeze-the-simulation.md) |
+
 ## Open — increment 5 (validated balance)
 
 | id | severity | title |

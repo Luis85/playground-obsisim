@@ -3,7 +3,7 @@ import { SimClock, SnapshotStore } from '../../src/engine/resources';
 import { createColonyWorld, initialSave } from '../../src/engine/world';
 import { BALANCE } from '../../src/engine/content/balance';
 import { enqueue as dispatch } from './fixtures';
-import type { SaveGameV4 } from '../../src/shared/save';
+import type { SaveGameV5 } from '../../src/shared/save';
 
 async function run(world: Awaited<ReturnType<typeof createColonyWorld>>, ticks: number) {
   const clock = world.getResource(SimClock);
@@ -35,15 +35,22 @@ async function run(world: Awaited<ReturnType<typeof createColonyWorld>>, ticks: 
  */
 const HOUSE_TILES = [{ col: 5, row: 1 }, { col: 7, row: 1 }, { col: 9, row: 1 }, { col: 11, row: 1 }, { col: 5, row: 3 }];
 
-function richSave(): SaveGameV4 {
+function richSave(): SaveGameV5 {
   const save = initialSave();
   save.stockpile = { wood: 500, planks: 200, berries: 200 };
-  save.workers = Array.from({ length: 18 }, (_, i) => ({ id: i + 1, hunger: 0, buildingId: null, toolTicks: 0, hauling: false }));
   // 5 houses x BALANCE.houseBeds is 20 beds for 18 colonists, so nobody is
   // left homeless by a bed shortage this fixture never meant to create.
+  // These REPLACE initialSave()'s starter house: the tiles below are chosen to
+  // dodge the plot sequence, and keeping the starter house would put a sixth
+  // house on the first plot tile the seven constructions below expect.
   save.buildings = HOUSE_TILES.map((tile, i) => ({
     id: 19 + i, defId: 'house' as const, col: tile.col, row: tile.row,
     progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0,
+  }));
+  save.colonists = Array.from({ length: 18 }, (_, i) => ({
+    id: i + 1, hunger: 0, buildingId: null, toolTicks: 0, hauling: false,
+    ageTicks: BALANCE.startingAgeTicks, homeId: save.buildings[Math.floor(i / BALANCE.houseBeds)].id,
+    starvingTicks: 0,
   }));
   save.nextEntityId = 19 + HOUSE_TILES.length;
   return save;
@@ -159,6 +166,6 @@ describe('full colony integration', () => {
     expect(snapshot.stockpile.wood.stock).toBe(30);
     expect(snapshot.population).toBe(3);
     expect(snapshot.idleAdults).toBe(3);
-    expect(snapshot.buildings).toHaveLength(0);
+    expect(snapshot.buildings.map((b) => b.defId)).toEqual(['house']); // the starter house, and nothing else
   });
 });

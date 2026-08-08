@@ -36,7 +36,8 @@ async function setup(
   { houseHaulers = true }: { houseHaulers?: boolean } = {},
 ) {
   const save = initialSave();
-  save.workers = [];
+  save.colonists = [];
+  save.buildings = [];   // no starter house: this fixture builds its own world
   save.stockpile = {};
   const prep = buildColonyPrepWorld({ save, systems: [...systemsBefore, HaulSystem] });
   const ids = getPrepResource(prep, IdCounter);
@@ -307,7 +308,8 @@ describe('HaulSystem', () => {
 
   it('ignores workers who are not haulers', async () => {
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
     save.stockpile = {};
     const prep = buildColonyPrepWorld({ save, systems: [HaulSystem] });
     const ids = getPrepResource(prep, IdCounter);
@@ -382,7 +384,8 @@ describe('HaulSystem lifecycle', () => {
     // claim map is rebuilt from live components every tick rather than being
     // remembered, so a hauler promoted mid-walk must see the first one's claim.
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
     save.stockpile = {};
     const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, HaulSystem] });
     const ids = getPrepResource(prep, IdCounter);
@@ -415,7 +418,8 @@ describe('HaulSystem lifecycle', () => {
     // reserving the flat 6 reports the whole buffer spoken for, and the
     // promoted hauler stays at the camp while a unit sits at the building.
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
     save.stockpile = {};
     const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, HaulSystem] });
     const ids = getPrepResource(prep, IdCounter);
@@ -443,7 +447,7 @@ describe('HaulSystem lifecycle', () => {
     // a backlog worth claiming — so an attempt to persist trip state, or a
     // restore that carried one across timelines, fails here.
     const save = initialSave();
-    save.workers = save.workers.map((worker) => ({ ...worker, hauling: true }));
+    save.colonists = save.colonists.map((worker) => ({ ...worker, hauling: true }));
     save.buildings = [{ id: 10, defId: 'forester', progress: 0, batchActive: false, col: 5, row: 4, buffer: { wood: 9 }, relocatingTicks: 0 }];
     save.nextEntityId = 11;
     const world = await createColonyWorld(save);
@@ -451,7 +455,7 @@ describe('HaulSystem lifecycle', () => {
     const trips = [...world.getEntities()]
       .filter((entity) => entity.getComponent(Colonist) !== undefined)
       .map((entity) => entity.getComponent(HaulTrip)!);
-    expect(trips).toHaveLength(save.workers.length);
+    expect(trips).toHaveLength(save.colonists.length);
     expect(trips.every((t) => t.phase === 'idle' && t.targetId === null && t.ticksLeft === 0 && t.amount === 0)).toBe(true);
   });
 });

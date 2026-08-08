@@ -1,7 +1,7 @@
 import { createSystem, ReadResource } from 'sim-ecs';
 import type { IPreptimeWorld } from 'sim-ecs';
 import type { BuildingDefId, ResourceId } from '../../src/shared/content-types';
-import type { SaveGameV4 } from '../../src/shared/save';
+import type { SaveGameV5 } from '../../src/shared/save';
 import { haulTicks } from '../../src/shared/haul';
 import { autoPlacePosition, type TileRef, type WorldMapSize } from '../../src/shared/placement';
 import { BALANCE } from '../../src/engine/content/balance';
@@ -309,9 +309,17 @@ export async function runScenario(scenario: Scenario): Promise<BalanceResult> {
   // `haulers` is not destructured here: populateColony owns every use of it.
   const { defId, col, row, crew, ticks, resource, moveTo } = scenario;
   const seededStockpile = Object.fromEntries(SEEDED_RESOURCE_IDS.map((id): [ResourceId, number] => [id, FED]));
-  const save: SaveGameV4 = {
+  const save: SaveGameV5 = {
     ...initialSave(),
-    workers: [],
+    // Both, and for different reasons. `colonists` because v5 renamed the
+    // roster key — clearing `workers` would leave the real array untouched.
+    // `buildings` because initialSave() now ships a starter house, whose id
+    // (1, which `nextEntityId: 1` would mint again) and tile (the first plot,
+    // which campAdjacentFreeTile does not know to avoid) would both collide
+    // with what this harness places below. Either collision corrupts the
+    // distance and relocation sweeps silently.
+    colonists: [],
+    buildings: [],
     stockpile: seededStockpile as Partial<Record<ResourceId, number>>,
     nextEntityId: 1,
   };

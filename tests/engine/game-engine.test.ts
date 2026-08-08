@@ -15,22 +15,27 @@ import { HaulTrip } from '../../src/engine/components';
 import { Stockpile } from '../../src/engine/resources';
 
 const refreshMock = vi.mocked(worldModule.refreshEntitySections);
-import type { SaveGameV4 } from '../../src/shared/save';
+import type { SaveGameV5 } from '../../src/shared/save';
 import { MAX_SAVED_COUNTER } from '../../src/shared/save';
+
+/** The forester scriptedRun builds: the starter house holds id 1 and the
+ * founders 2-4, so the first thing constructed gets id 5. */
+const FORESTER_ID = 5;
 
 async function steps(engine: GameEngine, n: number) {
   for (let i = 0; i < n; i++) await engine.stepOnce();
 }
 
 /** Deterministic scripted session used by both determinism tests. */
-async function scriptedRun(ticks: number, save?: SaveGameV4): Promise<GameEngine> {
+async function scriptedRun(ticks: number, save?: SaveGameV5): Promise<GameEngine> {
   const engine = await GameEngine.create(save ?? null);
   if (!save) {
     engine.dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
     await engine.stepOnce();
-    // ids: workers 1-3 spawned first, the constructed forester gets id 4
-    engine.dispatch({ type: 'assignWorker', buildingId: 4 });
-    engine.dispatch({ type: 'assignWorker', buildingId: 4 });
+    // ids: the starter house is 1 and the founders 2-4, so the constructed
+    // forester gets id 5
+    engine.dispatch({ type: 'assignWorker', buildingId: FORESTER_ID });
+    engine.dispatch({ type: 'assignWorker', buildingId: FORESTER_ID });
   }
   await steps(engine, ticks);
   return engine;
@@ -89,8 +94,9 @@ describe('GameEngine', () => {
     await steps(engine, 99);
     engine.dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
     await engine.stepOnce(); // tick 100 -> autosave fires
-    const save: SaveGameV4 = autosave.mock.calls[0][0];
-    expect(save.buildings).toEqual([{ id: 4, defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, buffer: {}, relocatingTicks: 0 }]);
+    const save: SaveGameV5 = autosave.mock.calls[0][0];
+    expect(save.buildings.find((b) => b.id === FORESTER_ID))
+      .toEqual({ id: FORESTER_ID, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0 });
     expect(save.stockpile.wood).toBe(20); // cost paid AND building present
   });
 
@@ -139,7 +145,8 @@ describe('GameEngine', () => {
     engine.dispatch({ type: 'constructBuilding', buildingDefId: 'forester' }); // paused: no tick runs
     await engine.flush(); // runs one final tick to process the queue
     const save = engine.serialize();
-    expect(save.buildings).toEqual([{ id: 4, defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, buffer: {}, relocatingTicks: 0 }]);
+    expect(save.buildings.find((b) => b.id === FORESTER_ID))
+      .toEqual({ id: FORESTER_ID, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0 });
     expect(save.stockpile.wood).toBe(20); // cost paid AND building present
     await engine.flush(); // empty queue: no extra tick
     expect(engine.serialize().tick).toBe(1);
@@ -152,15 +159,19 @@ describe('GameEngine', () => {
   it('serializes entities in ascending id order regardless of spawn order', async () => {
     const save = initialSave();
     save.buildings = [
-      { id: 5, defId: 'sawmill', progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0 },
-      { id: 4, defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, buffer: {}, relocatingTicks: 0 },
+      { id: 6, defId: 'sawmill', progress: 0, batchActive: false, col: 8, row: 1, buffer: {}, relocatingTicks: 0 },
+      { id: 5, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0 },
+      ...initialSave().buildings, // the starter house, id 1, listed LAST on purpose
     ];
-    save.workers = [3, 1, 2].map((id) => ({ id, hunger: 0, buildingId: null, toolTicks: 0, hauling: false }));
-    save.nextEntityId = 6;
+    save.colonists = [4, 2, 3].map((id) => ({
+      id, hunger: 0, buildingId: null, toolTicks: 0, hauling: false,
+      ageTicks: 2500, homeId: 1, starvingTicks: 0,
+    }));
+    save.nextEntityId = 7;
     const engine = await GameEngine.create(save);
     const out = engine.serialize();
-    expect(out.buildings.map((b) => b.id)).toEqual([4, 5]);
-    expect(out.workers.map((w) => w.id)).toEqual([1, 2, 3]);
+    expect(out.buildings.map((b) => b.id)).toEqual([1, 5, 6]);
+    expect(out.colonists.map((c) => c.id)).toEqual([2, 3, 4]);
   });
 
   // Killer test for flush()'s `await this.settle()` (increment-1 review:
@@ -193,7 +204,7 @@ describe('GameEngine', () => {
     await inFlight;
 
     const out = engine.serialize();
-    expect(out.buildings.map((b) => b.defId)).toEqual(['forester', 'gatherersHut']);
+    expect(out.buildings.map((b) => b.defId)).toEqual(['house', 'forester', 'gatherersHut']);
     expect(out.tick).toBe(2); // the in-flight tick plus flush's own
   });
 
@@ -201,8 +212,8 @@ describe('GameEngine', () => {
     const engine = await GameEngine.create();
     engine.dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
     await engine.stepOnce(); // paused manual step: no follow-up tick will come
-    expect(engine.snapshot!.buildings).toHaveLength(1);
-    expect(engine.snapshot!.buildings[0].defId).toBe('forester');
+    expect(engine.snapshot!.buildings).toHaveLength(2); // the starter house and the new forester
+    expect(engine.snapshot!.buildings[1].defId).toBe('forester');
     expect(engine.snapshot!.stockpile.wood.stock).toBe(20);
   });
 
@@ -213,12 +224,12 @@ describe('GameEngine', () => {
     const save = engine.serialize();
 
     const restored = await GameEngine.create(save);
-    expect(restored.snapshot!.colonists.map((w) => w.id).sort((a, b) => a - b)).toEqual([1, 2, 3]);
-    expect(restored.snapshot!.buildings.map((b) => b.id)).toEqual([4]);
+    expect(restored.snapshot!.colonists.map((c) => c.id).sort((a, b) => a - b)).toEqual([2, 3, 4]);
+    expect(restored.snapshot!.buildings.map((b) => b.id)).toEqual([1, FORESTER_ID]);
 
     restored.dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
     await restored.stepOnce();
-    expect(restored.snapshot!.buildings.map((b) => b.id).sort((a, b) => a - b)).toEqual([4, 5]);
+    expect(restored.snapshot!.buildings.map((b) => b.id).sort((a, b) => a - b)).toEqual([1, 5, 6]);
   });
 
   it('a thrown step captures the error and pauses, without crashing the caller', async () => {
@@ -252,7 +263,7 @@ describe('GameEngine', () => {
     await engine.stepOnce();
     expect(refreshMock).toHaveBeenCalledTimes(1); // creating tick: refreshed
     // and the building must be visible on ITS OWN tick, not one later
-    expect(engine.snapshot!.buildings).toHaveLength(1);
+    expect(engine.snapshot!.buildings).toHaveLength(2);
   });
 
   it('a demolishing tick refreshes the published snapshot immediately', async () => {
@@ -260,13 +271,13 @@ describe('GameEngine', () => {
     engine.dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
     await engine.stepOnce();
     await engine.stepOnce();
-    const buildingId = engine.snapshot!.buildings[0].id;
+    const buildingId = engine.snapshot!.buildings.find((b) => b.defId === 'forester')!.id;
     engine.dispatch({ type: 'demolishBuilding', buildingId });
     // Removal consumes no id, so without the RemovalLedger flag the
     // id-delta-gated refresh would skip and the demolished building would
     // linger in the published snapshot until the next id-consuming tick.
     await engine.stepOnce();
-    expect(engine.snapshot!.buildings).toHaveLength(0);
+    expect(engine.snapshot!.buildings.map((b) => b.defId)).toEqual(['house']);
   });
 
   it('banks a hauler mid-trip load into the saved stockpile without touching the live world', async () => {

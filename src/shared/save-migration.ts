@@ -1,6 +1,10 @@
-import type { SaveGameV1, SaveGameV2, SaveGameV3, SaveGameV4 } from './save';
-import { isSaveGameV1, isSaveGameV2, isSaveGameV3, isSaveGameV4, isSaveGameV5, LATEST_SAVE_VERSION } from './save';
-import { autoPlaceSequence, mapThatFits } from './placement';
+import type { SaveGameV1, SaveGameV2, SaveGameV3, SaveGameV4, SaveGameV5, SavedColonist, SavedColonistV4 } from './save';
+import {
+  isSaveGameV1, isSaveGameV2, isSaveGameV3, isSaveGameV4, isSaveGameV5, LATEST_SAVE_VERSION, MAX_SAVED_ENTITIES,
+} from './save';
+import type { WorldMapSize } from './placement';
+import { autoPlacePosition, autoPlaceSequence, CAMP_COLS, MAX_MAP, mapThatFits } from './placement';
+import { SALT, spreadFor } from './population';
 
 /**
  * One structural upgrade between ADJACENT save versions. Migrations know
@@ -101,10 +105,192 @@ const migrateV3toV4: MigrationStep = {
   },
 };
 
+/**
+ * BALANCE values the v4->v5 migration needs but cannot import — `src/shared/**`
+ * may import nothing outside itself, and balance constants live only in
+ * `src/engine/content/balance.ts`. The duplication is forced, so every one of
+ * these is PINNED against its real counterpart by a content test rather than
+ * trusted. An unpinned duplicate would drift silently and house or age a
+ * migrated colony differently from a fresh one, for no stated reason.
+ */
+export const MIGRATION_CONSTANTS = {
+  houseBeds: 4,           // BALANCE.houseBeds
+  startingAgeTicks: 2500, // BALANCE.startingAgeTicks
+  spreadTicks: 800,       // BALANCE.lifeBands.spreadTicks
+  birthCooldownTicks: 50, // BALANCE.birthCooldownTicks
+} as const;
+
+/**
+ * Starting-age jitter, decorrelated from the lifespan draw by its salt: with a
+ * single unsalted draw per id the two cancel exactly and every founder still
+ * dies on the same tick. `src/shared/population.ts` is importable from here
+ * (both are src/shared), so the hash is imported rather than copied.
+ */
+const jitter = (id: number) => spreadFor(id, MIGRATION_CONSTANTS.spreadTicks, SALT.startingAge);
+
+/**
+ * Shelters the save ALREADY has, ascending by id.
+ *
+ * A v4 save written by any build after the house shipped can contain houses —
+ * that was the repo's state for a whole increment, not a hypothetical — and
+ * ignoring them would hand a well-housed colony a wholly-homeless seed at
+ * penalty work power for as long as the player leaves the restored engine
+ * paused. `defId === 'house'` rather than a catalog lookup because
+ * `src/shared/**` cannot import BUILDINGS; pinned by a content test, like
+ * every other duplicated fact here.
+ *
+ * Relocating houses are excluded for exactly the reason `rehome` excludes
+ * them, and that agreement is the whole point: this must produce the
+ * assignment the first homing pass would, or the seed contradicts the engine
+ * the instant it runs.
+ */
+function savedShelterIds(v4: SaveGameV4): number[] {
+  return v4.buildings
+    .filter((b) => b.defId === 'house' && b.relocatingTicks === 0)
+    .map((b) => b.id)
+    .sort((a, b) => a - b);
+}
+
+/**
+ * The map grown far enough that one more building fits. Without this, a v4
+ * save with every buildable tile occupied silently gets NO starter house and
+ * every colonist loads homeless — the precise outcome this migration exists to
+ * prevent, reached through the one branch that quietly does nothing.
+ *
+ * Grown FROM the save's own map, never from `mapThatFits(count)`: that helper
+ * derives a shape from DEFAULT_MAP and would hand a full 50x6 colony a
+ * 24-column map, stranding every building at column 24+ outside the persisted
+ * bounds — isPositionsValid then rejects the migration and a valid save takes
+ * the corrupt-backup path. Existing dimensions are a floor, never a starting
+ * point to be replaced.
+ *
+ * The `break` is unreachable and kept as total-function hygiene: the
+ * structural guard admits at most MAX_SAVED_ENTITIES (10,000) buildings, while
+ * MAX_MAP minus the camp band is (256 - 3) * 256 = 64,768 buildable tiles, so
+ * the loop always exits on its own condition. Retune either bound and the arm
+ * becomes live — at which point loading homeless with a grown map is still
+ * correct, because the alternative is demolishing the player's buildings to
+ * make room for a house they did not ask for.
+ */
+function grownMap(from: WorldMapSize, buildingCount: number): WorldMapSize {
+  const map = { ...from };
+  while (buildingCount >= (map.cols - CAMP_COLS) * map.rows) {
+    if (map.rows < MAX_MAP.rows) map.rows += 1;
+    else if (map.cols < MAX_MAP.cols) map.cols += 1;
+    else break;
+  }
+  return map;
+}
+
+/**
+ * The smallest unused positive id, NOT max + 1. A guard-valid v4 save may sit
+ * at nextEntityId === MAX_SAVED_COUNTER — IdCounter.exhausted() exists
+ * precisely to keep such a save playable — and max + 1 would push nextEntityId
+ * past the ceiling, so isIdsValid would reject a previously valid save
+ * straight into the corrupt-backup path. The arrays hold at most 20,000
+ * records, so a gap below the ceiling always exists.
+ */
+function smallestFreeId(v4: SaveGameV4): number {
+  const used = new Set([...v4.buildings.map((b) => b.id), ...v4.workers.map((w) => w.id)]);
+  let id = 1;
+  while (used.has(id)) id++;
+  return id;
+}
+
+/**
+ * Greedy fill: colonists ascending by id into shelters ascending by building
+ * id, houseBeds each — `rehome`'s own documented rule, so the seeded
+ * assignment IS the one the first homing pass produces. Colonists past the
+ * last bed get null, which is the truth about that colony rather than a
+ * failure: a save with one house and ten adults really does have six homeless,
+ * and the migration's job is to reproduce homing, not to bail the player out
+ * of it.
+ *
+ * `ageTicks` and `starvingTicks` are KEPT when the record already carries
+ * them. Increment 6 wrote both onto the optional v4 record before v5 existed,
+ * so a colony saved by any build after that holds real accumulated values:
+ * overwriting the age would postpone retirement and death by thousands of
+ * ticks purely because the save was upgraded, and zeroing the starvation clock
+ * would cancel up to 99 ticks of incurred starvation for the same reason. The
+ * `??` fallbacks cover only genuinely legacy records that never had the field.
+ */
+function housedColonists(workers: readonly SavedColonistV4[], shelterIds: readonly number[]): SavedColonist[] {
+  return [...workers].sort((a, b) => a.id - b.id).map((w, index) => ({
+    ...w,
+    ageTicks: w.ageTicks ?? MIGRATION_CONSTANTS.startingAgeTicks + jitter(w.id),
+    homeId: shelterIds[Math.floor(index / MIGRATION_CONSTANTS.houseBeds)] ?? null,
+    starvingTicks: w.starvingTicks ?? 0,
+  }));
+}
+
+/**
+ * v4 -> v5: demographics arrive. A v4 colony is a colony of adults who have
+ * never had anywhere to live, so this synthesises the state the new mechanic
+ * needs rather than deferring it — exactly as v1 -> v2 synthesised positions.
+ *
+ * The starter house and its assignments are written HERE, not left to the
+ * homing phase, because buildColonyPrepWorld seeds the initial snapshot
+ * straight from the save and a restored engine starts paused: an all-null
+ * homeId would present a wholly homeless colony at penalty work power for as
+ * long as the player leaves it paused.
+ *
+ * The house is synthesised ONLY for a colony with no shelter at all, and only
+ * while the entity cap leaves room for it. Its justification is "a v4 colony
+ * has never had anywhere to live"; a colony that demonstrably has houses does
+ * not need a free one, and a colony already AT MAX_SAVED_ENTITIES cannot gain
+ * a building without failing the very guard that has to accept the output.
+ * Map growth is gated on the same question — a save that needs no tile must
+ * not have its persisted map resized as a side effect.
+ */
+const migrateV4toV5: MigrationStep = {
+  from: 4,
+  to: 5,
+  migrate: (save) => {
+    const v4 = save as SaveGameV4; // the runner guard-validated this shape
+    const shelterIds = savedShelterIds(v4);
+    const wantsStarterHouse = shelterIds.length === 0 && v4.buildings.length < MAX_SAVED_ENTITIES;
+    const map = wantsStarterHouse ? grownMap(v4.map, v4.buildings.length) : { ...v4.map };
+    // Null is unreachable given the capacity argument on grownMap, and is kept
+    // for the same reason its `break` is. Never invent a tile as a fallback: a
+    // house at col < CAMP_COLS fails isPositionsValid and sends the whole save
+    // down the corrupt-backup path, which is strictly worse than loading
+    // homeless — and homeless is recoverable by demolishing one building.
+    const at = wantsStarterHouse ? autoPlacePosition(map, v4.buildings) : null;
+    const houseId = smallestFreeId(v4);
+    const house = at === null ? null : {
+      id: houseId, defId: 'house' as const, col: at.col, row: at.row,
+      progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0,
+    };
+    if (house !== null) shelterIds.push(houseId);
+    // Written out field by field rather than spread-minus-`workers`: v4 is a
+    // frozen shape, and naming each carried field is what makes the ONE
+    // dropped key (`workers`, renamed to `colonists`) visible at a glance.
+    return {
+      version: 5,
+      tick: v4.tick,
+      lastRecruitTick: v4.lastRecruitTick,
+      stockpile: v4.stockpile,
+      // The sentinel, not 0. "Any migrated colony is already past the
+      // cooldown" is false for a v4 save written before tick 50 — a tick-0
+      // colony would have its first otherwise-eligible birth blocked purely
+      // because it was reopened, which is the save-alters-growth defect
+      // lastBirthTick exists to prevent.
+      lastBirthTick: -MIGRATION_CONSTANTS.birthCooldownTicks,
+      map,
+      buildings: house === null ? v4.buildings : [...v4.buildings, house],
+      colonists: housedColonists(v4.workers, shelterIds),
+      // Never lowered, and safe: houseId fills a GAP below the ceiling, so
+      // with at most 20,000 records the smallest unused id is at most 20,001
+      // and this can never push the counter near MAX_SAVED_COUNTER.
+      nextEntityId: Math.max(v4.nextEntityId, houseId + 1),
+    };
+  },
+};
+
 /** The registration tables this module owns, edited in place when a version
  * lands. Deliberately not exported: tests inject fakes through
  * migrateSaveToLatest's parameters instead. */
-const SAVE_MIGRATIONS: readonly MigrationStep[] = [migrateV1toV2, migrateV2toV3, migrateV3toV4];
+const SAVE_MIGRATIONS: readonly MigrationStep[] = [migrateV1toV2, migrateV2toV3, migrateV3toV4, migrateV4toV5];
 
 export function readSaveVersion(data: unknown): number | null {
   if (typeof data !== 'object' || data === null) return null;
@@ -186,7 +372,7 @@ export function migrateSaveToLatest(
   guards: SaveGuards = SAVE_GUARDS,
   steps: readonly MigrationStep[] = SAVE_MIGRATIONS,
   target: number = LATEST_SAVE_VERSION,
-): SaveGameV4 | null {
+): SaveGameV5 | null {
   const version = readSaveVersion(data);
   if (version === null || version > target) return null; // a save from a NEWER build is not downgradable
   if (!passesGuard(guards[version], data)) return null;  // validate at the version it claims
@@ -199,5 +385,5 @@ export function migrateSaveToLatest(
   // same value. Kept so a future change to runSteps or to the early-return
   // above doesn't silently stop being caught here.
   if (migrated === null || !passesGuard(guards[target], migrated)) return null;
-  return migrated as SaveGameV4;
+  return migrated as SaveGameV5;
 }

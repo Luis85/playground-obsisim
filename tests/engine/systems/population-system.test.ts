@@ -12,7 +12,7 @@ import type { ResourceId } from '../../../src/shared/content-types';
 import { enqueue, stepTick } from '../fixtures';
 
 async function colonyWith(ages: { id: number; ageTicks: number; buildingId?: number | null }[]) {
-  const save = { ...initialSave(), workers: [], stockpile: { berries: 100_000 }, nextEntityId: 100 };
+  const save = { ...initialSave(), colonists: [], buildings: [], stockpile: { berries: 100_000 }, nextEntityId: 100 };
   const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
   const ids = getPrepResource(prep, IdCounter);
   const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 5, row: 3, relocatingTicks: 0 });
@@ -79,7 +79,7 @@ describe('PopulationSystem — starvation', () => {
     // colonist starts BELOW hungerMax so the first ticks raise hunger without
     // touching the starvation clock, which is what separates "hungry" from
     // "starving".
-    const save = { ...initialSave(), workers: [], stockpile: {}, nextEntityId: 100 };
+    const save = { ...initialSave(), colonists: [], buildings: [], stockpile: {}, nextEntityId: 100 };
     const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
     const ids = getPrepResource(prep, IdCounter);
     spawnColonist(prep, ids, { id: 1, ageTicks: BALANCE.lifeBands.matureTicks, hunger: BALANCE.hungerMax - 2 });
@@ -99,7 +99,7 @@ describe('PopulationSystem — starvation', () => {
   });
 
   it('resets the starvation clock the moment a colonist eats', async () => {
-    const save = { ...initialSave(), workers: [], stockpile: {}, nextEntityId: 100 };
+    const save = { ...initialSave(), colonists: [], buildings: [], stockpile: {}, nextEntityId: 100 };
     const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
     const ids = getPrepResource(prep, IdCounter);
     spawnColonist(prep, ids, { id: 1, ageTicks: BALANCE.lifeBands.matureTicks, hunger: BALANCE.hungerMax });
@@ -147,7 +147,7 @@ describe('PopulationSystem — standDown on death', () => {
   // call is otherwise invisible to the rest of the suite.
 
   it("banks a starving hauler's carried load into the stockpile the tick they die", async () => {
-    const save = { ...initialSave(), workers: [], stockpile: {}, nextEntityId: 100 };
+    const save = { ...initialSave(), colonists: [], buildings: [], stockpile: {}, nextEntityId: 100 };
     const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
     const ids = getPrepResource(prep, IdCounter);
     // One tick short of the death threshold, already pinned at max hunger:
@@ -166,7 +166,7 @@ describe('PopulationSystem — standDown on death', () => {
   });
 
   it("banks an aged-out hauler's carried load into the stockpile the tick they die", async () => {
-    const save = { ...initialSave(), workers: [], stockpile: {}, nextEntityId: 100 };
+    const save = { ...initialSave(), colonists: [], buildings: [], stockpile: {}, nextEntityId: 100 };
     const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
     const ids = getPrepResource(prep, IdCounter);
     const span = lifespanFor(1, BALANCE.lifeBands);
@@ -181,7 +181,7 @@ describe('PopulationSystem — standDown on death', () => {
   });
 
   it('gives a building no phantom tick of work from a colonist who dies of old age this tick', async () => {
-    const save = { ...initialSave(), workers: [], stockpile: {}, nextEntityId: 100 };
+    const save = { ...initialSave(), colonists: [], buildings: [], stockpile: {}, nextEntityId: 100 };
     const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
     const ids = getPrepResource(prep, IdCounter);
     spawnBuilding(prep, ids, { id: 50, defId: 'forester', progress: 0, batchActive: false, col: 5, row: 3, relocatingTicks: 0 });
@@ -202,7 +202,7 @@ describe('PopulationSystem — standDown on death', () => {
 
 describe('PopulationSystem — homing', () => {
   it('homes a homeless colonist into a free bed, and evicts when the house relocates', async () => {
-    const save = { ...initialSave(), workers: [], stockpile: { berries: 100_000 }, nextEntityId: 100 };
+    const save = { ...initialSave(), colonists: [], buildings: [], stockpile: { berries: 100_000 }, nextEntityId: 100 };
     const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
     const ids = getPrepResource(prep, IdCounter);
     const house = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: 5, row: 3, relocatingTicks: 0 });
@@ -234,7 +234,7 @@ describe('PopulationSystem — homing', () => {
     // half the relocation story — a house that stops sheltering must start
     // again once it lands, or a homeless colonist evicted by a move would
     // never recover without a SECOND, unrelated free bed opening elsewhere.
-    const save = { ...initialSave(), workers: [], stockpile: { berries: 100_000 }, nextEntityId: 100 };
+    const save = { ...initialSave(), colonists: [], buildings: [], stockpile: { berries: 100_000 }, nextEntityId: 100 };
     const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
     const ids = getPrepResource(prep, IdCounter);
     const house = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: 5, row: 3, relocatingTicks: 0 });
@@ -271,7 +271,7 @@ describe('PopulationSystem — homing', () => {
     // order disagree: a rehome that walked entity order (or Map/Set
     // iteration order) instead of sorting by id would evict a different
     // colonist than id 5, the numerically highest.
-    const save = { ...initialSave(), workers: [], stockpile: { berries: 100_000 }, nextEntityId: 100 };
+    const save = { ...initialSave(), colonists: [], buildings: [], stockpile: { berries: 100_000 }, nextEntityId: 100 };
     const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
     const ids = getPrepResource(prep, IdCounter);
     const house = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: 5, row: 3, relocatingTicks: 0 });
@@ -291,7 +291,7 @@ describe('PopulationSystem — homing', () => {
   });
 
   it('makes a demolished house homeless immediately, not next tick', async () => {
-    const save = { ...initialSave(), workers: [], stockpile: { berries: 100_000 }, nextEntityId: 100 };
+    const save = { ...initialSave(), colonists: [], buildings: [], stockpile: { berries: 100_000 }, nextEntityId: 100 };
     const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
     const ids = getPrepResource(prep, IdCounter);
     const house = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: 5, row: 3, relocatingTicks: 0 });
@@ -316,7 +316,7 @@ describe('PopulationSystem — homing', () => {
   // early readmit would hand the resident its full placementFactor for a tick
   // still genuinely charged as relocation downtime.
   it('does not readmit a colonist until the tick after its relocating house lands', async () => {
-    const save = { ...initialSave(), workers: [], stockpile: { berries: 100_000 }, nextEntityId: 100 };
+    const save = { ...initialSave(), colonists: [], buildings: [], stockpile: { berries: 100_000 }, nextEntityId: 100 };
     const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
     const ids = getPrepResource(prep, IdCounter);
     const house = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: 5, row: 3, relocatingTicks: 0 });
@@ -349,7 +349,7 @@ describe('PopulationSystem — homing', () => {
   // already exists — resolving itself the tick after, but persisting forever
   // if the game is paused right after building.
   it('houses a homeless colonist on the tick its house is built, not the tick after', async () => {
-    const save = { ...initialSave(), workers: [], stockpile: { wood: 100, planks: 100 }, nextEntityId: 100 };
+    const save = { ...initialSave(), colonists: [], buildings: [], stockpile: { wood: 100, planks: 100 }, nextEntityId: 100 };
     const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
     const ids = getPrepResource(prep, IdCounter);
     spawnColonist(prep, ids, { id: 1, ageTicks: BALANCE.lifeBands.matureTicks });
@@ -368,7 +368,7 @@ describe('PopulationSystem — homing', () => {
   // beside a homeless colonist), because homeless/beds are derived from the
   // same Home components rehome just wrote. Distinct assertion, same defect.
   it('does not publish free beds beside a homeless colonist on the tick its house is built', async () => {
-    const save = { ...initialSave(), workers: [], stockpile: { wood: 100, planks: 100 }, nextEntityId: 100 };
+    const save = { ...initialSave(), colonists: [], buildings: [], stockpile: { wood: 100, planks: 100 }, nextEntityId: 100 };
     const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
     const ids = getPrepResource(prep, IdCounter);
     spawnColonist(prep, ids, { id: 1, ageTicks: BALANCE.lifeBands.matureTicks });
@@ -395,7 +395,7 @@ describe('PopulationSystem — homing', () => {
   // resident, both because the stale entry's hard-coded `relocating: false`
   // outvotes the live, now-`true` value.
   it('does not let a pending-constructed house shelter its resident through a later relocation', async () => {
-    const save = { ...initialSave(), workers: [], stockpile: { wood: 100, planks: 100 }, nextEntityId: 100 };
+    const save = { ...initialSave(), colonists: [], buildings: [], stockpile: { wood: 100, planks: 100 }, nextEntityId: 100 };
     const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
     const ids = getPrepResource(prep, IdCounter);
     spawnColonist(prep, ids, { id: 1, ageTicks: BALANCE.lifeBands.matureTicks });
@@ -439,7 +439,7 @@ describe('PopulationSystem — homing', () => {
   // tick they were housed, while refreshEntitySections published them housed
   // moments later. Same defect as the two tests above, one layer down.
   it('charges a colonist housed by a same-tick construction as housed, not homeless', async () => {
-    const save = { ...initialSave(), workers: [], stockpile: { wood: 100, planks: 100 }, nextEntityId: 100 };
+    const save = { ...initialSave(), colonists: [], buildings: [], stockpile: { wood: 100, planks: 100 }, nextEntityId: 100 };
     const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
     const ids = getPrepResource(prep, IdCounter);
     const forester = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 5, row: 2, relocatingTicks: 0 });
@@ -475,7 +475,7 @@ describe('PopulationSystem — homing', () => {
 describe('PopulationSystem — births and the nomad gate', () => {
   /** A colony that can feed and shelter arrivals; `houses` four-bed shelters. */
   async function fedColony(houses: number, colonists: number, bread = 5000) {
-    const save = { ...initialSave(), workers: [], buildings: [], stockpile: { bread }, nextEntityId: 100 };
+    const save = { ...initialSave(), colonists: [], buildings: [], stockpile: { bread }, nextEntityId: 100 };
     const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
     const ids = getPrepResource(prep, IdCounter);
     const spots = autoPlaceSequence(save.map);

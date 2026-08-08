@@ -115,13 +115,10 @@ export class SimClock {
    * change population growth. Starts a full cooldown in the past, so a fresh
    * colony's first birth is gated on food and beds rather than on patience.
    *
-   * Suppressed for the same reason PendingChanges.clear is: every reader
-   * reaches it through an interface-typed value (PopulationContext.clock) or
-   * through sim-ecs's ISystemResource intersection in SnapshotSystem, neither
-   * of which fallow's static analysis traces back to this class. Scoped to
-   * this one declaration rather than added to .fallowrc.json's
-   * usedClassMembers, which matches a bare name across the whole repo. */
-  // fallow-ignore-next-line unused-class-member
+   * Save v5 persists it (buildSaveFromWorld reads it directly off the
+   * resource), which is what retired the suppression this used to need: the
+   * in-tick readers all reach it through an interface-typed value that
+   * fallow's static analysis cannot trace back here. */
   lastBirthTick = -BALANCE.birthCooldownTicks;
 }
 

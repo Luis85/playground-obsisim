@@ -3,6 +3,7 @@ import { BALANCE, STARTING_STOCK, colonistEfficiency } from '../../src/engine/co
 import { MEAL_WEIGHTS, RESOURCES, RESOURCE_IDS } from '../../src/engine/content/resources';
 import { BUILDINGS, BUILDING_IDS } from '../../src/engine/content/buildings';
 import { CHAINS } from '../../src/engine/content/chains';
+import { MIGRATION_CONSTANTS } from '../../src/shared/save-migration';
 import type { ResourceId } from '../../src/shared/content-types';
 
 // Content validation (spec §7.1): the catalog is plain typed data, so nothing
@@ -113,6 +114,26 @@ describe('content catalog', () => {
     // Spec 4: one number for the player to beat. A drift between these two
     // would make being homeless quietly better than living far away.
     expect(BALANCE.homelessFactor).toBe(BALANCE.commute.floor);
+  });
+
+  it('the migration constants match the balance they duplicate', () => {
+    // The duplication is forced — src/shared/save-migration.ts may not import
+    // BALANCE — so each one is pinned instead of trusted. Drift here would age
+    // or house a migrated colony differently from a fresh one, silently.
+    expect(MIGRATION_CONSTANTS.houseBeds).toBe(BALANCE.houseBeds);
+    expect(MIGRATION_CONSTANTS.startingAgeTicks).toBe(BALANCE.startingAgeTicks);
+    expect(MIGRATION_CONSTANTS.spreadTicks).toBe(BALANCE.lifeBands.spreadTicks);
+    expect(MIGRATION_CONSTANTS.birthCooldownTicks).toBe(BALANCE.birthCooldownTicks);
+  });
+
+  it("'house' is still the only sheltering def the migration can name", () => {
+    // The migration identifies a saved shelter as `defId === 'house'`, because
+    // src/shared/** cannot import BUILDINGS. That literal is a duplicated fact
+    // like the numbers above, and it fails in a nastier way: add a second
+    // building with beds and the migration silently stops seeing it as
+    // housing, seeding its residents homeless with nothing to point at.
+    const sheltering = BUILDING_IDS.filter((id) => BUILDINGS[id].beds > 0);
+    expect(sheltering).toEqual(['house']);
   });
 
   it('the house shelters and never produces', () => {

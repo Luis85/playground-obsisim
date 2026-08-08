@@ -15,7 +15,8 @@ import { stepTick } from '../fixtures';
 
 async function setup(defId: BuildingDefId, stock: Partial<Record<ResourceId, number>>, workerCount = 1, workerToolTicks = 0) {
   const save = initialSave();
-  save.workers = [];
+  save.colonists = [];
+  save.buildings = [];   // no starter house: this fixture builds its own world
   save.stockpile = stock;
   const prep = buildColonyPrepWorld({ save, systems: [ProductionSystem] });
   const ids = getPrepResource(prep, IdCounter);
@@ -81,7 +82,8 @@ describe('ProductionSystem', () => {
     // otherwise-identical housed worker — the discriminating half of the
     // pair.
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
     save.stockpile = {};
     const prep = buildColonyPrepWorld({ save, systems: [ProductionSystem] });
     const ids = getPrepResource(prep, IdCounter);
@@ -104,7 +106,8 @@ describe('ProductionSystem', () => {
     // that ignored `homeId` still falls off with distance.
     const bankedIn30Ticks = async (houseAt: TileRef | null) => {
       const save = initialSave();
-      save.workers = [];
+      save.colonists = [];
+      save.buildings = [];   // no starter house: this fixture builds its own world
       save.stockpile = {};
       const prep = buildColonyPrepWorld({ save, systems: [ProductionSystem] });
       const ids = getPrepResource(prep, IdCounter);
@@ -144,7 +147,8 @@ describe('ProductionSystem', () => {
 
   it('only covered workers get the multiplier (mixed staffing)', async () => {
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
     save.stockpile = {}; // starting wood would mask the 'no output yet' assertion
     const prep = buildColonyPrepWorld({ save, systems: [ProductionSystem] });
     const ids = getPrepResource(prep, IdCounter);
@@ -185,7 +189,8 @@ describe('ProductionSystem', () => {
     // needed: the cross-check catches a change to one derivation, the absolute
     // value catches a change to the shared formula they now both call.
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
     const prep = buildColonyPrepWorld({ save, systems: [ProductionSystem, SnapshotSystem] });
     const ids = getPrepResource(prep, IdCounter);
     const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 0 });
@@ -281,7 +286,7 @@ describe('ProductionSystem', () => {
     // Discriminating fixture: the same crew on a forester at the same tile DOES
     // produce, so a pass here cannot come from the crew being idle for some
     // unrelated reason.
-    const save = { ...initialSave(), workers: [], stockpile: { berries: 100_000 }, nextEntityId: 100 };
+    const save = { ...initialSave(), colonists: [], buildings: [], stockpile: { berries: 100_000 }, nextEntityId: 100 };
     const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
     const ids = getPrepResource(prep, IdCounter);
     const house = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: 5, row: 3, relocatingTicks: 0 });

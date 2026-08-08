@@ -6,7 +6,8 @@ import { buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spaw
 
 function makePrep(tools: number) {
   const save = initialSave();
-  save.workers = [];
+  save.colonists = [];
+  save.buildings = [];   // no starter house: this fixture builds its own world
   save.stockpile = { tools };
   return buildColonyPrepWorld({ save, systems: [EfficiencySystem] });
 }

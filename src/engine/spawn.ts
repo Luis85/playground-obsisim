@@ -33,8 +33,8 @@ import {
  * rejecting the save. `isLoadableSave` deliberately does not bounds-check these.
  *
  * They live here because three callers must agree on them: both spawn paths, and
- * `buildInitialSnapshot`, which seeds a snapshot that has to match the entities
- * actually spawned. That third mirror was maintained by hand and by comment.
+ * the restore path (`restoredColonists`, `buildInitialSnapshot`), which seeds a
+ * snapshot that has to match the entities actually spawned.
  */
 export function clampedProgress(defId: BuildingDefId, progress: number): number {
   const { recipe } = BUILDINGS[defId];
@@ -58,7 +58,7 @@ export function clampedToolTicks(toolTicks: number): number {
 /**
  * A saved relocation countdown, clamped to what current balance can produce.
  * Exported (promoted back from module-private) because `buildInitialSnapshot`
- * in world.ts now needs it: the seeded snapshot's `relocatingTicks` fact must
+ * needs it too: the seeded snapshot's `relocatingTicks` fact must
  * be clamped the same way `buildingComponents` below clamps the live
  * `Relocation` component, or the two would disagree about a saved building
  * that outlived a balance retune (same principle as clampedProgress,
@@ -140,17 +140,15 @@ export function colonistComponents(spec: ColonistSpec): object[] {
     // be assigned without the snapshot query losing sight of them.
     new HaulTrip(),
     // Defaults to a founder's starting age, not 0: an unspecified age means
-    // "a save/spec that predates this field", and BALANCE.startingAgeTicks
-    // (spec 2.2) is already the documented age new founders begin at. 0 would
-    // make every colonist created without an explicit age a child — including
-    // every pre-Task-9 save reload and every existing test's fixture colonist —
-    // silently ineligible for the assign command this same task adds.
+    // "a spec that does not care", and BALANCE.startingAgeTicks (spec 2.2) is
+    // already the documented age new founders begin at. 0 would make every
+    // colonist created without an explicit age a child — including every
+    // fixture colonist — silently ineligible for the assign command.
     new Age(clampedAge(spec.ageTicks ?? BALANCE.startingAgeTicks)),
-    // Not yet part of any save record (Task 6 stops short of the v5 bump), so
-    // every restored colonist reads as homeless until PopulationSystem's
-    // rehome phase re-derives an assignment on the next tick. Runtime commands
-    // (recruitWorker) never pass homeId either — a nomad's own arrival gate
-    // is Task 8's, not this constructor's.
+    // Saved since v5, so a restored colonist wakes in the bed they went to
+    // sleep in rather than homeless until the next rehome pass. Unspecified
+    // still means homeless: a colonist created by a command without one (an
+    // arrival whose gate found no bed) genuinely has nowhere to live.
     new Home(spec.homeId ?? null),
   ];
 }

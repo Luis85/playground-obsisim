@@ -1,6 +1,6 @@
 import type { IRuntimeWorld } from 'sim-ecs';
 import type { BuildingDefId, RecipeDef, ResourceId } from '../shared/content-types';
-import type { SavedBuilding, SavedColonistV4 } from '../shared/save';
+import type { SavedBuilding, SavedColonist } from '../shared/save';
 import type { BuildingSnapshot, BuildingState, ColonistSnapshot } from '../shared/snapshot';
 import type { TileRef } from '../shared/placement';
 import { CAMP_TILE } from '../shared/haul';
@@ -313,10 +313,16 @@ export function buildingFactsOf(
  * means the persist decision for a new fact is one obvious edit rather than a
  * whitelist buried inside the serializer.
  */
-export function savedColonistOf(facts: ColonistFacts): SavedColonistV4 {
+export function savedColonistOf(facts: ColonistFacts): SavedColonist {
   return {
     id: facts.id, hunger: facts.hunger, buildingId: facts.buildingId,
     toolTicks: facts.toolTicks, hauling: facts.hauling,
+    // A decision, not a derivation: rehome picks a bed once and the colonist
+    // keeps it until something evicts them. Dropping it here would restore
+    // every colony wholly homeless — at homelessFactor work power, on a
+    // PAUSED engine, until the player unpauses and the first homing pass
+    // reshuffles everyone into different houses than they went to sleep in.
+    homeId: facts.homeId,
     // Unlike efficiency/stage, ageTicks is NOT recomputed from anything else —
     // it is the source PopulationSystem ages and stage is derived from, so
     // dropping it here would reset every colonist to the default starting age

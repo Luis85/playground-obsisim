@@ -25,7 +25,8 @@ const DepositWoodSystem = () => createSystem({
 describe('StatsSystem', () => {
   it('records per-tick flows and resets them', async () => {
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
     // 1 wood deposited per tick, same as "3 workers on a forester" used to yield.
     const prep = buildColonyPrepWorld({ save, systems: [DepositWoodSystem, StatsSystem, SnapshotSystem] });
     const world = await prep.prepareRun();
@@ -44,7 +45,8 @@ describe('StatsSystem', () => {
     // and nothing ever reaches the store. Under one combined "production" rate
     // these were indistinguishable, which is the schema half of OBS-4-06.
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
     save.stockpile = {};
     const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
     const ids = getPrepResource(prep, IdCounter);

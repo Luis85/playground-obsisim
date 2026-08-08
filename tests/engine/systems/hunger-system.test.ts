@@ -7,7 +7,8 @@ import { buildColonyPrepWorld, getPrepResource, initialSave, spawnColonist } fro
 
 async function setup(hunger: number, stock: Partial<Record<'bread' | 'berries', number>>) {
   const save = initialSave();
-  save.workers = [];
+  save.colonists = [];
+  save.buildings = [];   // no starter house: this fixture builds its own world
   save.stockpile = stock;
   const prep = buildColonyPrepWorld({ save, systems: [HungerSystem] });
   const worker: IEntity = spawnColonist(prep, getPrepResource(prep, IdCounter), { hunger });

@@ -45,14 +45,14 @@ export const MAX_SAVED_COUNTER = Number.MAX_SAFE_INTEGER - 2 ** 32;
  *
  * Both producers (`buildSaveFromWorld`, `initialSave`) use this constant rather
  * than a literal, which makes the bump self-policing: because
- * `SaveGameV4.version` is the literal type `4`, raising this to 5 fails
- * typecheck AT those producers (`Type '5' is not assignable to type '4'`) until
+ * `SaveGameV5.version` is the literal type `5`, raising this to 6 fails
+ * typecheck AT those producers (`Type '6' is not assignable to type '5'`) until
  * the save type is updated too. That is deliberate — with hardcoded literals,
- * bumping the constant would have pointed the loader at v5 while autosaves and
- * fresh colonies kept claiming v4, and a v4-labelled save carrying v5 fields
+ * bumping the constant would have pointed the loader at v6 while autosaves and
+ * fresh colonies kept claiming v5, and a v5-labelled save carrying v6 fields
  * would then be migrated a second time on load.
  */
-export const LATEST_SAVE_VERSION = 4;
+export const LATEST_SAVE_VERSION = 5;
 
 /** The v1 building record — frozen legacy shape, pre-spatial. */
 export interface SavedBuildingV1 {

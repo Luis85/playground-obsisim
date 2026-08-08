@@ -10,7 +10,8 @@ import { campAdjacentFreeTile } from '../fixtures';
 describe('SnapshotSystem', () => {
   it('projects a complete snapshot', async () => {
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
     save.stockpile = { wood: 10, bread: 2 };
     const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
     const ids = getPrepResource(prep, IdCounter);
@@ -48,7 +49,8 @@ describe('SnapshotSystem', () => {
 
   it('marks unstaffed and waiting states', async () => {
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
     const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
     const ids = getPrepResource(prep, IdCounter);
     spawnBuilding(prep, ids, { defId: 'mill', progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 0 });
@@ -62,7 +64,8 @@ describe('SnapshotSystem', () => {
 
   it('pins staffing precedence: unstaffed wins over outputFull', async () => {
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
     const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
     const ids = getPrepResource(prep, IdCounter);
 
@@ -97,7 +100,8 @@ describe('SnapshotSystem', () => {
     // (OBS-5-01) follow the same rule: published so the layout never has to
     // re-derive them from the building's live tile.
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
     save.stockpile = {};
     const prep = buildColonyPrepWorld({ save, systems: [HaulSystem, SnapshotSystem] });
     const ids = getPrepResource(prep, IdCounter);
@@ -152,7 +156,8 @@ describe('SnapshotSystem', () => {
     // actually spent — buildEntitySections computes it once and uses it for
     // both, and this pins that they cannot drift apart.
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
     save.stockpile = {};
     const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
     const ids = getPrepResource(prep, IdCounter);
@@ -186,7 +191,8 @@ describe('SnapshotSystem', () => {
 
   it('reports a relocating building as relocating, with its remaining ticks', async () => {
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
     save.stockpile = {};
     const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
     const ids = getPrepResource(prep, IdCounter);
@@ -213,7 +219,8 @@ describe('SnapshotSystem', () => {
     // These two fixtures instead genuinely satisfy the rival branch's own
     // condition, so a reordered priority actually flips the result.
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
     const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
     const ids = getPrepResource(prep, IdCounter);
 
@@ -244,7 +251,8 @@ describe('SnapshotSystem', () => {
     // house can never be 'unstaffed' or 'outputFull' (no slots, no batch), so
     // relocating-vs-housing is the one precedence a house can actually flip.
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
     const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
     const ids = getPrepResource(prep, IdCounter);
     spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 5 });

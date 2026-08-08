@@ -1,29 +1,24 @@
 import { buildWorld } from 'sim-ecs';
 import type { IEntity, IPreptimeWorld, IRuntimeWorld } from 'sim-ecs';
-import { isSaveGameV4, LATEST_SAVE_VERSION, MAX_SAVED_COUNTER } from '../shared/save';
+import { isSaveGameV5, LATEST_SAVE_VERSION, MAX_SAVED_COUNTER } from '../shared/save';
 import { migrateSaveToLatest } from '../shared/save-migration';
-import type { SaveGameV4, SavedBuilding } from '../shared/save';
+import type { SaveGameV5, SavedBuilding } from '../shared/save';
 import type { ResourceId } from '../shared/content-types';
-import type { ResourceStats, Snapshot } from '../shared/snapshot';
-import { DEFAULT_MAP } from '../shared/placement';
-import { stageOf } from '../shared/population';
-import { BALANCE, STARTING_STOCK, STARTING_COLONISTS, colonistEfficiency } from './content/balance';
-import { BUILDINGS } from './content/buildings';
-import { RESOURCES, RESOURCE_IDS } from './content/resources';
+import { autoPlacePosition, DEFAULT_MAP } from '../shared/placement';
+import { SALT, spreadFor } from '../shared/population';
+import { BALANCE, STARTING_STOCK, STARTING_COLONISTS } from './content/balance';
 import {
   Age, Building, Efficiency, HaulTrip, Home, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Colonist,
   WorkerSlots,
 } from './components';
 import { isBuffersValid, isBuildingsValid, isIdsValid, isPositionsValid, isStockpileValid, isColonistsValid } from './save-guard';
-import {
-  buildingComponents, clampedAge, clampedBuffer, clampedHunger, clampedProgress, clampedRelocation, clampedStarving,
-  clampedToolTicks, colonistComponents,
-} from './spawn';
+import { buildingComponents, colonistComponents } from './spawn';
+import { restoredColonists } from './restore';
 import {
   CommandQueue, IdCounter, NoticeBoard, PendingChanges, ProductionLedger, RemovalLedger, SimClock, SnapshotStore, StatsHistory, Stockpile,
   WorldMap,
 } from './resources';
-import type { BuildingFacts, ColonistFacts } from './snapshot-builder';
+import { buildInitialSnapshot } from './initial-snapshot';
 import { buildEntitySections, gatherEntityFacts } from './snapshot-builder';
 import { CommandSystem } from './systems/command-system';
 import { HungerSystem } from './systems/hunger-system';
@@ -91,27 +86,46 @@ export const COMPONENT_TYPES: (new (...args: any[]) => object)[] = [
   Relocation, Age, Home,
 ];
 
-export function initialSave(): SaveGameV4 {
+/** The starter house's id, and therefore every founder's `homeId`. Taking id 1
+ * keeps the founders on the ids that follow, so the first thing the player
+ * builds still gets the id after the last founder. */
+const STARTER_HOUSE_ID = 1;
+
+export function initialSave(): SaveGameV5 {
   return {
     version: LATEST_SAVE_VERSION,
     tick: 0,
     lastRecruitTick: -BALANCE.recruitCooldownTicks,
+    lastBirthTick: -BALANCE.birthCooldownTicks,
     stockpile: { ...STARTING_STOCK },
     map: { ...DEFAULT_MAP },
-    buildings: [],
-    workers: Array.from({ length: STARTING_COLONISTS }, (_, index) => ({
-      id: index + 1,
+    // The first pre-placed building in the game's history, and worth the
+    // exception: a house costs planks, planks need a sawmill, and a colony that
+    // opens with 30 wood cannot build one for a long time — so without this the
+    // whole opening is spent at homelessFactor for reasons the player cannot act
+    // on. With it, the pressure starts legibly: you are housed, you have one
+    // spare bed, and the fourth colonist is the first thing you must build for.
+    buildings: [{
+      id: STARTER_HOUSE_ID, defId: 'house', ...autoPlacePosition(DEFAULT_MAP, [])!,
+      progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0,
+    }],
+    colonists: Array.from({ length: STARTING_COLONISTS }, (_, index) => ({
+      id: index + 1 + STARTER_HOUSE_ID,
       hunger: 0,
       buildingId: null,
       toolTicks: 0,
       hauling: false,
+      ageTicks: BALANCE.startingAgeTicks
+        + spreadFor(index + 1 + STARTER_HOUSE_ID, BALANCE.lifeBands.spreadTicks, SALT.startingAge),
+      homeId: STARTER_HOUSE_ID,
+      starvingTicks: 0,
     })),
-    nextEntityId: STARTING_COLONISTS + 1,
+    nextEntityId: STARTING_COLONISTS + 1 + STARTER_HOUSE_ID,
   };
 }
 
 /**
- * Structural validity (isSaveGameV4) plus referential integrity against the content
+ * Structural validity (isSaveGameV5) plus referential integrity against the content
  * catalog, for a save that is ALREADY at the current version. This is the internal
  * current-version validator, not the shell's entry point: it has no idea how to
  * migrate an older save, so calling it directly on unmigrated data would crash
@@ -129,8 +143,8 @@ export function initialSave(): SaveGameV4 {
  * grandfathered at load (see spawnColonist) so retuning balance down never
  * orphans a previously valid save.
  */
-export function isLoadableSave(data: unknown): data is SaveGameV4 {
-  if (!isSaveGameV4(data)) return false;
+export function isLoadableSave(data: unknown): data is SaveGameV5 {
+  if (!isSaveGameV5(data)) return false;
   // SAFE integers: a fractional tick would desync every modulo-based cadence
   // (autosave, recruit cooldown) forever; past 2^53, ++ stops incrementing.
   // No upper REJECT bound: any hard accept-bound would orphan a save that
@@ -146,6 +160,13 @@ export function isLoadableSave(data: unknown): data is SaveGameV4 {
   if (
     !Number.isSafeInteger(data.lastRecruitTick) ||
     data.lastRecruitTick > data.tick
+  ) return false;
+  // Identical treatment for the birth clock, for the identical reason: the
+  // engine only ever records a tick that has already happened, so a timestamp
+  // ahead of `tick` would gate births on a cooldown that never expires.
+  if (
+    !Number.isSafeInteger(data.lastBirthTick) ||
+    data.lastBirthTick > data.tick
   ) return false;
   if (!isStockpileValid(data.stockpile)) return false;
   if (!isBuildingsValid(data.buildings)) return false;
@@ -167,14 +188,14 @@ export function isLoadableSave(data: unknown): data is SaveGameV4 {
  * 7.2). Kept here rather than in src/shared/ because isLoadableSave needs the
  * content catalog, while the migration chain is pure structure.
  */
-export function prepareLoadedSave(data: unknown): SaveGameV4 | null {
+export function prepareLoadedSave(data: unknown): SaveGameV5 | null {
   const migrated = migrateSaveToLatest(data);
   return migrated !== null && isLoadableSave(migrated) ? migrated : null;
 }
 
 /** The three things the shell can do after reading data.json's `save` field. */
 export type LoadDecision =
-  | { kind: 'restore'; save: SaveGameV4 }
+  | { kind: 'restore'; save: SaveGameV5 }
   | { kind: 'backup' }
   | { kind: 'fresh' };
 
@@ -262,7 +283,7 @@ function assertSystemOrder(systems: readonly TColonySystemFactory[]): void {
 }
 
 export function buildColonyPrepWorld(
-  options: { save?: SaveGameV4; systems?: readonly TColonySystemFactory[] } = {},
+  options: { save?: SaveGameV5; systems?: readonly TColonySystemFactory[] } = {},
 ): IPreptimeWorld {
   const save = options.save ?? initialSave();
   const systems = options.systems ?? ALL_SYSTEMS;
@@ -284,6 +305,7 @@ export function buildColonyPrepWorld(
   // session regardless of what a prior session wrote
   clock.tick = Math.min(save.tick, MAX_SAVED_COUNTER);
   clock.lastRecruitTick = Math.min(save.lastRecruitTick, clock.tick);
+  clock.lastBirthTick = Math.min(save.lastBirthTick, clock.tick);
   const ids = new IdCounter(save.nextEntityId);
   const store = new SnapshotStore();
   const instances = [
@@ -307,7 +329,11 @@ export function buildColonyPrepWorld(
   PREP_RESOURCES.set(prep, registry);
 
   for (const saved of save.buildings) spawnBuilding(prep, ids, saved);
-  for (const saved of save.workers) {
+  // Through restoredColonists, never straight off `save.colonists`: it is the
+  // one place the load-time clamps and repairs live, and buildInitialSnapshot
+  // reads the very same records — so the seeded snapshot and the entities
+  // spawned here cannot disagree about what this save restores as.
+  for (const saved of restoredColonists(save)) {
     spawnColonist(prep, ids, {
       id: saved.id,
       hunger: saved.hunger,
@@ -316,6 +342,7 @@ export function buildColonyPrepWorld(
       hauling: saved.hauling,
       ageTicks: saved.ageTicks,
       starvingTicks: saved.starvingTicks,
+      homeId: saved.homeId,
     });
   }
   // The UI must never see a null snapshot: a reset or freshly created engine is
@@ -324,89 +351,6 @@ export function buildColonyPrepWorld(
   store.latest = buildInitialSnapshot(save);
 
   return prep;
-}
-
-function buildInitialSnapshot(save: SaveGameV4): Snapshot {
-  const workerFacts: ColonistFacts[] = save.workers.map((saved) => {
-    // The same clamps colonistComponents applies, so the seeded snapshot matches
-    // the entities buildColonyPrepWorld actually spawns (see src/engine/spawn.ts).
-    const hunger = clampedHunger(saved.hunger);
-    const toolTicks = clampedToolTicks(saved.toolTicks);
-    // Same fallback colonistComponents uses (src/engine/spawn.ts): an
-    // unspecified age defaults to a founder's starting age, not 0, or this
-    // seed would disagree with the entity buildColonyPrepWorld actually
-    // spawns for the very same save record the moment the first tick refreshes.
-    const ageTicks = clampedAge(saved.ageTicks ?? BALANCE.startingAgeTicks);
-    // Same fallback colonistComponents uses: a save predating the field reads
-    // as a clean starvation clock, same as every pre-save-v5 restore.
-    const starvingTicks = clampedStarving(saved.starvingTicks ?? 0);
-    return {
-      id: saved.id,
-      hunger,
-      starvingTicks,
-      efficiency: colonistEfficiency(hunger),
-      buildingId: saved.buildingId,
-      hauling: saved.hauling,
-      // a restored colony's haulers start at the camp: HaulTrip never enters the save
-      haulTargetId: null, haulPhase: 'idle' as const, haulTicksLeft: 0,
-      haulLegTicks: 0, haulPickupCol: 0, haulPickupRow: 0,
-      carrying: 0, carryingResource: null,
-      toolTicks,
-      ageTicks, stage: stageOf(ageTicks, BALANCE.lifeBands),
-      // Not yet part of any save record (Task 6 stops short of the v5 bump):
-      // every restored colonist seeds as homeless, exactly like the entity
-      // colonistComponents actually spawns for the same record — the next
-      // tick's rehome phase re-derives a real assignment.
-      homeId: null,
-    };
-  });
-  const buildingFacts: BuildingFacts[] = save.buildings.map((saved) => {
-    // The same clamps buildingComponents applies, so the seeded snapshot's
-    // buffered total matches the buffer the spawned entity actually holds
-    // (an over-cap saved buffer trims to the cap here too, not just in the world)
-    const buffer = new OutputBuffer(clampedBuffer(saved.buffer));
-    return {
-      id: saved.id,
-      defId: saved.defId,
-      col: saved.col, row: saved.row,
-      workerSlots: BUILDINGS[saved.defId].workerSlots,
-      progress: clampedProgress(saved.defId, saved.progress),
-      batchActive: saved.batchActive,
-      buffered: buffer.total(),
-      buffer: Object.fromEntries(buffer.amounts) as Partial<Record<ResourceId, number>>,
-      relocatingTicks: clampedRelocation(saved.relocatingTicks ?? 0),
-    };
-  });
-  const {
-    colonists, buildings, population, idleAdults, homeless, beds, demographics, mealsPerHead,
-  } = buildEntitySections(workerFacts, buildingFacts, save.stockpile as Record<string, number>);
-  const stockpile = {} as Record<ResourceId, ResourceStats>;
-  let colonyWealth = 0;
-  for (const resourceId of RESOURCE_IDS) {
-    const stock = save.stockpile[resourceId] ?? 0;
-    const stockValue = stock * RESOURCES[resourceId].value;
-    colonyWealth += stockValue;
-    stockpile[resourceId] = { stock, deliveredRate: 0, madeRate: 0, consumptionRate: 0, netFlow: 0, stockValue };
-  }
-  return {
-    tick: Math.min(save.tick, MAX_SAVED_COUNTER), // same clamp as the spawned clock
-    lastRecruitTick: Math.min(save.lastRecruitTick, Math.min(save.tick, MAX_SAVED_COUNTER)),
-    // Not yet a saved field (Task 9 adds it): a restored colony's first birth
-    // is gated on food and beds, never on a cooldown it cannot remember.
-    lastBirthTick: -BALANCE.birthCooldownTicks,
-    mealsPerHead,
-    map: { cols: save.map.cols, rows: save.map.rows },
-    stockpile,
-    colonyWealth,
-    population,
-    idleAdults,
-    homeless,
-    beds,
-    demographics,
-    buildings,
-    colonists,
-    notices: [],
-  };
 }
 
 /**
@@ -452,6 +396,6 @@ export function refreshEntitySections(world: IRuntimeWorld): void {
 // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type -- mirrors sim-ecs's TExecutionFunction callback type exactly
 const runSynchronously = (callback: Function): void => (callback as () => void)();
 
-export async function createColonyWorld(save?: SaveGameV4): Promise<IRuntimeWorld> {
+export async function createColonyWorld(save?: SaveGameV5): Promise<IRuntimeWorld> {
   return buildColonyPrepWorld({ save }).prepareRun({ executionFunction: runSynchronously });
 }

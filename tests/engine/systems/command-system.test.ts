@@ -12,7 +12,7 @@ import { enqueue } from '../fixtures';
 import { buildSaveFromWorld } from '../../../src/engine/game-engine';
 import { buildColonyPrepWorld, COMPONENT_TYPES, getPrepResource, initialSave, spawnBuilding, spawnColonist } from '../../../src/engine/world';
 import type { Command } from '../../../src/shared/commands';
-import type { SaveGameV4 } from '../../../src/shared/save';
+import type { SaveGameV5 } from '../../../src/shared/save';
 
 /**
  * What a hauler in this file's fixtures carries per trip.
@@ -32,7 +32,23 @@ import type { SaveGameV4 } from '../../../src/shared/save';
  */
 const ONE_LOAD = haulerCapacity(null);
 
-async function setup(save: SaveGameV4 = initialSave()) {
+/**
+ * `initialSave()` with the starter house taken away and the founders back on
+ * the street — the colony this whole file was written against.
+ *
+ * Almost every case here counts `snapshot().buildings` or reads
+ * `buildings[0]`, and ONE_LOAD above is the capacity of an UNHOUSED hauler.
+ * Save v5 gives a fresh colony a house and puts all three founders in it, so
+ * inheriting that here would shift a dozen assertions that have nothing to do
+ * with housing. Stating the houseless colony explicitly keeps them honest —
+ * the same move `houseHaulers: false` makes in haul-system.test.ts.
+ */
+function houselessSave(): SaveGameV5 {
+  const base = initialSave();
+  return { ...base, buildings: [], colonists: base.colonists.map((c) => ({ ...c, homeId: null })) };
+}
+
+async function setup(save: SaveGameV5 = houselessSave()) {
   const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, HaulSystem, SnapshotSystem] });
   const world = await prep.prepareRun();
   // mirror GameEngine.stepOnce: the engine owns time, bumping the clock before each step.
@@ -57,8 +73,8 @@ async function setup(save: SaveGameV4 = initialSave()) {
  * bed, so the SECOND recruit below would be refused for want of a bed and the
  * cooldown assertion would pass for the wrong reason.
  */
-function saveThatCanHouseArrivals(): SaveGameV4 {
-  const base = initialSave();
+function saveThatCanHouseArrivals(): SaveGameV5 {
+  const base = houselessSave();
   return {
     ...base,
     buildings: [
@@ -73,7 +89,7 @@ function saveThatCanHouseArrivals(): SaveGameV4 {
 // Relocation downtime is enforced by ProductionSystem, which the shared setup()
 // deliberately omits. Order matches ALL_SYSTEMS (buildColonyPrepWorld throws
 // otherwise).
-async function setupWithProduction(save: SaveGameV4 = initialSave()) {
+async function setupWithProduction(save: SaveGameV5 = houselessSave()) {
   const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, ProductionSystem, HaulSystem, SnapshotSystem] });
   const world = await prep.prepareRun();
   const tick = async () => {
@@ -168,7 +184,8 @@ describe('CommandSystem', () => {
     // the same-tick demolishedIds guard rejects later commands against the id.
     // Pinned as defense in depth for any future remover that misses eviction.
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // this fixture spawns exactly the world it needs
     const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, SnapshotSystem] });
     spawnColonist(prep, getPrepResource(prep, IdCounter), { buildingId: 404 }); // no building 404
     const world = await prep.prepareRun();
@@ -181,7 +198,7 @@ describe('CommandSystem', () => {
   });
 
   it('refuses entity creation once the id space is exhausted, without side effects', async () => {
-    const save = initialSave();
+    const save = houselessSave();
     save.nextEntityId = Number.MAX_SAFE_INTEGER - 2 ** 32; // == MAX_SAVED_COUNTER: nothing left to hand out
     const { world, tick, dispatch, snapshot } = await setup(save);
     await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
@@ -288,7 +305,7 @@ describe('CommandSystem', () => {
   });
 
   it('rejects construction once no buildable tile remains', async () => {
-    const save = initialSave();
+    const save = houselessSave(); // its own fill covers (4,1), where the starter house would stand
     let id = 10;
     for (let row = 0; row < 16; row++) {
       for (let col = 3; col < 24; col++) {
@@ -350,7 +367,8 @@ describe('CommandSystem', () => {
 
   it('names exactly one displaced resident, singular wording', async () => {
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // this fixture spawns exactly the world it needs
     const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, HaulSystem, SnapshotSystem] });
     const ids = getPrepResource(prep, IdCounter);
     const house = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: 5, row: 3, relocatingTicks: 0 });
@@ -367,7 +385,8 @@ describe('CommandSystem', () => {
 
   it('names the exact count of several displaced residents', async () => {
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // this fixture spawns exactly the world it needs
     const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, HaulSystem, SnapshotSystem] });
     const ids = getPrepResource(prep, IdCounter);
     const house = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: 5, row: 3, relocatingTicks: 0 });
@@ -387,7 +406,8 @@ describe('CommandSystem', () => {
     // against a house (the one building type residents ever point home at),
     // not just the Forester the byte-identical test above already covers.
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // this fixture spawns exactly the world it needs
     const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, HaulSystem, SnapshotSystem] });
     const ids = getPrepResource(prep, IdCounter);
     const house = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: 5, row: 3, relocatingTicks: 0 });
@@ -509,7 +529,8 @@ describe('CommandSystem', () => {
     // Built directly against HungerSystem: the shared `setup` runs only the
     // command and snapshot systems, so it could never show a hauler eating.
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // this fixture spawns exactly the world it needs
     save.stockpile = { berries: 5 };
     const prep = buildColonyPrepWorld({ save, systems: [HungerSystem] });
     spawnColonist(prep, getPrepResource(prep, IdCounter), { hauling: true });
@@ -699,9 +720,14 @@ describe('CommandSystem', () => {
   // path only, so buildings constructed during play had no buffer at all, and
   // nothing in the suite would have noticed.
   it('a constructed building carries the same components as a restored one', async () => {
-    const save: SaveGameV4 = {
+    const save: SaveGameV5 = {
       ...initialSave(),
-      buildings: [{ id: 10, defId: 'forester', col: 6, row: 3, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 }],
+      // Beside the starter house, not instead of it: the founders' homeId
+      // points at it, and the load guard refuses a home that names nothing.
+      buildings: [
+        ...initialSave().buildings,
+        { id: 10, defId: 'forester', col: 6, row: 3, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 },
+      ],
       nextEntityId: 11, // strictly past every id above, or the load guard refuses the save
     };
     const { world, tick, dispatch } = await setup(save);

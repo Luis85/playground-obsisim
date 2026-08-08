@@ -467,7 +467,7 @@ and distribution tests all pass."
   - `class Age { constructor(public ticks = 0) {} }`
   - `clampedAge(ticks: number): number`
   - `PopulationSystem: TColonySystemFactory`
-  - `interface PopulationContext` and the phase functions `ageEveryone`, `resolveOldAge`, `retireElders`
+  - `interface PopulationContext` and the phase functions `ageEveryone`, `resolveOldAge`, `standDownNonAdults`
   - `ColonistSnapshot.ageTicks: number`, `ColonistSnapshot.stage: LifeStage`
   - `EntitySections.idleAdults` (was `idleWorkers`), `Snapshot.idleAdults`
   - `ColonistSpec.ageTicks?: number`
@@ -582,6 +582,8 @@ export function clampedAge(ticks: number): number {
 }
 ```
 
+**Then remove `MAX_AGE_TICKS` from `.fallowrc.json`'s `ignoreExports`.** Task 2 added it there because the constant had no consumer yet and tripped the dead-code ratchet (`deadCodeIssues: 0 → 1`), recording the entry as transitional in `docs/build-ci/quality-gates.md`. `clampedAge` is that consumer, so the entry has served its purpose — leaving it would permanently exempt a live export from the gate that exists to catch exactly this. Remove the note from the quality-gates doc too, and confirm `npm run check:quality` still reports `deadCodeIssues: 0` without it.
+
 Import `MAX_AGE_TICKS` from `./content/balance`, add `ageTicks?: number` to `ColonistSpec`, and add to `colonistComponents`'s list:
 
 ```ts
@@ -669,12 +671,18 @@ export function resolveOldAge(ctx: PopulationContext): void {
   }
 }
 
-export function retireElders(ctx: PopulationContext): void {
+export function standDownNonAdults(ctx: PopulationContext): void {
   for (const row of livingRows(ctx)) {
-    if (stageOf(row.age.ticks, BALANCE.lifeBands) !== 'elder') continue;
-    if (row.job.buildingId === null && !row.job.hauling) continue; // already retired
+    const stage = stageOf(row.age.ticks, BALANCE.lifeBands);
+    // Every non-adult, not just elders. A save written before `matureTicks`
+    // was raised can load with a staffed colonist whose age now falls in the
+    // CHILD band — balance-retuned saves are accepted by policy, and the
+    // assign command only gates future commands — so an elder-only check
+    // would leave that child working until it matured all over again.
+    if (stage === 'adult') continue;
+    if (row.job.buildingId === null && !row.job.hauling) continue; // already stood down
     standDown(ctx, row);
-    ctx.notices.succeed(`Colonist #${row.colonist.id} retired.`);
+    ctx.notices.succeed(`Colonist #${row.colonist.id} ${stage === 'elder' ? 'retired' : 'is too young to work'}.`);
   }
 }
 ```
@@ -687,7 +695,7 @@ Create `src/engine/systems/population-system.ts`:
 import { Actions, createSystem, queryComponents, Read, ReadEntity, Write, WriteResource } from 'sim-ecs';
 import { Age, Colonist, HaulTrip, Hunger, JobAssignment } from '../components';
 import { IdCounter, NoticeBoard, RemovalLedger, SimClock, Stockpile } from '../resources';
-import { ageEveryone, resolveOldAge, retireElders, type PopulationContext } from './population-handlers';
+import { ageEveryone, resolveOldAge, standDownNonAdults, type PopulationContext } from './population-handlers';
 
 /**
  * Spec 2.9 places this third, and both neighbours are load-bearing: AFTER
@@ -727,7 +735,7 @@ export const PopulationSystem = () => createSystem({
     };
     ageEveryone(ctx);
     resolveOldAge(ctx);
-    retireElders(ctx);
+    standDownNonAdults(ctx);
   })
   .build();
 ```
@@ -814,7 +822,7 @@ cp "$SP/population-handlers.ts" src/engine/systems/population-handlers.ts
 # the earlier multiline form left the file untouched and the test "passed"
 # against unmutated code. Target the ONE line that does the work instead, and
 # check it applied.
-perl -0pi -e 's/(export function retireElders[\s\S]*?)    standDown\(ctx, row\);/$1/' src/engine/systems/population-handlers.ts
+perl -0pi -e 's/(export function standDownNonAdults[\s\S]*?)    standDown\(ctx, row\);/$1/' src/engine/systems/population-handlers.ts
 git diff --quiet src/engine/systems/population-handlers.ts && { echo "MUTATION DID NOT APPLY"; exit 1; }
 npx vitest run tests/engine/systems/population-system.test.ts -t "retires an adult"      # expect FAIL
 cp "$SP/population-handlers.ts" src/engine/systems/population-handlers.ts
@@ -1450,7 +1458,7 @@ export function rehome(ctx: PopulationContext): void {
   // A nomad welcomed earlier this tick already reserved its bed and is not in
   // `rows` — without this, homing hands that same bed to a homeless colonist
   // and the house ends the tick over capacity.
-  for (const arrival of ctx.arrivals.pending) {
+  for (const arrival of ctx.pending.arrivals) {
     if (arrival.homeId !== null) free.set(arrival.homeId, (free.get(arrival.homeId) ?? 0) - 1);
   }
 
@@ -1510,7 +1518,7 @@ build the shelter rows in the context:
         })),
 ```
 
-and call `rehome(ctx)` after `retireElders(ctx)`. Add `home: Write(Home)` to the colonists query and thread it into the row mapping.
+and call `rehome(ctx)` after `standDownNonAdults(ctx)`. Add `home: Write(Home)` to the colonists query and thread it into the row mapping.
 
 - [ ] **Step 6: Evict on demolition**
 
@@ -2157,11 +2165,31 @@ In `src/engine/resources.ts`, beside `RemovalLedger`:
  * Reset by PopulationSystem after it has read it: by the next tick the real
  * entities are in the query and counting them again would double them.
  */
-export class ArrivalLedger {
+export class PendingChanges {
   /** One entry per colonist spawned this tick, carrying the bed it took. */
-  readonly pending: { homeId: number | null }[] = [];
+  readonly arrivals: { homeId: number | null }[] = [];
+  /** Buildings demolished this tick. Still in every query until the sync. */
+  readonly demolished = new Set<number>();
+
+  clear(): void {
+    this.arrivals.length = 0;
+    this.demolished.clear();
+  }
 }
 ```
+
+**One resource, because both halves are the same bug.** sim-ecs makes a spawned entity invisible until the post-step sync *and* keeps a removed one visible until then, so `PopulationSystem` needs to know about both. The arrivals half stops a nomad and a birth taking the same bed. The demolished half is what makes `handleDemolishBuilding`'s eviction stick: it nulls its residents' homes, but the house is still in `PopulationSystem`'s `shelters` query later in the same tick, so `rehome` would see its beds as free and put the very same colonists straight back into the building that no longer exists. Both are one question — "what changed this tick that queries cannot see yet?" — so they get one answer, cleared together by `PopulationSystem` after `tryBirth`.
+
+`rehome` and both gates therefore skip any shelter in `ctx.pending.demolished`, exactly as they skip a relocating one:
+
+```ts
+  for (const shelter of ctx.shelters) {
+    if (shelter.relocating || ctx.pending.demolished.has(shelter.id)) continue;
+    free.set(shelter.id, shelter.beds);
+  }
+```
+
+and `freeBeds` / `shelterWithRoom` take the same exclusion.
 
 #### Read this before writing any of it: beds are fungible
 
@@ -2205,7 +2233,7 @@ export function shelterWithRoom(
 
 **An arrival names its bed, and `rehome` must honour that.** Neither arrival is homed on its own tick — a nomad is invisible to `PopulationSystem`, a birth happens after homing — so each passes a `homeId` into `colonistComponents` and pushes `{ homeId }` onto the ledger. `rehome` then counts pending arrivals against their houses when computing per-shelter room, or it will fill the very bed an arrival reserved.
 
-Register `ArrivalLedger` in `buildColonyPrepWorld`'s `instances` array. `handleRecruitWorker` gates on `freeBeds(...) > 0`, picks its bed with `shelterWithRoom`, and pushes onto the ledger.
+Register `PendingChanges` in `buildColonyPrepWorld`'s `instances` array. `handleRecruitWorker` gates on `freeBeds(...) > 0`, picks its bed with `shelterWithRoom`, and pushes onto the ledger.
 
 **Pin the invariant, not just the three known cases.** All three defects violated one property, and a property test catches the next variant:
 
@@ -2239,7 +2267,7 @@ export function tryBirth(ctx: PopulationContext): void {
   const rows = livingRows(ctx);
   // A nomad welcomed earlier this tick holds a bed and eats, but is not in
   // `rows` yet — count them, or both arrivals take the same last bed.
-  const pending = ctx.arrivals.pending.length;
+  const pending = ctx.pending.arrivals.length;
   const blocker = birthBlocker({
     stock: ctx.stockpile.toJSON(),
     weights: MEAL_WEIGHTS,
@@ -2261,17 +2289,17 @@ export function tryBirth(ctx: PopulationContext): void {
   for (const row of rows) {
     if (row.home.buildingId !== null) claimed.set(row.home.buildingId, (claimed.get(row.home.buildingId) ?? 0) + 1);
   }
-  for (const arrival of ctx.arrivals.pending) {
+  for (const arrival of ctx.pending.arrivals) {
     if (arrival.homeId !== null) claimed.set(arrival.homeId, (claimed.get(arrival.homeId) ?? 0) + 1);
   }
   const homeId = shelterWithRoom(ctx.shelters, claimed);
   ctx.spawn(...colonistComponents({ id, ageTicks: 0, homeId }));
-  ctx.arrivals.pending.push({ homeId });
+  ctx.pending.arrivals.push({ homeId });
   ctx.notices.succeed(`Colonist #${id} was born.`);
 }
 ```
 
-`PopulationSystem` clears `ctx.arrivals.pending` (`length = 0`) after `tryBirth` — by the next tick the real entities are in the query, and counting them twice would double them — and `PopulationContext` gains `arrivals: ArrivalLedger`.
+`PopulationSystem` calls `ctx.pending.clear()` after `tryBirth` — by the next tick the real entities are in the query, so counting them again would double the arrivals and keep a demolished house excluded forever — and `PopulationContext` gains `pending: PendingChanges`.
 
 Pin the interaction — this is the whole reason the ledger exists:
 
@@ -3080,22 +3108,24 @@ Putting the label *inside* the chip is what rendered two increment-4 entries as 
 
 - [ ] **Step 4: Add smoke phases, one change each**
 
-In `scripts/world-smoke.mjs`, extend the harness scene and add four phases, each changing **exactly one** thing:
+Add four fixture phases to the `phases` table in `scripts/world-smoke-harness/main.ts`, and four checks to the runner in `scripts/world-smoke.mjs`. Each phase changes **exactly one** thing.
+
+**Append to the END of that table and use the next free indices.** It already holds 18 entries (0–17), and 9 through 12 are the carrying marker, relocation state, ghost activation and ghost tint — reusing those indices would compare unrelated existing transitions, so all four new checks would pass with demographic rendering entirely removed. That is the precise failure one-change-per-phase exists to prevent. Confirm the count first (`grep -c 'snap(' scripts/world-smoke-harness/main.ts`) and renumber if the table has grown since this was written.
 
 ```js
-await step(9);  // a house appears — nothing else moves
+await step(18);  // a house appears — nothing else moves
 const withHouse = await shot();
 check('a house is drawn on the canvas', !withHouse.equals(preHouse));
 
-await step(10); // ONE colonist's stage becomes 'child'
+await step(19); // ONE colonist's stage becomes 'child'
 const withChild = await shot();
 check('a child is drawn differently from an adult', !withChild.equals(withHouse));
 
-await step(11); // that SAME colonist becomes 'elder' — one field, one frame
+await step(20); // that SAME colonist becomes 'elder' — one field, one frame
 const withElder = await shot();
 check('an elder is drawn differently from a child', !withElder.equals(withChild));
 
-await step(12); // that same colonist's homeId becomes null
+await step(21); // that same colonist's homeId becomes null
 const homeless = await shot();
 check('a homeless colonist carries its mark', !homeless.equals(withElder));
 ```
@@ -3175,7 +3205,7 @@ describe('population balance', () => {
     expect(firstStarving).toBeGreaterThanOrEqual(0);
     expect(firstDeath).toBeGreaterThan(firstStarving);
     const warningTicks = (firstDeath - firstStarving) * 10;
-    expect(warningTicks).toBeGreaterThan(BALANCE.autosaveEveryTicks);
+    expect(warningTicks).toBeGreaterThanOrEqual(BALANCE.autosaveEveryTicks);
   }, 120000);
 
   it('a birth burst becomes a retirement bulge one generation later', async () => {

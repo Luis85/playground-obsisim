@@ -2962,7 +2962,7 @@ const migrateV4toV5: MigrationStep = {
     while (v4.buildings.length >= (map.cols - CAMP_COLS) * map.rows) {
       if (map.rows < MAX_MAP.rows) map.rows += 1;
       else if (map.cols < MAX_MAP.cols) map.cols += 1;
-      else break; // at MAX_MAP and still full: fall through to the no-house path
+      else break; // unreachable — see the capacity proof below the loop
     }
     const at = autoPlacePosition(map, occupied);
     // The smallest unused positive id, NOT max + 1. A guard-valid v4 save may
@@ -2998,6 +2998,40 @@ const migrateV4toV5: MigrationStep = {
       // records that never carried it.
       starvingTicks: w.starvingTicks ?? 0,
     }));
+**Why `break` and `at === null` are both unreachable, and why the code keeps
+them anyway.** A reviewer has twice read the no-house path as a live
+regression — a migrated colony loading wholly homeless with no tile left to
+build on. It cannot happen, and the arithmetic is worth writing down once so
+the next reader does not have to re-derive it:
+
+- `MAX_SAVED_ENTITIES` is 10,000 (`src/shared/save.ts`), and the structural
+  guard rejects any save whose `buildings` array exceeds it. So a
+  guard-valid v4 save holds at most 10,000 buildings.
+- `MAX_MAP` is 256×256, and the camp band costs three columns, so the
+  buildable area tops out at `(256 - 3) * 256 = 64,768` tiles.
+- The growth loop therefore exits on its condition — 10,000 is never `>=`
+  64,768 — with at least 54,768 free tiles in the worst admissible case.
+  The `break` arm never runs.
+- `isPositionsValid` already guarantees every saved building sits in bounds,
+  at `col >= CAMP_COLS`, on a tile no other building shares. Occupied tiles
+  are thus a subset of buildable ones, so free tiles are exactly
+  `buildable - buildings.length`, and `autoPlacePosition`'s row-major
+  fallback scan sweeps the whole `col >= CAMP_COLS` region. It cannot return
+  null when free tiles exist.
+
+Keep both branches regardless: they are total-function hygiene, not dead
+weight, and the bound they depend on lives in a different file from the
+loop that relies on it. Retune `MAX_SAVED_ENTITIES` upward or `MAX_MAP`
+downward and the arm becomes live — at which point loading homeless with a
+grown map is still the correct outcome, because the alternative is a
+migration that demolishes the player's buildings to make room for a house
+they did not ask for. Do NOT add a fallback that invents a tile: a house
+placed at `col < CAMP_COLS` fails `isPositionsValid` and sends the whole
+save down the corrupt-backup path, which is strictly worse than loading it
+homeless. And homeless is recoverable by the player — demolishing one
+building frees a tile and the next homing pass rehouses everyone, which is
+precisely the decision this increment is about.
+
     const { workers: _dropped, ...rest } = v4;
     return {
       ...rest,

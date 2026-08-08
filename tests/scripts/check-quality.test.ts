@@ -29,7 +29,10 @@ function report(fileScores: FileScore[], overrides: Record<string, number> = {})
         functions_above_threshold: overrides.complexFunctions ?? 0,
         severity_critical_count: overrides.criticalComplexity ?? 0,
       },
-      file_scores: fileScores,
+      // Copied, not aliased: SRC/TESTS/SCRIPTS are module-level constants shared
+      // by every test, and `mangle` below hands this structure out for damage.
+      // Aliasing let one test's `delete` poison the fixtures for the whole file.
+      file_scores: fileScores.map((f) => ({ ...f })),
     },
   };
 }
@@ -66,9 +69,21 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 function run(
   fileScores: FileScore[],
-  opts: { overrides?: Record<string, number>; baseline?: unknown; args?: string[]; skipBaseline?: boolean } = {},
+  opts: {
+    overrides?: Record<string, number>;
+    baseline?: unknown;
+    args?: string[];
+    skipBaseline?: boolean;
+    /** Damage the report before writing it — for the fallow-changed-shape cases. */
+    mangle?: (built: ReturnType<typeof report>) => void;
+    /** Create a coverage/ directory, which the gate must refuse to run beside. */
+    withCoverageDir?: boolean;
+  } = {},
 ) {
-  writeFileSync(join(dir, 'reports.json'), JSON.stringify(report(fileScores, opts.overrides ?? {})));
+  const built = report(fileScores, opts.overrides ?? {});
+  opts.mangle?.(built);
+  if (opts.withCoverageDir) mkdirSync(join(dir, 'coverage'));
+  writeFileSync(join(dir, 'reports.json'), JSON.stringify(built));
   if (!opts.skipBaseline) {
     writeFileSync(join(dir, 'scripts', 'quality-baseline.json'), JSON.stringify(opts.baseline ?? BASELINE, null, 2));
   }
@@ -183,6 +198,53 @@ describe('check:quality maintainability floor', () => {
     const { code, err } = run([...SRC, ...TESTS, ...SCRIPTS], { baseline: malformed });
     expect(code).toBe(1);
     expect(err).toContain('not finite numbers: worstSrcFileMaintainability=null');
+  });
+
+  // The baseline is only one operand. Every check above damages the baseline;
+  // these damage the REPORT, which fails identically and just as quietly — a
+  // fallow upgrade that renames a summary field leaves current[key] undefined,
+  // and `undefined > 0` is false, so the counter it feeds stops gating while the
+  // run still prints ok. Caught in every mode, with no --allow-regression
+  // escape: a number the gate could not measure is not a number it can lock.
+  it('fails when fallow reports no number for a pinned-at-zero counter', () => {
+    const { code, err } = run([...SRC, ...TESTS, ...SCRIPTS], {
+      mangle: (r) => { delete (r.check.summary as Record<string, unknown>).boundary_violations; },
+    });
+    expect(code).toBe(1);
+    expect(err).toContain('no number for: boundaryViolations=undefined');
+  });
+
+  it('fails when fallow reports no number for the maintainability floor', () => {
+    const { code, err } = run([...SRC, ...TESTS, ...SCRIPTS], {
+      // the worst file scores fine, but under a renamed field the gate reads undefined
+      mangle: (r) => { for (const f of r.health.file_scores) delete (f as Record<string, unknown>).maintainability_index; },
+    });
+    expect(code).toBe(1);
+    expect(err).toContain('worstSrcFileMaintainability=undefined');
+  });
+
+  it('refuses to lock an unmeasured counter even with --allow-regression', () => {
+    const { code, err } = run([...SRC, ...TESTS, ...SCRIPTS], {
+      args: ['--update', '--allow-regression'],
+      mangle: (r) => { delete (r.health.summary as Record<string, unknown>).functions_above_threshold; },
+    });
+    expect(code).toBe(1);
+    expect(err).toContain('complexFunctions=undefined');
+    // the escape hatch covers a judged trade-off, never a broken toolchain
+    expect(lockedBaseline()).toEqual(BASELINE);
+  });
+
+  // The two remaining exit paths, neither previously exercised.
+  it('refuses to run beside a coverage/ directory', () => {
+    const { code, err } = run([...SRC, ...TESTS, ...SCRIPTS], { withCoverageDir: true });
+    expect(code).toBe(1);
+    expect(err).toContain('without a coverage/ directory');
+  });
+
+  it('fails the normal run when no baseline file exists', () => {
+    const { code, err } = run([...SRC, ...TESTS, ...SCRIPTS], { skipBaseline: true });
+    expect(code).toBe(1);
+    expect(err).toContain('Missing scripts/quality-baseline.json');
   });
 
   // Coverage for the normal run path (no --update): the pinned-at-zero counters

@@ -86,6 +86,26 @@ const SHRINK_ONLY = ['deadCodeIssues', 'cloneGroups', 'duplicatedLines', 'comple
 const FLOORS = ['worstSrcFileMaintainability'];
 const GATED = [...PINNED_AT_ZERO, ...SHRINK_ONLY, ...FLOORS];
 
+// The baseline is validated below, but it is only one operand. `current` can go
+// bad the same way and with the same silence: fallow renaming or dropping a
+// summary field leaves current[key] undefined, and every comparison against
+// undefined is false — so a pinned-at-zero key reports no breach, a shrink-only
+// counter reports no regression, and the run prints `quality ratchet ok` with
+// that counter switched off. `--update` would then write a baseline with the key
+// missing entirely, since JSON.stringify drops undefined, moving the damage into
+// the file where the next run reads it as a malformed baseline.
+//
+// No --allow-regression escape, and it fails in every mode: a number the gate
+// could not measure is not a number it can lock. This is a broken toolchain, not
+// a metric trade-off.
+const unmeasured = GATED.filter((key) => !Number.isFinite(current[key]));
+if (unmeasured.length) {
+  console.error(
+    `fallow's report yielded no number for: ${unmeasured.map((key) => `${key}=${JSON.stringify(current[key])}`).join(', ')}\nEach is read from fallow's own summary, so a renamed or removed field silently disables the counter it feeds. Check the fallow version against the field names in this script.`,
+  );
+  process.exit(1);
+}
+
 const hasBaseline = existsSync(BASELINE_PATH);
 const baseline = hasBaseline ? JSON.parse(readFileSync(BASELINE_PATH, 'utf8')) : {};
 

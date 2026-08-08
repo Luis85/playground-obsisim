@@ -1,4 +1,4 @@
-import type { Snapshot, BuildingState, WorkerSnapshot } from '../../shared/snapshot';
+import type { Snapshot, BuildingState, ColonistSnapshot } from '../../shared/snapshot';
 import type { BuildingDefId } from '../../shared/content-types';
 import { BUILDINGS } from '../../engine/content';
 import { legProgress } from '../../shared/haul';
@@ -96,7 +96,7 @@ function heldSlots(previous?: WorldLayout): Map<number | null, Map<number, numbe
  * arrival, departure, or roster-size change — the stability spec §2.3 asks
  * for, and the collision-free arrivals its review demanded.
  */
-function allocateSlots(members: WorkerSnapshot[], base: number, held?: Map<number, number>): Map<number, number> {
+function allocateSlots(members: ColonistSnapshot[], base: number, held?: Map<number, number>): Map<number, number> {
   const slots = new Map<number, number>();
   const taken = new Set<number>();
   for (const m of members) {
@@ -167,10 +167,10 @@ export function describePick(snapshot: Snapshot, pick: WorldPick): string[] {
       b.batchActive ? `batch ${b.progressPct}%` : 'no active batch',
     ];
   }
-  const w = snapshot.workers.find((candidate) => candidate.id === pick.id);
+  const w = snapshot.colonists.find((candidate) => candidate.id === pick.id);
   if (!w) return [];
   return [
-    `Worker #${w.id}`,
+    `Colonist #${w.id}`,
     `efficiency ${Math.round(w.efficiency * 100)}% — hunger ${Math.round(w.hunger)}`,
     w.toolTicks > 0 ? `tooled (${w.toolTicks}t left)` : 'no tool',
   ];
@@ -236,7 +236,7 @@ function haulerSpot(tile: { col: number; row: number }): Spot {
  * outbound trip's ticks on a move (handleMoveBuilding), so that endpoint and
  * the leg total the snapshot publishes always agree.
  */
-function haulSpot(w: WorkerSnapshot, cell: PlacedBuilding): Spot {
+function haulSpot(w: ColonistSnapshot, cell: PlacedBuilding): Spot {
   const door = haulerSpot(cell);
   const pickup = haulerSpot({ col: w.haulPickupCol, row: w.haulPickupRow });
   const travelled = legProgress(w.haulTicksLeft, w.haulLegTicks);
@@ -253,7 +253,7 @@ function haulSpot(w: WorkerSnapshot, cell: PlacedBuilding): Spot {
  * Its own function (not inlined in layoutWorld) purely to keep that
  * orchestrator's complexity within the project's gate.
  */
-function placeHaulers(sorted: WorkerSnapshot[], cellById: Map<number, PlacedBuilding>, placements: Map<number, Placement>): void {
+function placeHaulers(sorted: ColonistSnapshot[], cellById: Map<number, PlacedBuilding>, placements: Map<number, Placement>): void {
   for (const w of sorted) {
     if (!w.hauling || w.haulTargetId === null || w.haulPhase === 'idle') continue;
     const cell = cellById.get(w.haulTargetId);
@@ -266,10 +266,10 @@ export function layoutWorld(snapshot: Snapshot, previous?: WorldLayout): WorldLa
   const { cols, rows } = snapshot.map;
   const cellById = placeBuildings(snapshot);
   const held = heldSlots(previous);
-  const sorted = [...snapshot.workers].sort(byId);
+  const sorted = [...snapshot.colonists].sort(byId);
   const placements = new Map<number, Placement>();
 
-  const rosters = new Map<number, WorkerSnapshot[]>();
+  const rosters = new Map<number, ColonistSnapshot[]>();
   for (const w of sorted) {
     if (w.buildingId === null || !cellById.has(w.buildingId)) continue;
     const mates = rosters.get(w.buildingId) ?? [];

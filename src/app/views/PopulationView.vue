@@ -39,8 +39,8 @@ function toolLabel(toolTicks: number): string {
 // its own column, and coloring both would say the same thing twice.
 //
 // Reuses BALANCE.mealThreshold/hungerMax rather than new literals, so a
-// balance retune can't silently desync this coloring from workerEfficiency()
-// in content/balance.ts. The `>=` here (vs. workerEfficiency's `<=`) is
+// balance retune can't silently desync this coloring from colonistEfficiency()
+// in content/balance.ts. The `>=` here (vs. colonistEfficiency's `<=`) is
 // deliberate: the warning fires at hunger === mealThreshold itself, one tick
 // before efficiency actually starts to drop.
 function hungerClass(hunger: number): string {
@@ -64,10 +64,10 @@ function hungerClass(hunger: number): string {
     </div>
     <table class="obsisim-table">
       <thead>
-        <tr><th>Worker</th><th>Job</th><th>Hunger</th><th>Efficiency</th><th>Tool</th></tr>
+        <tr><th>Colonist</th><th>Job</th><th>Hunger</th><th>Efficiency</th><th>Tool</th></tr>
       </thead>
       <tbody>
-        <tr v-for="w in store.snapshot.workers" :key="w.id">
+        <tr v-for="w in store.snapshot.colonists" :key="w.id">
           <td>#{{ w.id }}</td>
           <td>{{ jobLabel(w.buildingId, w.hauling) }}</td>
           <td :data-test="`hunger-${w.id}`" :class="hungerClass(w.hunger)">{{ w.hunger }} / {{ BALANCE.hungerMax }}</td>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { IEntity, IRuntimeWorld } from 'sim-ecs';
-import { Building, HaulTrip, JobAssignment, OutputBuffer, Worker } from '../../../src/engine/components';
+import { Building, HaulTrip, JobAssignment, OutputBuffer, Colonist } from '../../../src/engine/components';
 import { IdCounter, Stockpile } from '../../../src/engine/resources';
 import { BALANCE } from '../../../src/engine/content/balance';
 import { BUILDINGS } from '../../../src/engine/content/buildings';
@@ -8,7 +8,7 @@ import { HaulSystem } from '../../../src/engine/systems/haul-system';
 import { CommandSystem } from '../../../src/engine/systems/command-system';
 import { enqueue } from '../fixtures';
 import {
-  buildColonyPrepWorld, createColonyWorld, getPrepResource, initialSave, spawnBuilding, spawnWorker, type TColonySystemFactory,
+  buildColonyPrepWorld, createColonyWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist, type TColonySystemFactory,
 } from '../../../src/engine/world';
 import { buildSaveFromWorld } from '../../../src/engine/game-engine';
 
@@ -33,7 +33,7 @@ async function setup(specs: readonly BuildingSpec[], haulerCount: number, system
     if (spec.wood > 0) entity.getComponent(OutputBuffer)!.add('wood', spec.wood);
     return entity;
   });
-  const haulers: IEntity[] = Array.from({ length: haulerCount }, () => spawnWorker(prep, ids, { hauling: true }));
+  const haulers: IEntity[] = Array.from({ length: haulerCount }, () => spawnColonist(prep, ids, { hauling: true }));
   const world = await prep.prepareRun();
   const step = async (times: number) => { for (let i = 0; i < times; i++) await world.step(); };
   return { world, buildings, haulers, step, stockpile: world.getResource(Stockpile) };
@@ -56,7 +56,7 @@ function haulStateOf(world: IRuntimeWorld) {
     .map((e) => {
       const trip = e.getComponent(HaulTrip)!;
       return {
-        workerId: e.getComponent(Worker)!.id,
+        workerId: e.getComponent(Colonist)!.id,
         targetId: trip.targetId,
         phase: trip.phase,
         ticksLeft: trip.ticksLeft,
@@ -246,7 +246,7 @@ describe('HaulSystem', () => {
     const ids = getPrepResource(prep, IdCounter);
     const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 0 });
     building.getComponent(OutputBuffer)!.add('wood', 9);
-    const idle = spawnWorker(prep, ids, {});
+    const idle = spawnColonist(prep, ids, {});
     const world = await prep.prepareRun();
     for (let i = 0; i < 6; i++) await world.step();
     expect(idle.getComponent(HaulTrip)!.phase).toBe('idle');
@@ -321,8 +321,8 @@ describe('HaulSystem lifecycle', () => {
     const ids = getPrepResource(prep, IdCounter);
     const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 5, row: 4, relocatingTicks: 0 });
     building.getComponent(OutputBuffer)!.add('wood', BALANCE.haulCarryCapacity); // exactly one load, no more
-    const first = spawnWorker(prep, ids, { hauling: true });
-    const second = spawnWorker(prep, ids, {}); // idle for now; promoted next tick
+    const first = spawnColonist(prep, ids, { hauling: true });
+    const second = spawnColonist(prep, ids, {}); // idle for now; promoted next tick
     const world = await prep.prepareRun();
 
     await world.step(); // tick 1: the first hauler claims the whole buffer
@@ -348,7 +348,7 @@ describe('HaulSystem lifecycle', () => {
     const world = await createColonyWorld(save);
 
     const trips = [...world.getEntities()]
-      .filter((entity) => entity.getComponent(Worker) !== undefined)
+      .filter((entity) => entity.getComponent(Colonist) !== undefined)
       .map((entity) => entity.getComponent(HaulTrip)!);
     expect(trips).toHaveLength(save.workers.length);
     expect(trips.every((t) => t.phase === 'idle' && t.targetId === null && t.ticksLeft === 0 && t.amount === 0)).toBe(true);

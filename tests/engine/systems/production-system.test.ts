@@ -4,7 +4,7 @@ import { Building, OutputBuffer, Production } from '../../../src/engine/componen
 import { IdCounter, SnapshotStore, Stockpile } from '../../../src/engine/resources';
 import { ProductionSystem } from '../../../src/engine/systems/production-system';
 import { SnapshotSystem } from '../../../src/engine/systems/snapshot-system';
-import { buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spawnWorker } from '../../../src/engine/world';
+import { buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist } from '../../../src/engine/world';
 import type { BuildingDefId, ResourceId } from '../../../src/shared/content-types';
 import { BALANCE } from '../../../src/engine/content/balance';
 import { BUILDINGS } from '../../../src/engine/content/buildings';
@@ -17,7 +17,7 @@ async function setup(defId: BuildingDefId, stock: Partial<Record<ResourceId, num
   const ids = getPrepResource(prep, IdCounter);
   const building: IEntity = spawnBuilding(prep, ids, { defId, progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 0 });
   const buildingId = building.getComponent(Building)!.id;
-  for (let i = 0; i < workerCount; i++) spawnWorker(prep, ids, { buildingId, toolTicks: workerToolTicks });
+  for (let i = 0; i < workerCount; i++) spawnColonist(prep, ids, { buildingId, toolTicks: workerToolTicks });
   const world = await prep.prepareRun();
   return { world, building, stockpile: world.getResource(Stockpile) };
 }
@@ -72,8 +72,8 @@ describe('ProductionSystem', () => {
     // one covered worker (1.5) + one bare worker (1.0) = 2.5 power/tick, forester batch is 3
     const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 0 });
     const buildingId = building.getComponent(Building)!.id;
-    spawnWorker(prep, ids, { buildingId, toolTicks: 1000 });
-    spawnWorker(prep, ids, { buildingId });
+    spawnColonist(prep, ids, { buildingId, toolTicks: 1000 });
+    spawnColonist(prep, ids, { buildingId });
     const world = await prep.prepareRun();
     await world.step(); // 2.5 < 3: batch not done
     expect(building.getComponent(OutputBuffer)!.total()).toBe(0);
@@ -98,7 +98,7 @@ describe('ProductionSystem', () => {
 
   it('the work power the snapshot reports is the one production actually applied', async () => {
     // Two INDEPENDENT derivations of the same number: this system sums live
-    // components, buildEntitySections sums WorkerFacts. They agreed only by
+    // components, buildEntitySections sums ColonistFacts. They agreed only by
     // both spelling out the tool bonus, so a change to one could make the UI
     // report a work power the simulation never used. Both assertions are
     // needed: the cross-check catches a change to one derivation, the absolute
@@ -109,8 +109,8 @@ describe('ProductionSystem', () => {
     const ids = getPrepResource(prep, IdCounter);
     const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 0 });
     const buildingId = building.getComponent(Building)!.id;
-    spawnWorker(prep, ids, { buildingId, toolTicks: 1000 }); // exercises the tooled branch
-    spawnWorker(prep, ids, { buildingId }); // and the untooled one
+    spawnColonist(prep, ids, { buildingId, toolTicks: 1000 }); // exercises the tooled branch
+    spawnColonist(prep, ids, { buildingId }); // and the untooled one
     const world = await prep.prepareRun();
     await world.step();
 

@@ -24,7 +24,7 @@ export interface ResourceDef {
 export interface RecipeDef {
   inputs: CostMap;
   outputs: CostMap;
-  /** Worker-ticks of accumulated progress needed to finish one batch. */
+  /** Colonist-ticks of accumulated progress needed to finish one batch. */
   ticksPerBatch: number;
 }
 

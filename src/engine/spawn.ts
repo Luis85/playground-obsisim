@@ -3,7 +3,7 @@ import { BALANCE } from './content/balance';
 import { BUILDINGS } from './content/buildings';
 import { RESOURCE_IDS } from './content/resources';
 import {
-  Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Worker,
+  Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Colonist,
   WorkerSlots,
 } from './components';
 
@@ -11,7 +11,7 @@ import {
  * The one place each entity kind's component set is written down.
  *
  * An entity can enter the world by two independent paths — restored from a save
- * (`spawnBuilding`/`spawnWorker` in world.ts, at preptime) or created live by a
+ * (`spawnBuilding`/`spawnColonist` in world.ts, at preptime) or created live by a
  * command (`handleConstructBuilding`/`handleRecruitWorker`, at runtime) — and
  * each used to list its own components. Forgetting one was silent, and it bit
  * twice inside a single increment: buildings constructed during play had no
@@ -105,7 +105,7 @@ export function buildingComponents(spec: BuildingSpec): object[] {
 }
 
 /** Initial values for a worker, from a save record or from a recruit command. */
-export interface WorkerSpec {
+export interface ColonistSpec {
   id: number;
   hunger?: number;
   buildingId?: number | null;
@@ -115,9 +115,9 @@ export interface WorkerSpec {
 }
 
 /** Every component a worker needs, in one list. Order is not significant. */
-export function workerComponents(spec: WorkerSpec): object[] {
+export function colonistComponents(spec: ColonistSpec): object[] {
   return [
-    new Worker(spec.id),
+    new Colonist(spec.id),
     new Hunger(clampedHunger(spec.hunger ?? 0)),
     new JobAssignment(spec.buildingId ?? null, spec.hauling ?? false),
     new Efficiency(spec.efficiency ?? 1),

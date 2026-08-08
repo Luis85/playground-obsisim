@@ -79,7 +79,7 @@ describe('full colony integration', () => {
     // fed by haulers rather than a direct stockpile write)
     expect(final.stockpile.wheat.stock).toBeLessThan(50);
     // everyone stays fed on the safety net + bread
-    expect(final.workers.every((w) => w.efficiency > 0.5)).toBe(true);
+    expect(final.colonists.every((w) => w.efficiency > 0.5)).toBe(true);
     expect(final.colonyWealth).toBeGreaterThan(0);
   });
 
@@ -89,13 +89,13 @@ describe('full colony integration', () => {
     await run(world, 400); // berries run out, workers starve
     const snapshot = () => world.getResource(SnapshotStore).latest!;
     expect(snapshot().population).toBe(3); // nobody dies
-    expect(snapshot().workers.every((w) => w.efficiency <= 0.21)).toBe(true);
+    expect(snapshot().colonists.every((w) => w.efficiency <= 0.21)).toBe(true);
 
     // hand the colony bread: everyone recovers within a meal cycle
     const { Stockpile } = await import('../../src/engine/resources');
     world.getResource(Stockpile).add('bread', 50);
     await run(world, 60);
-    expect(snapshot().workers.every((w) => w.efficiency === 1)).toBe(true);
+    expect(snapshot().colonists.every((w) => w.efficiency === 1)).toBe(true);
   });
 
   it('starting state matches the spec (30 wood, 20 berries, 3 idle workers)', async () => {

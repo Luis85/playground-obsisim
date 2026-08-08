@@ -58,7 +58,7 @@ export function isBuildingsValid(buildings: SaveGameV4['buildings']): boolean {
 function isWorkerRecordValid(w: SaveGameV4['workers'][number], buildingIds: ReadonlySet<number>): boolean {
   // Upper bounds intentionally NOT checked against current BALANCE.hungerMax /
   // toolDurationTicks: those are clamped to current balance at spawn instead
-  // (see spawnWorker), so a save written under a higher balance value still loads.
+  // (see spawnColonist), so a save written under a higher balance value still loads.
   if (!(w.hunger >= 0 && Number.isFinite(w.hunger))) return false;
   if (!Number.isSafeInteger(w.toolTicks) || w.toolTicks < 0 || w.toolTicks > MAX_SAVED_COUNTER) return false;
   if (w.buildingId === null) return true;

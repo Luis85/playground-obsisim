@@ -47,7 +47,7 @@ export const BALANCE = {
 } as const;
 
 /** Spec 3.5: fed = 1.0 up to the meal threshold, then linear down to 0.2 at max hunger. */
-export function workerEfficiency(hunger: number): number {
+export function colonistEfficiency(hunger: number): number {
   if (hunger <= BALANCE.mealThreshold) return 1;
   const starvation = (hunger - BALANCE.mealThreshold) / (BALANCE.hungerMax - BALANCE.mealThreshold);
   return 1 - (1 - BALANCE.starvingEfficiency) * starvation;
@@ -55,9 +55,9 @@ export function workerEfficiency(hunger: number): number {
 
 /**
  * One worker's contribution to its building's work power: efficiency, multiplied
- * while tool coverage lasts. Lives here beside workerEfficiency because two
+ * while tool coverage lasts. Lives here beside colonistEfficiency because two
  * callers derive it from different sources — ProductionSystem from live
- * components during a tick, buildEntitySections from WorkerFacts. While the
+ * components during a tick, buildEntitySections from ColonistFacts. While the
  * expression existed in both places they could drift, and the drift is invisible
  * on inspection: the UI would report a work power the simulation never used.
  */
@@ -70,4 +70,4 @@ export const STARTING_STOCK: Partial<Record<ResourceId, number>> = {
   berries: 20,
 };
 
-export const STARTING_WORKERS = 3;
+export const STARTING_COLONISTS = 3;

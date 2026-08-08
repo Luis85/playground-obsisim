@@ -17,7 +17,7 @@ export class ToolCoverage {
   constructor(public remainingTicks = 0) {}
 }
 
-export class Worker {
+export class Colonist {
   constructor(public id: number) {}
 }
 

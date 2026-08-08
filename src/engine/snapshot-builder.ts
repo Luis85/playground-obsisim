@@ -1,11 +1,11 @@
 import type { IRuntimeWorld } from 'sim-ecs';
 import type { BuildingDefId, ResourceId } from '../shared/content-types';
-import type { SavedBuilding, SavedWorker } from '../shared/save';
-import type { BuildingSnapshot, BuildingState, WorkerSnapshot } from '../shared/snapshot';
+import type { SavedBuilding, SavedColonist } from '../shared/save';
+import type { BuildingSnapshot, BuildingState, ColonistSnapshot } from '../shared/snapshot';
 import { BALANCE, workerWorkPower } from './content/balance';
 import { batchOutputUnits, BUILDINGS } from './content/buildings';
 import {
-  Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Worker,
+  Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Colonist,
   WorkerSlots,
 } from './components';
 
@@ -19,12 +19,12 @@ import {
  * A worker's facts ARE its published snapshot, field for field: unlike a
  * building, nothing about one worker's own snapshot is aggregated across
  * other entities (compare BuildingFacts below, which is a genuinely smaller
- * set — staffing and power are counted from the whole roster). WorkerFacts
- * therefore extends WorkerSnapshot instead of repeating its field list, plus
+ * set — staffing and power are counted from the whole roster). ColonistFacts
+ * therefore extends ColonistSnapshot instead of repeating its field list, plus
  * the one thing a snapshot never needed: which resource is in hand (the
  * amount alone, `carrying`, is what the app and the save both actually use).
  */
-export interface WorkerFacts extends WorkerSnapshot {
+export interface ColonistFacts extends ColonistSnapshot {
   carryingResource: ResourceId | null;
 }
 
@@ -42,14 +42,14 @@ export interface BuildingFacts {
 }
 
 export interface EntitySections {
-  workers: WorkerSnapshot[];
+  colonists: ColonistSnapshot[];
   buildings: BuildingSnapshot[];
   population: number;
   idleWorkers: number;
 }
 
 /** Pure aggregation shared by SnapshotSystem, the initial-snapshot seed, and the post-step refresh. */
-export function buildEntitySections(workers: readonly WorkerFacts[], buildings: readonly BuildingFacts[]): EntitySections {
+export function buildEntitySections(workers: readonly ColonistFacts[], buildings: readonly BuildingFacts[]): EntitySections {
   const staffCount = new Map<number, number>();
   const powerByBuilding = new Map<number, number>();
   const tooledByBuilding = new Map<number, number>();
@@ -65,7 +65,7 @@ export function buildEntitySections(workers: readonly WorkerFacts[], buildings: 
     if (tooled) tooledByBuilding.set(w.buildingId, (tooledByBuilding.get(w.buildingId) ?? 0) + 1);
   }
 
-  const workerSnaps: WorkerSnapshot[] = workers
+  const workerSnaps: ColonistSnapshot[] = workers
     .map((w) => ({
       id: w.id, hunger: w.hunger, efficiency: w.efficiency, buildingId: w.buildingId, hauling: w.hauling,
       haulTargetId: w.haulTargetId, haulPhase: w.haulPhase, haulTicksLeft: w.haulTicksLeft,
@@ -109,7 +109,7 @@ export function buildEntitySections(workers: readonly WorkerFacts[], buildings: 
     .sort((a, b) => a.id - b.id);
 
   return {
-    workers: workerSnaps,
+    colonists: workerSnaps,
     buildings: buildingSnaps,
     population: workerSnaps.length,
     // Idle, on-a-building, and hauling are mutually exclusive states: a
@@ -127,11 +127,11 @@ export function buildEntitySections(workers: readonly WorkerFacts[], buildings: 
  * drifting between access paths (increment-1 review: 3-site edit risk).
  *
  * Save records are NOT convertible here — buildInitialSnapshot runs before any
- * entity exists and maps SavedWorker/SavedBuilding instead.
+ * entity exists and maps SavedColonist/SavedBuilding instead.
  */
-export function workerFactsOf(
-  worker: Worker, hunger: Hunger, job: JobAssignment, efficiency: Efficiency, coverage: ToolCoverage, trip: HaulTrip,
-): WorkerFacts {
+export function colonistFactsOf(
+  worker: Colonist, hunger: Hunger, job: JobAssignment, efficiency: Efficiency, coverage: ToolCoverage, trip: HaulTrip,
+): ColonistFacts {
   return {
     id: worker.id,
     hunger: hunger.value,
@@ -176,14 +176,14 @@ export function buildingFactsOf(
 }
 
 /**
- * Facts -> save records. SavedWorker is deliberately a SUBSET of WorkerFacts:
+ * Facts -> save records. SavedColonist is deliberately a SUBSET of ColonistFacts:
  * `efficiency` is recomputed from hunger every tick by EfficiencySystem, so
  * storing it would be a second source of truth. That subsetting is why this
- * cannot be derived automatically — but keeping it here, beside workerFactsOf,
+ * cannot be derived automatically — but keeping it here, beside colonistFactsOf,
  * means the persist decision for a new fact is one obvious edit rather than a
  * whitelist buried inside the serializer.
  */
-export function savedWorkerOf(facts: WorkerFacts): SavedWorker {
+export function savedColonistOf(facts: ColonistFacts): SavedColonist {
   return {
     id: facts.id, hunger: facts.hunger, buildingId: facts.buildingId,
     toolTicks: facts.toolTicks, hauling: facts.hauling,
@@ -199,7 +199,7 @@ export function savedBuildingOf(facts: BuildingFacts): SavedBuilding {
 }
 
 export interface EntityFacts {
-  workers: WorkerFacts[];
+  workers: ColonistFacts[];
   buildings: BuildingFacts[];
 }
 
@@ -209,7 +209,7 @@ export interface EntityFacts {
  * SnapshotSystem about what a worker or building is.
  */
 export function gatherEntityFacts(world: IRuntimeWorld): EntityFacts {
-  const workers: WorkerFacts[] = [];
+  const workers: ColonistFacts[] = [];
   const buildings: BuildingFacts[] = [];
   for (const entity of world.getEntities()) {
     const building = entity.getComponent(Building);
@@ -224,9 +224,9 @@ export function gatherEntityFacts(world: IRuntimeWorld): EntityFacts {
       ));
       continue;
     }
-    const worker = entity.getComponent(Worker);
+    const worker = entity.getComponent(Colonist);
     if (worker) {
-      workers.push(workerFactsOf(
+      workers.push(colonistFactsOf(
         worker,
         entity.getComponent(Hunger)!,
         entity.getComponent(JobAssignment)!,

@@ -36,7 +36,7 @@ export const CommandSystem = () => createSystem({
     entity: ReadEntity(), building: Read(Building), slots: Read(WorkerSlots), position: Write(Position), buffer: Write(OutputBuffer),
     relocation: Write(Relocation),
   }),
-  // JobAssignment alone identifies a worker entity — the Worker component
+  // JobAssignment alone identifies a worker entity — the Colonist component
   // added nothing the handlers read.
   workers: queryComponents({ job: Write(JobAssignment), trip: Write(HaulTrip) }),
 })

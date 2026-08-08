@@ -213,7 +213,7 @@ describe('GameEngine', () => {
     const save = engine.serialize();
 
     const restored = await GameEngine.create(save);
-    expect(restored.snapshot!.workers.map((w) => w.id).sort((a, b) => a - b)).toEqual([1, 2, 3]);
+    expect(restored.snapshot!.colonists.map((w) => w.id).sort((a, b) => a - b)).toEqual([1, 2, 3]);
     expect(restored.snapshot!.buildings.map((b) => b.id)).toEqual([4]);
 
     restored.dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });

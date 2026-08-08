@@ -145,12 +145,12 @@ describe('WorldView', () => {
     (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'worker', id: 3 });
     const { wrapper } = mountHarness(factory);
     useGameStore().ingest(makeSnapshot({
-      workers: [makeWorker(3, { hunger: 40, efficiency: 0.8, buildingId: null, toolTicks: 12 })],
+      colonists: [makeWorker(3, { hunger: 40, efficiency: 0.8, buildingId: null, toolTicks: 12 })],
     }), { paused: false, speed: 1, error: null });
     await nextTick();
     await wrapper.find('[data-test="world-host"]').trigger('pointermove', { pageX: 10, pageY: 10 });
     const tooltip = wrapper.find('[data-test="world-tooltip"]');
-    expect(tooltip.text()).toContain('Worker #3');
+    expect(tooltip.text()).toContain('Colonist #3');
     expect(tooltip.text()).toContain('efficiency 80%');
     expect(tooltip.text()).toContain('tooled (12t left)');
   });
@@ -160,7 +160,7 @@ describe('WorldView', () => {
     (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'worker', id: 3 });
     const { wrapper } = mountHarness(factory);
     useGameStore().ingest(makeSnapshot({
-      workers: [makeWorker(3, { hunger: 0, efficiency: 1, buildingId: null, toolTicks: 0 })],
+      colonists: [makeWorker(3, { hunger: 0, efficiency: 1, buildingId: null, toolTicks: 0 })],
     }), { paused: false, speed: 1, error: null });
     await nextTick();
     await wrapper.find('[data-test="world-host"]').trigger('pointermove', { pageX: 10, pageY: 10 });
@@ -168,7 +168,7 @@ describe('WorldView', () => {
     // the worker walks away; the next snapshot re-runs the live hit-test
     (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue(null);
     useGameStore().ingest(makeSnapshot({
-      workers: [makeWorker(3, { hunger: 0, efficiency: 1, buildingId: 1, toolTicks: 0 })],
+      colonists: [makeWorker(3, { hunger: 0, efficiency: 1, buildingId: 1, toolTicks: 0 })],
     }), { paused: false, speed: 1, error: null });
     await nextTick();
     expect(wrapper.find('[data-test="world-tooltip"]').exists()).toBe(false);
@@ -181,7 +181,7 @@ describe('WorldView', () => {
       (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'worker', id: 3 });
       const { wrapper } = mountHarness(factory);
       useGameStore().ingest(makeSnapshot({
-        workers: [makeWorker(3, { hunger: 0, efficiency: 1, buildingId: null, toolTicks: 0 })],
+        colonists: [makeWorker(3, { hunger: 0, efficiency: 1, buildingId: null, toolTicks: 0 })],
       }), { paused: true, speed: 1, error: null });
       await nextTick();
       await wrapper.find('[data-test="world-host"]').trigger('pointermove', { pageX: 10, pageY: 10 });

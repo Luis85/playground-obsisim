@@ -1,7 +1,7 @@
 import type { ResourceStats, Snapshot } from '../../src/shared/snapshot';
 import { RESOURCE_IDS } from '../../src/engine/content/resources';
 import type { ResourceId } from '../../src/shared/content-types';
-import type { BuildingSnapshot, WorkerSnapshot } from '../../src/shared/snapshot';
+import type { BuildingSnapshot, ColonistSnapshot } from '../../src/shared/snapshot';
 
 /**
  * A full stockpile with the given resources' `stock` set, everything else at
@@ -20,7 +20,7 @@ export function stockedWith(stocks: Partial<Record<ResourceId, number>> = {}): R
 export function makeSnapshot(overrides: Partial<Snapshot> = {}): Snapshot {
   return {
     tick: 0, lastRecruitTick: -30, map: { cols: 24, rows: 16 }, stockpile: stockedWith(), colonyWealth: 0,
-    population: 0, idleWorkers: 0, buildings: [], workers: [], notices: [],
+    population: 0, idleWorkers: 0, buildings: [], colonists: [], notices: [],
     ...overrides,
   };
 }
@@ -36,7 +36,7 @@ export function makeBuilding(id: number, overrides: Partial<BuildingSnapshot> = 
   };
 }
 
-export function makeWorker(id: number, overrides: Partial<WorkerSnapshot> = {}): WorkerSnapshot {
+export function makeWorker(id: number, overrides: Partial<ColonistSnapshot> = {}): ColonistSnapshot {
   return {
     id, hunger: 0, efficiency: 1, buildingId: null, hauling: false,
     haulTargetId: null, haulPhase: 'idle', haulTicksLeft: 0,

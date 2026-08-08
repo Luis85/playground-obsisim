@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { IRuntimeWorld } from 'sim-ecs';
 import { CommandQueue, IdCounter, MAX_PENDING_COMMANDS, SimClock, SnapshotStore, Stockpile } from '../../../src/engine/resources';
 import { BALANCE } from '../../../src/engine/content/balance';
-import { Building, HaulTrip, OutputBuffer, Relocation, Worker } from '../../../src/engine/components';
+import { Building, HaulTrip, OutputBuffer, Relocation, Colonist } from '../../../src/engine/components';
 import { CommandSystem } from '../../../src/engine/systems/command-system';
 import { HaulSystem } from '../../../src/engine/systems/haul-system';
 import { HungerSystem } from '../../../src/engine/systems/hunger-system';
@@ -10,7 +10,7 @@ import { ProductionSystem } from '../../../src/engine/systems/production-system'
 import { SnapshotSystem } from '../../../src/engine/systems/snapshot-system';
 import { enqueue } from '../fixtures';
 import { buildSaveFromWorld } from '../../../src/engine/game-engine';
-import { buildColonyPrepWorld, COMPONENT_TYPES, getPrepResource, initialSave, spawnWorker } from '../../../src/engine/world';
+import { buildColonyPrepWorld, COMPONENT_TYPES, getPrepResource, initialSave, spawnColonist } from '../../../src/engine/world';
 import type { Command } from '../../../src/shared/commands';
 import type { SaveGameV4 } from '../../../src/shared/save';
 
@@ -110,7 +110,7 @@ describe('CommandSystem', () => {
     const save = initialSave();
     save.workers = [];
     const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, SnapshotSystem] });
-    spawnWorker(prep, getPrepResource(prep, IdCounter), { buildingId: 404 }); // no building 404
+    spawnColonist(prep, getPrepResource(prep, IdCounter), { buildingId: 404 }); // no building 404
     const world = await prep.prepareRun();
     enqueue(world, { type: 'unassignWorker', buildingId: 404 });
     world.getResource(SimClock).tick++;
@@ -373,12 +373,12 @@ describe('CommandSystem', () => {
     const { dispatch, snapshot } = await setup();
     await dispatch({ type: 'assignHauler' });
     expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Assigned a hauler.' }]);
-    expect(snapshot().workers.filter((w) => w.hauling)).toHaveLength(1);
+    expect(snapshot().colonists.filter((w) => w.hauling)).toHaveLength(1);
     expect(snapshot().idleWorkers).toBe(2); // 3 starting workers, one now hauling
 
     await dispatch({ type: 'unassignHauler' });
     expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Unassigned a hauler.' }]);
-    expect(snapshot().workers.filter((w) => w.hauling)).toHaveLength(0);
+    expect(snapshot().colonists.filter((w) => w.hauling)).toHaveLength(0);
     expect(snapshot().idleWorkers).toBe(3);
   });
 
@@ -399,7 +399,7 @@ describe('CommandSystem', () => {
     save.workers = [];
     save.stockpile = { berries: 5 };
     const prep = buildColonyPrepWorld({ save, systems: [HungerSystem] });
-    spawnWorker(prep, getPrepResource(prep, IdCounter), { hauling: true });
+    spawnColonist(prep, getPrepResource(prep, IdCounter), { hauling: true });
     const world = await prep.prepareRun();
     for (let i = 0; i <= BALANCE.mealThreshold; i++) await world.step();
     expect(world.getResource(Stockpile).get('berries')).toBeLessThan(5);
@@ -427,13 +427,13 @@ describe('CommandSystem', () => {
     await dispatch({ type: 'assignHauler' });
     await dispatch({ type: 'assignHauler' });
     // Verify all are hauling and none are idle
-    expect(snapshot().workers.filter((w) => w.hauling)).toHaveLength(3);
+    expect(snapshot().colonists.filter((w) => w.hauling)).toHaveLength(3);
     expect(snapshot().idleWorkers).toBe(0);
     // Try to assign a worker to the building — should reject, not poach a hauler
     await dispatch({ type: 'assignWorker', buildingId });
     expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'No idle workers available.' }]);
     // Verify every hauler is still hauling with no buildingId
-    expect(snapshot().workers.every((w) => w.hauling && w.buildingId === null)).toBe(true);
+    expect(snapshot().colonists.every((w) => w.hauling && w.buildingId === null)).toBe(true);
     expect(snapshot().buildings[0].workers).toBe(0);
   });
 
@@ -499,7 +499,7 @@ describe('CommandSystem', () => {
     // holding its load, and nothing banked early.
     expect(carrier.getComponent(HaulTrip)!).toMatchObject({ phase: 'returning', amount: carriedBefore });
     expect(world.getResource(Stockpile).get('wood')).toBe(stockBefore);
-    expect(snapshot().workers.filter((w) => w.hauling)).toHaveLength(1);
+    expect(snapshot().colonists.filter((w) => w.hauling)).toHaveLength(1);
   });
 
   it('a move retargets the haulers already walking to that building', async () => {
@@ -616,14 +616,14 @@ describe('CommandSystem', () => {
     // starting worker would let the id > before.id check below match another
     // pre-existing (and therefore trivially complete) worker instead of the
     // actual recruit, silently defeating the whole test.
-    const workers = [...world.getEntities()].filter((e) => e.getComponent(Worker) !== undefined);
-    const before = workers.reduce((max, e) => (e.getComponent(Worker)!.id > max.getComponent(Worker)!.id ? e : max));
+    const workers = [...world.getEntities()].filter((e) => e.getComponent(Colonist) !== undefined);
+    const before = workers.reduce((max, e) => (e.getComponent(Colonist)!.id > max.getComponent(Colonist)!.id ? e : max));
     const expected = COMPONENT_TYPES.filter((type) => before.getComponent(type) !== undefined);
     await dispatch({ type: 'recruitWorker' });
     await tick();
     const recruited = [...world.getEntities()]
-      .filter((e) => e.getComponent(Worker) !== undefined)
-      .find((e) => e.getComponent(Worker)!.id > before.getComponent(Worker)!.id)!;
+      .filter((e) => e.getComponent(Colonist) !== undefined)
+      .find((e) => e.getComponent(Colonist)!.id > before.getComponent(Colonist)!.id)!;
     for (const type of expected) {
       expect(recruited.getComponent(type), `recruited worker is missing ${type.name}`).toBeDefined();
     }

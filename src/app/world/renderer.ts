@@ -255,7 +255,7 @@ class WorldScene {
 
   private upsertWorker(w: PlacedWorker): void {
     const target = vec(w.x * TILE, w.y * TILE);
-    const bundle = this.workers.get(w.id) ?? this.spawnWorker(w.id, target);
+    const bundle = this.workers.get(w.id) ?? this.spawnColonist(w.id, target);
     bundle.actor.graphics.use(this.cache.worker(efficiencyBucket(w.efficiency), w.tooled));
     // A carrying hauler reads as "loaded" at a glance, which is what makes the
     // flow direction legible: dots going out are empty, dots coming back are not.
@@ -264,7 +264,7 @@ class WorldScene {
   }
 
   /** New workers appear in place — only reassignments walk (spec §2.4). */
-  private spawnWorker(id: number, target: Vector): WorkerBundle {
+  private spawnColonist(id: number, target: Vector): WorkerBundle {
     const actor = new Actor({ pos: target, z: 3 });
     this.engine.currentScene.add(actor);
     const load = new Actor({ pos: vec(0, -WORKER_RADIUS - 3), z: 3 });

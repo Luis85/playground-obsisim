@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BALANCE } from '../../src/engine/content/balance';
 import { RESOURCE_IDS } from '../../src/engine/content/resources';
-import { Building, Hunger, JobAssignment, Relocation, ToolCoverage, Worker } from '../../src/engine/components';
+import { Building, Hunger, JobAssignment, Relocation, ToolCoverage, Colonist } from '../../src/engine/components';
 import { IdCounter, SimClock, SnapshotStore, Stockpile } from '../../src/engine/resources';
 import type { IRuntimeWorld } from 'sim-ecs';
 import { GameEngine } from '../../src/engine/game-engine';
@@ -98,7 +98,7 @@ describe('isLoadableSave', () => {
 
   it('accepts and grandfathers balance-coupled values above CURRENT balance (spec 4.5: saves survive retuning)', () => {
     // hunger/toolTicks above current BALANCE were valid under a prior, higher
-    // balance value; the guard no longer rejects them (spawnWorker clamps instead).
+    // balance value; the guard no longer rejects them (spawnColonist clamps instead).
     const hungry = initialSave();
     hungry.workers[0].hunger = 1000;
     expect(isLoadableSave(hungry)).toBe(true);
@@ -458,7 +458,7 @@ describe('createColonyWorld', () => {
     const save = initialSave();
     save.workers[0].hunger = 42;
     const prep = buildColonyPrepWorld({ save });
-    const workers = [...prep.getEntities()].filter((e) => e.hasComponent(Worker));
+    const workers = [...prep.getEntities()].filter((e) => e.hasComponent(Colonist));
     expect(workers).toHaveLength(3);
     expect(workers.map((w) => w.getComponent(Hunger)!.value).sort((a, b) => b - a)[0]).toBe(42);
     expect(workers.every((w) => w.getComponent(JobAssignment)!.buildingId === null)).toBe(true);
@@ -472,13 +472,13 @@ describe('createColonyWorld', () => {
 
     const world = await createColonyWorld(save);
     const snapshot = world.getResource(SnapshotStore).latest!;
-    const clamped = snapshot.workers.find((w) => w.id === save.workers[0].id)!;
+    const clamped = snapshot.colonists.find((w) => w.id === save.workers[0].id)!;
     expect(clamped.hunger).toBeLessThanOrEqual(BALANCE.hungerMax);
     expect(clamped.toolTicks).toBeLessThanOrEqual(BALANCE.toolDurationTicks);
 
     const prep = buildColonyPrepWorld({ save });
     const spawnedWorker = [...prep.getEntities()].find(
-      (e) => e.hasComponent(Worker) && e.getComponent(Worker)!.id === save.workers[0].id,
+      (e) => e.hasComponent(Colonist) && e.getComponent(Colonist)!.id === save.workers[0].id,
     )!;
     expect(spawnedWorker.getComponent(Hunger)!.value).toBeLessThanOrEqual(BALANCE.hungerMax);
     expect(spawnedWorker.getComponent(ToolCoverage)!.remainingTicks).toBeLessThanOrEqual(BALANCE.toolDurationTicks);
@@ -683,11 +683,11 @@ describe('live-world projections agree', () => {
 
   it('the query path, the walk path and serialize() report the same facts', async () => {
     const engine = await busyColony();
-    const fromQueryPath = engine.snapshot!.workers.map((w) => ({ ...w }));
+    const fromQueryPath = engine.snapshot!.colonists.map((w) => ({ ...w }));
 
     // force the walk path over the same unchanged world
     refreshEntitySections((engine as unknown as { world: IRuntimeWorld }).world);
-    expect(engine.snapshot!.workers.map((w) => ({ ...w }))).toEqual(fromQueryPath);
+    expect(engine.snapshot!.colonists.map((w) => ({ ...w }))).toEqual(fromQueryPath);
 
     // and the save projection must agree on every field it shares
     const saved = engine.serialize().workers;
@@ -696,7 +696,7 @@ describe('live-world projections agree', () => {
 
   it('every non-derived worker fact is represented in the save record', async () => {
     const engine = await busyColony();
-    const factKeys = Object.keys(engine.snapshot!.workers[0])
+    const factKeys = Object.keys(engine.snapshot!.colonists[0])
       .filter((key) => !DERIVED.includes(key as (typeof DERIVED)[number]));
     const savedKeys = Object.keys(engine.serialize().workers[0]);
     expect(factKeys.filter((key) => !savedKeys.includes(key))).toEqual([]);
@@ -704,13 +704,13 @@ describe('live-world projections agree', () => {
 
   it('every persisted worker fact survives save -> restore', async () => {
     const engine = await busyColony();
-    const before = persisted(engine.snapshot!.workers);
+    const before = persisted(engine.snapshot!.colonists);
     // Guard against vacuous coverage: busyColony's hauler must actually show up
     // hauling here, or the comparison below would pass just as happily with
     // hauling dropped entirely from the save (every worker reads false either way).
     expect(before.some((w) => w.hauling)).toBe(true);
     const restored = await GameEngine.create(engine.serialize());
-    expect(persisted(restored.snapshot!.workers)).toEqual(before);
+    expect(persisted(restored.snapshot!.colonists)).toEqual(before);
   });
 
   it('a building keeps its buffered goods across save -> restore', async () => {
@@ -735,7 +735,7 @@ describe('live-world projections agree', () => {
     // actually persists (SavedBuilding.buffer, save v3) — buildInitialSnapshot
     // recomputes the total from it on restore. Storing the sum a second time
     // would be exactly the second-source-of-truth this file avoids elsewhere
-    // (see savedWorkerOf's comment re: efficiency), so — like workPower and
+    // (see savedColonistOf's comment re: efficiency), so — like workPower and
     // progressPct — it has no save slot of its own.
     const derivedBuilding = ['workers', 'workerSlots', 'state', 'progressPct', 'tooledWorkers', 'workPower', 'buffered'];
     const factKeys = Object.keys(engine.snapshot!.buildings[0]).filter((k) => !derivedBuilding.includes(k));

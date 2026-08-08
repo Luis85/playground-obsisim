@@ -5,7 +5,7 @@ import type { SaveGameV4 } from '../shared/save';
 import { LATEST_SAVE_VERSION, MAX_SAVED_COUNTER } from '../shared/save';
 import { BALANCE } from './content/balance';
 import { CommandQueue, IdCounter, RemovalLedger, SimClock, SnapshotStore, Stockpile, WorldMap } from './resources';
-import { gatherEntityFacts, savedBuildingOf, savedWorkerOf } from './snapshot-builder';
+import { gatherEntityFacts, savedBuildingOf, savedColonistOf } from './snapshot-builder';
 import { createColonyWorld, initialSave, refreshEntitySections } from './world';
 
 export type UpdateListener = (snapshot: Snapshot | null, status: EngineStatus) => void;
@@ -36,7 +36,7 @@ export function buildSaveFromWorld(world: IRuntimeWorld): SaveGameV4 {
     stockpile,
     map: { cols: world.getResource(WorldMap).cols, rows: world.getResource(WorldMap).rows },
     buildings: facts.buildings.map(savedBuildingOf).sort((a, b) => a.id - b.id),
-    workers: facts.workers.map(savedWorkerOf).sort((a, b) => a.id - b.id),
+    workers: facts.workers.map(savedColonistOf).sort((a, b) => a.id - b.id),
     nextEntityId: world.getResource(IdCounter).peek(),
   };
 }

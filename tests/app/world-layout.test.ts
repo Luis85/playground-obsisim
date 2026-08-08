@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { layoutWorld, pickBuildingAt, TILE } from '../../src/app/world/layout';
 import { CAMP_COLS } from '../../src/shared/placement';
-import type { WorkerSnapshot } from '../../src/shared/snapshot';
+import type { ColonistSnapshot } from '../../src/shared/snapshot';
 import { makeBuilding, makeSnapshot, makeWorker } from './fixtures';
 
 // The layout invariants the world view stands on (spec §2.3): determinism
@@ -22,7 +22,7 @@ describe('layoutWorld', () => {
   it('is deterministic: same snapshot -> deep-equal layout', () => {
     const snapshot = makeSnapshot({
       buildings: [makeBuilding(1), makeBuilding(4, { defId: 'mill' })],
-      workers: [makeWorker(2, { buildingId: 1 }), makeWorker(3)],
+      colonists: [makeWorker(2, { buildingId: 1 }), makeWorker(3)],
     });
     expect(layoutWorld(snapshot)).toEqual(layoutWorld(snapshot));
   });
@@ -30,7 +30,7 @@ describe('layoutWorld', () => {
   it('is a fixpoint: relayout with itself as previous changes nothing', () => {
     const snapshot = makeSnapshot({
       buildings: [makeBuilding(1, { workers: 1 })],
-      workers: [makeWorker(2, { buildingId: 1 }), makeWorker(3)],
+      colonists: [makeWorker(2, { buildingId: 1 }), makeWorker(3)],
     });
     const fresh = layoutWorld(snapshot);
     expect(layoutWorld(snapshot, fresh)).toEqual(fresh);
@@ -52,11 +52,11 @@ describe('layoutWorld', () => {
   it('a moved building takes its standing crew with it (same slots, new cell)', () => {
     const before = layoutWorld(makeSnapshot({
       buildings: [makeBuilding(1, { col: 5, row: 3, workers: 2 })],
-      workers: [makeWorker(10, { buildingId: 1 }), makeWorker(11, { buildingId: 1 })],
+      colonists: [makeWorker(10, { buildingId: 1 }), makeWorker(11, { buildingId: 1 })],
     }));
     const after = layoutWorld(makeSnapshot({
       buildings: [makeBuilding(1, { col: 9, row: 7, workers: 2 })],
-      workers: [makeWorker(10, { buildingId: 1 }), makeWorker(11, { buildingId: 1 })],
+      colonists: [makeWorker(10, { buildingId: 1 }), makeWorker(11, { buildingId: 1 })],
     }), before);
     for (const id of [10, 11]) {
       const was = before.workers.find((w) => w.id === id)!;
@@ -69,7 +69,7 @@ describe('layoutWorld', () => {
 
   it('contains pathological idle crowds inside the camp band of the fixed map', () => {
     const crowd = Array.from({ length: 40 }, (_, i) => makeWorker(i + 1));
-    const layout = layoutWorld(makeSnapshot({ workers: crowd }));
+    const layout = layoutWorld(makeSnapshot({ colonists: crowd }));
     const spots = new Set<string>();
     for (const w of layout.workers) {
       expect(w.x).toBeGreaterThan(0);
@@ -84,7 +84,7 @@ describe('layoutWorld', () => {
   it('clusters assigned workers inside their building cell', () => {
     const snapshot = makeSnapshot({
       buildings: [makeBuilding(1, { workerSlots: 4, workers: 2 })],
-      workers: [makeWorker(10, { buildingId: 1 }), makeWorker(11, { buildingId: 1 })],
+      colonists: [makeWorker(10, { buildingId: 1 }), makeWorker(11, { buildingId: 1 })],
     });
     const layout = layoutWorld(snapshot);
     const cell = layout.buildings[0];
@@ -100,11 +100,11 @@ describe('layoutWorld', () => {
   it('staffing another slot never moves the workers already there', () => {
     const before = layoutWorld(makeSnapshot({
       buildings: [makeBuilding(1, { workerSlots: 4, workers: 2 })],
-      workers: [makeWorker(10, { buildingId: 1 }), makeWorker(11, { buildingId: 1 })],
+      colonists: [makeWorker(10, { buildingId: 1 }), makeWorker(11, { buildingId: 1 })],
     }));
     const after = layoutWorld(makeSnapshot({
       buildings: [makeBuilding(1, { workerSlots: 4, workers: 3 })],
-      workers: [makeWorker(10, { buildingId: 1 }), makeWorker(11, { buildingId: 1 }), makeWorker(12, { buildingId: 1 })],
+      colonists: [makeWorker(10, { buildingId: 1 }), makeWorker(11, { buildingId: 1 }), makeWorker(12, { buildingId: 1 })],
     }), before);
     unmoved(before, after, [10, 11]);
   });
@@ -115,11 +115,11 @@ describe('layoutWorld', () => {
     // up somewhere distinct — never stacked on a parked colleague.
     const before = layoutWorld(makeSnapshot({
       buildings: [makeBuilding(2, { workerSlots: 4, workers: 2 })],
-      workers: [makeWorker(5, { buildingId: 2 }), makeWorker(9, { buildingId: 2 })],
+      colonists: [makeWorker(5, { buildingId: 2 }), makeWorker(9, { buildingId: 2 })],
     }));
     const after = layoutWorld(makeSnapshot({
       buildings: [makeBuilding(2, { workerSlots: 4, workers: 3 })],
-      workers: [makeWorker(1, { buildingId: 2 }), makeWorker(5, { buildingId: 2 }), makeWorker(9, { buildingId: 2 })],
+      colonists: [makeWorker(1, { buildingId: 2 }), makeWorker(5, { buildingId: 2 }), makeWorker(9, { buildingId: 2 })],
     }), before);
     unmoved(before, after, [5, 9]);
     const spots = after.workers.map((w) => `${w.x},${w.y}`);
@@ -129,11 +129,11 @@ describe('layoutWorld', () => {
   it('a lower-id worker joining leaves the existing crew in place', () => {
     const before = layoutWorld(makeSnapshot({
       buildings: [makeBuilding(1, { workerSlots: 4, workers: 2 })],
-      workers: [makeWorker(10, { buildingId: 1 }), makeWorker(11, { buildingId: 1 })],
+      colonists: [makeWorker(10, { buildingId: 1 }), makeWorker(11, { buildingId: 1 })],
     }));
     const after = layoutWorld(makeSnapshot({
       buildings: [makeBuilding(1, { workerSlots: 4, workers: 3 })],
-      workers: [makeWorker(9, { buildingId: 1 }), makeWorker(10, { buildingId: 1 }), makeWorker(11, { buildingId: 1 })],
+      colonists: [makeWorker(9, { buildingId: 1 }), makeWorker(10, { buildingId: 1 }), makeWorker(11, { buildingId: 1 })],
     }), before);
     unmoved(before, after, [10, 11]);
   });
@@ -145,7 +145,7 @@ describe('layoutWorld', () => {
     const crew = Array.from({ length: 11 }, (_, i) => makeWorker(10 + i, { buildingId: 1 }));
     const layout = layoutWorld(makeSnapshot({
       buildings: [makeBuilding(1, { workerSlots: 2, workers: crew.length })],
-      workers: crew,
+      colonists: crew,
     }));
     const cell = layout.buildings[0];
     for (const w of layout.workers) {
@@ -168,7 +168,7 @@ describe('layoutWorld', () => {
     const crew = Array.from({ length: 20 }, (_, i) => makeWorker(10 + i, { buildingId: 1 }));
     const layout = layoutWorld(makeSnapshot({
       buildings: [makeBuilding(1, { workerSlots: 2, workers: crew.length })],
-      workers: crew,
+      colonists: crew,
     }));
     const cell = layout.buildings[0];
     const spots = new Set<string>();
@@ -185,11 +185,11 @@ describe('layoutWorld', () => {
   it('shrinking an over-capacity roster leaves the remaining crew in place (review round 3)', () => {
     const overCapacity = layoutWorld(makeSnapshot({
       buildings: [makeBuilding(1, { workerSlots: 2, workers: 3 })],
-      workers: [makeWorker(1, { buildingId: 1 }), makeWorker(2, { buildingId: 1 }), makeWorker(3, { buildingId: 1 })],
+      colonists: [makeWorker(1, { buildingId: 1 }), makeWorker(2, { buildingId: 1 }), makeWorker(3, { buildingId: 1 })],
     }));
     const shrunk = layoutWorld(makeSnapshot({
       buildings: [makeBuilding(1, { workerSlots: 2, workers: 2 })],
-      workers: [makeWorker(1, { buildingId: 1 }), makeWorker(2, { buildingId: 1 }), makeWorker(3)],
+      colonists: [makeWorker(1, { buildingId: 1 }), makeWorker(2, { buildingId: 1 }), makeWorker(3)],
     }), overCapacity);
     unmoved(overCapacity, shrunk, [1, 2]);
   });
@@ -197,7 +197,7 @@ describe('layoutWorld', () => {
   it('parks idle workers at the camp, left of the plots', () => {
     const snapshot = makeSnapshot({
       buildings: [makeBuilding(1)],
-      workers: [makeWorker(10), makeWorker(11), makeWorker(12)],
+      colonists: [makeWorker(10), makeWorker(11), makeWorker(12)],
     });
     const layout = layoutWorld(snapshot);
     const minPlotCol = Math.min(...layout.buildings.map((b) => b.col));
@@ -214,23 +214,23 @@ describe('layoutWorld', () => {
 
   it('crossing the camp baseline leaves existing campers in place (review round 3)', () => {
     const six = [3, 7, 12, 15, 21, 26].map((id) => makeWorker(id));
-    const before = layoutWorld(makeSnapshot({ workers: six }));
-    const after = layoutWorld(makeSnapshot({ workers: [...six, makeWorker(30)] }), before);
+    const before = layoutWorld(makeSnapshot({ colonists: six }));
+    const after = layoutWorld(makeSnapshot({ colonists: [...six, makeWorker(30)] }), before);
     unmoved(before, after, [3, 7, 12, 15, 21, 26]);
     const spots = after.workers.map((w) => `${w.x},${w.y}`);
     expect(new Set(spots).size).toBe(7);
   });
 
   it('a worker going idle leaves the existing campers in place', () => {
-    const before = layoutWorld(makeSnapshot({ workers: [makeWorker(10), makeWorker(11)] }));
-    const after = layoutWorld(makeSnapshot({ workers: [makeWorker(9), makeWorker(10), makeWorker(11)] }), before);
+    const before = layoutWorld(makeSnapshot({ colonists: [makeWorker(10), makeWorker(11)] }));
+    const after = layoutWorld(makeSnapshot({ colonists: [makeWorker(9), makeWorker(10), makeWorker(11)] }), before);
     unmoved(before, after, [10, 11]);
   });
 
   it('carries state, progress, efficiency and tool coverage through', () => {
     const snapshot = makeSnapshot({
       buildings: [makeBuilding(1, { state: 'producing', progressPct: 40, batchActive: true })],
-      workers: [makeWorker(10, { buildingId: 1, efficiency: 0.5, toolTicks: 7 })],
+      colonists: [makeWorker(10, { buildingId: 1, efficiency: 0.5, toolTicks: 7 })],
     });
     const layout = layoutWorld(snapshot);
     expect(layout.buildings[0]).toMatchObject({ state: 'producing', progressPct: 40, batchActive: true });
@@ -241,7 +241,7 @@ describe('layoutWorld', () => {
   it('reports each worker\'s post: the building id, or null at the camp', () => {
     const layout = layoutWorld(makeSnapshot({
       buildings: [makeBuilding(1)],
-      workers: [makeWorker(10, { buildingId: 1 }), makeWorker(11), makeWorker(12, { buildingId: 99 })],
+      colonists: [makeWorker(10, { buildingId: 1 }), makeWorker(11), makeWorker(12, { buildingId: 99 })],
     }));
     const at = new Map(layout.workers.map((w) => [w.id, w.at]));
     expect(at.get(10)).toBe(1);
@@ -260,7 +260,7 @@ describe('layoutWorld', () => {
   it('keeps every placement inside the reported grid', () => {
     const layout = layoutWorld(makeSnapshot({
       buildings: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((id) => makeBuilding(id)),
-      workers: [10, 11, 12, 13, 14, 15, 16, 17].map((id) => makeWorker(id)),
+      colonists: [10, 11, 12, 13, 14, 15, 16, 17].map((id) => makeWorker(id)),
     }));
     for (const b of layout.buildings) {
       expect(b.col).toBeGreaterThanOrEqual(0);
@@ -281,7 +281,7 @@ describe('hauler placement', () => {
   // (8,4) is hypot(6,4) = 7.21 tiles from the camp, so haulTicks at 2 tiles/tick
   // is ceil(7.21/2) = 4. Every leg below is 4 ticks long.
   const LEG_TICKS = 4;
-  const haulSnapshot = (overrides: Partial<WorkerSnapshot>) => makeSnapshot({
+  const haulSnapshot = (overrides: Partial<ColonistSnapshot>) => makeSnapshot({
     buildings: [makeBuilding(1, { defId: 'forester', col: 8, row: 4 })],
     // Default: an outbound hauler that has ARRIVED (0 ticks left), which is the
     // doorstep case the placement tests below were written against. The leg
@@ -289,7 +289,7 @@ describe('hauler placement', () => {
     // block) position — haulSpot now reads them from the snapshot rather than
     // recomputing them from the building's live tile (OBS-5-01); the dedicated
     // "building moved mid-leg" test below is the one that overrides them.
-    workers: [makeWorker(20, {
+    colonists: [makeWorker(20, {
       hauling: true, haulPhase: 'outbound', haulTicksLeft: 0,
       haulLegTicks: LEG_TICKS, haulPickupCol: 8, haulPickupRow: 4,
       ...overrides,
@@ -373,13 +373,13 @@ describe('hauler placement', () => {
     // rather than hardcoding the cell's offset here.
     const haulerAlone = layoutWorld(makeSnapshot({
       buildings: [building],
-      workers: [makeWorker(20, { hauling: true, haulTargetId: 1, haulPhase: 'outbound', haulTicksLeft: 0 })],
+      colonists: [makeWorker(20, { hauling: true, haulTargetId: 1, haulPhase: 'outbound', haulTicksLeft: 0 })],
     }));
     const doorstep = haulerAlone.workers.find((w) => w.id === 20)!;
 
     const layout = layoutWorld(makeSnapshot({
       buildings: [building],
-      workers: [
+      colonists: [
         makeWorker(1, { buildingId: 1 }),
         makeWorker(2, { buildingId: 1 }),
         makeWorker(20, { hauling: true, haulTargetId: 1, haulPhase: 'outbound', haulTicksLeft: 0 }),
@@ -416,14 +416,14 @@ describe('hauler placement', () => {
     const building = makeBuilding(1, { defId: 'forester', col: 8, row: 4, workerSlots: 4 });
     const before = layoutWorld(makeSnapshot({
       buildings: [building],
-      workers: [makeWorker(20, { hauling: true, haulTargetId: 1, haulPhase: 'outbound', haulTicksLeft: 0 })],
+      colonists: [makeWorker(20, { hauling: true, haulTargetId: 1, haulPhase: 'outbound', haulTicksLeft: 0 })],
     }));
     const wasHauler = before.workers.find((w) => w.id === 20)!;
     expect(wasHauler.at).toBe(1); // sanity: this frame is the doorstep case, its placement carries the sentinel
 
     const after = layoutWorld(makeSnapshot({
       buildings: [building],
-      workers: [makeWorker(20, { buildingId: 1 })], // same id, now genuine crew at the same building
+      colonists: [makeWorker(20, { buildingId: 1 })], // same id, now genuine crew at the same building
     }), before);
 
     const crew = after.workers.find((w) => w.id === 20)!;
@@ -444,7 +444,7 @@ describe('hauler placement', () => {
   it('draws a returning hauler on the leg it actually walked, not the one its building\'s new tile implies', () => {
     const snapshot = makeSnapshot({
       buildings: [makeBuilding(1, { defId: 'forester', col: 23, row: 15 })], // moved mid-leg, far corner
-      workers: [makeWorker(20, {
+      colonists: [makeWorker(20, {
         hauling: true, haulTargetId: 1, haulPhase: 'returning', haulTicksLeft: 2, carrying: 6,
         haulLegTicks: LEG_TICKS, haulPickupCol: 8, haulPickupRow: 4, // frozen at the ORIGINAL (8,4) pickup
       })],

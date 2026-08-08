@@ -172,7 +172,7 @@ describe('useGameStore', () => {
         makeBuilding(2, { buffered: 3, state: 'producing' }),
         makeBuilding(3, { buffered: 0, state: 'unstaffed' }),
       ],
-      workers: [makeWorker(1, { hauling: true }), makeWorker(2, { hauling: true }), makeWorker(3, {})],
+      colonists: [makeWorker(1, { hauling: true }), makeWorker(2, { hauling: true }), makeWorker(3, {})],
     }), { paused: false, speed: 1, error: null });
     expect(store.haulerCount).toBe(2);
     expect(store.unitsWaiting).toBe(15);

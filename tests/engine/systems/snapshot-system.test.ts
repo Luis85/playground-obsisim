@@ -4,7 +4,7 @@ import { IdCounter, NoticeBoard, SnapshotStore } from '../../../src/engine/resou
 import { HaulSystem } from '../../../src/engine/systems/haul-system';
 import { SnapshotSystem } from '../../../src/engine/systems/snapshot-system';
 import { BALANCE } from '../../../src/engine/content/balance';
-import { buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spawnWorker } from '../../../src/engine/world';
+import { buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist } from '../../../src/engine/world';
 
 describe('SnapshotSystem', () => {
   it('projects a complete snapshot', async () => {
@@ -15,8 +15,8 @@ describe('SnapshotSystem', () => {
     const ids = getPrepResource(prep, IdCounter);
     const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 1.5, batchActive: true, col: 4, row: 1, relocatingTicks: 0 });
     const buildingId = building.getComponent(Building)!.id;
-    spawnWorker(prep, ids, { buildingId, hunger: 20, toolTicks: 10 });
-    spawnWorker(prep, ids); // idle
+    spawnColonist(prep, ids, { buildingId, hunger: 20, toolTicks: 10 });
+    spawnColonist(prep, ids); // idle
     getPrepResource(prep, NoticeBoard).reject('test notice');
 
     const world = await prep.prepareRun();
@@ -37,8 +37,8 @@ describe('SnapshotSystem', () => {
     expect(b.tooledWorkers).toBe(1);
     expect(b.workPower).toBeCloseTo(1.5); // 1 covered worker: eff 1.0 x tool 1.5
 
-    expect(snapshot.workers.map((w) => w.buildingId)).toEqual([buildingId, null]);
-    expect(snapshot.workers[0].toolTicks).toBe(10);
+    expect(snapshot.colonists.map((w) => w.buildingId)).toEqual([buildingId, null]);
+    expect(snapshot.colonists[0].toolTicks).toBe(10);
   });
 
   it('marks unstaffed and waiting states', async () => {
@@ -48,7 +48,7 @@ describe('SnapshotSystem', () => {
     const ids = getPrepResource(prep, IdCounter);
     spawnBuilding(prep, ids, { defId: 'mill', progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 0 });
     const staffed = spawnBuilding(prep, ids, { defId: 'mill', progress: 0, batchActive: false, col: 6, row: 1, relocatingTicks: 0 });
-    spawnWorker(prep, ids, { buildingId: staffed.getComponent(Building)!.id });
+    spawnColonist(prep, ids, { buildingId: staffed.getComponent(Building)!.id });
     const world = await prep.prepareRun();
     await world.step();
     const snapshot = world.getResource(SnapshotStore).latest!;
@@ -68,7 +68,7 @@ describe('SnapshotSystem', () => {
     // Staffed building with full buffer: should report 'outputFull'
     const staffedFull = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1, relocatingTicks: 0 });
     staffedFull.getComponent(OutputBuffer)!.add('wood', BALANCE.outputBufferCap);
-    spawnWorker(prep, ids, { buildingId: staffedFull.getComponent(Building)!.id });
+    spawnColonist(prep, ids, { buildingId: staffedFull.getComponent(Building)!.id });
 
     const world = await prep.prepareRun();
     await world.step();
@@ -100,9 +100,9 @@ describe('SnapshotSystem', () => {
     const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 5, row: 4, relocatingTicks: 0 });
     building.getComponent(OutputBuffer)!.add('wood', 9);
     const buildingId = building.getComponent(Building)!.id;
-    spawnWorker(prep, ids, { hauling: true });
+    spawnColonist(prep, ids, { hauling: true });
     const world = await prep.prepareRun();
-    const hauler = () => world.getResource(SnapshotStore).latest!.workers[0];
+    const hauler = () => world.getResource(SnapshotStore).latest!.colonists[0];
 
     await world.step(); // dispatched: walking out to the building
     // The dispatch tick sets the full 3-tick leg without decrementing it, so
@@ -147,7 +147,7 @@ describe('SnapshotSystem', () => {
     // test below, whose fixtures genuinely satisfy those rival branches.
     const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 5, row: 4, relocatingTicks: 7 });
     const buildingId = building.getComponent(Building)!.id;
-    spawnWorker(prep, ids, { buildingId });
+    spawnColonist(prep, ids, { buildingId });
     const world = await prep.prepareRun();
     await world.step();
 
@@ -177,7 +177,7 @@ describe('SnapshotSystem', () => {
     // ran before relocatingTicks > 0, this would read 'outputFull' instead.
     const relocatingFull = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1, relocatingTicks: 5 });
     relocatingFull.getComponent(OutputBuffer)!.add('wood', BALANCE.outputBufferCap);
-    spawnWorker(prep, ids, { buildingId: relocatingFull.getComponent(Building)!.id });
+    spawnColonist(prep, ids, { buildingId: relocatingFull.getComponent(Building)!.id });
 
     const world = await prep.prepareRun();
     await world.step();

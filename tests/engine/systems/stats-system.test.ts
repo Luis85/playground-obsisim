@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { IdCounter, ProductionLedger, SimClock, SnapshotStore, StatsHistory, Stockpile } from '../../../src/engine/resources';
 import { SnapshotSystem } from '../../../src/engine/systems/snapshot-system';
 import { StatsSystem } from '../../../src/engine/systems/stats-system';
-import { ALL_SYSTEMS, buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spawnWorker } from '../../../src/engine/world';
+import { ALL_SYSTEMS, buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist } from '../../../src/engine/world';
 import { Building } from '../../../src/engine/components';
 
 // StatsSystem's actual contract is "record whatever flows the Stockpile saw
@@ -50,8 +50,8 @@ describe('StatsSystem', () => {
     const ids = getPrepResource(prep, IdCounter);
     const b = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 5, row: 4, relocatingTicks: 0 });
     const bid = b.getComponent(Building)!.id;
-    spawnWorker(prep, ids, { buildingId: bid });
-    spawnWorker(prep, ids, { buildingId: bid });
+    spawnColonist(prep, ids, { buildingId: bid });
+    spawnColonist(prep, ids, { buildingId: bid });
     const world = await prep.prepareRun();
 
     for (let i = 0; i < 12; i++) {

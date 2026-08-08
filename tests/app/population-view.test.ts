@@ -7,12 +7,12 @@ import { ENGINE_KEY } from '../../src/app/engine-key';
 import { useGameStore } from '../../src/app/stores/game-store';
 import { BALANCE } from '../../src/engine/content/balance';
 import { makeSnapshot } from './fixtures';
-import type { WorkerSnapshot } from '../../src/shared/snapshot';
+import type { ColonistSnapshot } from '../../src/shared/snapshot';
 
 // A single idle worker, overridable field by field — hunger is the only
 // field this file's cases vary, but the full shape keeps callers honest
-// about what a WorkerSnapshot actually carries.
-function worker(overrides: Partial<WorkerSnapshot> = {}): WorkerSnapshot {
+// about what a ColonistSnapshot actually carries.
+function worker(overrides: Partial<ColonistSnapshot> = {}): ColonistSnapshot {
   return {
     id: 1, hunger: 0, efficiency: 1, buildingId: null, hauling: false,
     haulTargetId: null, haulPhase: 'idle', haulTicksLeft: 0,
@@ -24,7 +24,7 @@ function worker(overrides: Partial<WorkerSnapshot> = {}): WorkerSnapshot {
 
 // Mounts with a fresh testing Pinia each call, so tests never leak state
 // between it.each cases the way a shared module-level store would.
-function mountPopulationView(workers: WorkerSnapshot[]) {
+function mountPopulationView(colonists: ColonistSnapshot[]) {
   const engine = { dispatch: vi.fn() };
   const wrapper = mount(PopulationView, {
     global: {
@@ -32,7 +32,7 @@ function mountPopulationView(workers: WorkerSnapshot[]) {
       provide: { [ENGINE_KEY as symbol]: engine },
     },
   });
-  useGameStore().ingest(makeSnapshot({ workers }), { paused: true, speed: 1, error: null });
+  useGameStore().ingest(makeSnapshot({ colonists }), { paused: true, speed: 1, error: null });
   return wrapper;
 }
 

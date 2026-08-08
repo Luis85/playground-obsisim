@@ -7,7 +7,7 @@ import { BALANCE } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
 import { RESOURCES, RESOURCE_IDS } from '../content/resources';
 import { Building, HaulTrip, JobAssignment, OutputBuffer, Position, Relocation, WorkerSlots } from '../components';
-import { buildingComponents, workerComponents } from '../spawn';
+import { buildingComponents, colonistComponents } from '../spawn';
 import type { IdCounter, NoticeBoard, RemovalLedger, SimClock, Stockpile, WorldMap } from '../resources';
 
 // One small handler per command type (the complexity gate is why they live
@@ -124,7 +124,7 @@ export function handleRecruitWorker(ctx: CommandContext): void {
   const id = ctx.ids.take();
   // Same shared list as the restore path — a worker recruited in play once
   // shipped without HaulTrip and vanished from snapshots entirely (OBS-4-02).
-  ctx.spawn(...workerComponents({ id }));
+  ctx.spawn(...colonistComponents({ id }));
   ctx.notices.succeed(`Recruited worker #${id}.`);
 }
 

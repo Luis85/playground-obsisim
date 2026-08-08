@@ -90,7 +90,7 @@ export interface SavedWorkerV2 {
   toolTicks: number;
 }
 
-export interface SavedWorker {
+export interface SavedColonist {
   id: number;
   hunger: number;
   buildingId: number | null;
@@ -128,7 +128,7 @@ export interface SaveGameV3 {
   stockpile: Partial<Record<ResourceId, number>>;
   map: WorldMapSize;
   buildings: SavedBuildingV3[];
-  workers: SavedWorker[];
+  workers: SavedColonist[];
   nextEntityId: number;
 }
 
@@ -139,7 +139,7 @@ export interface SaveGameV4 {
   stockpile: Partial<Record<ResourceId, number>>;
   map: WorldMapSize;
   buildings: SavedBuilding[];
-  workers: SavedWorker[];
+  workers: SavedColonist[];
   nextEntityId: number;
 }
 
@@ -156,10 +156,10 @@ function isSavedBuildingV1Shape(b: unknown): boolean {
 function isSavedWorkerShape(w: unknown): boolean {
   return (
     typeof w === 'object' && w !== null &&
-    Number.isFinite((w as SavedWorker).id) &&
-    Number.isFinite((w as SavedWorker).hunger) &&
-    Number.isFinite((w as SavedWorker).toolTicks) &&
-    ((w as SavedWorker).buildingId === null || Number.isFinite((w as SavedWorker).buildingId))
+    Number.isFinite((w as SavedColonist).id) &&
+    Number.isFinite((w as SavedColonist).hunger) &&
+    Number.isFinite((w as SavedColonist).toolTicks) &&
+    ((w as SavedColonist).buildingId === null || Number.isFinite((w as SavedColonist).buildingId))
   );
 }
 
@@ -253,7 +253,7 @@ export function isSaveGameV3(data: unknown): data is SaveGameV3 {
     isCommonSaveShape(save) &&
     isMapShape(save.map) &&
     (save.buildings as unknown[]).every((b) => hasSavedPosition(b) && isBufferShape((b as SavedBuildingV3).buffer)) &&
-    (save.workers as unknown[]).every((w) => typeof (w as SavedWorker).hauling === 'boolean')
+    (save.workers as unknown[]).every((w) => typeof (w as SavedColonist).hauling === 'boolean')
   );
 }
 
@@ -268,6 +268,6 @@ export function isSaveGameV4(data: unknown): data is SaveGameV4 {
       (b) => hasSavedPosition(b) && isBufferShape((b as SavedBuilding).buffer)
         && Number.isFinite((b as SavedBuilding).relocatingTicks),
     ) &&
-    (save.workers as unknown[]).every((w) => typeof (w as SavedWorker).hauling === 'boolean')
+    (save.workers as unknown[]).every((w) => typeof (w as SavedColonist).hauling === 'boolean')
   );
 }

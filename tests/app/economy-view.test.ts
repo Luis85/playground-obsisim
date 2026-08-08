@@ -62,7 +62,7 @@ describe('EconomyView', () => {
         makeBuilding(2, { buffered: 6, state: 'outputFull' }),
         makeBuilding(3, { buffered: 0, state: 'producing' }),
       ],
-      workers: [
+      colonists: [
         makeWorker(1, { hauling: true }),
         makeWorker(2, { hauling: true }),
         makeWorker(3, { hauling: true }),
@@ -87,7 +87,7 @@ describe('EconomyView', () => {
         makeBuilding(1, { buffered: 5, state: 'outputFull' }),
         makeBuilding(2, { buffered: 2, state: 'outputFull' }),
       ],
-      workers: [makeWorker(1, { hauling: true })],
+      colonists: [makeWorker(1, { hauling: true })],
     }));
     await wrapper.vm.$nextTick();
     const haul = wrapper.find('[data-test="haul-pressure"]').text();

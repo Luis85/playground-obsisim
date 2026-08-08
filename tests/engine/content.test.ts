@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BALANCE, STARTING_STOCK, workerEfficiency } from '../../src/engine/content/balance';
+import { BALANCE, STARTING_STOCK, colonistEfficiency } from '../../src/engine/content/balance';
 import { RESOURCES, RESOURCE_IDS } from '../../src/engine/content/resources';
 import { BUILDINGS, BUILDING_IDS } from '../../src/engine/content/buildings';
 import { CHAINS } from '../../src/engine/content/chains';
@@ -66,10 +66,10 @@ describe('content catalog', () => {
     expect(edible.sort()).toEqual(['berries', 'bread']);
   });
 
-  it('workerEfficiency matches the spec curve', () => {
-    expect(workerEfficiency(0)).toBe(1);
-    expect(workerEfficiency(BALANCE.mealThreshold)).toBe(1);
-    expect(workerEfficiency(75)).toBeCloseTo(0.6);
-    expect(workerEfficiency(100)).toBeCloseTo(0.2);
+  it('colonistEfficiency matches the spec curve', () => {
+    expect(colonistEfficiency(0)).toBe(1);
+    expect(colonistEfficiency(BALANCE.mealThreshold)).toBe(1);
+    expect(colonistEfficiency(75)).toBeCloseTo(0.6);
+    expect(colonistEfficiency(100)).toBeCloseTo(0.2);
   });
 });

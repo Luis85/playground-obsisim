@@ -7,7 +7,7 @@ import { BUILDINGS } from '../../src/engine/content/buildings';
 import { Building } from '../../src/engine/components';
 import { IdCounter, SimClock, SnapshotStore, Stockpile } from '../../src/engine/resources';
 import {
-  ALL_SYSTEMS, buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spawnWorker, type TColonySystemFactory,
+  ALL_SYSTEMS, buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist, type TColonySystemFactory,
 } from '../../src/engine/world';
 import { StatsSystem } from '../../src/engine/systems/stats-system';
 import { enqueue } from '../engine/fixtures';
@@ -101,7 +101,7 @@ const FED = 1_000_000;
  * is what an unmodified run gets today — a real change to an existing
  * measurement, not just a generalisation of the instrument. `bread` is the
  * other non-input `ResourceId`; seeding it measured harmless (hunger never
- * crosses `workerEfficiency`'s threshold under either meal choice — see
+ * crosses `colonistEfficiency`'s threshold under either meal choice — see
  * BALANCE.mealThreshold), but it stays out on the same principle: it is not
  * a recipe input, so seeding it is not this fix's job.
  */
@@ -152,8 +152,8 @@ export async function runScenario(scenario: Scenario): Promise<BalanceResult> {
   const ids = getPrepResource(prep, IdCounter);
   const entity = spawnBuilding(prep, ids, { defId, progress: 0, batchActive: false, col, row, relocatingTicks: 0 });
   const buildingId = entity.getComponent(Building)!.id;
-  for (let i = 0; i < crew; i++) spawnWorker(prep, ids, { buildingId });
-  for (let i = 0; i < haulers; i++) spawnWorker(prep, ids, { hauling: true });
+  for (let i = 0; i < crew; i++) spawnColonist(prep, ids, { buildingId });
+  for (let i = 0; i < haulers; i++) spawnColonist(prep, ids, { hauling: true });
   const world = await prep.prepareRun();
 
   let stalledTicks = 0;
@@ -182,12 +182,12 @@ export async function runScenario(scenario: Scenario): Promise<BalanceResult> {
     // match `relocationTicks()` exactly, including a 1-tick nudge.
     if (issuingMove || wasRelocating) relocatingTicks++;
     wasRelocating = (building?.relocatingTicks ?? 0) > 0;
-    haulerIdleTicks += snapshot.workers.filter((w) => w.hauling && w.haulPhase === 'idle').length;
+    haulerIdleTicks += snapshot.colonists.filter((w) => w.hauling && w.haulPhase === 'idle').length;
   }
 
   const snapshot = world.getResource(SnapshotStore).latest!;
   const finalBuffer = snapshot.buildings.find((b) => b.id === buildingId)?.buffered ?? 0;
-  const inTransit = snapshot.workers.reduce((sum, w) => sum + w.carrying, 0);
+  const inTransit = snapshot.colonists.reduce((sum, w) => sum + w.carrying, 0);
   // Gross production, derived rather than sampled: madeRate is a rolling mean
   // over statsWindowTicks and would understate a short run. Everything made
   // either reached the store, is still in the buffer, or is in a hauler's

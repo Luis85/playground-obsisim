@@ -36,7 +36,7 @@ export interface BuildingSnapshot {
   relocatingTicks: number;
 }
 
-export interface WorkerSnapshot {
+export interface ColonistSnapshot {
   id: number;
   hunger: number;
   efficiency: number;
@@ -107,7 +107,7 @@ export interface Snapshot {
   population: number;
   idleWorkers: number;
   buildings: BuildingSnapshot[];
-  workers: WorkerSnapshot[];
+  colonists: ColonistSnapshot[];
   /** Per-tick feedback (success and rejection alike); cleared after each snapshot. */
   notices: NoticeMessage[];
 }

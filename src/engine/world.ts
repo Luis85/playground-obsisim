@@ -6,21 +6,21 @@ import type { SaveGameV4, SavedBuilding } from '../shared/save';
 import type { ResourceId } from '../shared/content-types';
 import type { ResourceStats, Snapshot } from '../shared/snapshot';
 import { DEFAULT_MAP } from '../shared/placement';
-import { BALANCE, STARTING_STOCK, STARTING_WORKERS, workerEfficiency } from './content/balance';
+import { BALANCE, STARTING_STOCK, STARTING_COLONISTS, colonistEfficiency } from './content/balance';
 import { BUILDINGS } from './content/buildings';
 import { RESOURCES, RESOURCE_IDS } from './content/resources';
 import {
-  Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Worker,
+  Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Colonist,
   WorkerSlots,
 } from './components';
 import { isBuffersValid, isBuildingsValid, isIdsValid, isPositionsValid, isStockpileValid, isWorkersValid } from './save-guard';
 import {
-  buildingComponents, clampedBuffer, clampedHunger, clampedProgress, clampedRelocation, clampedToolTicks, workerComponents,
+  buildingComponents, clampedBuffer, clampedHunger, clampedProgress, clampedRelocation, clampedToolTicks, colonistComponents,
 } from './spawn';
 import {
   CommandQueue, IdCounter, NoticeBoard, ProductionLedger, RemovalLedger, SimClock, SnapshotStore, StatsHistory, Stockpile, WorldMap,
 } from './resources';
-import type { BuildingFacts, WorkerFacts } from './snapshot-builder';
+import type { BuildingFacts, ColonistFacts } from './snapshot-builder';
 import { buildEntitySections, gatherEntityFacts } from './snapshot-builder';
 import { CommandSystem } from './systems/command-system';
 import { HungerSystem } from './systems/hunger-system';
@@ -82,7 +82,7 @@ export function getPrepResource<T extends object>(prep: IPreptimeWorld, type: ne
 // and elements of this array back OUT into getComponent's parameter.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors sim-ecs's own TTypeProto<T> constructor-parameter shape exactly
 export const COMPONENT_TYPES: (new (...args: any[]) => object)[] = [
-  Building, WorkerSlots, Production, Worker, Hunger, JobAssignment, Efficiency, ToolCoverage, Position, OutputBuffer, HaulTrip,
+  Building, WorkerSlots, Production, Colonist, Hunger, JobAssignment, Efficiency, ToolCoverage, Position, OutputBuffer, HaulTrip,
   Relocation,
 ];
 
@@ -94,14 +94,14 @@ export function initialSave(): SaveGameV4 {
     stockpile: { ...STARTING_STOCK },
     map: { ...DEFAULT_MAP },
     buildings: [],
-    workers: Array.from({ length: STARTING_WORKERS }, (_, index) => ({
+    workers: Array.from({ length: STARTING_COLONISTS }, (_, index) => ({
       id: index + 1,
       hunger: 0,
       buildingId: null,
       toolTicks: 0,
       hauling: false,
     })),
-    nextEntityId: STARTING_WORKERS + 1,
+    nextEntityId: STARTING_COLONISTS + 1,
   };
 }
 
@@ -121,7 +121,7 @@ export function initialSave(): SaveGameV4 {
  * cross-references). Values coupled to tunable BALANCE/catalog numbers
  * (hunger max, tool duration, recruit cooldown sentinel, recipe batch size,
  * worker slots) are deliberately NOT bounds-checked here: they're clamped or
- * grandfathered at load (see spawnWorker) so retuning balance down never
+ * grandfathered at load (see spawnColonist) so retuning balance down never
  * orphans a previously valid save.
  */
 export function isLoadableSave(data: unknown): data is SaveGameV4 {
@@ -213,12 +213,12 @@ export function spawnBuilding(
 }
 
 /** Restore a worker from a save record. See spawnBuilding on the shared list. */
-export function spawnWorker(
+export function spawnColonist(
   prep: IPreptimeWorld,
   ids: IdCounter,
   opts: { id?: number; hunger?: number; buildingId?: number | null; hauling?: boolean; efficiency?: number; toolTicks?: number } = {},
 ): IEntity {
-  return attach(prep, workerComponents({ ...opts, id: opts.id ?? ids.take() }));
+  return attach(prep, colonistComponents({ ...opts, id: opts.id ?? ids.take() }));
 }
 
 /**
@@ -299,7 +299,7 @@ export function buildColonyPrepWorld(
 
   for (const saved of save.buildings) spawnBuilding(prep, ids, saved);
   for (const saved of save.workers) {
-    spawnWorker(prep, ids, {
+    spawnColonist(prep, ids, {
       id: saved.id,
       hunger: saved.hunger,
       toolTicks: saved.toolTicks,
@@ -316,15 +316,15 @@ export function buildColonyPrepWorld(
 }
 
 function buildInitialSnapshot(save: SaveGameV4): Snapshot {
-  const workerFacts: WorkerFacts[] = save.workers.map((saved) => {
-    // The same clamps workerComponents applies, so the seeded snapshot matches
+  const workerFacts: ColonistFacts[] = save.workers.map((saved) => {
+    // The same clamps colonistComponents applies, so the seeded snapshot matches
     // the entities buildColonyPrepWorld actually spawns (see src/engine/spawn.ts).
     const hunger = clampedHunger(saved.hunger);
     const toolTicks = clampedToolTicks(saved.toolTicks);
     return {
       id: saved.id,
       hunger,
-      efficiency: workerEfficiency(hunger),
+      efficiency: colonistEfficiency(hunger),
       buildingId: saved.buildingId,
       hauling: saved.hauling,
       // a restored colony's haulers start at the camp: HaulTrip never enters the save
@@ -351,7 +351,7 @@ function buildInitialSnapshot(save: SaveGameV4): Snapshot {
       relocatingTicks: clampedRelocation(saved.relocatingTicks ?? 0),
     };
   });
-  const { workers, buildings, population, idleWorkers } = buildEntitySections(workerFacts, buildingFacts);
+  const { colonists, buildings, population, idleWorkers } = buildEntitySections(workerFacts, buildingFacts);
   const stockpile = {} as Record<ResourceId, ResourceStats>;
   let colonyWealth = 0;
   for (const resourceId of RESOURCE_IDS) {
@@ -369,7 +369,7 @@ function buildInitialSnapshot(save: SaveGameV4): Snapshot {
     population,
     idleWorkers,
     buildings,
-    workers,
+    colonists,
     notices: [],
   };
 }

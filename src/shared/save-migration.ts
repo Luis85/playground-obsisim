@@ -5,7 +5,7 @@ import { autoPlaceSequence, mapThatFits } from './placement';
 /**
  * One structural upgrade between ADJACENT save versions. Migrations know
  * shapes, never content: no catalog, no BALANCE, no clamping (load-time
- * clamping stays in spawnWorker/spawnBuilding, per spec 4.5). That is what
+ * clamping stays in spawnColonist/spawnBuilding, per spec 4.5). That is what
  * lets this file live in src/shared/, which may import nothing else.
  *
  * `migrate` MUST return a new object and never mutate its input: callers may

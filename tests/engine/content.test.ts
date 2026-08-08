@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BALANCE, STARTING_STOCK, colonistEfficiency } from '../../src/engine/content/balance';
-import { RESOURCES, RESOURCE_IDS } from '../../src/engine/content/resources';
+import { MEAL_WEIGHTS, RESOURCES, RESOURCE_IDS } from '../../src/engine/content/resources';
 import { BUILDINGS, BUILDING_IDS } from '../../src/engine/content/buildings';
 import { CHAINS } from '../../src/engine/content/chains';
 import type { ResourceId } from '../../src/shared/content-types';
@@ -84,6 +84,29 @@ describe('content catalog', () => {
       const shelters = def.beds > 0;
       expect(produces !== shelters, `${def.id} must produce or shelter, not neither or both`).toBe(true);
     }
+  });
+
+  it('every edible has a meal weight, and nothing else does', () => {
+    // Both directions. A new edible with no weight is invisible to the food
+    // gates — the colony would starve while the store looked full — and a
+    // weight for something nobody eats inflates mealsPerHead against food
+    // that can never be eaten. Derived from the catalog's own `edible` flag
+    // rather than a second hand-written list, which is the thing that drifts.
+    const edible = RESOURCE_IDS.filter((id) => RESOURCES[id].edible).sort();
+    expect(Object.keys(MEAL_WEIGHTS).sort()).toEqual(edible);
+  });
+
+  it('a meal weight is what that food restores, relative to one meal', () => {
+    // Pins the derivation, not the literal: retune berriesHungerRestore and
+    // this still holds, while a hand-typed 0.6 would silently be wrong.
+    expect(MEAL_WEIGHTS.bread).toBe(1);
+    expect(MEAL_WEIGHTS.berries).toBe(BALANCE.berriesHungerRestore / BALANCE.mealThreshold);
+    expect(MEAL_WEIGHTS.berries).toBeLessThan(MEAL_WEIGHTS.bread); // discriminating: not all 1
+  });
+
+  it('a nomad costs more stored food than a birth', () => {
+    // Spec 2.7: the recovery valve is itself a trap, and this is the price.
+    expect(BALANCE.nomadFoodPerHead).toBeGreaterThan(BALANCE.birthFoodPerHead);
   });
 
   it('homelessness is exactly as bad as the worst commute', () => {

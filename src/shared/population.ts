@@ -104,3 +104,65 @@ export function commuteFactor(tiles: number | null, rates: CommuteRates, homeles
   const charged = Math.max(0, tiles - rates.freeTiles);
   return Math.max(rates.floor, 1 - charged * rates.penaltyPerTile);
 }
+
+/** Meals per unit for each edible resource, supplied by the caller from the
+ * content catalog (src/shared may not import it). */
+export type MealWeights = Readonly<Record<string, number>>;
+
+/** Total meals the store holds. */
+export function mealsInStore(stock: Readonly<Record<string, number>>, weights: MealWeights): number {
+  let meals = 0;
+  for (const [id, weight] of Object.entries(weights)) meals += (stock[id] ?? 0) * weight;
+  return meals;
+}
+
+/**
+ * Meals per head, dividing by the population this gate would PRODUCE rather
+ * than the current one — the honest question is "can the store feed them once
+ * they are here?".
+ *
+ * It also removes a special case with a hole in it: dividing by the current
+ * population needs `population === 0` treated as unbounded to dodge a division
+ * by zero, and unbounded satisfies any threshold, so a colony with an empty
+ * store and one standing bed could still welcome a nomad — contradicting the
+ * claim that a foodless colony is unrecoverable.
+ */
+export function mealsPerHead(stock: Readonly<Record<string, number>>, weights: MealWeights, population: number): number {
+  return mealsInStore(stock, weights) / (population + 1);
+}
+
+export type PopulationBlocker = 'noBed' | 'notEnoughFood' | 'cooldown' | 'noParents' | null;
+
+export interface BirthGate {
+  stock: Readonly<Record<string, number>>;
+  weights: MealWeights;
+  population: number;
+  adults: number;
+  freeBeds: number;
+  tick: number;
+  lastBirthTick: number;
+  cooldown: number;
+  perHead: number;
+}
+
+/** The gate a birth fails, or null when one may happen. Order is the order the
+ * player can act on: shelter, then parents, then food, then patience. */
+export function birthBlocker(gate: BirthGate): PopulationBlocker {
+  if (gate.freeBeds <= 0) return 'noBed';
+  if (gate.adults < 2) return 'noParents';
+  if (mealsPerHead(gate.stock, gate.weights, gate.population) < gate.perHead) return 'notEnoughFood';
+  if (gate.tick < gate.lastBirthTick + gate.cooldown) return 'cooldown';
+  return null;
+}
+
+export type NomadGate = Omit<BirthGate, 'adults' | 'lastBirthTick'> & { lastRecruitTick: number };
+
+/** The same shape for a nomad, minus the two-adult rule: a colony that has
+ * died out entirely can still be restarted by someone walking in — provided
+ * there is food, which `mealsPerHead`'s population + 1 guarantees it checks. */
+export function nomadBlocker(gate: NomadGate): PopulationBlocker {
+  if (gate.freeBeds <= 0) return 'noBed';
+  if (mealsPerHead(gate.stock, gate.weights, gate.population) < gate.perHead) return 'notEnoughFood';
+  if (gate.tick < gate.lastRecruitTick + gate.cooldown) return 'cooldown';
+  return null;
+}

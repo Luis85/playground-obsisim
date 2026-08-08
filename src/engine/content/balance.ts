@@ -76,6 +76,14 @@ export const BALANCE = {
    * the opening has a free bed and the second house is the first growth
    * decision the player makes. */
   houseBeds: 4,
+  /** Meals per head a colony must hold before a birth is allowed. Lower than
+   * the nomad gate: your own child is cheaper to take on than a stranger. */
+  birthFoodPerHead: 6,
+  /** Meals per head before a nomad may join — the recovery valve's price, and
+   * deliberately the higher of the two (spec 2.7). */
+  nomadFoodPerHead: 10,
+  /** Ticks between births, colony-wide. */
+  birthCooldownTicks: 50,
   /** Work power multiplier for a colonist with nowhere to live. Equal to
    * commute.floor (spec 4): homelessness is exactly as bad as the worst
    * possible commute, so the player has one number to beat. The two cannot

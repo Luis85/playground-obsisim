@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  commuteFactor, lifespanFor, SALT, spreadFor, stageOf, type CommuteRates, type LifeBands,
+  birthBlocker, commuteFactor, lifespanFor, mealsInStore, mealsPerHead, nomadBlocker, SALT, spreadFor, stageOf,
+  type CommuteRates, type LifeBands,
 } from '../../src/shared/population';
 
 // Deliberately not BALANCE's real numbers: this module takes bands as
@@ -111,5 +112,44 @@ describe('lifespanFor', () => {
       expect(span).toBeLessThanOrEqual(BANDS.lifespanTicks + BANDS.spreadTicks);
       expect(span).toBeGreaterThan(BANDS.matureTicks);
     }
+  });
+});
+
+const WEIGHTS = { bread: 1, berries: 0.6 };
+
+describe('meals', () => {
+  it('weights each edible by what it actually restores', () => {
+    // Discriminating: 10 bread and 10 berries must NOT score the same, which
+    // is the whole reason this is weighted rather than a unit count.
+    expect(mealsInStore({ bread: 10 }, WEIGHTS)).toBe(10);
+    expect(mealsInStore({ berries: 10 }, WEIGHTS)).toBe(6);
+    expect(mealsInStore({ bread: 10, berries: 10, wood: 500 }, WEIGHTS)).toBe(16); // wood is not edible
+  });
+
+  it('divides by the population it would produce, never the current one', () => {
+    // population + 1 is what removes the zero-population special case AND its
+    // hole: dividing by the current population needs 0 treated as unbounded,
+    // and unbounded satisfies any threshold, so an EMPTY store plus one bed
+    // could admit a nomad.
+    expect(mealsPerHead({ bread: 12 }, WEIGHTS, 3)).toBe(3);   // 12 / (3 + 1)
+    expect(mealsPerHead({}, WEIGHTS, 0)).toBe(0);              // empty store, nobody: not unbounded
+    expect(Number.isFinite(mealsPerHead({ bread: 5 }, WEIGHTS, 0))).toBe(true);
+  });
+});
+
+describe('gates', () => {
+  const plenty = { bread: 1000 };
+  it('names the failed gate rather than returning a bare boolean', () => {
+    expect(birthBlocker({ stock: plenty, weights: WEIGHTS, population: 4, adults: 2, freeBeds: 1, tick: 100, lastBirthTick: 0, cooldown: 50, perHead: 6 })).toBeNull();
+    expect(birthBlocker({ stock: plenty, weights: WEIGHTS, population: 4, adults: 2, freeBeds: 0, tick: 100, lastBirthTick: 0, cooldown: 50, perHead: 6 })).toBe('noBed');
+    expect(birthBlocker({ stock: plenty, weights: WEIGHTS, population: 4, adults: 1, freeBeds: 1, tick: 100, lastBirthTick: 0, cooldown: 50, perHead: 6 })).toBe('noParents');
+    expect(birthBlocker({ stock: {}, weights: WEIGHTS, population: 4, adults: 2, freeBeds: 1, tick: 100, lastBirthTick: 0, cooldown: 50, perHead: 6 })).toBe('notEnoughFood');
+    expect(birthBlocker({ stock: plenty, weights: WEIGHTS, population: 4, adults: 2, freeBeds: 1, tick: 10, lastBirthTick: 0, cooldown: 50, perHead: 6 })).toBe('cooldown');
+  });
+
+  it('refuses a nomad to a wiped-out colony with an empty store', () => {
+    // Acceptance criterion 10. Beds standing, nobody alive, nothing to eat.
+    expect(nomadBlocker({ stock: {}, weights: WEIGHTS, population: 0, freeBeds: 4, tick: 100, lastRecruitTick: 0, cooldown: 30, perHead: 10 })).toBe('notEnoughFood');
+    expect(nomadBlocker({ stock: { bread: 50 }, weights: WEIGHTS, population: 0, freeBeds: 4, tick: 100, lastRecruitTick: 0, cooldown: 30, perHead: 10 })).toBeNull();
   });
 });

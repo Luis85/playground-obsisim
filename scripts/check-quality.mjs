@@ -59,6 +59,21 @@ if (srcScores.length === 0) {
   process.exit(1);
 }
 
+// Every src/ score, not merely the aggregate they reduce to. `lower` picks with
+// `<`, which is false whenever either side is not a number, so a file fallow
+// listed without a maintainability_index is silently SKIPPED by the reduce —
+// unless it happens to sort first — and the floor is then derived from the files
+// that did parse. The result is a healthy-looking number with a src file missing
+// from the gate altogether. Validating what the reduce RETURNS (the GATED check
+// further down) cannot see that; only validating what it consumes can.
+const unscored = srcScores.filter((f) => !Number.isFinite(f.maintainability_index));
+if (unscored.length) {
+  console.error(
+    `fallow scored no maintainability_index for: ${unscored.map((f) => f.path).join(', ')}\nThe floor is the worst src/ file, so a file with no score would be dropped from the comparison rather than failing it. Check the fallow version against the field names in this script.`,
+  );
+  process.exit(1);
+}
+
 const worstSrc = srcScores.reduce(lower);
 
 const current = {

@@ -31,6 +31,7 @@ No single fix is interesting; the pattern is.
 | 3 | `--update` re-locked a baseline **missing** a gated key, and the normal run's own error text advised running `--update` | Codex, PR #7 |
 | 4 | Fix for #3 checked key *presence* only, so a **non-numeric** value reopened it | Codex, PR #7 |
 | 5 | Every check validated `baseline`; **`current` was never validated**, so a renamed fallow field would disable a counter | this audit |
+| 6 | The fix for #5 validated the reduce's **output**, not its inputs: an unscored `src/` file is skipped by `lower()` rather than caught, so the floor came from the files that did parse | Codex, PR #8 |
 
 ## The single root cause
 
@@ -65,8 +66,15 @@ Both operands, symmetrically, before any comparison runs:
   number the gate could not measure is not a number it can lock. This is a broken
   toolchain, not a metric trade-off, and the distinction is the point.
 
+- **Every `src/` score** that feeds the floor, before they are reduced. `lower()`
+  picks with `<`, so an unscored file is *skipped* by the reduce unless it happens
+  to sort first, and the floor is then derived from the files that did parse —
+  a healthy number with a file missing from the gate. This is hole 6, and it is
+  the one worth dwelling on: it was introduced by the fix for hole 5, which
+  validated the reduce's **output** and never asked what it consumed.
+
 Every exit path in the script now has a test — including the two that never had
-one (the `coverage/` refusal and the missing-baseline normal run). 29 tests.
+one (the `coverage/` refusal and the missing-baseline normal run). 31 tests.
 
 ## Verification
 
@@ -88,3 +96,16 @@ reintroduce the pattern if it is added without extending both validators. The
 durable guard is the audit habit rather than any one check: when adding a metric
 to `GATED`, ask what happens if *either* operand is not a number, and write the
 test that answers it.
+
+That advice was already written here when hole 6 landed **one commit later** —
+the paragraph above was in this note, and the fix it warned about still validated
+only the aggregate. So state the habit more precisely than "check both operands":
+
+> Follow the value backwards. A gated number is often *derived* — reduced,
+> averaged, picked from a list. Validating the derived value proves nothing about
+> the inputs it came from, because the same false-y comparison that hides a bad
+> operand also hides a bad input from the reduce that consumed it. Guard the
+> narrowest thing the arithmetic actually touches.
+
+Three of these six holes were in a fix for one of the others. That is the honest
+measure of how easy this class is to half-close.

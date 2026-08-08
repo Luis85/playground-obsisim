@@ -214,13 +214,45 @@ describe('check:quality maintainability floor', () => {
     expect(err).toContain('no number for: boundaryViolations=undefined');
   });
 
-  it('fails when fallow reports no number for the maintainability floor', () => {
+  // The reduce that picks the worst src/ file compares with `<`, which is false
+  // when either side is not a number — so an unscored file is skipped rather
+  // than caught, and the floor comes from the files that did parse. Order
+  // matters and is the whole point: unscored-first leaves the reduce holding it
+  // (caught by the aggregate check), unscored-LAST returns a healthy 100 and
+  // sails through it. Both must fail, or the gate silently stops covering a file.
+  it('fails when a src file has no score, even when it does not sort first', () => {
+    const { code, err } = run([{ path: 'src/good.ts', maintainability_index: 100 }, ...TESTS], {
+      mangle: (r) => { r.health.file_scores.push({ path: 'src/unmeasured.ts' } as FileScore); },
+    });
+    expect(code).toBe(1);
+    expect(err).toContain('no maintainability_index for: src/unmeasured.ts');
+  });
+
+  it('fails when a src file has no score and sorts first', () => {
+    const { code, err } = run([...TESTS], {
+      mangle: (r) => {
+        r.health.file_scores.unshift({ path: 'src/unmeasured.ts' } as FileScore);
+        r.health.file_scores.push({ path: 'src/good.ts', maintainability_index: 100 } as FileScore);
+      },
+    });
+    expect(code).toBe(1);
+    expect(err).toContain('no maintainability_index for: src/unmeasured.ts');
+  });
+
+  // A wholesale field rename — nothing in the report scores at all. Caught by
+  // the per-file check above rather than by the aggregate one, which is the
+  // stronger of the two outcomes: it names the files, and it fires whatever
+  // order they arrive in. The aggregate check still guards the eight counters
+  // read straight from fallow's summary (see the boundaryViolations case above);
+  // worstSrcFileMaintainability simply cannot reach it any more, because it is
+  // derived from scores that must all be finite by the time the reduce runs.
+  it('fails when fallow scores no file at all', () => {
     const { code, err } = run([...SRC, ...TESTS, ...SCRIPTS], {
-      // the worst file scores fine, but under a renamed field the gate reads undefined
       mangle: (r) => { for (const f of r.health.file_scores) delete (f as Record<string, unknown>).maintainability_index; },
     });
     expect(code).toBe(1);
-    expect(err).toContain('worstSrcFileMaintainability=undefined');
+    expect(err).toContain('no maintainability_index for:');
+    expect(err).toContain('src/app/views/WorldView.vue');
   });
 
   it('refuses to lock an unmeasured counter even with --allow-regression', () => {

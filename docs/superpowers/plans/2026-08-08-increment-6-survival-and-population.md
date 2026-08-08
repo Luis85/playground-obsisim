@@ -1663,9 +1663,16 @@ cp src/engine/systems/command-handlers.ts "$SP/command-handlers.ts"
 # NOTE the second one uses `#` as the delimiter: inside a |-delimited s|||,
 # GNU sed reads `\|` as ALTERNATION, not a literal pipe, so the obvious
 # escaping of `||` silently matches nothing and exits 0.
-sed -i 's|    if (!shelter.relocating) free.set(shelter.id, shelter.beds);|    free.set(shelter.id, shelter.beds);|' src/engine/systems/population-handlers.ts
+# `#` as the delimiter throughout: inside a |-delimited s|||, GNU sed reads
+# `\|` as ALTERNATION, so escaping the `||` in these guards matches nothing
+# and exits 0.
+sed -i 's#    if (shelter.relocating || ctx.pending.demolished.has(shelter.id)) continue;#    if (ctx.pending.demolished.has(shelter.id)) continue;#' src/engine/systems/population-handlers.ts
 sed -i 's#    if (shelter === undefined || shelter.relocating) {#    if (shelter === undefined) {#' src/engine/systems/population-handlers.ts
-git diff --stat src/engine/systems/population-handlers.ts | grep -q '2 +' || echo "CHECK: expected both edits to apply"
+# BOTH guards must go. Removing only one leaves the other still evicting the
+# resident, so the test stays green and the mutation proves nothing. Exit
+# nonzero rather than print — a warning scrolls past.
+changed=$(git diff --numstat src/engine/systems/population-handlers.ts | awk '{print $1}')
+[ "$changed" = "2" ] || { echo "MUTATION INCOMPLETE: $changed of 2 lines changed"; exit 1; }
 npx vitest run tests/engine/systems/population-system.test.ts -t "evicts when the house relocates"  # expect FAIL
 cp "$SP/population-handlers.ts" src/engine/systems/population-handlers.ts
 
@@ -2941,7 +2948,8 @@ npx vitest run tests/shared/save-migration.test.ts -t "SEEDED snapshot"        #
 cp "$SP/save-migration.ts" src/shared/save-migration.ts
 
 # Ages must be staggered, not uniform
-sed -i 's|ageTicks: MIGRATION_CONSTANTS.startingAgeTicks + jitter(w.id),|ageTicks: MIGRATION_CONSTANTS.startingAgeTicks,|' src/shared/save-migration.ts
+sed -i 's|ageTicks: w.ageTicks ?? MIGRATION_CONSTANTS.startingAgeTicks + jitter(w.id),|ageTicks: w.ageTicks ?? MIGRATION_CONSTANTS.startingAgeTicks,|' src/shared/save-migration.ts
+git diff --quiet src/shared/save-migration.ts && { echo 'MUTATION DID NOT APPLY'; exit 1; }
 npx vitest run tests/shared/save-migration.test.ts -t "v4 -> v5"                # expect FAIL
 cp "$SP/save-migration.ts" src/shared/save-migration.ts
 ```
@@ -3079,6 +3087,21 @@ export function starvingLabel(starvingTicks: number): string {
 ```
 
 Add `nomadBlocker` and `bedsFree` getters to `src/app/stores/game-store.ts`, both reading the **shared predicate** so the button's reason and the engine's rejection cannot disagree.
+
+The button binds to that getter exactly — this markup is what Step 7's mutation targets, so it must appear verbatim:
+
+```html
+      <button
+        data-test="recruit"
+        :disabled="store.nomadBlocker !== null"
+        @click="engine.dispatch({ type: 'recruitWorker' })"
+      >
+        Welcome a nomad
+      </button>
+      <span v-if="store.nomadBlocker" data-test="recruit-reason">{{ NOMAD_REASONS[store.nomadBlocker] }}</span>
+```
+
+`NOMAD_REASONS` is the view-side counterpart of the engine's `NOMAD_REJECTIONS` (Task 8), keyed by the same `PopulationBlocker` union so the compiler catches a gate the UI forgot to explain.
 
 - [ ] **Step 4: Rebuild the view**
 

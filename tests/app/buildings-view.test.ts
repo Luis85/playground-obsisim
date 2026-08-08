@@ -5,6 +5,7 @@ import { createTestingPinia } from '@pinia/testing';
 import BuildingsView from '../../src/app/views/BuildingsView.vue';
 import { ENGINE_KEY } from '../../src/app/engine-key';
 import { useGameStore } from '../../src/app/stores/game-store';
+import { BALANCE } from '../../src/engine/content/balance';
 import { makeBuilding, makeSnapshot } from './fixtures';
 import type { BuildingState, BuildingSnapshot } from '../../src/shared/snapshot';
 
@@ -116,5 +117,48 @@ describe('BuildingsView', () => {
     const { wrapper } = mountView({}, 'producing', { relocatingTicks: 0 });
     await wrapper.vm.$nextTick();
     expect(wrapper.find('[data-test="downtime-7"]').text()).toBe('—');
+  });
+
+  // A producer and a house in ONE render, because the two share a column: a
+  // test that only ever saw one kind could not tell a branch from a constant.
+  function mountMixed(house: Partial<BuildingSnapshot> = {}) {
+    const wrapper = mount(BuildingsView, {
+      global: {
+        plugins: [createTestingPinia({ createSpy: vi.fn, stubActions: false })],
+        provide: { [ENGINE_KEY as symbol]: { dispatch: vi.fn() } },
+      },
+    });
+    useGameStore().ingest(makeSnapshot({
+      buildings: [
+        makeBuilding(7, { defId: 'forester', state: 'producing', progressPct: 33, beds: 0, occupants: 0 }),
+        makeBuilding(8, {
+          defId: 'house', state: 'housing', workerSlots: 0, progressPct: 0,
+          beds: BALANCE.houseBeds, occupants: 3, ...house,
+        }),
+      ],
+    }), { paused: true, speed: 1, error: null });
+    return wrapper;
+  }
+
+  // Batch progress is meaningless for a building with no recipe — it sits at
+  // 0% forever — so the house spends that column on the only number it has:
+  // who is actually sleeping there. The two rows below rule each other out: a
+  // cell hardwired to progressPct would read "0%" for the house, and one
+  // hardwired to occupancy would read "0 / 0" for the forester.
+  it('a house reports its occupancy where a producer reports batch progress', async () => {
+    const wrapper = mountMixed();
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('[data-test="batch-7"]').text()).toBe('33%');
+    expect(wrapper.get('[data-test="batch-8"]').text()).toBe(`3 / ${BALANCE.houseBeds}`);
+  });
+
+  it('the occupancy cell counts the snapshot\'s own residents, empty house included', async () => {
+    const empty = mountMixed({ occupants: 0 });
+    await empty.vm.$nextTick();
+    expect(empty.get('[data-test="batch-8"]').text()).toBe(`0 / ${BALANCE.houseBeds}`);
+
+    const full = mountMixed({ occupants: BALANCE.houseBeds, beds: BALANCE.houseBeds });
+    await full.vm.$nextTick();
+    expect(full.get('[data-test="batch-8"]').text()).toBe(`${BALANCE.houseBeds} / ${BALANCE.houseBeds}`);
   });
 });

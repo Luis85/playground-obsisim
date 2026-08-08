@@ -74,6 +74,22 @@ export function commuteLabel(homeId: number | null, tiles: number, factor: numbe
 }
 
 /**
+ * "3 / 4" for a house, "33%" for a producer — the Buildings table's one
+ * progress column, answering the same question for both: is this building
+ * doing its job?
+ *
+ * A house has no recipe, so its batch progress is pinned at 0% forever and the
+ * column would be dead space on exactly the def increment 6 added. Beds are
+ * what a house is FOR, and its occupancy is the number that changes.
+ *
+ * Branches on `beds`, not on the def id: `BuildingSnapshot.beds` is already the
+ * def's bed count, so a second def gaining beds needs no edit here.
+ */
+export function batchLabel(beds: number, occupants: number, progressPct: number): string {
+  return beds > 0 ? `${occupants} / ${beds}` : `${progressPct}%`;
+}
+
+/**
  * Which tier the store's meals-per-head sits in, as a CSS class: below the
  * birth bar the colony cannot grow at all, between the two bars it can only
  * grow its own, and above both a nomad may join.

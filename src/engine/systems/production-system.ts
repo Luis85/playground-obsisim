@@ -66,7 +66,11 @@ export const ProductionSystem = () => createSystem({
 
     // Isolated so the run function itself stays a flat dispatch loop.
     const advanceBatches = (building: Building, production: Production, buffer: OutputBuffer, workPower: number) => {
-      const recipe = BUILDINGS[building.defId].recipe;
+      // Non-null: this is only ever reached from the building loop below,
+      // whose recipe-null `continue` guard runs before advanceBatches is
+      // called, so no building without a recipe ever gets here. Keep that
+      // guard in place — remove it and this assertion becomes a crash.
+      const recipe = BUILDINGS[building.defId].recipe!;
       const perBatch = batchOutputUnits(recipe);
       startBatch(production, buffer, stockpile, recipe, perBatch);
       if (!production.batchActive) return;
@@ -90,6 +94,10 @@ export const ProductionSystem = () => createSystem({
         // ever displays as in-flight.
         continue;
       }
+      // A shelter has no recipe. Skipped before work power is even looked up,
+      // so a colonist mistakenly assigned to one can never bank anything.
+      // advanceBatches' recipe! assertion depends on this guard running first.
+      if (BUILDINGS[building.defId].recipe === null) continue;
       const workPower = powerByBuilding.get(building.id) ?? 0;
       if (workPower === 0) continue;
       advanceBatches(building, production, buffer, workPower);

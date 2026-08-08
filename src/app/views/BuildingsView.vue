@@ -7,7 +7,7 @@ import { BUILDINGS, BUILDING_IDS } from '../../engine/content';
 // (used in the State cell below) is a Record keyed by the BuildingState union,
 // so a state added to the union without a matching label is a type error here,
 // not a silently-raw string in the rendered table.
-import { BUILDING_STATE_LABELS, costLabel, downtimeLabel } from '../labels';
+import { BUILDING_STATE_LABELS, costLabel, downtimeLabel, recipeLabel } from '../labels';
 import TwoStepButton from '../components/TwoStepButton.vue';
 
 const engine = inject(ENGINE_KEY)!;
@@ -62,10 +62,7 @@ const store = useGameStore();
           <td>{{ BUILDINGS[id].name }}</td>
           <td>{{ costLabel(BUILDINGS[id].cost) }}</td>
           <td>{{ BUILDINGS[id].workerSlots }}</td>
-          <td>
-            {{ costLabel(BUILDINGS[id].recipe.inputs) || '—' }} → {{ costLabel(BUILDINGS[id].recipe.outputs) }}
-            ({{ BUILDINGS[id].recipe.ticksPerBatch }}wt)
-          </td>
+          <td>{{ recipeLabel(BUILDINGS[id]) }}</td>
           <td>
             <button
               :data-test="`construct-${id}`"

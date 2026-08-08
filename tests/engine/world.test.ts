@@ -824,8 +824,15 @@ describe('live-world projections agree', () => {
     // recomputes the total from it on restore. Storing the sum a second time
     // would be exactly the second-source-of-truth this file avoids elsewhere
     // (see savedColonistOf's comment re: efficiency), so — like workPower and
-    // progressPct — it has no save slot of its own.
-    const derivedBuilding = ['workers', 'workerSlots', 'state', 'progressPct', 'tooledWorkers', 'workPower', 'buffered'];
+    // progressPct — it has no save slot of its own. beds is derived exactly
+    // like workerSlots: a content-catalog constant looked up by defId
+    // (BUILDINGS[b.defId].beds), never a per-building save fact. occupants is
+    // derived like buffered, but from a live pointer rather than a stored map
+    // — it counts colonists whose home points here (Task 6), so it has no
+    // save slot of its own either.
+    const derivedBuilding = [
+      'workers', 'workerSlots', 'state', 'progressPct', 'tooledWorkers', 'workPower', 'buffered', 'beds', 'occupants',
+    ];
     const factKeys = Object.keys(engine.snapshot!.buildings[0]).filter((k) => !derivedBuilding.includes(k));
     const savedKeys = Object.keys(engine.serialize().buildings[0]);
     expect(factKeys.filter((key) => !savedKeys.includes(key))).toEqual([]);

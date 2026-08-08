@@ -187,6 +187,23 @@ describe('SnapshotSystem', () => {
     expect(snapshot.buildings[1].state).toBe('relocating'); // rival condition: outputBlocked === true
   });
 
+  it('pins relocating precedence over housing too', async () => {
+    // Same shape as the precedence test above: a relocating house's OWN rival
+    // condition (recipe === null) is genuinely satisfied, so if that check
+    // ran before relocatingTicks > 0, this would read 'housing' instead. A
+    // house can never be 'unstaffed' or 'outputFull' (no slots, no batch), so
+    // relocating-vs-housing is the one precedence a house can actually flip.
+    const save = initialSave();
+    save.workers = [];
+    const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
+    const ids = getPrepResource(prep, IdCounter);
+    spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 5 });
+
+    const world = await prep.prepareRun();
+    await world.step();
+    expect(world.getResource(SnapshotStore).latest!.buildings[0].state).toBe('relocating');
+  });
+
   it('clears notices after snapshotting them', async () => {
     const prep = buildColonyPrepWorld({ save: initialSave(), systems: [SnapshotSystem] });
     getPrepResource(prep, NoticeBoard).reject('once');

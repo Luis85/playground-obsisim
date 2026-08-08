@@ -33,6 +33,7 @@ export function makeBuilding(id: number, overrides: Partial<BuildingSnapshot> = 
     id, defId: 'farm', col: 4 + 2 * ((id - 1) % 5), row: 1 + 2 * (Math.floor((id - 1) / 5) % 8),
     workers: 0, workerSlots: 4, state: 'unstaffed',
     progress: 0, batchActive: false, progressPct: 0, tooledWorkers: 0, workPower: 0, buffered: 0, relocatingTicks: 0,
+    beds: 0, occupants: 0,
     ...overrides,
   };
 }

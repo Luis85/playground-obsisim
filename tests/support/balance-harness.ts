@@ -106,7 +106,10 @@ const FED = 1_000_000;
  * a recipe input, so seeding it is not this fix's job.
  */
 const SEEDED_RESOURCE_IDS: readonly ResourceId[] = [
-  ...new Set<ResourceId>(['berries', ...Object.values(BUILDINGS).flatMap((def) => Object.keys(def.recipe.inputs) as ResourceId[])]),
+  ...new Set<ResourceId>([
+    'berries',
+    ...Object.values(BUILDINGS).flatMap((def) => Object.keys(def.recipe?.inputs ?? {}) as ResourceId[]),
+  ]),
 ];
 
 /**
@@ -197,6 +200,7 @@ export async function runScenario(scenario: Scenario): Promise<BalanceResult> {
   const made = delivered + finalBuffer + inTransit;
 
   const recipe = BUILDINGS[defId].recipe;
+  if (recipe === null) throw new Error(`Scenario building ${defId} has no recipe to measure`);
   const perBatch = Object.values(recipe.outputs).reduce((sum, n) => sum + n, 0);
   return {
     made,

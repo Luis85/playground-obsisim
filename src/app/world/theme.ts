@@ -43,12 +43,12 @@ function pick(read: VarReader, name: string, fallback: string): string {
 
 const BUILDING_FILL: Record<BuildingDefId, string> = {
   gatherersHut: '#7d9464', farm: '#b0913f', mill: '#a2793d', bakery: '#b06a4e',
-  forester: '#4e7a52', sawmill: '#8a6a49', workshop: '#6f6f85',
+  forester: '#4e7a52', sawmill: '#8a6a49', workshop: '#6f6f85', house: '#c9a66b',
 };
 
 export const BUILDING_GLYPHS: Record<BuildingDefId, string> = {
   gatherersHut: '🧺', farm: '🌾', mill: '⚙️', bakery: '🍞',
-  forester: '🌲', sawmill: '🪚', workshop: '🔨',
+  forester: '🌲', sawmill: '🪚', workshop: '🔨', house: '🏠',
 };
 
 function mixHex(from: string, to: string, t: number): string {
@@ -92,6 +92,12 @@ export function resolveWorldTheme(read: VarReader): WorldTheme {
       // ring color here would fail that pre-existing test AND leave a real
       // building genuinely in that state with an undefined ring at runtime.
       relocating: pick(read, '--color-cyan', '#4bbfd4'),
+      // A house never produces or stalls, it shelters — its own hue, not
+      // borrowed from the production language above (green/orange/purple) or
+      // the in-transit cyan. Same requirement as relocating just above: the
+      // BuildingState union gained 'housing' this task, so a ring color is
+      // needed now, not deferred to the task that draws the house on canvas.
+      housing: pick(read, '--color-blue', '#4c8bf5'),
     },
     workerColors: Array.from({ length: WORKER_BUCKETS }, (_, i) => mixHex(red, green, i / (WORKER_BUCKETS - 1))),
     workerToolRing: '#f2ecdd',

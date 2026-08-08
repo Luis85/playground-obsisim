@@ -72,6 +72,10 @@ export const BALANCE = {
    * its higher food gate a fair price. */
   nomadArrivalTicks: years(20),
   maxRelocationTicks: MAX_RELOCATION_TICKS,
+  /** Sleeping places one house provides. Three founders plus one spare, so
+   * the opening has a free bed and the second house is the first growth
+   * decision the player makes. */
+  houseBeds: 4,
 } as const;
 
 /**

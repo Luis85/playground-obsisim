@@ -1,5 +1,5 @@
 import type { IRuntimeWorld } from 'sim-ecs';
-import type { BuildingDefId, ResourceId } from '../shared/content-types';
+import type { BuildingDefId, RecipeDef, ResourceId } from '../shared/content-types';
 import type { SavedBuilding, SavedColonist } from '../shared/save';
 import type { BuildingSnapshot, BuildingState, ColonistSnapshot } from '../shared/snapshot';
 import { stageOf } from '../shared/population';
@@ -49,6 +49,43 @@ export interface EntitySections {
   idleAdults: number;
 }
 
+/**
+ * A staffed building that cannot bank another batch is stalled on output,
+ * whether or not its current batch has finished — the player's remedy is the
+ * same either way: send a hauler. A shelter has no batch to stall on, so it
+ * is never output-blocked.
+ */
+function isOutputBlocked(recipe: RecipeDef | null, buffered: number): boolean {
+  return recipe !== null && BALANCE.outputBufferCap - buffered < batchOutputUnits(recipe);
+}
+
+/**
+ * The state ladder for one building. Relocating dominates everything: it is
+ * the reason nothing is happening, and it is also why a relocating house
+ * shelters nobody. A shelter has no other state to be in — it is never
+ * unstaffed (no slots) and never producing.
+ *
+ * Extracted (rather than one inline nested ternary in buildEntitySections)
+ * purely to keep that function's own branch count — and CRAP score — down as
+ * this ladder grows. Same principle as save-guard.ts's isValidAgeTicks /
+ * isValidStarvingTicks / isValidHunger / isValidToolTicks splitting out of
+ * isColonistRecordValid.
+ */
+function buildingState(
+  recipe: RecipeDef | null, relocatingTicks: number, staffed: number, outputBlocked: boolean, batchActive: boolean,
+): BuildingState {
+  if (relocatingTicks > 0) return 'relocating';
+  if (recipe === null) return 'housing';
+  if (staffed === 0) return 'unstaffed';
+  if (outputBlocked) return 'outputFull';
+  return batchActive ? 'producing' : 'waitingForInput';
+}
+
+/** 0-100 display progress; a shelter has no batch to show progress on. */
+function progressPercent(recipe: RecipeDef | null, progress: number): number {
+  return recipe === null ? 0 : Math.min(100, Math.round((progress / recipe.ticksPerBatch) * 100));
+}
+
 /** Pure aggregation shared by SnapshotSystem, the initial-snapshot seed, and the post-step refresh. */
 export function buildEntitySections(workers: readonly ColonistFacts[], buildings: readonly BuildingFacts[]): EntitySections {
   const staffCount = new Map<number, number>();
@@ -79,18 +116,8 @@ export function buildEntitySections(workers: readonly ColonistFacts[], buildings
     .map((b) => {
       const def = BUILDINGS[b.defId];
       const staffed = staffCount.get(b.id) ?? 0;
-      // A staffed building that cannot bank another batch is stalled on output,
-      // whether or not its current batch has finished — the player's remedy is
-      // the same either way: send a hauler. Staffing still takes precedence,
-      // since an unstaffed building is not waiting on transport.
-      const outputBlocked = BALANCE.outputBufferCap - b.buffered < batchOutputUnits(def.recipe);
-      // Relocating first: it is the reason nothing is happening, and an
-      // unstaffed/output-full label would send the player after the wrong fix.
-      const state: BuildingState = b.relocatingTicks > 0
-        ? 'relocating'
-        : staffed === 0
-          ? 'unstaffed'
-          : outputBlocked ? 'outputFull' : b.batchActive ? 'producing' : 'waitingForInput';
+      const outputBlocked = isOutputBlocked(def.recipe, b.buffered);
+      const state = buildingState(def.recipe, b.relocatingTicks, staffed, outputBlocked, b.batchActive);
       return {
         id: b.id,
         defId: b.defId,
@@ -100,11 +127,13 @@ export function buildEntitySections(workers: readonly ColonistFacts[], buildings
         state,
         progress: b.progress,
         batchActive: b.batchActive,
-        progressPct: Math.min(100, Math.round((b.progress / def.recipe.ticksPerBatch) * 100)),
+        progressPct: progressPercent(def.recipe, b.progress),
         tooledWorkers: tooledByBuilding.get(b.id) ?? 0,
         workPower: powerByBuilding.get(b.id) ?? 0,
         buffered: b.buffered,
         relocatingTicks: b.relocatingTicks,
+        beds: def.beds,
+        occupants: 0, // Task 6 fills this from Home
       };
     })
     .sort((a, b) => a.id - b.id);

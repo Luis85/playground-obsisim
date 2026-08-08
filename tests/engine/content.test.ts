@@ -11,12 +11,12 @@ import type { ResourceId } from '../../src/shared/content-types';
 // balance numbers are the sim tests' concern.
 
 const hasProducer = (res: string) =>
-  BUILDING_IDS.some((b) => (BUILDINGS[b].recipe.outputs[res as ResourceId] ?? 0) > 0);
+  BUILDING_IDS.some((b) => (BUILDINGS[b].recipe?.outputs[res as ResourceId] ?? 0) > 0);
 
 describe('content catalog', () => {
-  it('has 7 resources and 7 buildings', () => {
+  it('has 7 resources and 8 buildings', () => {
     expect(RESOURCE_IDS).toHaveLength(7);
-    expect(BUILDING_IDS).toHaveLength(7);
+    expect(BUILDING_IDS).toHaveLength(8);
   });
 
   describe.each(BUILDING_IDS)('%s', (id) => {
@@ -25,13 +25,16 @@ describe('content catalog', () => {
     it('references only existing resources', () => {
       const referenced = [
         ...Object.keys(def.cost),
-        ...Object.keys(def.recipe.inputs),
-        ...Object.keys(def.recipe.outputs),
+        ...Object.keys(def.recipe?.inputs ?? {}),
+        ...Object.keys(def.recipe?.outputs ?? {}),
       ];
       for (const res of referenced) expect(RESOURCES[res as ResourceId], `${res} missing`).toBeDefined();
     });
 
     it('has positive batch length and worker slots', () => {
+      // A shelter has no batch and no crew — the exactly-one-of-recipe-or-beds
+      // test below covers it instead.
+      if (def.recipe === null) return;
       expect(def.recipe.ticksPerBatch).toBeGreaterThan(0);
       expect(def.workerSlots).toBeGreaterThan(0);
     });
@@ -56,7 +59,7 @@ describe('content catalog', () => {
       for (const step of chain.steps) {
         const def = BUILDINGS[step.building];
         expect(def).toBeDefined();
-        expect((def.recipe.outputs[step.output] ?? 0) > 0).toBe(true);
+        expect((def.recipe?.outputs[step.output] ?? 0) > 0).toBe(true);
       }
     },
   );
@@ -71,5 +74,23 @@ describe('content catalog', () => {
     expect(colonistEfficiency(BALANCE.mealThreshold)).toBe(1);
     expect(colonistEfficiency(75)).toBeCloseTo(0.6);
     expect(colonistEfficiency(100)).toBeCloseTo(0.2);
+  });
+
+  it('every building def has exactly one of a recipe or beds', () => {
+    // The rule that keeps `recipe: RecipeDef | null` honest: a def with neither
+    // does nothing at all, and a def with both is two mechanics in one entry.
+    for (const def of Object.values(BUILDINGS)) {
+      const produces = def.recipe !== null;
+      const shelters = def.beds > 0;
+      expect(produces !== shelters, `${def.id} must produce or shelter, not neither or both`).toBe(true);
+    }
+  });
+
+  it('the house shelters and never produces', () => {
+    expect(BUILDINGS.house.recipe).toBeNull();
+    expect(BUILDINGS.house.beds).toBe(BALANCE.houseBeds);
+    expect(BUILDINGS.house.workerSlots).toBe(0);
+    // Costs planks, which before this had no demand outside mill/bakery/workshop.
+    expect(BUILDINGS.house.cost.planks).toBeGreaterThan(0);
   });
 });

@@ -1,13 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import type { IEntity } from 'sim-ecs';
+import { SystemError, type IEntity } from 'sim-ecs';
 import { Building, OutputBuffer, Production } from '../../../src/engine/components';
 import { IdCounter, SnapshotStore, Stockpile } from '../../../src/engine/resources';
 import { ProductionSystem } from '../../../src/engine/systems/production-system';
 import { SnapshotSystem } from '../../../src/engine/systems/snapshot-system';
-import { buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist } from '../../../src/engine/world';
+import {
+  ALL_SYSTEMS, buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist,
+} from '../../../src/engine/world';
 import type { BuildingDefId, ResourceId } from '../../../src/shared/content-types';
 import { BALANCE } from '../../../src/engine/content/balance';
 import { BUILDINGS } from '../../../src/engine/content/buildings';
+import { stepTick } from '../fixtures';
 
 async function setup(defId: BuildingDefId, stock: Partial<Record<ResourceId, number>>, workerCount = 1, workerToolTicks = 0) {
   const save = initialSave();
@@ -136,7 +139,7 @@ describe('ProductionSystem', () => {
     const production = building.getComponent(Production)!;
     expect(buffer.total()).toBe(BALANCE.outputBufferCap);
     expect(production.batchActive).toBe(true);
-    expect(production.progress).toBe(BUILDINGS.forester.recipe.ticksPerBatch); // work done, waiting on a cart
+    expect(production.progress).toBe(BUILDINGS.forester.recipe!.ticksPerBatch); // forester always has a recipe; work done, waiting on a cart
   });
 
   it('resumes the tick after the buffer gains room', async () => {
@@ -190,5 +193,36 @@ describe('ProductionSystem', () => {
     for (let i = 0; i < 50; i++) await world.step();
     expect(stockpile.get('wheat')).toBe(0);
     expect(buffer.total()).toBe(12);
+  });
+
+  it('a house never produces, even fully staffed', async () => {
+    // Discriminating fixture: the same crew on a forester at the same tile DOES
+    // produce, so a pass here cannot come from the crew being idle for some
+    // unrelated reason.
+    const save = { ...initialSave(), workers: [], stockpile: { berries: 100_000 }, nextEntityId: 100 };
+    const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
+    const ids = getPrepResource(prep, IdCounter);
+    const house = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: 5, row: 3, relocatingTicks: 0 });
+    const houseId = house.getComponent(Building)!.id;
+    spawnColonist(prep, ids, { id: 1, ageTicks: BALANCE.lifeBands.matureTicks, buildingId: houseId });
+    const world = await prep.prepareRun();
+    // Also discriminating, and load-bearing: ProductionSystem's recipe-null
+    // skip must run BEFORE advanceBatches reads BUILDINGS[...].recipe!, not
+    // merely produce a snapshot that happens to look right. Without the skip,
+    // advanceBatches throws on this exact fixture — but sim-ecs's scheduler
+    // catches a system's thrown Error and republishes it as a SystemError
+    // event instead of failing the tick (see node_modules/sim-ecs's stage
+    // executor), and the crash happens before any state mutation, so
+    // state/buffered/progress below would still read as correct. Subscribing
+    // here is what turns that swallowed crash into a real test failure.
+    let systemErrors = 0;
+    world.eventBus.subscribe(SystemError, () => { systemErrors++; });
+    for (let i = 0; i < 20; i++) await stepTick(world);
+
+    const snap = world.getResource(SnapshotStore).latest!.buildings.find((b) => b.id === houseId)!;
+    expect(systemErrors).toBe(0);
+    expect(snap.state).toBe('housing');
+    expect(snap.buffered).toBe(0);
+    expect(snap.progress).toBe(0);
   });
 });

@@ -37,7 +37,10 @@ import {
  * actually spawned. That third mirror was maintained by hand and by comment.
  */
 export function clampedProgress(defId: BuildingDefId, progress: number): number {
-  return Math.min(progress, BUILDINGS[defId].recipe.ticksPerBatch);
+  const { recipe } = BUILDINGS[defId];
+  // A shelter has no batch to be part-way through; any saved progress on one
+  // is meaningless and clamps to nothing rather than being rejected.
+  return recipe === null ? 0 : Math.min(progress, recipe.ticksPerBatch);
 }
 
 export function clampedHunger(hunger: number): number {

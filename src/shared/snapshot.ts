@@ -3,7 +3,7 @@ import type { HaulPhase } from './haul';
 import type { LifeStage } from './population';
 import type { WorldMapSize } from './placement';
 
-export type BuildingState = 'producing' | 'waitingForInput' | 'unstaffed' | 'outputFull' | 'relocating';
+export type BuildingState = 'producing' | 'waitingForInput' | 'unstaffed' | 'outputFull' | 'relocating' | 'housing';
 
 export type NoticeKind = 'success' | 'rejection';
 
@@ -35,6 +35,11 @@ export interface BuildingSnapshot {
   buffered: number;
   /** Ticks until a moved building can work again (0 when not relocating). */
   relocatingTicks: number;
+  /** Sleeping places this building provides (0 for a producer). */
+  beds: number;
+  /** Colonists currently homed here. Derived from who points at it, never
+   * stored — so it cannot disagree with the colonists. */
+  occupants: number;
 }
 
 export interface ColonistSnapshot {

@@ -1,7 +1,7 @@
 ---
 id: OBS-6-03
 title: An idle adult crossing the elder band retires silently, while a working one is announced
-status: resolved
+status: Done
 severity: minor
 area: engine
 increment: 6
@@ -13,6 +13,14 @@ affects:
   - src/engine/systems/population-system.ts
   - tests/engine/systems/population-system.test.ts
   - tests/engine/world.test.ts
+type: Issue
+parent: "[[Colonist Lifecycle - Child, Adult, Elder, Death]]"
+order: 130
+started: ""
+finished: ""
+horizon: ""
+start: ""
+due: ""
 ---
 
 # An idle adult crossing the elder band retires silently, while a working one is announced

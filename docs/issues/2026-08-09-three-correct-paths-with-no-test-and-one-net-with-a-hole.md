@@ -1,7 +1,7 @@
 ---
 id: OBS-6-07
 title: Three correct-but-untested paths, and the property test that does not net the family it was written for
-status: resolved
+status: Done
 severity: minor
 area: tests
 increment: 6
@@ -12,6 +12,14 @@ affects:
   - tests/engine/systems/haul-system.test.ts
   - tests/engine/systems/population-system.test.ts
   - tests/app/game-store.test.ts
+type: Issue
+parent: "[[Houses and Beds Throttle Growth]]"
+order: 170
+started: ""
+finished: ""
+horizon: ""
+start: ""
+due: ""
 ---
 
 # Three correct-but-untested paths, and one net with a hole

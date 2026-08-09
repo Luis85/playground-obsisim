@@ -1,7 +1,7 @@
 ---
 id: OBS-6-06
 title: The homeless work-power penalty is invisible in the view that exists to explain low output
-status: resolved
+status: Done
 severity: minor
 area: app
 increment: 6
@@ -11,6 +11,14 @@ source: increment-6 whole-branch review, recorded in the final fix pass — the 
 affects:
   - src/app/labels.ts
   - src/app/views/PopulationView.vue
+type: Issue
+parent: "[[Population View - a New Primary Screen]]"
+order: 160
+started: ""
+finished: ""
+horizon: ""
+start: ""
+due: ""
 ---
 
 # The homeless work-power penalty is invisible in the Population view

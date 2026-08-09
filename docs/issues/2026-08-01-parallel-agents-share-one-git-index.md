@@ -1,7 +1,7 @@
 ---
 id: OBS-4-05
 title: Parallel agents share one git index, so explicit-path staging does not prevent collisions
-status: resolved
+status: Open
 severity: minor
 area: process
 increment: 4
@@ -11,9 +11,15 @@ source: increment-4, collision between the carried-load fix and Task 17
 affects:
   - .claude/skills/subagent-driven-development
 tags:
-  - issue
   - process
   - tooling
+type: Issue
+parent: "[[Engineering Quality and Balance Tooling]]"
+order: 70
+started: ""
+horizon: ""
+start: ""
+due: ""
 ---
 
 # Parallel agents share one git index

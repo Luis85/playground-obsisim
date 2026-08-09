@@ -1,7 +1,7 @@
 ---
 id: OBS-4-03
 title: Two haul tests run systems in the reverse of production order
-status: resolved
+status: Done
 severity: minor
 area: tests
 increment: 4
@@ -11,9 +11,16 @@ source: increment-4 Task 5 review (caught a real false positive from this patter
 affects:
   - tests/engine/systems/haul-system.test.ts
 tags:
-  - issue
   - test-validity
   - tech-debt
+type: Issue
+parent: "[[Logistics]]"
+order: 30
+started: ""
+finished: ""
+horizon: ""
+start: ""
+due: ""
 ---
 
 # Two haul tests run systems in the reverse of production order

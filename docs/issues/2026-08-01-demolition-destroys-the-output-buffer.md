@@ -1,18 +1,25 @@
 ---
 id: OBS-4-07
 title: Demolishing a building destroys everything in its output buffer, under a notice that says "cost refunded"
-status: resolved
+status: Done
 severity: important
 area: engine
 increment: 4
 created: 2026-08-01
 resolved: 2026-08-01
-source: increment-4 final whole-branch review (Important #4)
+source: increment-4 final whole-branch review (Important
 affects:
   - src/engine/systems/command-handlers.ts
 tags:
-  - issue
   - game-design
+type: Issue
+parent: "[[Output Buffers and the Output-Full Stall]]"
+order: 10
+started: ""
+finished: ""
+horizon: ""
+start: ""
+due: ""
 ---
 
 # Demolition destroys the output buffer

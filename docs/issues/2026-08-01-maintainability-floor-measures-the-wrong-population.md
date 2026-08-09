@@ -1,7 +1,7 @@
 ---
 id: OBS-4-01
 title: The maintainability floor averages over tests, so it falls whenever an increment adds them
-status: resolved
+status: Done
 severity: important
 area: build-ci
 increment: 4
@@ -13,10 +13,17 @@ affects:
   - scripts/quality-baseline.json
   - docs/build-ci/quality-gates.md
 tags:
-  - issue
   - quality-gates
   - metrics
   - tech-debt
+type: Issue
+parent: "[[The Quality Gate Ratchet System]]"
+order: 50
+started: ""
+finished: ""
+horizon: ""
+start: ""
+due: ""
 ---
 
 # The maintainability floor measures the wrong population

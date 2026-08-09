@@ -1,7 +1,7 @@
 ---
 id: OBS-4-04
 title: Smoke checks compare whole frames while fixtures change many things at once
-status: resolved
+status: Done
 severity: minor
 area: world
 increment: 4
@@ -12,9 +12,16 @@ affects:
   - scripts/world-smoke.mjs
   - scripts/world-smoke-harness/main.ts
 tags:
-  - issue
   - test-validity
   - rendering
+type: Issue
+parent: "[[Logistics]]"
+order: 90
+started: ""
+finished: ""
+horizon: ""
+start: ""
+due: ""
 ---
 
 # Smoke checks compare whole frames while fixtures change many things at once

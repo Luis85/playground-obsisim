@@ -1,13 +1,13 @@
 ---
 id: OBS-4-09
 title: The hauler dot animates at a fixed speed unrelated to the trip's simulated duration
-status: resolved
+status: Done
 severity: important
 area: world
 increment: 4
 created: 2026-08-01
 resolved: 2026-08-01
-source: Codex review on PR #6 (P1), arithmetic verified against the code
+source: Codex review on PR
 affects:
   - src/shared/haul.ts
   - src/shared/snapshot.ts
@@ -15,10 +15,17 @@ affects:
   - src/app/world/layout.ts
   - src/app/world/renderer.ts
 tags:
-  - issue
   - rendering
   - game-feel
   - needs-design
+type: Issue
+parent: "[[Haulers as a Staffed Role]]"
+order: 40
+started: ""
+finished: ""
+horizon: ""
+start: ""
+due: ""
 ---
 
 # The hauler dot animates at a fixed speed unrelated to the trip

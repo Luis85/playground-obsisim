@@ -1,16 +1,24 @@
 ---
 id: OBS-6-01
 title: A demolished tile is still occupied for the rest of the drain
-status: resolved
+status: Done
 severity: minor
 area: engine
 increment: 6
 created: 2026-08-08
 resolved: 2026-08-09
-source: increment-6 review (automated PR review on #9) — a pre-existing increment-3 defect surfaced while reviewing this increment
+source: "increment-6 review (automated PR review on #9) — a pre-existing increment-3 defect surfaced while reviewing this increment"
 affects:
   - src/engine/systems/command-handlers.ts
   - tests/engine/systems/command-system.test.ts
+type: Issue
+parent: "[[Positions as Sim Truth - the Fixed Map and Save v2]]"
+order: 120
+started: ""
+finished: ""
+horizon: ""
+start: ""
+due: ""
 ---
 
 # A demolished tile is still occupied for the rest of the drain

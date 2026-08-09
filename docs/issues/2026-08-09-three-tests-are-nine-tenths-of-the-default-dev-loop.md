@@ -1,7 +1,7 @@
 ---
 id: OBS-6-04
 title: Three long-horizon balance tests are nine tenths of the default dev loop
-status: resolved
+status: Done
 severity: important
 area: tests
 increment: 6
@@ -15,6 +15,14 @@ affects:
   - .github/workflows/ci.yml
   - scripts/check-test-projects.mjs
   - docs/build-ci/test-projects.md
+type: Issue
+parent: "[[Measured and Retuned - the Birth Threshold]]"
+order: 180
+started: ""
+finished: ""
+horizon: ""
+start: ""
+due: ""
 ---
 
 # Three long-horizon balance tests are nine tenths of the default dev loop

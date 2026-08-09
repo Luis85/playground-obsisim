@@ -1,7 +1,7 @@
 ---
 id: OBS-6-08
 title: A relocating crew's work power is computed and discarded on the engine side, and reaches zero a different way on the snapshot side
-status: open
+status: Open
 severity: minor
 area: engine
 increment: 6
@@ -11,6 +11,14 @@ affects:
   - src/engine/systems/production-system.ts
   - src/engine/snapshot-builder.ts
   - tests/engine/systems/snapshot-system.test.ts
+type: Issue
+parent: "[[Relocation Costs Downtime]]"
+order: 70
+started: ""
+finished: ""
+horizon: ""
+start: ""
+due: ""
 ---
 
 # A relocating crew's work power is computed and discarded on the engine side, and reaches zero a different way on the snapshot side

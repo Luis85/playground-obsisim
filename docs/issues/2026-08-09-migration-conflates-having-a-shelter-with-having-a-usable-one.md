@@ -1,7 +1,7 @@
 ---
 id: OBS-6-05
 title: The v4 migration conflates "has a shelter" with "has a usable one", and code, comment and test disagree about it
-status: resolved
+status: Done
 severity: minor
 area: shared
 increment: 6
@@ -11,6 +11,14 @@ source: increment-6 whole-branch review, recorded in the final fix pass — file
 affects:
   - src/shared/save-migration.ts
   - tests/shared/save-migration.test.ts
+type: Issue
+parent: "[[Save v5 - Age, Home and Starvation Clock]]"
+order: 150
+started: ""
+finished: ""
+horizon: ""
+start: ""
+due: ""
 ---
 
 # The v4 migration conflates "has a shelter" with "has a usable one"

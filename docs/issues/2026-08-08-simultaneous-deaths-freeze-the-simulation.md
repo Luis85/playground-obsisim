@@ -1,18 +1,26 @@
 ---
 id: OBS-6-02
 title: Two colonists dying on the same tick freeze the whole simulation for a tick each
-status: resolved
+status: Done
 severity: important
 area: engine
 increment: 6
 created: 2026-08-08
 resolved: 2026-08-09
-source: increment-6 Task 12 (population balance harness) — found by running, not by reading; the autosave consequence added at Task 13 close-out, after PR #9's bot reached the same defect independently
+source: "increment-6 Task 12 (population balance harness) — found by running, not by reading; the autosave consequence added at Task 13 close-out, after PR #9's bot reached the same defect independently"
 affects:
   - src/engine/systems/population-handlers.ts
   - src/engine/game-engine.ts
   - src/engine/world.ts
   - tests/engine/fixtures.ts
+type: Issue
+parent: "[[Colonist Lifecycle - Child, Adult, Elder, Death]]"
+order: 140
+started: ""
+finished: ""
+horizon: ""
+start: ""
+due: ""
 ---
 
 # Two colonists dying on the same tick freeze the whole simulation for a tick each

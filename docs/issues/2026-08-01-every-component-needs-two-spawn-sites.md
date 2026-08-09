@@ -1,7 +1,7 @@
 ---
 id: OBS-4-02
 title: Every component must be attached in two places, and forgetting one is silent
-status: resolved
+status: Done
 severity: important
 area: engine
 increment: 4
@@ -13,10 +13,17 @@ affects:
   - src/engine/world.ts
   - src/engine/systems/command-handlers.ts
 tags:
-  - issue
   - architecture
   - tech-debt
   - footgun
+type: Issue
+parent: "[[Logistics]]"
+order: 20
+started: ""
+finished: ""
+horizon: ""
+start: ""
+due: ""
 ---
 
 # Every component needs two spawn sites

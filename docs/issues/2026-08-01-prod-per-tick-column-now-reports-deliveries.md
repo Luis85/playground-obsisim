@@ -1,7 +1,7 @@
 ---
 id: OBS-4-06
 title: The Economy view's "Prod/t" column now reports deliveries, not production
-status: resolved
+status: Done
 severity: important
 area: app
 increment: 4
@@ -12,9 +12,16 @@ affects:
   - src/app/views/EconomyView.vue
   - src/app/views/DashboardView.vue
 tags:
-  - issue
   - ux
   - labelling
+type: Issue
+parent: "[[Made vs Delivered]]"
+order: 80
+started: ""
+finished: ""
+horizon: ""
+start: ""
+due: ""
 ---
 
 # "Prod/t" now reports deliveries, not production

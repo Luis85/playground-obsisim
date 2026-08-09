@@ -12,7 +12,7 @@ views:
     horizonProperty: note.horizon
     startProperty: note.start
     targetProperty: note.due
-    stateValues: Open, Active, Done
+    stateValues: New, Open, Active, Done
     startedStates: Active
     doneValues: Done, Closed, Completed, Removed, Resolved
   - type: table

@@ -144,7 +144,7 @@ grows the concept the rest of this increment is built on:
   `capacity: null` always has room, so the camp is the guaranteed fallback and
   this
   function can never return null while the camp exists.
-- `sitesHolding(sites, unclaimedAt, resource)` — every site with unclaimed
+- `sitesHolding(sites, unclaimedAt)` — every site with unclaimed
   stock of a resource, for the supply pairing in §2.6. An earlier draft
   deliberately omitted this, on the grounds that a supply trip loaded where the
   hauler already stood; removing the hauler's base is exactly what makes it

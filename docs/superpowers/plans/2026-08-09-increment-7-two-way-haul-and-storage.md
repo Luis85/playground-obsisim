@@ -98,22 +98,29 @@ describe('nearestSiteWithRoom', () => {
   const depot: StoreSite = { id: 7, col: 20, row: 14, capacity: 60 };
 
   it('prefers the depot for a building beside it', () => {
-    expect(nearestSiteWithRoom(21, 14, [camp, depot], () => 0)?.id).toBe(7);
+    expect(nearestSiteWithRoom(21, 14, [camp, depot], () => 0, 6)?.id).toBe(7);
   });
   it('falls through to the camp when the depot is full', () => {
     // Discriminating: the depot is still NEARER. Only the room check can move
     // this answer, so a mutation that ignores capacity fails here and nowhere else.
-    expect(nearestSiteWithRoom(21, 14, [camp, depot], (id) => (id === 7 ? 60 : 0))?.id).toBe(CAMP_SITE_ID);
+    expect(nearestSiteWithRoom(21, 14, [camp, depot], (id) => (id === 7 ? 60 : 0), 6)?.id).toBe(CAMP_SITE_ID);
   });
+  it('rejects a depot with SOME room but not enough for the load', () => {
+    // The case the `amount` parameter exists for. 55 of 60 held, 12 to bank:
+    // a predicate that only skips FULL sites picks the depot and splits the
+    // load on arrival.
+    expect(nearestSiteWithRoom(21, 14, [camp, depot], (id) => (id === 7 ? 55 : 0), 12)?.id).toBe(CAMP_SITE_ID);
+  });
+
   it('never runs out of destinations while the camp exists', () => {
     // capacity: null is unbounded, so the camp is the guaranteed fallback.
-    expect(nearestSiteWithRoom(21, 14, [camp], () => 1e9)).not.toBeNull();
+    expect(nearestSiteWithRoom(21, 14, [camp], () => 1e9, 6)).not.toBeNull();
   });
   it('breaks a distance tie by site id, not by argument order', () => {
     const a: StoreSite = { id: 9, col: 4, row: 0, capacity: 60 };
     const b: StoreSite = { id: 3, col: 0, row: 0, capacity: 60 };
-    expect(nearestSiteWithRoom(2, 0, [a, b], () => 0)?.id).toBe(3);
-    expect(nearestSiteWithRoom(2, 0, [b, a], () => 0)?.id).toBe(3);
+    expect(nearestSiteWithRoom(2, 0, [a, b], () => 0, 6)?.id).toBe(3);
+    expect(nearestSiteWithRoom(2, 0, [b, a], () => 0, 6)?.id).toBe(3);
   });
 });
 ```
@@ -142,11 +149,13 @@ export function haulTicks(col: number, row: number, tilesPerTick: number): numbe
 
 ```ts
 export function nearestSiteWithRoom(
-  col: number, row: number, sites: readonly StoreSite[], heldAt: (siteId: number) => number,
+  col: number, row: number, sites: readonly StoreSite[], heldAt: (siteId: number) => number, amount: number,
 ): StoreSite | null {
   let best: StoreSite | null = null;
   for (const site of sites) {
-    if (site.capacity !== null && heldAt(site.id) >= site.capacity) continue;
+    // The WHOLE load must fit: `>= capacity` skips only sites already full and
+    // lets a 12-unit load pick a depot holding 55 of 60.
+    if (site.capacity !== null && heldAt(site.id) + amount > site.capacity) continue;
     if (best === null || closer(site, best, col, row)) best = site;
   }
   return best;
@@ -158,9 +167,9 @@ export function nearestSiteWithRoom(
 - [ ] **Step 4: Mutation-check**
 
 ```bash
-sed -i 's/if (site.capacity !== null \&\& heldAt(site.id) >= site.capacity) continue;//' src/shared/haul.ts
+sed -i 's/heldAt(site.id) + amount > site.capacity/heldAt(site.id) >= site.capacity/' src/shared/haul.ts
 git diff --quiet src/shared/haul.ts && echo "MUTATION DID NOT APPLY"
-npx vitest run tests/shared/haul.test.ts   # expect ONLY "falls through to the camp when the depot is full" red
+npx vitest run tests/shared/haul.test.ts   # expect ONLY the partial-room test red
 git checkout src/shared/haul.ts
 ```
 

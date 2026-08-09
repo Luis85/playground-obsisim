@@ -15,6 +15,13 @@ tags:
   - issue
   - ux
   - labelling
+type: Issue
+order: 80
+started: ""
+finished: ""
+horizon: ""
+start: ""
+due: ""
 ---
 
 # "Prod/t" now reports deliveries, not production

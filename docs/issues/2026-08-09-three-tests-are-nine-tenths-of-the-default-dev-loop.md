@@ -11,6 +11,13 @@ affects:
   - tests/engine/balance.test.ts
   - package.json
   - vitest.config.ts
+type: Issue
+order: 180
+started: ""
+finished: ""
+horizon: ""
+start: ""
+due: ""
 ---
 
 # Three long-horizon balance tests are nine tenths of the default dev loop

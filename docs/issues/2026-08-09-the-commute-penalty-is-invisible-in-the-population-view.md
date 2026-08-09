@@ -10,6 +10,13 @@ source: increment-6 whole-branch review, recorded in the final fix pass — the 
 affects:
   - src/app/labels.ts
   - src/app/views/PopulationView.vue
+type: Issue
+order: 160
+started: ""
+finished: ""
+horizon: ""
+start: ""
+due: ""
 ---
 
 # The homeless work-power penalty is invisible in the Population view

@@ -17,6 +17,13 @@ tags:
   - quality-gates
   - metrics
   - tech-debt
+type: Issue
+order: 50
+started: ""
+finished: ""
+horizon: ""
+start: ""
+due: ""
 ---
 
 # The maintainability floor measures the wrong population

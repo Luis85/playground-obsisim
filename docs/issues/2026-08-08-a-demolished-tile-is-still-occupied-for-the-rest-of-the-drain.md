@@ -6,10 +6,17 @@ severity: minor
 area: engine
 increment: 6
 created: 2026-08-08
-source: increment-6 review (automated PR review on #9) — a pre-existing increment-3 defect surfaced while reviewing this increment
+source: increment-6 review (automated PR review on
 affects:
   - src/engine/systems/command-handlers.ts
   - tests/engine/systems/command-system.test.ts
+type: Issue
+order: 120
+started: ""
+finished: ""
+horizon: ""
+start: ""
+due: ""
 ---
 
 # A demolished tile is still occupied for the rest of the drain

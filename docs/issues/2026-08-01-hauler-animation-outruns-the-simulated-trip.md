@@ -7,7 +7,7 @@ area: world
 increment: 4
 created: 2026-08-01
 resolved: 2026-08-01
-source: Codex review on PR #6 (P1), arithmetic verified against the code
+source: Codex review on PR
 affects:
   - src/shared/haul.ts
   - src/shared/snapshot.ts
@@ -19,6 +19,13 @@ tags:
   - rendering
   - game-feel
   - needs-design
+type: Issue
+order: 40
+started: ""
+finished: ""
+horizon: ""
+start: ""
+due: ""
 ---
 
 # The hauler dot animates at a fixed speed unrelated to the trip

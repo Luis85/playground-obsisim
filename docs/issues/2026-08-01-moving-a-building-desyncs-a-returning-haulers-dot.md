@@ -7,7 +7,7 @@ area: world
 increment: 5
 created: 2026-08-01
 resolved: 2026-08-08
-source: Codex review on PR #7 (P2), traced against the engine and clamping verified
+source: Codex review on PR
 affects:
   - src/shared/snapshot.ts
   - src/shared/haul.ts
@@ -18,6 +18,13 @@ tags:
   - issue
   - rendering
   - game-feel
+type: Issue
+order: 60
+started: ""
+finished: ""
+horizon: ""
+start: ""
+due: ""
 ---
 
 # Moving a building desyncs the dot of a hauler already returning from it

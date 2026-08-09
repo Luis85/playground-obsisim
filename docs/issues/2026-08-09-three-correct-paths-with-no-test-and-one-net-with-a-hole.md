@@ -11,6 +11,13 @@ affects:
   - tests/engine/systems/haul-system.test.ts
   - tests/engine/systems/population-system.test.ts
   - tests/app/game-store.test.ts
+type: Issue
+order: 170
+started: ""
+finished: ""
+horizon: ""
+start: ""
+due: ""
 ---
 
 # Three correct-but-untested paths, and one net with a hole

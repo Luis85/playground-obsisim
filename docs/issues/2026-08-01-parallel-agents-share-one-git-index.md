@@ -14,6 +14,13 @@ tags:
   - issue
   - process
   - tooling
+type: Issue
+order: 70
+started: ""
+finished: ""
+horizon: ""
+start: ""
+due: ""
 ---
 
 # Parallel agents share one git index

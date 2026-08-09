@@ -17,6 +17,13 @@ tags:
   - architecture
   - tech-debt
   - footgun
+type: Issue
+order: 20
+started: ""
+finished: ""
+horizon: ""
+start: ""
+due: ""
 ---
 
 # Every component needs two spawn sites

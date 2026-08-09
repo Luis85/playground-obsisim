@@ -10,6 +10,13 @@ source: increment-6 Task 13 close-out — a deferred refinement, judged a design
 affects:
   - src/engine/systems/population-handlers.ts
   - tests/engine/systems/population-system.test.ts
+type: Issue
+order: 130
+started: ""
+finished: ""
+horizon: ""
+start: ""
+due: ""
 ---
 
 # An idle adult crossing the elder band retires silently, while a working one is announced

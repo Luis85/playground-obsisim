@@ -14,6 +14,13 @@ tags:
   - issue
   - test-validity
   - tech-debt
+type: Issue
+order: 30
+started: ""
+finished: ""
+horizon: ""
+start: ""
+due: ""
 ---
 
 # Two haul tests run systems in the reverse of production order

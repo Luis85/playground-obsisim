@@ -15,6 +15,13 @@ tags:
   - issue
   - test-validity
   - rendering
+type: Issue
+order: 90
+started: ""
+finished: ""
+horizon: ""
+start: ""
+due: ""
 ---
 
 # Smoke checks compare whole frames while fixtures change many things at once

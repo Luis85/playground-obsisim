@@ -10,6 +10,13 @@ source: increment-6 whole-branch review, recorded in the final fix pass — file
 affects:
   - src/shared/save-migration.ts
   - tests/shared/save-migration.test.ts
+type: Issue
+order: 150
+started: ""
+finished: ""
+horizon: ""
+start: ""
+due: ""
 ---
 
 # The v4 migration conflates "has a shelter" with "has a usable one"

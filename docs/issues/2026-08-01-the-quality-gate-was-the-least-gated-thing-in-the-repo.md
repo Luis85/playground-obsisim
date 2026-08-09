@@ -7,7 +7,7 @@ area: build-ci
 increment: 5
 created: 2026-08-01
 resolved: 2026-08-01
-source: five holes found across increment 5 — two by its own reviews, three by Codex on PR #7, two of them in fixes for the earlier ones
+source: five holes found across increment 5 — two by its own reviews, three by Codex on PR
 affects:
   - scripts/check-quality.mjs
   - tests/scripts/check-quality.test.ts
@@ -15,6 +15,13 @@ tags:
   - issue
   - build-ci
   - process
+type: Issue
+order: 100
+started: ""
+finished: ""
+horizon: ""
+start: ""
+due: ""
 ---
 
 # The quality gate was the least-gated thing in the repo

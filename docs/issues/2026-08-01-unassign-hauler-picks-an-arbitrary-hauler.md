@@ -7,13 +7,20 @@ area: engine
 increment: 4
 created: 2026-08-01
 resolved: 2026-08-01
-source: increment-4 final whole-branch review (Minor #11)
+source: increment-4 final whole-branch review (Minor
 affects:
   - src/engine/systems/command-handlers.ts
 tags:
   - issue
   - ux
   - game-design
+type: Issue
+order: 110
+started: ""
+finished: ""
+horizon: ""
+start: ""
+due: ""
 ---
 
 # Unassigning a hauler picks an arbitrary one

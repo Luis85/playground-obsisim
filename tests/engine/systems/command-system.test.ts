@@ -573,8 +573,7 @@ describe('CommandSystem', () => {
     spawnColonist(prep, ids, { id: 1, homeId: houseId });
     const world = await prep.prepareRun();
     enqueue(world, { type: 'demolishBuilding', buildingId: houseId });
-    world.getResource(SimClock).tick++;
-    await world.step();
+    await ticker(world)();
     expect(world.getResource(SnapshotStore).latest!.notices).toEqual([
       { kind: 'success', message: 'Demolished the House — cost refunded. — 1 colonist(s) displaced.' },
     ]);
@@ -591,8 +590,7 @@ describe('CommandSystem', () => {
     for (const id of [1, 2, 3]) spawnColonist(prep, ids, { id, homeId: houseId });
     const world = await prep.prepareRun();
     enqueue(world, { type: 'demolishBuilding', buildingId: houseId });
-    world.getResource(SimClock).tick++;
-    await world.step();
+    await ticker(world)();
     expect(world.getResource(SnapshotStore).latest!.notices).toEqual([
       { kind: 'success', message: 'Demolished the House — cost refunded. — 3 colonist(s) displaced.' },
     ]);
@@ -611,8 +609,7 @@ describe('CommandSystem', () => {
     const houseId = house.getComponent(Building)!.id;
     const world = await prep.prepareRun();
     enqueue(world, { type: 'demolishBuilding', buildingId: houseId });
-    world.getResource(SimClock).tick++;
-    await world.step();
+    await ticker(world)();
     expect(world.getResource(SnapshotStore).latest!.notices).toEqual([
       { kind: 'success', message: 'Demolished the House — cost refunded.' },
     ]);

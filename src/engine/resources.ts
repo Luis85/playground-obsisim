@@ -297,11 +297,16 @@ export class RemovalLedger {
   /**
    * Everything queued, in the order it was queued; empties the ledger.
    *
-   * Called only from `applyRemovals`, through `world.getResource(RemovalLedger)`
-   * — a generic lookup fallow's static analysis cannot trace back to this
-   * class, the same blind spot PendingChanges.clear() carries.
+   * In production this is called only from `applyRemovals`, through
+   * `world.getResource(RemovalLedger)` — a generic lookup fallow's static
+   * analysis cannot trace back to this class, the same blind spot
+   * PendingChanges.clear() carries — so it used to need a
+   * `fallow-ignore-next-line unused-class-member`. The teardown guard
+   * (tests/support/removal-guard.ts) now calls it on a directly-typed
+   * receiver, which fallow CAN trace, and the suppression became stale.
+   * If that call ever goes away the suppression has to come back; the quality
+   * ratchet reports it either way, as an unused member or a stale suppression.
    */
-  // fallow-ignore-next-line unused-class-member
   drain(): Readonly<IEntity>[] {
     return this.pending.splice(0, this.pending.length);
   }

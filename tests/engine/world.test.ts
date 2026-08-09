@@ -1492,6 +1492,13 @@ describe('applyRemovals', () => {
     } as unknown as IRuntimeWorld;
 
     expect(() => applyRemovals(stubWorld)).toThrow(boom);
+    // The throw took the requeue arm, so the entry is back on the ledger — the
+    // one place in the suite where a loaded ledger at teardown is correct
+    // rather than a dropped removal. Drained here so it stays a statement this
+    // test makes, checked, instead of an exemption the teardown guard
+    // (tests/support/removal-guard.ts) would have to carry. The full retention
+    // property, including the entries the throw never reached, is the next case.
+    expect(ledger.drain()).toHaveLength(1);
   });
 
   it('keeps the failed removal and the ones after it on the ledger when a detachment throws', async () => {

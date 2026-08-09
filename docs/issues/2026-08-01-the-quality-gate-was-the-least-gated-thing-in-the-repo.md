@@ -1,7 +1,7 @@
 ---
 id: OBS-5-02
 title: The quality gate was the least-gated thing in the repo
-status: resolved
+status: Done
 severity: important
 area: build-ci
 increment: 5

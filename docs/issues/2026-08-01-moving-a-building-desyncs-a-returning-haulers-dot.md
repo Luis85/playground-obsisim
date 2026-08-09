@@ -1,7 +1,7 @@
 ---
 id: OBS-5-01
 title: Moving a building desyncs the dot of a hauler already returning from it
-status: resolved
+status: Done
 severity: minor
 area: world
 increment: 5

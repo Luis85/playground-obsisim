@@ -1,7 +1,7 @@
 ---
 id: OBS-4-01
 title: The maintainability floor averages over tests, so it falls whenever an increment adds them
-status: resolved
+status: Done
 severity: important
 area: build-ci
 increment: 4

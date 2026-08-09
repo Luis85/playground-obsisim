@@ -1,7 +1,7 @@
 ---
 id: OBS-6-02
 title: Two colonists dying on the same tick freeze the whole simulation for a tick each
-status: open
+status: Open
 severity: important
 area: engine
 increment: 6

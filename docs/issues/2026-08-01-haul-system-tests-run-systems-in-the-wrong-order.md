@@ -1,7 +1,7 @@
 ---
 id: OBS-4-03
 title: Two haul tests run systems in the reverse of production order
-status: resolved
+status: Done
 severity: minor
 area: tests
 increment: 4

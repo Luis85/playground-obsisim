@@ -1,7 +1,7 @@
 ---
 id: OBS-4-05
 title: Parallel agents share one git index, so explicit-path staging does not prevent collisions
-status: resolved
+status: Done
 severity: minor
 area: process
 increment: 4

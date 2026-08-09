@@ -1,7 +1,7 @@
 ---
 id: OBS-6-04
 title: Three long-horizon balance tests are nine tenths of the default dev loop
-status: open
+status: Open
 severity: important
 area: tests
 increment: 6

@@ -1,7 +1,7 @@
 ---
 id: OBS-4-08
 title: Unassigning a hauler picks an arbitrary one, which may be mid-return
-status: resolved
+status: Done
 severity: minor
 area: engine
 increment: 4

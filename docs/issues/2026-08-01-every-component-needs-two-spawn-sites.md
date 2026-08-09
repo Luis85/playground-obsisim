@@ -1,7 +1,7 @@
 ---
 id: OBS-4-02
 title: Every component must be attached in two places, and forgetting one is silent
-status: resolved
+status: Done
 severity: important
 area: engine
 increment: 4

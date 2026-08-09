@@ -1,7 +1,7 @@
 ---
 id: OBS-4-07
 title: Demolishing a building destroys everything in its output buffer, under a notice that says "cost refunded"
-status: resolved
+status: Done
 severity: important
 area: engine
 increment: 4

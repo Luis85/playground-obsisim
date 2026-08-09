@@ -1,7 +1,7 @@
 ---
 id: OBS-6-01
 title: A demolished tile is still occupied for the rest of the drain
-status: open
+status: Open
 severity: minor
 area: engine
 increment: 6

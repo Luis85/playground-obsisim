@@ -1,7 +1,7 @@
 ---
 id: OBS-6-06
 title: The homeless work-power penalty is invisible in the view that exists to explain low output
-status: open
+status: Open
 severity: minor
 area: app
 increment: 6

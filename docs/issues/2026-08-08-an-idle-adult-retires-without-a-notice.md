@@ -1,7 +1,7 @@
 ---
 id: OBS-6-03
 title: An idle adult crossing the elder band retires silently, while a working one is announced
-status: open
+status: Open
 severity: minor
 area: engine
 increment: 6

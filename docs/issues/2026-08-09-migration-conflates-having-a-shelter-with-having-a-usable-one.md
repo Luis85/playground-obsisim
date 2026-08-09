@@ -1,7 +1,7 @@
 ---
 id: OBS-6-05
 title: The v4 migration conflates "has a shelter" with "has a usable one", and code, comment and test disagree about it
-status: open
+status: Open
 severity: minor
 area: shared
 increment: 6

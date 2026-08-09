@@ -1,7 +1,7 @@
 ---
 id: OBS-4-04
 title: Smoke checks compare whole frames while fixtures change many things at once
-status: resolved
+status: Done
 severity: minor
 area: world
 increment: 4

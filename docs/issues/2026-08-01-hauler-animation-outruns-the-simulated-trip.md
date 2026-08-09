@@ -1,7 +1,7 @@
 ---
 id: OBS-4-09
 title: The hauler dot animates at a fixed speed unrelated to the trip's simulated duration
-status: resolved
+status: Done
 severity: important
 area: world
 increment: 4

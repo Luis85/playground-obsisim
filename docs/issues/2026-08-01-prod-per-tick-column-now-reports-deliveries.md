@@ -1,7 +1,7 @@
 ---
 id: OBS-4-06
 title: The Economy view's "Prod/t" column now reports deliveries, not production
-status: resolved
+status: Done
 severity: important
 area: app
 increment: 4

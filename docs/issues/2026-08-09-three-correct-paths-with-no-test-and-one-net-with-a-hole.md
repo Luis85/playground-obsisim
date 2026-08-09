@@ -1,7 +1,7 @@
 ---
 id: OBS-6-07
 title: Three correct-but-untested paths, and the property test that does not net the family it was written for
-status: open
+status: Open
 severity: minor
 area: tests
 increment: 6

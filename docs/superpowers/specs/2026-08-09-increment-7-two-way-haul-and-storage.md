@@ -351,6 +351,17 @@ increment at all.
   remainder the colony already owned (bank with `refundAt`), and nothing about
   the load itself distinguishes them.
 
+**Anything true when a trip is dispatched may be false when it arrives**, and
+this spec has now been caught assuming otherwise three times: destination room
+(fixed by reserving it), source stock (fixed by reconciling against what
+`takeAt` actually returned), and the target's staffing (below). A leg takes
+ticks, and the world moves during them. Any condition a dispatch decision rests
+on is therefore either **reserved**, so nothing else can invalidate it, or
+**rechecked on arrival** — and the rule for a recheck that fails is always the
+same: the load stays in hand and becomes an undelivered remainder, which step 4
+already knows how to route. Adding a fourth such condition without picking one
+of those two is the mistake this paragraph exists to stop.
+
 `HaulPhase` becomes `'idle' | 'fetching' | 'outbound' | 'returning'`. A collect
 trip is two legs, exactly as increment 4 shipped it; a supply trip is the same
 trip with one leading leg to pick the goods up. That is the whole difference:
@@ -364,6 +375,15 @@ trip with one leading leg to pick the goods up. That is the whole difference:
    nothing — the goods are in transit, not gone: §2.4). Phase `outbound`, leg
    from the source tile to the building.
 3. **Outbound** → on arrival:
+   - **staffing is rechecked here, not only at dispatch.** A building's last
+     worker can be unassigned, retire or die while a hauler walks, and none of
+     those cancels the trip the way a demolition does. Unloading regardless
+     would park goods in a processor that cannot use them and will lose them if
+     it is demolished — precisely what §2.6's staffing rule exists to prevent,
+     defeated by a few ticks of travel. An unstaffed target is simply not
+     unloaded into: the load stays in hand with `pickedUp` false, which makes it
+     an undelivered remainder, and step 4 already sends those home to their
+     source. No new mechanism, no new state.
    - a `supply` load is put into the building's `InputBuffer` — whatever fits,
      recording consumption for what lands, since that is the moment the goods
      leave the colony's store for good. Any remainder stays in hand with

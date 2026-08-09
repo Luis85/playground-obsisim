@@ -618,7 +618,15 @@ The outbound arrival handler is the only genuinely new code, and it does three t
 
 ```ts
 const arrive = (trip: HaulTrip, row: BuildingRow, capacity: number): void => {
-  if (trip.kind === 'supply' && trip.resource !== null) {
+  // Staffing is a DISPATCH-TIME filter (§2.6) and the world moves during a
+  // leg: the target's last worker can be unassigned, retire or die while this
+  // hauler walks, and none of those cancels the trip the way a demolition
+  // does. Unloading anyway parks goods in a processor that cannot use them and
+  // loses them if it is demolished — exactly what the staffing rule prevents,
+  // defeated by travel time. Leave the load in hand instead; `pickedUp` stays
+  // false, so it is an undelivered remainder and goes home to its source.
+  const staffed = row.workers > 0;
+  if (trip.kind === 'supply' && trip.resource !== null && staffed) {
     const placed = row.input.add(trip.resource, Math.min(trip.amount, row.input.room(BALANCE.inputBufferCap)));
     // Consumption is recorded HERE, not when the load left its site: this is
     // the moment the goods leave the colony's store for good, and it is the
@@ -750,7 +758,7 @@ The base model needed a pass at the top of every tick to re-resolve haulers whos
 
 - [ ] **Step 5: Mutation-check**
 
-Ten separate mutations, each of which must redden exactly one test: carry the *claimed* fetch amount instead of `takeAt`'s return value (the construction-during-fetch conservation fixture); drop the `amount` argument from `nearestSiteWithRoom` so it only skips full sites (the partial-room fixture); let `refundAt` ignore reservations (the cancellation-plus-return fixture); read the destination from `destSiteId`'s live tile rather than the frozen one (the relocated-mid-return fixture); drop the destination reservation (the two-haulers-one-depot fixture); drop the `sourceSiteId` claim (the three-haulers-one-job fixture); restrict supply sources to the site the hauler stands on (**all five** reachability fixtures — this is the base model creeping back, and it should be loud); drop the unload (`row.input.add`); drop the return-leg load; and force `pickedUp = true` unconditionally (the delivery-inflation test).
+Eleven separate mutations, each of which must redden exactly one test: drop the arrival-time staffing recheck (a fixture where the target's only worker is unassigned mid-leg, asserting the goods come home rather than sitting in an unstaffed mill); carry the *claimed* fetch amount instead of `takeAt`'s return value (the construction-during-fetch conservation fixture); drop the `amount` argument from `nearestSiteWithRoom` so it only skips full sites (the partial-room fixture); let `refundAt` ignore reservations (the cancellation-plus-return fixture); read the destination from `destSiteId`'s live tile rather than the frozen one (the relocated-mid-return fixture); drop the destination reservation (the two-haulers-one-depot fixture); drop the `sourceSiteId` claim (the three-haulers-one-job fixture); restrict supply sources to the site the hauler stands on (**all five** reachability fixtures — this is the base model creeping back, and it should be loud); drop the unload (`row.input.add`); drop the return-leg load; and force `pickedUp = true` unconditionally (the delivery-inflation test).
 
 - [ ] **Step 6: Gates and commit**
 

@@ -1,0 +1,883 @@
+# Increment 7 — Two-Way Haul & Storage Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Finish increment 4's sentence. A recipe's inputs stop being paid out of a global store and start being carried to the building that needs them; a `storehouse` gives the player a second place to drop and collect, so a distant cluster becomes an investment rather than a mistake.
+
+**Architecture:** One new component (`InputBuffer`), one new building role (`storage` beside `recipe` and `beds`), and one reinterpretation: `Stockpile` stops being a single map and becomes a map per **store site** while keeping every aggregate method it exposes today. `src/shared/haul.ts` grows the site law — `StoreSite`, `CAMP_SITE_ID`, two-point distances, nearest-with-room — exactly as it already owns the camp-relative law. `HaulSystem` gains a trip `kind`; the return leg is identical for both kinds, which is what keeps this a change to one system rather than a second one.
+
+**Tech Stack:** TypeScript, sim-ecs 0.6.4, Vue 3 + Pinia, Vitest, Excalibur (canvas only), fallow (quality gates).
+
+**Spec:** `docs/superpowers/specs/2026-08-09-increment-7-two-way-haul-and-storage.md`. Section references below (§2.4, §2.6, …) are to that document.
+
+## Global Constraints
+
+- **Every component must be attached in `buildingComponents`/`colonistComponents` in `src/engine/spawn.ts`** — the single shared list — *and* its type appended to `COMPONENT_TYPES` in `src/engine/world.ts` for save round-tripping. Forgetting either is silent and has bitten twice (OBS-4-02). This increment adds exactly one component, in Task 3.
+- **No vitest test may import `src/app/world/renderer.ts` or `src/app/world/graphics-cache.ts`.** Excalibur throws on import outside a browser. Their only coverage is `npm run smoke:world`. **Task 12 adds a third file to that list** (`src/app/world/glyphs.ts`); update `docs/process/agent-workflow.md` when it does, or the rule silently stops covering the code it exists for.
+- **Mutation-test every test:** break the feature, confirm the named test fails, restore. Fixture values must *discriminate* — if the wrong field holds the same value, the assertion proves nothing. This increment's single most important test (Task 3) is exactly this shape: a building must fail to produce **while the colony stockpile is full**, or a pass proves only that there was no flour anywhere.
+- **A mutation that makes a system THROW does not fail a test by default.** sim-ecs catches a system's exception and publishes it as a `SystemError` event, so the run completes and the assertion reads pre-crash state. Any mutation whose effect is a crash rather than a wrong value needs the test to assert on the error itself:
+
+  ```ts
+  const errors: unknown[] = [];
+  world.eventBus.subscribe(SystemError, (e) => errors.push(e));
+  // …step…
+  expect(errors).toHaveLength(0);   // and the mutation makes this fail
+  ```
+
+- **Confirm every mutation actually applied.** `sed` exits 0 when its pattern matches nothing, so a stale pattern leaves the file untouched and the test passes against the *unmutated* implementation. After each `sed`: `git diff --quiet <file> && echo "MUTATION DID NOT APPLY"`.
+- **The 500-line cap is a design constraint in this increment, not a formality.** Five files this plan must touch are already close to it. The split is named in the task that trips it, and **no baseline is loosened**:
+
+  | file | now | owner of its split |
+  | --- | ---: | --- |
+  | `src/engine/world.ts` | 478 | Task 3 (contingency: extract `initialSave` to `src/engine/initial-save.ts`) |
+  | `src/app/world/renderer.ts` | 445 | Task 12 (`src/app/world/glyphs.ts`) |
+  | `src/engine/snapshot-builder.ts` | 438 | Task 10 (`src/engine/snapshot-buildings.ts`) |
+  | `src/engine/systems/command-handlers.ts` | 426 | Task 8 (`src/engine/systems/placement-handlers.ts`) |
+  | `src/engine/resources.ts` | 387 | Task 2 (`src/engine/stockpile.ts`) |
+  | `src/engine/systems/haul-system.ts` | 157 | Task 6 (`src/engine/systems/haul-dispatch.ts`) |
+
+  Check with `grep -cve '^\s*$' <file>` after every task that touches one.
+- **Never `--update` a quality baseline to make a gate pass.** `check:quality --update` refuses a loosened value without `--allow-regression`, and refuses pinned-at-zero breaches outright.
+- **Never pad comments to buy maintainability points.** Fallow's MI has no length term.
+- **Commit by pathspec** (`git commit <path> -m …`), never `git add` + bare `git commit`. A new file needs one `git add` immediately before its commit.
+- **Systems must be listed in `ALL_SYSTEMS` order** — `buildColonyPrepWorld` throws otherwise. This increment does not add or reorder a system.
+- **Balance constants live only in `src/engine/content/balance.ts`.** Shared law takes them as parameters — `src/shared/**` may import nothing outside itself. This is why `haulTicks` takes `tilesPerTick` and why `nearestSiteWithRoom` takes an occupancy lookup rather than reaching for `Stockpile`.
+- **Conservation is the invariant this increment can most easily break.** Goods now exist in four places (camp, storehouse, input buffer, output buffer) plus a hauler's hands. Every cancellation path — demolition, relocation, unassignment, a target that vanished — must put a carried load *somewhere*. Prefer `refundAt` over `addAt` for anything a hauler did not actually complete a delivery of, or the Economy view's `Delivered/t` inflates for goods nobody hauled.
+- `npm run check:all` must be green at the end of every task. Run `rm -rf coverage` first: `check:quality` hard-fails if `coverage/` exists.
+- **A raw `await world.step()` does NOT refresh the snapshot's entity sections.** Use `stepTick` from `tests/engine/fixtures.ts` in any test that asserts on entities appearing or disappearing.
+
+---
+
+### Task 1: The store-site law
+
+Pure shared law, no engine changes, landed first so every later task has a vocabulary. `src/shared/haul.ts` is 97 lines and owns the spatial rules of hauling exactly as `placement.ts` owns those of placement (§2.2).
+
+**Files:**
+- Modify: `src/shared/haul.ts`
+- Test: `tests/shared/haul.test.ts`
+
+**Interfaces:**
+- Consumes: `ticksForDistance`, `TileRef` (already imported).
+- Produces:
+  - `export const CAMP_SITE_ID = 0`
+  - `export interface StoreSite { id: number; col: number; row: number; capacity: number | null }`
+  - `export function haulTicksBetween(from: TileRef, to: TileRef, tilesPerTick: number): number`
+  - `export function nearestSite(col: number, row: number, sites: readonly StoreSite[]): StoreSite | null`
+  - `export function nearestSiteWithRoom(col, row, sites, heldAt: (siteId: number) => number): StoreSite | null`
+  - `export type HaulKind = 'collect' | 'supply'`
+  - `export interface SupplyCandidate { buildingId: number; col: number; row: number; resource: string; movable: number }` — `resource` is typed `ResourceId` (already imported by consumers; `haul.ts` may import from `./content-types`, which is inside `src/shared`).
+  - `export function compareSupplyCandidates(a, b, from: TileRef): number`
+  - `export function nextSupplyTarget(candidates, from: TileRef): SupplyCandidate | null`
+- **Unchanged on purpose:** `CAMP_TILE`, `haulDistance`, `haulTicks`, `legProgress`, `HaulCandidate`, `claimableAt`, `compareHaulCandidates`, `nextHaulTarget`. `haulTicks` is re-expressed in terms of `haulTicksBetween` but keeps its signature — `haulerCapacity` and the commute charge still measure from the camp.
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `tests/shared/haul.test.ts`. The cases that matter are the ones an implementation can get subtly wrong:
+
+```ts
+describe('haulTicksBetween', () => {
+  it('is never free, even between adjacent tiles', () => {
+    expect(haulTicksBetween({ col: 5, row: 5 }, { col: 5, row: 6 }, 2)).toBe(1);
+  });
+  it('agrees with haulTicks when measured from the camp', () => {
+    // haulTicks is now DEFINED as this, and the test pins the two together so
+    // a future edit to one cannot silently re-price every existing trip.
+    for (const tile of [{ col: 0, row: 0 }, { col: 23, row: 15 }, { col: 2, row: 0 }]) {
+      expect(haulTicksBetween(CAMP_TILE, tile, 2)).toBe(haulTicks(tile.col, tile.row, 2));
+    }
+  });
+});
+
+describe('nearestSiteWithRoom', () => {
+  const camp: StoreSite = { id: CAMP_SITE_ID, col: 2, row: 0, capacity: null };
+  const depot: StoreSite = { id: 7, col: 20, row: 14, capacity: 60 };
+
+  it('prefers the depot for a building beside it', () => {
+    expect(nearestSiteWithRoom(21, 14, [camp, depot], () => 0)?.id).toBe(7);
+  });
+  it('falls through to the camp when the depot is full', () => {
+    // Discriminating: the depot is still NEARER. Only the room check can move
+    // this answer, so a mutation that ignores capacity fails here and nowhere else.
+    expect(nearestSiteWithRoom(21, 14, [camp, depot], (id) => (id === 7 ? 60 : 0))?.id).toBe(CAMP_SITE_ID);
+  });
+  it('never runs out of destinations while the camp exists', () => {
+    // capacity: null is unbounded, so the camp is the guaranteed fallback.
+    expect(nearestSiteWithRoom(21, 14, [camp], () => 1e9)).not.toBeNull();
+  });
+  it('breaks a distance tie by site id, not by argument order', () => {
+    const a: StoreSite = { id: 9, col: 4, row: 0, capacity: 60 };
+    const b: StoreSite = { id: 3, col: 0, row: 0, capacity: 60 };
+    expect(nearestSiteWithRoom(2, 0, [a, b], () => 0)?.id).toBe(3);
+    expect(nearestSiteWithRoom(2, 0, [b, a], () => 0)?.id).toBe(3);
+  });
+});
+```
+
+For `nextSupplyTarget`, mirror the existing `nextHaulTarget` tests: most movable first, then nearest **to the hauler's site** (not to the camp — this is the difference from the collect comparator and the thing to pin), then lowest building id.
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+`npx vitest run tests/shared/haul.test.ts` — FAIL, the symbols do not exist.
+
+- [ ] **Step 3: Implement**
+
+`haulTicksBetween` is the generalisation; redefine `haulTicks` through it rather than leaving two copies of the rounding rule:
+
+```ts
+export function haulTicksBetween(from: TileRef, to: TileRef, tilesPerTick: number): number {
+  return ticksForDistance(Math.hypot(to.col - from.col, to.row - from.row), tilesPerTick);
+}
+
+export function haulTicks(col: number, row: number, tilesPerTick: number): number {
+  return haulTicksBetween(CAMP_TILE, { col, row }, tilesPerTick);
+}
+```
+
+`nearestSiteWithRoom` takes `heldAt` rather than a `Stockpile`, for the reason every other function here takes its inputs: `src/shared/**` imports nothing outside itself, and a site's occupancy lives in engine state.
+
+```ts
+export function nearestSiteWithRoom(
+  col: number, row: number, sites: readonly StoreSite[], heldAt: (siteId: number) => number,
+): StoreSite | null {
+  let best: StoreSite | null = null;
+  for (const site of sites) {
+    if (site.capacity !== null && heldAt(site.id) >= site.capacity) continue;
+    if (best === null || closer(site, best, col, row)) best = site;
+  }
+  return best;
+}
+```
+
+`closer` compares distance then id, so the answer never depends on array order — the same property `compareHaulCandidates` ends with and for the same reason.
+
+- [ ] **Step 4: Mutation-check**
+
+```bash
+sed -i 's/if (site.capacity !== null \&\& heldAt(site.id) >= site.capacity) continue;//' src/shared/haul.ts
+git diff --quiet src/shared/haul.ts && echo "MUTATION DID NOT APPLY"
+npx vitest run tests/shared/haul.test.ts   # expect ONLY "falls through to the camp when the depot is full" red
+git checkout src/shared/haul.ts
+```
+
+- [ ] **Step 5: Gates and commit**
+
+```bash
+rm -rf coverage && npm run check:all
+grep -cve '^\s*$' src/shared/haul.ts   # well under 500
+git commit src/shared/haul.ts tests/shared/haul.test.ts -m "feat(shared): the store-site law, so the camp stops being the only destination
+
+haulTicks is now defined through haulTicksBetween rather than repeating the
+rounding rule, and a test pins the two together: the camp-relative price every
+existing trip pays must not move when a second site becomes possible."
+```
+
+---
+
+### Task 2: `Stockpile` becomes a multi-site ledger
+
+The reinterpretation the rest of the increment stands on (§2.4). The aggregate API is unchanged — that is the whole design — so **no existing caller is edited in this task**, and every existing test must stay green without modification. If one needs changing, the change is wrong: say so rather than editing the test.
+
+`src/engine/resources.ts` is 387 lines and `Stockpile` grows by ~80 here, so it moves to its own file in the same task.
+
+**Files:**
+- Create: `src/engine/stockpile.ts` (moved from `resources.ts`, then extended)
+- Modify: `src/engine/resources.ts` (re-export `Stockpile` so no import site changes)
+- Test: `tests/engine/stockpile.test.ts` (new), and whichever existing file holds the current `Stockpile` tests — move them, do not duplicate.
+
+**Interfaces:**
+- Produces (new, site-aware — used only by `HaulSystem`, the command handlers and the save):
+  - `getAt(siteId: number, id: ResourceId): number`
+  - `totalAt(siteId: number): number`
+  - `addAt(siteId: number, id: ResourceId, amount: number, capacity: number | null): number` — banks what fits, returns what was banked, records into `producedThisTick`
+  - `refundAt(siteId, id, amount, capacity): number` — same, without recording a delivery
+  - `takeAt(siteId, id, amount): number` — takes up to `amount`, returns what was taken
+  - `spillTo(toSiteId: number, fromSiteId: number): void`
+  - `siteIds(): number[]`, `siteJSON(siteId): Partial<Record<ResourceId, number>>`
+- **Unchanged, and pinned by tests:** `get`, `total`, `canAfford`, `pay`, `take`, `add`, `refund`, `resetTickFlows`, `producedThisTick`, `consumedThisTick`, `toJSON`.
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+it('a colony with goods split across sites spends as one', () => {
+  const s = new Stockpile({ wood: 10 });          // camp
+  s.addAt(7, 'wood', 15, 60);                     // a depot
+  expect(s.get('wood')).toBe(25);
+  expect(s.pay({ wood: 20 })).toBe(true);         // neither site alone could
+  expect(s.get('wood')).toBe(5);
+});
+
+it('spends the camp first, then sites by ascending id', () => {
+  // Discriminating: three DIFFERENT amounts, so any draw order other than the
+  // documented one leaves a different residue at each site.
+  const s = new Stockpile({ wood: 4 });
+  s.addAt(9, 'wood', 2, 60);
+  s.addAt(3, 'wood', 8, 60);
+  expect(s.pay({ wood: 12 })).toBe(true);
+  expect(s.getAt(CAMP_SITE_ID, 'wood')).toBe(0);
+  expect(s.getAt(3, 'wood')).toBe(0);
+  expect(s.getAt(9, 'wood')).toBe(2);
+});
+
+it('addAt banks only what fits and reports it', () => {
+  const s = new Stockpile();
+  expect(s.addAt(7, 'wood', 100, 60)).toBe(60);
+  expect(s.get('wood')).toBe(60);
+});
+
+it('the camp is unbounded', () => {
+  const s = new Stockpile();
+  expect(s.addAt(CAMP_SITE_ID, 'wood', 10_000, null)).toBe(10_000);
+});
+
+it('toJSON is the camp alone, so a v5 stockpile round-trips unchanged', () => {
+  const s = new Stockpile({ wood: 10 });
+  s.addAt(7, 'wood', 15, 60);
+  expect(s.toJSON()).toEqual({ wood: 10 });
+  expect(s.siteJSON(7)).toEqual({ wood: 15 });
+});
+
+it('refundAt does not count as a delivery', () => {
+  const s = new Stockpile();
+  s.refundAt(7, 'wood', 5, 60);
+  expect(s.producedThisTick.get('wood') ?? 0).toBe(0);   // and addAt makes this 5
+});
+```
+
+- [ ] **Step 2: Run tests to verify they fail** — `npx vitest run tests/engine/stockpile.test.ts`.
+
+- [ ] **Step 3: Move the class, then extend it**
+
+Move `Stockpile` verbatim into `src/engine/stockpile.ts` first and confirm the suite is green **before** changing anything. `resources.ts` re-exports it (`export { Stockpile } from './stockpile';`) so not one import site moves — a rename and a behaviour change in one commit is two mistakes waiting to be attributed to each other.
+
+Then the storage becomes per site:
+
+```ts
+private readonly sites = new Map<number, Map<ResourceId, number>>();
+```
+
+`get(id)` sums across sites; `pay`/`take`/`remove` draw in **camp-first, then ascending site id** order (`drawOrder()`), which is the one place that order is written down. `bank` keeps its `MAX_SAVED_COUNTER` saturation, now per site, for the reason it exists: the engine must never write a save its own guard rejects.
+
+- [ ] **Step 4: Mutation-check the draw order and the cap**
+
+```bash
+sed -i 's/\.sort((a, b) => a - b)/.sort((a, b) => b - a)/' src/engine/stockpile.ts
+git diff --quiet src/engine/stockpile.ts && echo "MUTATION DID NOT APPLY"
+npx vitest run tests/engine/stockpile.test.ts   # expect ONLY the draw-order test red
+git checkout src/engine/stockpile.ts
+```
+
+- [ ] **Step 5: Gates and commit**
+
+```bash
+rm -rf coverage && npm run check:all
+grep -cve '^\s*$' src/engine/resources.ts src/engine/stockpile.ts
+git add src/engine/stockpile.ts tests/engine/stockpile.test.ts
+git commit src/engine/stockpile.ts src/engine/resources.ts tests/engine/stockpile.test.ts tests/engine -m "feat(engine): one ledger, held in several places
+
+Stockpile keeps every aggregate method it had — a goods total is a goods total
+wherever it stands — so hunger, construction, wealth, stats and the save are
+untouched. What changes is that goods now have a location a hauler can walk to."
+```
+
+---
+
+### Task 3: `InputBuffer`, and production draws locally
+
+The increment in one component (§2.1). This is the task that changes the game.
+
+**Files:**
+- Modify: `src/engine/components.ts` (`InputBuffer`)
+- Modify: `src/engine/spawn.ts` (`buildingComponents`, `clampedInputBuffer`, `BuildingSpec.inputBuffer`)
+- Modify: `src/engine/world.ts` (`COMPONENT_TYPES`)
+- Modify: `src/engine/content/balance.ts` (`inputBufferCap`)
+- Modify: `src/engine/systems/production-system.ts`
+- Test: `tests/engine/systems/production-system.test.ts`, `tests/engine/systems/command-system.test.ts` (component parity)
+
+**Interfaces:**
+- Produces: `class InputBuffer` (same shape as `OutputBuffer`; extract the shared body only if it stays under the complexity gate — two small classes beat one clever one), `BALANCE.inputBufferCap`, `clampedInputBuffer`.
+- **Blast radius, stated up front:** every existing `ProductionSystem` test that seeds a stockpile to make a mill or bakery run must instead seed that building's `InputBuffer`. Expect ~6–10 fixtures. `npm test` enumerates them; do not hunt by hand.
+
+- [ ] **Step 1: Write the failing tests**
+
+The first of these is the acceptance criterion of the whole increment, and its fixture is the thing to get right:
+
+```ts
+it('a staffed mill with an empty input buffer produces nothing, however full the colony store', async () => {
+  // DISCRIMINATING FIXTURE: 10,000 wheat in the stockpile. Before this task
+  // that mill produced flour every 3 ticks. A pass here cannot come from
+  // "there was no wheat" — there is more wheat than the mill could eat in a
+  // session, and it is simply in the wrong place.
+  const save = { ...initialSave(), stockpile: { wheat: 10_000 }, colonists: [] };
+  // …spawn a mill at (5,3), staff it with one adult, step 20 ticks…
+  expect(snap.state).toBe('waitingForInput');
+  expect(snap.buffered).toBe(0);
+  expect(stockpile.get('wheat')).toBe(10_000);   // and nothing was quietly eaten
+});
+
+it('the same mill produces once wheat is in its own input buffer', async () => {
+  // The other half: without this, "produces nothing" would also pass with
+  // ProductionSystem deleted entirely.
+  // …same fixture, but inputBuffer: { wheat: 6 } …
+  expect(snap.state).toBe('producing');
+  expect(inputBuffer.total()).toBeLessThan(6);
+});
+```
+
+- [ ] **Step 2: Run tests to verify they fail** — the first fails (it produces), the second fails (`inputBuffer` is not a `BuildingSpec` field).
+
+- [ ] **Step 3: The component, the cap, the spawn list**
+
+`InputBuffer` mirrors `OutputBuffer`: `amounts`, `total()`, `room(cap)`, `add`, `take`. It needs `fullestResource`'s opposite — **`shortestOf(recipe, order)`**, the input this building has least of relative to what its recipe wants, ties by catalog order. Put that on the component beside `take`, so `HaulSystem` and any UI preview cannot derive it differently.
+
+In `balance.ts`:
+
+```ts
+  /** Units a building may hold of its own recipe's inputs (total across
+   * resources, like outputBufferCap). Mirrors the output cap so a building's
+   * in-tray and out-tray are the same size and a hauler's round trip is
+   * symmetric. At one input per batch this is 12 batches of runway — ~36 ticks
+   * for a mill, comfortably longer than the 13-tick worst-case one-way walk. */
+  inputBufferCap: 12,
+```
+
+`clampedInputBuffer` is `clampedBuffer` against `inputBufferCap`. **Do not** parameterise `clampedBuffer` by reading a cap off the caller — give it a cap argument and keep one function; two copies of the trim loop is how the input side ends up trimming to the output cap after a retune.
+
+Append `InputBuffer` to `COMPONENT_TYPES` **and** to `buildingComponents`. `world.ts` is at 478 lines: check `grep -cve '^\s*$' src/engine/world.ts` after the edit, and if it crosses, extract `initialSave` into `src/engine/initial-save.ts` rather than loosening anything.
+
+- [ ] **Step 4: Production pays locally**
+
+Both payment sites move — the `startBatch` guard and the chain-into-the-next-batch call at the end of `completeBatches`. Miss the second and a building produces exactly one batch per delivery, which looks like a balance problem and is not:
+
+```ts
+function startBatch(production: Production, input: InputBuffer, buffer: OutputBuffer, recipe: RecipeDef, perBatch: number): void {
+  if (production.batchActive) return;
+  if (buffer.room(BALANCE.outputBufferCap) < perBatch) return;
+  if (payFrom(input, recipe.inputs)) { production.batchActive = true; production.progress = 0; }
+}
+```
+
+`ProductionSystem` no longer takes `WriteResource(Stockpile)` at all. Removing that dependency is the check that the move is complete: if it still compiles with the resource declared, something is still reaching for the global store.
+
+- [ ] **Step 5: Fix the existing fixtures**
+
+`npm test` names them. Each is the same edit — a stockpile seed becomes an `inputBuffer` seed on the building under test. Read each one as you go: a test that was *about* the stockpile draining (rather than about production) is telling you something, and its assertion may need to move rather than its fixture.
+
+- [ ] **Step 6: Mutation-check**
+
+```bash
+sed -i 's/if (payFrom(input, recipe.inputs))/if (stockpile.pay(recipe.inputs))/' src/engine/systems/production-system.ts
+# (restore the resource declaration by hand for this check, then:)
+npx vitest run tests/engine/systems/production-system.test.ts   # the first test above must go red
+git checkout src/engine/systems/production-system.ts
+```
+
+- [ ] **Step 7: Gates and commit**
+
+```bash
+rm -rf coverage && npm run check:all
+git commit src/engine tests/engine -m "feat(engine): a recipe's inputs come from the building, not from the colony
+
+ProductionSystem no longer holds Stockpile at all. A mill beside ten thousand
+wheat produces nothing until a hauler brings it some, which is the half of
+increment 4's 'goods stop teleporting' that never shipped."
+```
+
+---
+
+### Task 4: The `storehouse`, and `storage` as a third building role
+
+**Files:**
+- Modify: `src/shared/content-types.ts` (`storage: number` on `BuildingDef`; `'storehouse'` on `BuildingDefId`)
+- Modify: `src/engine/content/buildings.ts`, `src/engine/content/balance.ts`
+- Modify: `src/shared/snapshot.ts` (`BuildingState` gains `'storing'`), `src/app/labels.ts`
+- Modify: `src/engine/snapshot-builder.ts` (`stateOf`)
+- Test: `tests/engine/content.test.ts`
+
+**Interfaces:**
+- Produces: `BUILDINGS.storehouse`, `BALANCE.storehouseCapacity`, `BALANCE.minSupplyUnits`, `BuildingState` `'storing'`.
+
+- [ ] **Step 1: Generalise the content invariant (failing test first)**
+
+Increment 6 pinned *"exactly one of a recipe or beds"*. It becomes three roles:
+
+```ts
+it('every building def fills exactly one role: produces, shelters, or stores', () => {
+  // A def with none does nothing at all; a def with two is two mechanics in one
+  // entry. This is increment 6's two-way invariant generalised, not replaced —
+  // if it ever needs a fourth arm, that is the moment to ask whether roles want
+  // to be data rather than three fields.
+  for (const def of Object.values(BUILDINGS)) {
+    const roles = [def.recipe !== null, def.beds > 0, def.storage > 0].filter(Boolean).length;
+    expect(roles, `${def.id} fills ${roles} roles`).toBe(1);
+  }
+});
+
+it('the storehouse stores and does nothing else', () => {
+  expect(BUILDINGS.storehouse.storage).toBe(BALANCE.storehouseCapacity);
+  expect(BUILDINGS.storehouse.workerSlots).toBe(0);   // a shed, not a job
+  expect(BUILDINGS.storehouse.recipe).toBeNull();
+  expect(BUILDINGS.storehouse.beds).toBe(0);
+});
+```
+
+- [ ] **Step 2: The def and the constants**
+
+```ts
+  storehouse: {
+    id: 'storehouse', name: 'Storehouse', cost: { wood: 20, planks: 10 }, workerSlots: 0,
+    recipe: null, beds: 0, storage: BALANCE.storehouseCapacity,
+  },
+```
+
+Every other def gains `storage: 0`. Typecheck enumerates them.
+
+- [ ] **Step 3: `'storing'` in `stateOf`**
+
+`stateOf` currently returns `'housing'` for any recipe-less building, which would make a storehouse read "housing". The order matters — put the storage arm before the housing one and derive both from the def rather than from `recipe === null`:
+
+```ts
+if (relocatingTicks > 0) return 'relocating';
+if (def.storage > 0) return 'storing';
+if (def.recipe === null) return 'housing';
+```
+
+- [ ] **Step 4: Labels and palette**
+
+`src/app/labels.ts` gains `storing: 'Storing'`. The palette derives from `BUILDING_IDS`, so the storehouse appears in the World tab and the table's construct control with no further wiring — **verify that rather than assuming it**, since it is the kind of claim that is true until a filter is added.
+
+- [ ] **Step 5: Mutation-check, gates, commit**
+
+Mutate `roles).toBe(1)`'s subject by giving the storehouse `beds: 1` and confirm the invariant test — and only it — goes red.
+
+```bash
+rm -rf coverage && npm run check:all
+git commit src tests -m "feat(content): a storehouse, and storage as a third building role
+
+increment 6's 'exactly one of a recipe or beds' generalises rather than being
+replaced: produces, shelters, or stores, exactly one."
+```
+
+---
+
+### Task 5: Store sites come from the world
+
+Where `HaulSystem` gets its `StoreSite[]` (§2.3, §2.7). Small, and worth its own commit because two exclusion rules live here and both are easy to get wrong in a way nothing else catches.
+
+**Files:**
+- Create: `src/engine/systems/haul-sites.ts`
+- Test: `tests/engine/systems/haul-sites.test.ts`
+
+**Interfaces:**
+- Produces: `storeSitesOf(rows, pending): StoreSite[]` — the camp always first (id 0, `capacity: null`), then every non-relocating storehouse not in `pending.demolished`, ascending by id.
+
+- [ ] **Step 1: Write the failing tests**
+
+Two exclusions, one inclusion-that-isn't:
+
+```ts
+it('excludes a relocating storehouse', () => {
+  // A building mid-move provides none of its service — the same rule
+  // beds.total already applies to a relocating house (increment 6).
+});
+
+it('excludes a storehouse demolished earlier this tick', () => {
+  // CommandSystem runs before HaulSystem and the entity survives until the
+  // post-step sync, so without pending.demolished a hauler is dispatched to a
+  // shed that is already gone.
+});
+
+it('does NOT include a storehouse constructed earlier this tick', () => {
+  // Deliberate, and the opposite call from homing's pending.constructed
+  // handling: a colonist left homeless beside a house built this tick is a
+  // contradiction the player can SEE in one snapshot, while a hauler not yet
+  // using a new shed is invisible and costs one tick. Simpler wins here.
+});
+```
+
+- [ ] **Step 2: Implement, mutation-check each exclusion separately, commit**
+
+Each of the three cases must go red on its own mutation and stay green on the other two — that is what makes them three tests rather than one test written three ways.
+
+---
+
+### Task 6: The supply leg
+
+The heart of it (§2.5, §2.6). `haul-system.ts` is 157 lines and roughly doubles; the candidate-building and dispatch halves move to `src/engine/systems/haul-dispatch.ts` in this task, leaving the system as the tick loop it reads as today.
+
+**Files:**
+- Create: `src/engine/systems/haul-dispatch.ts`
+- Modify: `src/engine/systems/haul-system.ts`, `src/engine/components.ts` (`HaulTrip`)
+- Test: `tests/engine/systems/haul-system.test.ts`, `tests/engine/systems/haul-dispatch.test.ts`
+
+**Interfaces:**
+- `HaulTrip` gains, all runtime-only:
+  - `kind: HaulKind = 'collect'`
+  - `atSiteId: number = CAMP_SITE_ID` — where this hauler currently stands
+  - `destSiteId: number = CAMP_SITE_ID` — where the return leg is headed
+- `haulerCapacity(homeTile, siteTile)` — the commute is charged bed → base, not bed → camp (§2.5).
+- `reset()` clears `kind`, `destSiteId` and the rest but **leaves `atSiteId` alone**: a cancelled trip leaves the hauler standing where they were, not teleported to the camp.
+
+- [ ] **Step 1: Write the failing tests**
+
+Tick-by-tick, because a trip is a state machine and a test that only reads the end state passes for the wrong reasons:
+
+```ts
+it('a supply hauler leaves carrying, unloads, and comes back with what was waiting', async () => {
+  // camp: 20 wheat. A mill at (12,8) with an empty input buffer and 4 flour
+  // already in its output buffer — so the return leg has something to carry
+  // and the round trip in §2.5 is actually exercised.
+  // tick 1: dispatch — carrying > 0 while OUTBOUND, which never happened before
+  // tick n: arrival — mill inputBuffer gains wheat, hauler now carries flour
+  // tick 2n: deposit — stockpile gains flour at the destination site
+  // and across the whole trip: total wheat + flour in the world is unchanged.
+});
+
+it('a supply trip that finds nothing waiting returns empty', async () => { /* … */ });
+
+it('the remainder rides home when the input buffer filled meanwhile', async () => {
+  // Another hauler got there first. The leftover must NOT be silently dropped:
+  // assert the colony total, not just the hauler.
+});
+```
+
+- [ ] **Step 2: Implement dispatch**
+
+`haul-dispatch.ts` owns: the claim map (counting **both** kinds — a supply hauler also loads output on arrival, §2.6), the collect candidates (unchanged), the supply candidates, and `chooseJob(trip, sites, …)`, which offers supply first and falls through to collect.
+
+The supply-first rule and its non-deadlock belong in a comment where the fallthrough is, not only in the spec:
+
+```ts
+// Supply is offered first: a building waiting on inputs produces NOTHING,
+// while one with a full output buffer has already produced and its goods are
+// safe where they stand. The obvious objection is a deadlock — every hauler
+// supplying, nobody collecting, the ledger drained — and it cannot happen
+// structurally: a supply job requires stock at the hauler's OWN site, and only
+// collection puts it there. As the ledger empties, supply candidates vanish
+// and collection resumes on its own. Measured in spec §4 q3 rather than left
+// as this argument.
+```
+
+- [ ] **Step 3: Implement the legs**
+
+The outbound arrival handler is the only genuinely new code, and it does three things in order — unload, then load, then choose a destination:
+
+```ts
+const arrive = (trip: HaulTrip, row: BuildingRow, capacity: number): void => {
+  if (trip.kind === 'supply' && trip.resource !== null) {
+    const placed = row.input.add(trip.resource, Math.min(trip.amount, row.input.room(BALANCE.inputBufferCap)));
+    trip.amount -= placed;          // the remainder rides home; nothing is destroyed
+  }
+  // BOTH kinds load on the way back — this is the round trip the increment is named for.
+  if (trip.amount === 0) {
+    const resource = row.buffer.fullestResource(RESOURCE_IDS);
+    const taken = resource === null ? 0 : row.buffer.take(resource, capacity);
+    trip.resource = taken > 0 ? resource : null;
+    trip.amount = taken;
+  }
+  const dest = nearestSiteWithRoom(row.position.col, row.position.row, sites, heldAt) ?? campSite;
+  trip.destSiteId = dest.id;
+  trip.phase = 'returning';
+  const ticks = haulTicksBetween(row.position, dest, BALANCE.haulTilesPerTick);
+  trip.ticksLeft = ticks;
+  trip.legTicks = ticks;
+  trip.pickupCol = row.position.col;
+  trip.pickupRow = row.position.row;
+};
+```
+
+The `trip.amount === 0` guard is load-bearing and not an optimisation: a hauler still holding an undelivered remainder must carry *that* home rather than mixing two resources in one pair of hands, which `HaulTrip` has no room to represent.
+
+The deposit handler resolves `destSiteId` **on arrival**, not at dispatch: a storehouse can be demolished or sent into transit mid-leg, and the load then goes to the camp (§2.7).
+
+- [ ] **Step 4: Mutation-check**
+
+Three separate mutations, each of which must redden exactly one test: drop the unload (`row.input.add`), drop the return-leg load, and drop the `trip.amount -= placed` remainder accounting.
+
+- [ ] **Step 5: Gates and commit**
+
+```bash
+rm -rf coverage && npm run check:all
+grep -cve '^\s*$' src/engine/systems/haul-system.ts src/engine/systems/haul-dispatch.ts
+git add src/engine/systems/haul-dispatch.ts tests/engine/systems/haul-dispatch.test.ts
+git commit src/engine tests/engine -m "feat(engine): haulers carry inputs out and goods back in one trip
+
+The return leg is identical for both kinds, which is why this is a change to
+one system rather than a second one."
+```
+
+---
+
+### Task 7: Claims, determinism, and the commute a hauler actually walks
+
+**Files:**
+- Modify: `src/engine/systems/haul-dispatch.ts`, `src/engine/systems/haul-system.ts`
+- Test: `tests/engine/systems/haul-system.test.ts`
+
+- [ ] **Step 1: Both kinds claim, in both directions**
+
+Two claim maps, and missing either produces a specific, nameable failure:
+
+- **output claims** must count supply haulers (they load on arrival), or two haulers are sent at the same six units;
+- **input claims** must subtract pending deliveries from a building's deficit, or every idle hauler in the colony leaves for the same empty mill on the same tick.
+
+Test the second by dispatching three haulers in one tick at one starved bakery and asserting they choose three different jobs (or that two find none) — with a fixture where three targets exist, so the assertion discriminates.
+
+- [ ] **Step 2: The commute is charged bed → base**
+
+`haulerCapacity(homeTile, siteTile)`. Every reservation and every load must call it with the same two arguments — the mismatch its doc comment warns about is now two arguments wide, and a reservation computed against the camp while the load is computed against a depot claims capacity a hauler does not have.
+
+Pin it: a colonist housed beside a remote depot and based there carries **more** than one housed at the camp and based at the same depot. Two fixtures differing in one field.
+
+- [ ] **Step 3: Determinism**
+
+Extend the existing determinism test to cover both kinds: build one world state, run the dispatch twice from identical inputs in different entity orders, assert identical claims. The tie-break chains end at the building id precisely so this holds.
+
+- [ ] **Step 4: Mutation-check, gates, commit.**
+
+---
+
+### Task 8: Goods, demolition, relocation — and two carried-forward issues
+
+Conservation (§2.7) plus OBS-5-03 and OBS-6-08 (§2.12). `command-handlers.ts` is 426 lines and the placement handlers move out here.
+
+**Files:**
+- Create: `src/engine/systems/placement-handlers.ts` (construct / move / demolish, moved verbatim first)
+- Modify: `src/engine/systems/command-handlers.ts`, `src/engine/snapshot-builder.ts`
+- Modify: `docs/issues/2026-08-09-demolish-and-rebuild-bypasses-the-priced-relocation.md`, `docs/issues/2026-08-09-a-relocating-crews-work-power-is-computed-then-discarded.md`
+- Test: `tests/engine/systems/command-system.test.ts`
+
+- [ ] **Step 1: Move the handlers, green suite, commit that alone.** A move and a behaviour change in one commit is two mistakes waiting to be attributed to each other.
+
+- [ ] **Step 2: Demolition, three rules with one test each**
+
+```ts
+it('demolishing a storehouse leaves colony wealth unchanged', async () => {
+  // THE assertion for §2.7. Not "the camp gained 30 wood" — wealth across the
+  // tick, which is the property the player would notice being violated and the
+  // one a future refactor of where goods live cannot accidentally satisfy.
+});
+
+it('demolishing a producer loses both its buffers, and says so', async () => {
+  // OBS-4-07's decision, extended to the input buffer for the same reason:
+  // neither is in the ledger, and a building left full of goods should be
+  // expensive to bulldoze.
+});
+
+it('cancelling a supply trip refunds the load to the site it came from', async () => {
+  // Every cancellation path: demolition of the TARGET, unassignHauler, and the
+  // "building gone" branch in the load handler. refundAt, not addAt — the
+  // delivery never happened and must not inflate Delivered/t.
+});
+```
+
+- [ ] **Step 3: OBS-5-03 — demolish-and-rebuild bypasses the priced relocation**
+
+A storehouse is precisely the building a player wants to reposition as the colony spreads, which is why this issue is in scope now and was not before. The fix is the smallest one that closes the loophole: a building constructed on the tick a building of the same def was demolished pays the relocation downtime it would have paid for the move. Read the issue note for the reasoning already recorded there before choosing an implementation, and **push back if the note disagrees with the code** — the code wins.
+
+- [ ] **Step 4: OBS-6-08 — one path to a relocating crew's work power**
+
+Engine-side and snapshot-side reach zero two different ways today. A relocating *store* now needs excluding from site lists as well, which would make it three. Collapse to one derivation. Read the issue note first.
+
+- [ ] **Step 5: Resolve both notes**
+
+Set `status: Done`, `resolved: 2026-08-09`, and name the commit that did it — the convention every resolved note in `docs/issues/` follows. **Do not** write the resolution before the commit exists; a note naming a commit that does not exist is worse than no note.
+
+- [ ] **Step 6: Gates and commit.**
+
+---
+
+### Task 9: Save v6
+
+**Files:**
+- Modify: `src/shared/save.ts`, `src/shared/save-migration.ts`, `src/engine/save-guard.ts`, `src/engine/spawn.ts`, `src/engine/world.ts`, `src/engine/restore.ts`
+- Test: `tests/shared/save-migration.test.ts`, `tests/engine/save-guard.test.ts`, `tests/engine/world.test.ts`
+
+**Interfaces:**
+- `SavedBuilding` gains `inputBuffer` and `stored`, both required, both `{}` when empty (the uniform shape `buffer` established in v3 — a single unconditional guard check).
+- `SaveGameV6 extends Omit<SaveGameV5, 'version'>` with `version: 6`. `stockpile` is now **the camp's contents**, which for a v5 colony is exactly what it already was.
+- `LATEST_SAVE_VERSION = 6`. The literal type is what makes the bump self-policing: raising the constant fails typecheck at both producers until the type moves with it. Let it.
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+it('a v5 colony loads as v6 with empty input buffers and its stockpile at the camp', () => { /* … */ });
+
+it('an over-cap input buffer trims, and the save still loads', () => { /* clamped, never rejected */ });
+
+it('stored goods a building cannot legally hold spill to the camp', () => {
+  // Includes `stored` on a def with storage: 0 — a hand-edited save, or a
+  // storehouse whose capacity was retuned DOWN. The assertion is that the
+  // AGGREGATE is conserved, not that the field survived: the camp is unbounded,
+  // so conservation is exact and nothing is refused.
+});
+
+it('a hauler mid-supply-trip banks its load at the camp and stands there on load', () => {
+  // HaulTrip still never enters the save (increment 4's simplification, kept):
+  // conservation exact, no guard, no migration, and job selection is
+  // deterministic from persisted state so the colony resumes identically.
+});
+```
+
+- [ ] **Step 2: The migration**
+
+```ts
+const migrateV5toV6: MigrationStep = {
+  from: 5,
+  to: 6,
+  migrate: (save) => {
+    const v5 = save as SaveGameV5; // the runner guard-validated this shape
+    return {
+      ...v5,
+      version: 6,
+      buildings: v5.buildings.map((b) => ({ ...b, inputBuffer: {}, stored: {} })),
+    };
+  },
+};
+```
+
+A v5 colony was exactly a v6 colony with no storehouses and every input already paid. Append to `SAVE_MIGRATIONS`, add `guards[6]`.
+
+- [ ] **Step 3: Guards and clamps**
+
+`isSaveGameV6` validates both maps structurally (safe non-negative integers, `MAX_BUFFER_KEYS`) — reuse the existing buffer-shape helper rather than writing a third copy. `isLoadableSave`'s `isBuffersValid` extends to both new maps for the catalog check.
+
+The spill-at-load rule lives in the restore path, not the guard: the guard says "this file is well-formed", the restore says "and here is where those goods actually end up under current balance". Conflating them is how a retune starts rejecting saves.
+
+- [ ] **Step 4: Mutation-check**
+
+Drop `inputBuffer: {}` from the migration and confirm the v5→v6 test goes red rather than the guard test — if the guard reddens instead, the guard is doing the migration's job.
+
+- [ ] **Step 5: Gates and commit.**
+
+---
+
+### Task 10: Snapshot and the read-model
+
+`snapshot-builder.ts` is 438 lines; the building-section half moves to `src/engine/snapshot-buildings.ts` here.
+
+**Files:**
+- Create: `src/engine/snapshot-buildings.ts`
+- Modify: `src/engine/snapshot-builder.ts`, `src/shared/snapshot.ts`, `src/engine/initial-snapshot.ts`, `src/app/stores/game-store.ts`
+- Test: `tests/engine/snapshot-builder.test.ts`, `tests/app/stores/game-store.test.ts`
+
+**Interfaces:**
+- `BuildingSnapshot` gains `inputBuffered: number`, `stored: number`, `storage: number`.
+- `ColonistSnapshot` gains `haulKind: HaulKind | null`.
+- Store getters (derived once, not per view): `unitsShort`, `buildingsWaitingForInput`.
+
+- [ ] **Step 1: Move first, green suite, commit.**
+- [ ] **Step 2: New fields, with tests whose fixtures discriminate** — give `inputBuffered`, `stored` and `buffered` three *different* values in the fixture, or a field pointed at the wrong source passes (increment 5's `Delivered/t` test survived exactly that mutation until its three fields were given distinct values).
+- [ ] **Step 3: Store getters, mutation-checked, gates, commit.**
+
+---
+
+### Task 11: Tables, panel and the Economy view
+
+No-WebGL parity — the promise made in increment 3 §1.1 and kept ever since (§2.10).
+
+**Files:**
+- Modify: `src/app/views/BuildingsView.vue`, `src/app/components/SelectionPanel.vue`, `src/app/views/EconomyView.vue`
+- Test: `tests/app/views/*.test.ts`
+
+- [ ] **Step 1:** Buildings table gains an `In` column beside `Waiting`; a storehouse row shows `held / capacity`; the state column shows `Waiting for input`.
+- [ ] **Step 2:** Selection panel shows both buffers, and a storehouse's contents against capacity.
+- [ ] **Step 3:** Economy view names the **input** backlog beside the output backlog it already names — units short, and how many buildings are idle waiting for them. This is the answer to "why is my bakery stopped?" and it is in scope.
+- [ ] **Step 4:** A test that constructs a storehouse from the table and asserts it appears — the fallback path must be able to build the building this increment adds, or parity is a claim rather than a property.
+- [ ] **Step 5:** Mutation-check each column against a neighbouring one, gates, commit.
+
+---
+
+### Task 12: The world view, and the renderer's line budget
+
+**Files:**
+- Create: `src/app/world/glyphs.ts`
+- Modify: `src/app/world/renderer.ts`, `src/app/world/layout.ts`, `src/app/components/WorldLegend.vue`
+- Modify: `docs/process/agent-workflow.md` (the no-import rule gains a third file)
+- Modify: `scripts/world-smoke-harness/main.ts`, `scripts/world-smoke.mjs`
+
+- [ ] **Step 1: Extract the glyph drawing first.** `renderer.ts` is at 445 of 500 with nothing baselined and this task adds a storehouse glyph, a fill ring and a carrying-in marker. Extract, confirm `npm run smoke:world` is unchanged, commit that alone.
+- [ ] **Step 2:** Storehouse glyph with a fill ring; `storing` and `waitingForInput` state colours; a hauler carrying **in** drawn distinguishably from one carrying **out**, so flow direction reads at a glance.
+- [ ] **Step 3:** A legend entry for each of the three. The legend explains every encoding — true since increment 2, and this increment is not the exception.
+- [ ] **Step 4: Smoke checks, one change per fixture phase.** A supply leg: a dot leaves a site **carrying**, reaches a building, returns. Nearly every smoke check has the shape `!after.equals(before)`, so a phase that moves five things at once stays true for reasons unrelated to its name (OBS-4-04). Mutation-test by disabling the feature in `renderer.ts` or `layout.ts` and confirming that named check — and only it — goes red.
+- [ ] **Step 5:** `grep -cve '^\s*$' src/app/world/renderer.ts src/app/world/glyphs.ts` — both under 500. Gates, commit.
+
+---
+
+### Task 13: Extend the harnesses
+
+The instruments §4 needs. A task, not an afterthought — increment 6 shipped a birth-threshold regression that only a harness caught, and the harness had to exist first.
+
+**Files:**
+- Modify: `tests/support/balance-harness.ts` (a two-stage chain; an optional storehouse)
+- Modify: `tests/support/population-harness.ts` (`storehouses?: number`)
+- Test: `tests/engine/balance.test.ts` (the `balance` vitest project)
+
+- [ ] **Step 1: `Scenario` grows a second stage.** Today it measures one building. §4 q1 and q2 both need a *chain* — a forester feeding a sawmill at a distance — so the descriptor needs a second building and the result needs per-stage figures. Keep the existing single-building path working unchanged: increment 5's sweep is the control in q1, and a control that had to be rewritten is not one.
+- [ ] **Step 2: `storehouses`,** placed at a scenario-specified tile. In the population harness this closes a gap increment 6 flagged and this increment widens: the harness *cannot build*, which was a conservative control there and is a distortion here, because a colony that cannot build a depot cannot play this increment.
+- [ ] **Step 3: Sentinels.** `frozenSteps` must stay 0 (OBS-6-02's regression sentinel). Add a conservation sentinel while the instrument is open: total goods in the world at the end of a run equals what was made, minus what was eaten, minus what demolition destroyed. This increment moves goods through four places plus a hauler's hands, and a silent leak would show up in §4's numbers as a balance problem rather than as the bug it is.
+- [ ] **Step 4:** `npm run test:balance` green; timeouts explicit (these run thousands of ticks — vitest's 5s default will fail them). Gates, commit.
+
+---
+
+### Task 14: Measure
+
+**Files:**
+- Modify: `tests/engine/balance.test.ts`
+
+Answer §4.1's questions with numbers. Run:
+
+```bash
+rm -rf coverage
+npm run balance:report 2>&1 | tee /tmp/increment-7-report.txt
+npm run balance:population 2>&1 | tee -a /tmp/increment-7-report.txt
+```
+
+- [ ] **Step 1: q1 — the gradient, both halves.** Re-run increment 5's sweep for a **raw producer** and confirm it is **unchanged**. That is the control and the more important of the two readings: a raw producer has no inputs, nothing is delivered to it, and a shift there means this increment broke something it did not intend to touch. Then measure the processor's gradient, expected to be roughly halved in reach. **If it is not halved, find out why before believing it.**
+- [ ] **Step 2: q2 — does a storehouse pay for itself?** The two-stage chain at a range of distances, with and without a depot, at each hauler count. The answer wanted is a **crossover distance**: the leg beyond which 20 wood and 10 planks buys more throughput than another hauler. If the depot never wins, or wins everywhere, the storehouse is mistuned and `storehouseCapacity` or the cost is where to look first.
+- [ ] **Step 3: q3 — thrash and deadlock.** A colony with a drained ledger and every building wanting inputs: confirm collection resumes rather than the colony sitting still. Report the split of hauler-ticks between the two kinds, and **how often a supply trip returns loaded** — the round trip in §2.5 is only worth its complexity if that number is not near zero. If it is near zero, say so in §4 and propose removing the mechanic rather than keeping it because it is written.
+- [ ] **Step 4: the fourth reading.** Repeat increment 6's 12,000-tick chain run with and without a depot. If `birthFoodPerHead: 12` holds in both, record it beside increment 6's curve; if it does not, that is a retune this increment owns, measured the same way §4.1 of increment 6 measured its own.
+- [ ] **Step 5: Re-read the two fixtures increment 6 flagged** (its §4.3): the chain test's peak against the bed count, and the housing property test's saturation. Both hold their conclusions by *margin* rather than by assertion, and this increment moves food supply against bed supply — which is precisely the change that narrows them. Re-read the printed curve, not only the green tick.
+- [ ] **Step 6: Commit the measurements** (test changes only; §4 itself is Task 15).
+
+---
+
+### Task 15: Document and close out
+
+**Files:**
+- Modify: `docs/superpowers/specs/2026-08-09-increment-7-two-way-haul-and-storage.md` (§4)
+- Modify: `README.md`
+- Modify: `docs/requirements/Two-Way Haul and Storage Buildings.md` (status), and add PBI notes for what shipped
+- Modify: `docs/issues/` (any finding judged real and not fixed here)
+
+- [ ] **Step 1: Rewrite §4** with what the harness measured, replacing "reasoning to be checked" with a measured column. A constant that moves must move because of a number in `/tmp/increment-7-report.txt`, and that number goes in the table. **"Validated, unchanged" is a legitimate answer** to any row.
+- [ ] **Step 2: README.** An Increment 7 section in the voice of the existing six — what a *player* can now do, not what was implemented. Update the Documentation list with the new spec and plan paths.
+- [ ] **Step 3: Backlog.** Set the Two-Way Haul feature to its shipped state and add PBI notes under it for what actually shipped, filed and parented the way every other requirement note is (`docs/README_PRODUCT_BACKLOG.md` is the contract). Anything deliberately not built — construction as work, roads, storehouse-to-storehouse transfer — stays a `New` item rather than disappearing.
+- [ ] **Step 4: Issues.** Anything found and judged real but not fixed gets a note, parented into the backlog. Increments 4, 5 and 6 each found several; finding none would be the surprising outcome, not the good one.
+- [ ] **Step 5: Final gates**
+
+```bash
+rm -rf coverage && npm run check:all && npm run smoke:world
+for f in src/engine/world.ts src/app/world/renderer.ts src/engine/snapshot-builder.ts \
+         src/engine/systems/command-handlers.ts src/engine/resources.ts src/shared/save.ts; do
+  printf "%-50s %s\n" "$f" "$(grep -cve '^\s*$' $f)"
+done
+git diff --stat scripts/loc-baseline.json scripts/quality-baseline.json   # expect NO changes
+```
+
+The last line is the important one: if a baseline moved, find out why before shipping.
+
+- [ ] **Step 6: Commit and open the PR.**
+
+---
+
+## Notes for the implementer
+
+- **Push back rather than guess.** Roughly half of increment 4's task briefs contained an error — a helper that did not exist, a wrong expected value, a parameter that would have corrupted eight call sites. Implementers caught them only because they were told to. **If a brief here disagrees with the code, the code wins: say so.**
+- **Task 2's promise is testable and load-bearing: no existing caller changes.** If making the ledger multi-site requires editing `HungerSystem`, `handleConstructBuilding`, `colonyWealth`, `StatsSystem` or their tests, the aggregate API has leaked and the design has gone wrong. Stop and say so rather than editing the callers.
+- **Task 3 has the widest blast radius.** Every fixture that seeded a stockpile to make a processing building run now seeds an input buffer. Let `npm test` enumerate them. Read each as you go: a test that was *about* the stockpile draining is telling you something, and its assertion may need to move rather than its fixture.
+- **Conservation is the invariant most at risk.** Goods now live in four places plus a hauler's hands. Every cancellation path must put a carried load somewhere: demolition of the target, `unassignHauler`, the "building gone" branch, and save-time. Prefer asserting on a colony-wide total over asserting on the field you just wrote — the total is the property a player would notice being violated, and it is the one a future refactor cannot accidentally satisfy.
+- **`refundAt` vs `addAt` is not a style choice.** `producedThisTick` is what `StatsSystem` publishes as `Delivered/t`; anything banked that a hauler did not actually deliver must not inflate it. That distinction already caught one bug (OBS-4-06) and this increment triples the number of sites that bank goods.
+- **Do not reorder the systems to close the one-tick input delay** (§2.8). Putting haulage before production moves the tick from the input side to the output side; it does not remove it.
+- **`OutputBuffer.fullestResource` and `InputBuffer.shortestOf` are opposites and must stay opposite.** Both take catalog order as an argument for the same reason — determinism that does not depend on `Map` insertion order — and both are read by the engine's authoritative choice *and* by anything that previews it.
+- **Timeouts:** balance and population scenarios run thousands of ticks through the full system set. Explicit `120000` / `180000` timeouts are required; vitest's 5s default will fail them.
+- **If §4 q3 says the round trip almost never returns loaded, delete the mechanic.** A measurement that argues against a design decision is the point of measuring. Increment 6 moved a shipped constant on exactly that basis, and its spec says why at length.

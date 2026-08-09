@@ -1,0 +1,572 @@
+# Spec: Increment 7 — Two-Way Haul & Storage
+
+**Date:** 2026-08-09
+**Status:** Approved scope, pre-implementation
+**Predecessor:** Increment 6 (survival & population, PR #9 and #10, merged)
+
+---
+
+## 1. Why this increment exists
+
+Increment 4's thesis was one sentence: *"Goods stop teleporting."* Half of it
+shipped. A building banks what it makes into its own `OutputBuffer` and a
+hauler carries it to the camp — but `ProductionSystem` still pays a recipe's
+inputs straight out of the global `Stockpile`, from anywhere on the map, in the
+tick the batch begins:
+
+```ts
+// src/engine/systems/production-system.ts
+if (stockpile.pay(recipe.inputs)) { production.batchActive = true; production.progress = 0; }
+```
+
+So a bakery in the far corner walks its bread thirteen tiles home and its flour
+arrives by teleport. Distance is priced on the way out and free on the way in.
+That asymmetry is not a rounding error in the design — it is half the map game.
+Increment 5 measured the outbound gradient precisely (one hauler serves a
+building out to leg ~4, two by leg 8, three by leg 13) and every one of those
+numbers describes a *raw* producer, because a raw producer is the only kind
+whose real cost the simulation currently charges. A mill, a bakery, a sawmill
+and a workshop are all sited today as though they were foresters.
+
+This increment charges the other half, and then gives the player something to
+do about it.
+
+**The something matters more than the charge.** Input delivery on its own is
+not a good change: it roughly doubles haul demand, makes every processing
+building strictly worse the further it sits from the camp, and collapses the
+answer to "where do I build?" back to *"on the camp band"* — which is exactly
+the degenerate play increment 5 removed when it made free relocation cost
+downtime. So the storehouse ships in the same increment: a second place goods
+may be dropped and picked up, which turns a distant cluster from a mistake into
+an investment. The two halves are one decision, and the backlog has always
+named them together (`docs/requirements/Two-Way Haul and Storage Buildings.md`).
+
+### 1.1 Product decisions taken for this increment
+
+- **Inputs are physically delivered.** The alternative — an input-side
+  efficiency multiplier scaled by distance — was rejected for the same reason
+  increment 4 rejected an abstract haul-capacity coefficient: it leaves the
+  cost invisible and the dots decorative.
+- **One ledger, many places.** The colony's goods stay a single spendable
+  total. A storehouse does not own a separate economy; it holds part of the
+  same one, at a different tile. Meals, construction costs, refunds and
+  `colonyWealth` are unchanged — goods still do not change *what they are*,
+  only *where they must be fetched from*. This is Banished's model, and it is
+  what keeps the change affordable: every existing reader of `Stockpile` keeps
+  its exact API and meaning.
+- **The camp is unbounded; a storehouse is not.** Making the camp finite would
+  add a colony-wide failure mode (store full → haulers idle → buffers fill →
+  everything stalls) that no surface currently explains and that the opening
+  colony could hit by accident. A storehouse's cap is local and forgiving:
+  overflow walks on to the camp.
+- **A supply trip and a collect trip are the same trip.** A hauler that carries
+  flour out to the bakery and comes back empty is doing half a job. The return
+  leg loads whatever that building has waiting, so a well-sited pair of
+  buildings gets two-way haulage out of one round trip. This is the mechanic
+  the increment is actually named for.
+- **Supply outranks collect.** A building with no inputs produces *nothing*; a
+  building with a full output buffer has already produced, and its goods are
+  safe where they stand. §2.6 states the rule and why the obvious deadlock it
+  invites cannot happen.
+- **Construction still teleports.** Materials for a new building are paid out
+  of the ledger and the building appears finished. Making construction a job —
+  a site, delivered planks, a builder role — is the natural successor and is
+  named as such in §2.13, not folded in here. It would roughly double an
+  increment that is already fifteen tasks, and it depends on exactly the
+  input-delivery machinery this one builds.
+
+### 1.2 What this makes harder, deliberately
+
+Every processing building in the colony gets worse the day this ships, and that
+is the point. A player whose mill, bakery and workshop are scattered across the
+map will watch them sit `waitingForInput` while their haulers walk. The three
+answers available are all real decisions: move the buildings together, staff
+more haulers, or build a storehouse and pay 20 wood and 10 planks to shorten
+every trip in that corner.
+
+Increment 5's measured haul gradient is expected to move for input-consuming
+buildings and to stay put for raw producers. §4 measures both rather than
+assuming either: a raw producer's gradient shifting would mean this increment
+broke something it did not intend to touch.
+
+---
+
+## 2. Requirements
+
+### 2.1 Inputs come from the building, not the colony
+
+- New component `InputBuffer`, structurally identical to `OutputBuffer`
+  (amounts per resource, capped by `BALANCE.inputBufferCap` **counted as the
+  total across all resources**, for the same reason the output cap is).
+  It is attached to every building — a house or a storehouse simply never has
+  anything put in it — so `buildingComponents` stays one list (OBS-4-02).
+- `ProductionSystem` pays a batch's inputs out of the building's own
+  `InputBuffer`. It no longer touches `Stockpile` at all, in either direction.
+  Both payment sites move: the `startBatch` guard and the chain-into-the-next
+  -batch call at the end of `completeBatches`.
+- A staffed building with a recipe it cannot start for want of local inputs
+  reports `waitingForInput`. **That state already exists in the union and is
+  already published** — today it means "the batch is not active", which for a
+  building drawing on a global store is almost always a transient tick. From
+  this increment it is a real, persistent, explicable condition, and it is the
+  headline diagnostic of the whole change.
+- Buildings whose recipe has no inputs (gatherer's hut, farm, forester) are
+  untouched by any of this: nothing is ever delivered to them, and they never
+  wait. This is why §4 expects their gradient to be unchanged.
+- **`inputBufferCap` is per building, not per resource.** No recipe today has
+  more than one input; the total rule keeps the cap meaningful if one ever
+  does, and matches the output side exactly.
+
+### 2.2 Store sites: the camp stops being the only one
+
+`src/shared/haul.ts` owns the spatial law of hauling and imports nothing. It
+grows the concept the rest of this increment is built on:
+
+- `CAMP_SITE_ID = 0`. Entity ids start at 1 (`IdCounter`'s default), so zero is
+  permanently free and needs no reservation logic.
+- `interface StoreSite { id: number; col: number; row: number; capacity: number | null }`
+  — `null` capacity means unbounded, which is the camp and only the camp.
+- `haulTicksBetween(from, to, tilesPerTick)`, the two-point generalisation of
+  today's `haulTicks(col, row, tilesPerTick)`. `haulTicks` **stays**, defined as
+  `haulTicksBetween(CAMP_TILE, tile, …)`, because the camp-relative distance is
+  still what `haulerCapacity` and the commute charge measure from.
+- `nearestSite(col, row, sites)` — fewest tiles, ties by site id, so the choice
+  never depends on iteration order.
+- `nearestSiteWithRoom(col, row, sites, heldAt)` — where a loaded hauler should
+  unload. `heldAt(siteId)` supplies current occupancy; a site with `capacity:
+  null` always has room, so the camp is the guaranteed fallback and this
+  function can never return null while the camp exists.
+- `nearestSiteHolding(col, row, sites, amountAt, resource)` — reserved for a
+  future increment that lets a hauler walk to a source; **not used this
+  increment** (§2.5's supply trips load where the hauler already stands) and
+  therefore **not added**. Named here only so a reader knows the omission is
+  deliberate.
+
+The balance constants stay in `BALANCE` and arrive as arguments, preserving the
+rule that `src/shared/**` imports nothing outside itself.
+
+### 2.3 The storehouse
+
+- A third kind of building. `BuildingDef` gains `storage: number` — units it
+  can hold, `0` for everything that is not a store — beside `beds` and the
+  nullable `recipe`.
+- The content invariant generalises from increment 6's *"exactly one of a
+  recipe or beds"* to **exactly one of: produces, shelters, stores**. A def
+  with none of the three does nothing; a def with two is two mechanics in one
+  entry. Pinned by a content test, as the two-way version already is.
+- `storehouse`: cost `{ wood: 20, planks: 10 }`, `workerSlots: 0`,
+  `recipe: null`, `beds: 0`, `storage: BALANCE.storehouseCapacity`. It needs
+  no staff — it is a shed, not a job.
+- `BuildingState` gains `'storing'`, mirroring `'housing'`: a building with no
+  recipe has no batch to be `producing` or `unstaffed` about.
+- The build palette derives from `BUILDING_IDS`, so the storehouse appears in
+  the World tab and in the table's construct control with no extra wiring.
+- **A relocating storehouse is not a store site.** It is in transit; there is
+  nowhere to put anything. This mirrors `beds.total` excluding relocating
+  houses (increment 6, `buildEntitySections`) and is the same principle:
+  a building mid-move provides none of its service.
+
+### 2.4 One ledger, held in several places
+
+`Stockpile` keeps its name, its role as the colony's single ledger, and every
+aggregate method it exposes today. What changes is that it stops being one map
+and becomes a map per site.
+
+- Internally: `Map<siteId, Map<ResourceId, number>>`, with `CAMP_SITE_ID`
+  always present.
+- **Unchanged, and this is the load-bearing property:** `get`, `total`,
+  `canAfford`, `pay`, `take`, `refund`, `add`, `resetTickFlows`,
+  `producedThisTick`, `consumedThisTick`. Every existing caller — hunger meals,
+  construction cost, demolition refund, `colonyWealth`, `StatsSystem`, the
+  save — keeps working against the aggregate with no edit. A goods total is a
+  goods total wherever it stands.
+- **Draw order for aggregate spends is camp first, then sites by ascending
+  id.** Deterministic, and it drains the unbounded site before the bounded
+  ones, which leaves local depots stocked for the haulers that need them.
+- New site-aware API, used only by `HaulSystem`, the command handlers and the
+  save:
+  - `getAt(siteId, resource)` / `totalAt(siteId)`
+  - `addAt(siteId, resource, amount, capacity): number` — banks what fits,
+    returns what was banked, records a delivery (`producedThisTick`) exactly as
+    `add` does today.
+  - `refundAt(siteId, resource, amount)` — banks without recording a delivery,
+    for the same reason `refund` exists (`Stockpile.refund`'s own doc comment).
+  - `takeAt(siteId, resource, amount): number` — takes up to `amount` from one
+    site, returns what was taken.
+  - `spillTo(siteId, from)` — move a whole site's contents into another.
+    Used by demolition (§2.7) and by load-time clamping (§2.9).
+  - `siteJSON(siteId)` — one site's contents, for serialization.
+- `toJSON()` returns the **camp's** contents, which is what makes the save
+  migration in §2.9 a no-op for a v5 colony: a v5 stockpile *was* the camp.
+- Saturation at `MAX_SAVED_COUNTER` stays, per site, for the reason it exists
+  today: the engine must never write a save its own guard would reject.
+
+### 2.5 Haul trips gain a kind, and a return leg that always earns
+
+`HaulTrip` gains `kind: HaulKind` where `HaulKind = 'collect' | 'supply'`, and
+`atSiteId: number` — the site the hauler is currently standing at (`CAMP_SITE_ID`
+when idle at the camp, which is where every hauler starts and where every
+reloaded hauler stands, per §2.9). Both are runtime-only, like the rest of
+`HaulTrip`.
+
+A trip is still exactly two legs, and the **return leg is identical for both
+kinds**, which is what keeps this a small change to `HaulSystem` rather than a
+second system:
+
+1. **Idle at a site** → claim a job (§2.6). For a `supply` job, load
+   `min(capacity, deficit, held at this site)` of the chosen resource out of
+   `atSiteId` *now*, before walking. For a `collect` job, walk empty.
+   Phase `outbound`, `ticksLeft = haulTicksBetween(site tile, building tile)`.
+2. **Outbound** → decrement. On arrival:
+   - a `supply` load is put into the building's `InputBuffer` (whatever fits;
+     the remainder stays in hand and rides home, so no unit is ever destroyed);
+   - **then, for both kinds**, the hauler loads from that building's
+     `OutputBuffer` — `fullestResource`, up to its capacity. A supply trip that
+     finds nothing waiting returns empty, which is the honest cost of a
+     one-directional errand.
+   - Phase `returning`, destination `nearestSiteWithRoom(building tile, …)`,
+     `ticksLeft` computed from the building's **current** tile (a building
+     moved mid-trip charges the walk actually walked — the existing rule), and
+     `legTicks` / `pickupCol` / `pickupRow` frozen here exactly as today
+     (OBS-5-01).
+3. **Returning** → decrement. On arrival, `addAt(destination site, …)` the
+   load; overflow beyond the destination's capacity goes to the camp rather
+   than being dropped, because these goods are already in the ledger and
+   deleting them would delete banked colony wealth. Set `atSiteId` to the
+   destination, reset the trip to `idle`.
+
+A hauler therefore migrates naturally to wherever the work is: deposit at a
+remote storehouse and you are standing at it next tick, ready to supply the
+buildings around it from what you just dropped off.
+
+**A hauler's commute is charged from home to `atSiteId`**, not to the camp.
+`haulerCapacity(homeTile)` becomes `haulerCapacity(homeTile, siteTile)`: the
+distance term is the walk from bed to base, which is what it always modelled —
+increment 6 measured it to `CAMP_TILE` because the camp was the only base there
+was. A colonist housed beside a remote depot and based there is a good hauler;
+one housed at the camp and based at the depot is not. Every site that reserves
+or takes capacity must keep calling the same function with the same arguments
+(the reservation/load mismatch `haulerCapacity`'s doc comment warns about is
+now two arguments wide instead of one).
+
+### 2.6 Which job, and in what order
+
+Two candidate sets are built each tick from live components, and both are pure
+functions of world state — no memory between ticks, no iteration-order
+dependence, tie-breaks ending at the building id.
+
+**Collect candidates** — unchanged from increment 4 except for who counts as a
+claimant (below): buildings with unclaimed buffered output, ordered by
+`compareHaulCandidates` (most claimable first, then nearest, then lowest id).
+
+**Supply candidates** — a building qualifies when all of these hold:
+
+- its recipe has inputs and it is not relocating;
+- the resource it is shortest of (ties by catalog order, mirroring
+  `OutputBuffer.fullestResource`) is held at **this hauler's** site;
+- `movable = min(capacity, inputBufferCap − inputBuffered, held at this site)`
+  is at least `BALANCE.minSupplyUnits`.
+
+Ordered by `movable` descending, then nearest to the hauler's site, then lowest
+building id.
+
+**Supply is offered first.** A building waiting on inputs produces nothing at
+all, while a building with a full output buffer has already produced and its
+goods are standing safe where they were made. The obvious objection is
+deadlock — every hauler supplying, nobody collecting, the ledger drained — and
+it cannot happen, for a structural reason worth stating rather than hoping for:
+a supply job requires stock *at the hauler's own site*, and only collection puts
+it there. As the ledger empties, supply candidates disappear and collection
+resumes on its own. §4 question 3 measures that rather than trusting this
+paragraph.
+
+**Claims count both kinds.** `buildClaimMap` today counts outbound haulers
+against the output they will take. A supply hauler now also loads output on
+arrival (§2.5 step 2), so it claims too — otherwise two haulers would be sent
+at the same six units. The mirror is also needed: a building already being
+supplied has its pending delivery subtracted from its deficit, or every idle
+hauler in the colony leaves for the same empty mill on the same tick.
+
+### 2.7 Goods, and the buildings that hold them
+
+Three interactions, each of which has a precedent this increment follows rather
+than re-litigates:
+
+- **Demolishing a producer.** Its `OutputBuffer` dies with it, as decided in
+  OBS-4-07, and its `InputBuffer` dies with it for the same reason: neither is
+  in the ledger, and a building left full of goods should be expensive to
+  bulldoze. The notice names both losses.
+- **Demolishing a storehouse.** Its contents **move to the camp**, and the
+  notice says so. This is the opposite call from the buffers above, and the
+  distinction is exactly OBS-4-07's own reasoning applied to a different fact:
+  buffered goods are *not yet* colony wealth, while a storehouse's contents
+  **are** — they are in the ledger, they count in `colonyWealth`, the player has
+  already banked them. Destroying them would drop a published wealth figure
+  under a notice reading "cost refunded". `spillTo`, using `refundAt`, so the
+  move does not inflate `Delivered/t` for goods nobody hauled.
+- **Moving a storehouse.** Contents travel with it: they are inside. The site's
+  tile changes, and the site stops existing (§2.3) until the relocation
+  countdown expires. Any hauler `outbound` to it retargets exactly as today;
+  any hauler `returning` **to** it re-resolves its destination on arrival
+  rather than at dispatch, so a storehouse that went into transit mid-leg sends
+  the load on to the camp instead of into a hole.
+
+### 2.8 System order
+
+Unchanged: `CommandSystem → HungerSystem → PopulationSystem → EfficiencySystem
+→ ProductionSystem → HaulSystem → StatsSystem → SnapshotSystem`.
+
+One consequence, stated rather than discovered: `HaulSystem` runs *after*
+`ProductionSystem`, so **an input delivered on tick t is consumed at t+1**.
+This is the exact mirror of output being claimable on the tick it is made, and
+it costs one tick per delivery, not per batch. Reordering to close that tick
+would put haulage before production and cost a tick on the output side instead
+— the same tick, moved. It stays where it is.
+
+### 2.9 Save v6
+
+- `SavedBuilding` gains two fields, both **always present and `{}` when
+  empty**, which is the uniform shape that keeps each guard a single
+  unconditional check (the doctrine `buffer` established in v3):
+  - `inputBuffer: Partial<Record<ResourceId, number>>`
+  - `stored: Partial<Record<ResourceId, number>>` — a storehouse's share of the
+    ledger; `{}` for everything else.
+- `SaveGameV6.stockpile` is **the camp's contents**. For a v5 colony that is
+  precisely what its stockpile already was, which is what makes the migration
+  trivial.
+- `LATEST_SAVE_VERSION` becomes 6, with the same self-policing literal type:
+  `SaveGameV6.version` being the literal `6` is what makes the bump fail
+  typecheck at both producers until the type moves with it.
+- **Migration v5→v6:** every building gains `inputBuffer: {}` and
+  `stored: {}`. Nothing else moves. A v5 colony was exactly a v6 colony with no
+  storehouses and every input already paid.
+- **Clamped at load, never rejected**, per the standing rule that values
+  coupled to tunable balance numbers are clamped so retuning down never orphans
+  a valid save:
+  - an `inputBuffer` over `inputBufferCap` is trimmed;
+  - `stored` over the def's `storage` — including *any* `stored` on a building
+    whose def has `storage: 0` — **spills to the camp** rather than being
+    trimmed away. The camp is unbounded, so conservation stays exact and no
+    hand-edited or down-tuned save loses banked goods.
+- `isSaveGameV6` validates both maps structurally (safe non-negative integer
+  amounts, `MAX_BUFFER_KEYS`); `isLoadableSave` adds the cross-field check that
+  needs the catalog — every named resource id must exist — exactly as it does
+  for `buffer` today.
+- **`HaulTrip` still never enters the save.** A hauler caught mid-trip banks
+  its load into the camp, whichever kind of trip it was and whichever leg it
+  was on, and stands at the camp on load with `atSiteId = CAMP_SITE_ID`. This
+  is increment 4's deliberate simplification, unchanged: conservation is exact,
+  the trip needs no guard or migration, and job selection is deterministic from
+  persisted state, so a reloaded colony resumes identically.
+
+### 2.10 Snapshot and surfaces
+
+**Snapshot:**
+
+- `BuildingSnapshot` gains `inputBuffered: number` (units held for its own
+  recipe), `stored: number` (units held as a store), and `storage: number`
+  (its capacity, 0 for a non-store).
+- `BuildingState` gains `'storing'`.
+- `ColonistSnapshot` gains `haulKind: HaulKind | null` — null when not on a
+  trip. `carrying` keeps its meaning (units in hand) and now moves on the
+  outbound leg of a supply trip, which it never did before.
+- Aggregates the app would otherwise recompute in two places derive in the
+  store, not the snapshot: units short across the colony, and how many
+  buildings are idle for want of inputs.
+
+**No-WebGL parity holds** — the whole colony must stay playable from the
+tables, the promise made in increment 3 §1.1 and kept ever since:
+
+- **Buildings table:** an `In` column beside the existing `Waiting`, and
+  `Waiting for input` in the state column. A storehouse's row shows its fill as
+  `held / capacity`.
+- **Selection panel:** the selected building's input buffer and output buffer;
+  for a storehouse, its contents against capacity.
+- **Economy view:** the input backlog, symmetric with the output backlog it
+  already names — units short and how many buildings are idle waiting for them.
+  This is the answer to "why is my bakery stopped?", and it is in scope.
+- **World view:** a storehouse glyph with a fill ring; the `storing` and
+  `waitingForInput` state colours; a hauler carrying *in* drawn distinguishably
+  from one carrying *out*, so flow direction reads at a glance.
+- **Legend:** an entry for each of the three additions above. The legend
+  explains every encoding — that has been true since increment 2 and this
+  increment does not get to be the exception.
+
+### 2.11 Testing and gates
+
+- `src/shared/haul.ts`'s additions get exhaustive unit tests, as its existing
+  law has: two-point tick rounding (including the never-free minimum),
+  nearest-site ties, and room resolution with an unbounded camp among bounded
+  sites.
+- `ProductionSystem` gets local-input cases: a building with a stocked
+  `InputBuffer` produces, one with an empty buffer and a full colony stockpile
+  reports `waitingForInput` and produces nothing. **That second test is the
+  whole increment in one assertion** and its fixture must discriminate — a
+  full stockpile, so a pass cannot come from there being no flour anywhere.
+- `HaulSystem` gets tick-by-tick trips of both kinds, the supply-then-collect
+  round trip, and explicit determinism tests: identical world state yields
+  identical claims across runs and across a save/load cycle.
+- These edge cases are pinned by tests, not discovered later:
+  - a supply hauler arriving at a building whose input buffer filled meanwhile
+    — the remainder rides home rather than vanishing;
+  - a storehouse demolished while a hauler is `returning` to it;
+  - a storehouse relocated mid-leg (the destination re-resolves on arrival);
+  - a storehouse demolished with goods inside — `colonyWealth` is unchanged
+    across the tick, which is the assertion that actually tests §2.7;
+  - the deadlock §2.6 argues away: a colony whose ledger is empty and whose
+    buildings all want inputs must still collect.
+- Save v6 gets round-trip, v5→v6 migration, guard-rejection, and both clamp
+  cases — including `stored` on a def with `storage: 0`, where the assertion is
+  that the *aggregate* is conserved, not that the field survived.
+- The browser smoke test gains a supply leg: a dot leaves a site carrying,
+  reaches a building, and returns. Mutation-tested the same way as every other
+  smoke check — disable the feature in `renderer.ts` or `layout.ts` and confirm
+  that named check, and only that check, goes red.
+- **All existing gates hold**: `npm run check:all` green (fallow counters
+  pinned at zero, maintainability floor unmoved), coverage floors unchanged
+  (`src/engine/**`, `src/shared/**`, `src/app/stores/**` at 90/85/90/90), every
+  file under 500 nonblank lines, no new `!important`, no new dependencies,
+  artifact budgets untouched, boundary zones intact — `src/shared/**` imports
+  nothing outside itself, the app never imports `sim-ecs`, engine and shared
+  never import `vue`/`excalibur`/`obsidian`.
+- **The line budget is a design constraint this time, not a formality.** Five
+  files this increment must touch are already close to the 500-line cap:
+  `world.ts` 478, `renderer.ts` 445, `snapshot-builder.ts` 438,
+  `command-handlers.ts` 426, `resources.ts` 387. The plan names a split for
+  each rather than leaving it to whoever trips the gate first. No baseline is
+  loosened to accommodate this increment.
+
+### 2.12 Two carried-forward issues, resolved here
+
+Both are open, both are minor, and both live in exactly the code this
+increment rewrites — which is the only reason they are in scope:
+
+- **OBS-5-03** — demolish-and-rebuild bypasses the priced relocation entirely,
+  for an empty building. Increment 5 priced moving a building; demolishing it
+  and building it elsewhere costs only the (fully refunded) construction and
+  arrives instantly. A storehouse makes this materially worse: a store is
+  precisely the building a player wants to reposition as their colony spreads.
+- **OBS-6-08** — a relocating crew's work power is computed then discarded on
+  the engine side and reaches zero a different way on the snapshot side. The
+  duplication becomes a third path the moment a relocating *store* has to be
+  excluded from site lists, so it is collapsed now rather than triplicated.
+
+### 2.13 Explicitly out of scope
+
+- **Construction as work.** Materials are still paid from the ledger and the
+  building appears finished. This is the named successor to this increment, for
+  the reason given in §1.1: it needs a construction-site entity, a builder
+  role, and delivered materials — all of which sit on top of the input
+  delivery built here.
+- **Roads, terrain and pathfinding.** Straight-line distance only, still —
+  increment 4's own out-of-scope item, deferred a third time and now clearly
+  behind the storehouse in value: a depot shortens a trip more than a road
+  would.
+- **Storehouse-to-storehouse transfer.** Goods move site → building → site. A
+  hauler never rebalances two depots.
+- **Per-resource storehouse filters or priorities.** A storehouse takes
+  whatever arrives. Filters are a UI and a scheduling problem that only becomes
+  interesting once there are several depots worth specialising.
+- **A bounded camp**, and every failure mode that would come with it (§1.1).
+- **Carts, vehicles, or any haul capacity that is not a colonist.**
+- **Hunger or age affecting walk speed.** Still increment 4's deferral.
+- **Seasons, weather, firewood.** Still increment 6's deferral, and now the
+  strongest candidate for increment 9.
+- **The tick-interval sync seam** stays deferred (OBS-4-09's note, deferred by
+  increments 5 and 6 as well).
+- **Multiple storehouse tiers.** One def.
+
+---
+
+## 3. Acceptance criteria
+
+1. A staffed mill with an empty input buffer and a colony stockpile full of
+   wheat produces nothing and reports `waitingForInput`; the same mill produces
+   normally once a hauler delivers wheat to it.
+2. Assigning a hauler to a colony with a stocked camp and a starved bakery
+   produces exactly one notice; the hauler leaves the camp **carrying**,
+   reaches the bakery, unloads, and returns with whatever bread was waiting —
+   visible as a single round trip on the canvas.
+3. A storehouse built beside a distant cluster measurably raises what that
+   cluster delivers per tick, through the same number of haulers, against the
+   identical colony without it.
+4. With zero haulers assigned, every input-consuming building eventually stops,
+   and the Economy view states how many are idle for want of inputs and how
+   many units are short — separately from the output backlog it already names.
+5. Job selection is deterministic across both kinds: the same world state
+   produces the same claims across runs and across a save/load cycle.
+6. A v5 save loads as a v6 colony with empty input buffers, no storehouses, and
+   its stockpile intact at the camp — buildings exactly where increment 6 left
+   them, colonists exactly as old.
+7. Demolishing a storehouse holding goods leaves `colonyWealth` unchanged
+   across that tick and says where the goods went; demolishing a producer holding
+   goods loses them and says so.
+8. Moving or demolishing any building mid-trip, of either kind, resolves without
+   losing or duplicating a single unit of goods.
+9. The colony remains fully playable from the tables with no canvas:
+   storehouses constructible, input backlog visible, both buffers legible.
+10. `npm run check:all` is green with no baseline loosened, and every touched
+    file is under 500 nonblank lines.
+
+---
+
+## 4. Balance values
+
+**Starting points, not claims.** Per increment 5's thesis — a constant
+justified by prose rather than measurement is a guess — this table records
+where the increment starts, and **§4 is to be rewritten with what the harness
+measured before this increment is called done.** "Validated, unchanged" is a
+legitimate outcome for any row.
+
+| constant | start | reasoning to be checked |
+| --- | ---: | --- |
+| `inputBufferCap` | 12 | Mirrors `outputBufferCap`, so a building's in-tray and out-tray are the same size and a hauler's round trip is symmetric. At one input per batch this is 12 batches of runway — ~36 ticks for a mill, comfortably longer than the 13-tick worst-case one-way walk. |
+| `storehouseCapacity` | 60 | Five full output buffers, so one depot serves a cluster of four or five producers for several trips before it backs up. |
+| `minSupplyUnits` | 2 | Don't walk thirteen tiles to deliver one unit. Low enough that a small colony is not locked out of supply entirely, which a higher floor would do. |
+| `storehouse` cost | 20 wood, 10 planks | Between a forester (10 wood) and a mill (20 wood, 10 planks): a real decision in the early game, trivially affordable once the plank chain runs. |
+
+### 4.1 What the harness must answer
+
+Three questions, and the instruments that answer them. Both harnesses need
+extending; that extension is a task in the plan, not an afterthought.
+
+**1. What did two-way haul do to increment 5's measured gradient?**
+
+Increment 5 measured that one hauler serves a building out to leg ~4, two by
+leg 8, three by leg 13. Re-run that sweep, and add a second one for an
+input-consuming building (a sawmill fed by a forester). Two things must be
+read, not one:
+
+- the **raw producer's** gradient should be **unchanged**. It has no inputs,
+  nothing is ever delivered to it, and a shift there means this increment broke
+  something it did not intend to touch. This is the control, and it is the more
+  important of the two readings.
+- the **processor's** gradient is expected to be roughly halved in reach. If it
+  is not, find out why before believing it.
+
+**2. Does a storehouse pay for itself, and from what distance?**
+
+The same two-stage chain at a range of distances, with and without a depot
+beside it, at each hauler count. The answer wanted is a *crossover distance*:
+the leg beyond which 20 wood and 10 planks buys more throughput than another
+hauler does. If there is no such distance — if the depot never wins, or wins
+everywhere — the storehouse is mistuned and `storehouseCapacity` or the cost is
+where to look first.
+
+**3. Does supply-before-collect thrash, and is the deadlock self-resolving in
+practice?**
+
+§2.6 argues the deadlock away structurally. Measure it: run a colony with a
+deliberately drained ledger and every building wanting inputs, and confirm that
+collection resumes rather than the colony sitting still. Report the split of
+hauler-ticks between the two kinds over a long run, and how often a supply trip
+returns loaded — the round-trip mechanic in §2.5 is only worth its complexity
+if that number is not near zero.
+
+**A fourth reading, taken for free and worth having:** the population harness
+staffs but **cannot build** (increment 6 §4.1). Increment 6 flagged that as a
+conservative control; with a storehouse in the game it becomes a distortion,
+because a colony that cannot build a depot cannot play this increment. The
+harness extension should let a scenario place one, and the 12,000-tick chain
+run should be repeated with and without — if the retuned `birthFoodPerHead: 12`
+holds in both, that is a result worth recording beside increment 6's curve.

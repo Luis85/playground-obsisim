@@ -836,19 +836,48 @@ describe('balance-coupled states a save is repaired into, not rejected for', () 
       { ageTicks: bands.matureTicks + 40 },   // a lowered matureTicks
       { ageTicks: bands.retireTicks },        // sitting exactly ON a boundary at load
       { ageTicks: bands.matureTicks },
+      // The last two crossed INSIDE this session: restored one tick SHORT of a
+      // boundary, `ageEveryone` lands them exactly on it and the equality
+      // fires. They are here rather than in a test of their own because they
+      // are what makes the four above mean anything — every assertion on those
+      // four is a silence, and a silence passes just as happily against an
+      // `announceBandChanges` deleted outright. Announced and silent colonists
+      // in ONE world on ONE tick is the only arrangement that tells the two
+      // apart.
+      //
+      // They are also what rules out a save/load DOUBLE announcement. The pair
+      // sitting exactly ON a boundary is silent because `ageEveryone` carries
+      // it to `boundary + 1` before the phase runs — not because the phase is
+      // dead, which these two now prove — so a colonist announced on the tick
+      // it crossed, saved, and reloaded is not announced a second time.
+      //
+      // Homeless (`homeId: null`) so the four above keep the house's four beds
+      // and no over-capacity eviction runs: this fixture is about bands.
+      { ageTicks: bands.retireTicks - 1, homeId: null },
+      { ageTicks: bands.matureTicks - 1, homeId: null },
     ]);
     expect(isLoadableSave(save)).toBe(true); // accepted, then repaired — see above
     const world = await createColonyWorld(save);
     const seeded = world.getResource(SnapshotStore).latest!;
-    expect(seeded.colonists.map((c) => c.stage)).toEqual(['elder', 'adult', 'elder', 'adult']); // fixture precondition
+    // fixture precondition: the two crossers have NOT crossed yet at load
+    expect(seeded.colonists.map((c) => c.stage)).toEqual(['elder', 'adult', 'elder', 'adult', 'adult', 'child']);
+    expect(seeded.notices).toEqual([]); // and nothing is announced AT load, crossers included
 
     // Several ticks, not one: an inequality in place of the equality would
     // re-announce all four on EVERY tick, which a single step could not tell
-    // apart from a one-off announcement at load.
+    // apart from a one-off announcement at load — and would re-announce the
+    // two crossers every tick after their own, which is the same defect seen
+    // from the other side.
+    const perTick: string[][] = [];
     for (let i = 0; i < 3; i++) {
       await stepTick(world);
-      expect(world.getResource(SnapshotStore).latest!.notices).toEqual([]);
+      perTick.push(world.getResource(SnapshotStore).latest!.notices.map((n) => n.message));
     }
+    expect(perTick).toEqual([
+      ['Colonist #6 retired.', 'Colonist #7 came of age.'], // ids 6 and 7 — the crossers, and ONLY them
+      [],
+      [],
+    ]);
   });
 
   it('does not restore a colonist whose saved age has passed their OWN lifespan', async () => {

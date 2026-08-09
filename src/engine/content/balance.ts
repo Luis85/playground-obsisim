@@ -147,12 +147,12 @@ export function colonistEfficiency(hunger: number): number {
  * would report a work power the simulation never used.
  *
  * `placementFactor` defaults to 1 (no penalty) rather than requiring every
- * caller to pass it: Task 6 has exactly two callers that need anything other
- * than 1 (ProductionSystem and buildEntitySections, both applying
- * BALANCE.homelessFactor to a homeless worker), and a default keeps every
- * other computation — and every fixture that builds a worker with no notion
- * of housing — unaffected. Task 7 replaces the binary homeless/housed value
- * both of those callers pass with the full commute factor.
+ * caller to pass it: exactly two callers need anything other than 1
+ * (ProductionSystem and buildEntitySections), and a default keeps every other
+ * computation — and every fixture that builds a worker with no notion of
+ * housing — unaffected. Both of those callers now pass the full commute factor
+ * (`commuteFactor`, which collapses to BALANCE.homelessFactor for a worker with
+ * no home), not the binary housed/homeless value they started out passing.
  */
 export function workerWorkPower(efficiency: number, toolTicks: number, placementFactor = 1): number {
   return efficiency * (toolTicks > 0 ? BALANCE.toolMultiplier : 1) * placementFactor;

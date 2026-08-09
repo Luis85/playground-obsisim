@@ -138,9 +138,11 @@ function freeBeds(ctx: PopulationContext): Map<number, number> {
     if (shelter.relocating || ctx.pending.demolished.has(shelter.id)) continue;
     free.set(shelter.id, shelter.beds);
   }
-  // Arrivals hold reserved beds too, but nothing creates one until Task 8, so
-  // this loop is a no-op until then — written now because it belongs beside
-  // the exclusion above, and both halves clear together.
+  // Arrivals hold reserved beds too, and since Task 8 they genuinely occur: a
+  // nomad welcomed by CommandSystem earlier this same tick has already claimed
+  // a bed that no query can see yet. Counting them here is what stops `rehome`
+  // — running later in that same tick — from handing the same bed to somebody
+  // else. It belongs beside the exclusion above; both halves clear together.
   for (const { home } of ctx.pending.arrivals) {
     if (home.buildingId !== null) free.set(home.buildingId, (free.get(home.buildingId) ?? 0) - 1);
   }

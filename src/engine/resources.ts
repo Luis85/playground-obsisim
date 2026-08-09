@@ -288,9 +288,12 @@ export class RemovalLedger {
  * it was built on — resolving itself the tick after, but persisting
  * indefinitely if the game is paused right after building.
  *
- * `arrivals` is unused until Task 8 introduces births and nomads; it is
- * declared here so the three halves cannot drift apart, and so `clear()` has
- * one definition rather than growing a fourth field later.
+ * `arrivals` is the third of the same shape, and since Task 8 it carries real
+ * traffic: `spawnArrival` pushes every nomad and every newborn onto it, and
+ * `spareBeds`, `shelterWithRoom`, `freeBeds`, `reseatArrivalsOf` and both
+ * arrival gates (nomad and birth) read it. The three live together so they
+ * cannot drift apart, and so `clear()` has one definition rather than a fourth
+ * field added later.
  */
 export class PendingChanges {
   /**

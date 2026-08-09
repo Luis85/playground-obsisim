@@ -12,6 +12,7 @@ affects:
   - tests/engine/systems/population-system.test.ts
   - tests/app/game-store.test.ts
 type: Issue
+parent: "[[Houses and Beds Throttle Growth]]"
 order: 170
 started: ""
 finished: ""

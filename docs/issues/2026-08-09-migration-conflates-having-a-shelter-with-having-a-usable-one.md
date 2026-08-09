@@ -11,6 +11,7 @@ affects:
   - src/shared/save-migration.ts
   - tests/shared/save-migration.test.ts
 type: Issue
+parent: "[[Save v5 - Age, Home and Starvation Clock]]"
 order: 150
 started: ""
 finished: ""

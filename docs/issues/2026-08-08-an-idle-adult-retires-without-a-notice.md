@@ -11,6 +11,7 @@ affects:
   - src/engine/systems/population-handlers.ts
   - tests/engine/systems/population-system.test.ts
 type: Issue
+parent: "[[Colonist Lifecycle - Child, Adult, Elder, Death]]"
 order: 130
 started: ""
 finished: ""

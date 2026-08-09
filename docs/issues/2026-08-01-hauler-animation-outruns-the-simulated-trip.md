@@ -19,6 +19,7 @@ tags:
   - game-feel
   - needs-design
 type: Issue
+parent: "[[Haulers as a Staffed Role]]"
 order: 40
 started: ""
 finished: ""

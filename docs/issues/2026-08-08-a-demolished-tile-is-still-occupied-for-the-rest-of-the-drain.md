@@ -11,6 +11,7 @@ affects:
   - src/engine/systems/command-handlers.ts
   - tests/engine/systems/command-system.test.ts
 type: Issue
+parent: "[[Positions as Sim Truth - the Fixed Map and Save v2]]"
 order: 120
 started: ""
 finished: ""

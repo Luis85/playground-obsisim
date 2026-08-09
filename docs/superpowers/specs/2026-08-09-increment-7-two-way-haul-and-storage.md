@@ -249,6 +249,16 @@ every way of getting them wrong loses goods silently:
    next save with nothing reporting it. A save-time sentinel asserts the same
    invariant from the other end: every ledger site other than the camp names a
    building in the save.
+
+   **Restoration is the one caller exempt from this**, and the exemption is
+   narrow. A save can be taken while a *stocked* storehouse is mid-relocation,
+   and §2.3 keeps a store in transit out of the site list — so loading that
+   colony has contents to reconstruct and no `StoreSite` to bank them against.
+   The restore path therefore seeds a site directly rather than banking into
+   one (`seedSite`, §2.9). That is not a hole: seeding reconstructs a state the
+   engine itself previously wrote, records no delivery, and runs once per
+   building at load. What the invariant forbids is *play* creating a site with
+   no building — and it still does.
 - `toJSON()` returns the **camp's** contents, which is what makes the save
   migration in §2.9 a no-op for a v5 colony: a v5 stockpile *was* the camp.
   **`toJSON()` is therefore no longer sufficient to serialize the ledger** —

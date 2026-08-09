@@ -137,8 +137,13 @@ describe('PopulationView', () => {
     expect(wrapper.get('[data-test="commute-5"]').text()).toContain('#10');
     expect(wrapper.get('[data-test="commute-5"]').text()).toContain('100%');
 
+    // The discriminating case OBS-6-06 exists for: a homeless colonist and a
+    // colonist housed at commute-factor 1.0 (colonist 5 above) in the same
+    // table, so a label that prints a percentage for one and not the other
+    // fails. Derived from BALANCE, not the literal '50%', for the same reason
+    // the fixture above keys commuteFactor off BALANCE.homelessFactor.
     const homeless = wrapper.get('[data-test="commute-3"]');
-    expect(homeless.text()).toBe('Homeless');
+    expect(homeless.text()).toBe(`Homeless · ${(BALANCE.homelessFactor * 100).toFixed(0)}%`);
     expect(homeless.classes()).toContain('obsisim-warning');
   });
 

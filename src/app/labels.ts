@@ -58,19 +58,24 @@ export function ageLabel(ageTicks: number): string {
 }
 
 /**
- * "#9 · 12.0 tiles · 70%", or "Homeless" — the commute cost stated where the
- * player can act on it, since the only lever is moving one of the two
- * buildings. All three parts matter: the house id says WHICH building to move,
- * the distance says how far it currently is, and the percentage is the share of
- * this colonist's work the placement actually delivers.
+ * "#9 · 12.0 tiles · 70%" when housed, "Homeless · 50%" when not — the commute
+ * cost stated where the player can act on it, since the only lever is moving
+ * one of the two buildings (or building a house at all). The percentage is the
+ * share of this colonist's work the placement actually delivers, and it is the
+ * one part that must survive both branches: a homeless colonist pays the
+ * single largest commute penalty in the game, so dropping the number here
+ * would read as "not applicable" rather than "worst possible" (OBS-6-06) — the
+ * house id and the distance are the only parts that genuinely have nothing to
+ * say when there is no house.
  *
  * `homeId` is what decides the homeless wording, not a zero distance: a
  * colonist housed next door to their job also measures 0 tiles, and calling
  * that homelessness would invert the best case into the worst one.
  */
 export function commuteLabel(homeId: number | null, tiles: number, factor: number): string {
-  if (homeId === null) return 'Homeless';
-  return `#${homeId} · ${tiles.toFixed(1)} tiles · ${(factor * 100).toFixed(0)}%`;
+  const pct = `${(factor * 100).toFixed(0)}%`;
+  if (homeId === null) return `Homeless · ${pct}`;
+  return `#${homeId} · ${tiles.toFixed(1)} tiles · ${pct}`;
 }
 
 /**

@@ -29,12 +29,15 @@ import {
  * resource is in hand (the amount alone, `carrying`, is what the app and the
  * save both actually use).
  *
- * `commuteTiles`/`commuteFactor` are the exception, and the reason this is an
- * Omit rather than a bare extends: they need the HOME's tile and the
- * WORKPLACE's, which no single entity can supply, so buildEntitySections
- * computes them below where both are already in hand.
+ * `commuteTiles`/`commuteFactor`/`deliveredWorkPower` are the exception, and
+ * the reason this is an Omit rather than a bare extends: the first two need
+ * the HOME's tile and the WORKPLACE's, which no single entity can supply, and
+ * the third needs the second — it IS `workerWorkPower` applied to
+ * `commuteFactor` (OBS-6-06) — so buildEntitySections computes all three
+ * below, where home, workplace and the factor between them are already in
+ * hand.
  */
-export interface ColonistFacts extends Omit<ColonistSnapshot, 'commuteTiles' | 'commuteFactor'> {
+export interface ColonistFacts extends Omit<ColonistSnapshot, 'commuteTiles' | 'commuteFactor' | 'deliveredWorkPower'> {
   carryingResource: ResourceId | null;
 }
 
@@ -127,6 +130,20 @@ function workTileOf(c: ColonistFacts, tileById: ReadonlyMap<number, TileRef>): T
   return c.buildingId === null ? null : tileById.get(c.buildingId) ?? null;
 }
 
+/**
+ * The published ColonistSnapshot.deliveredWorkPower: null for anyone with no
+ * buildingId, `workerWorkPower` otherwise. `buildingId === null` is the exact
+ * guard the aggregation loop below already uses to decide who feeds
+ * `powerByBuilding`, and the one `sumWorkPower` (ProductionSystem) uses too —
+ * a hauler's `buildingId` is null by construction (JobAssignment never sets
+ * both), and their throughput is carried capacity, not work power (see
+ * `sumWorkPower`'s own doc comment), so null is correct for them, not merely
+ * unset.
+ */
+function deliveredWorkPowerOf(w: ColonistFacts, factor: number): number | null {
+  return w.buildingId === null ? null : workerWorkPower(w.efficiency, w.toolTicks, factor);
+}
+
 /** Pure aggregation shared by SnapshotSystem, the initial-snapshot seed, and the post-step refresh. */
 export function buildEntitySections(
   workers: readonly ColonistFacts[],
@@ -161,15 +178,22 @@ export function buildEntitySections(
   }
 
   const workerSnaps: ColonistSnapshot[] = workers
-    .map((w) => ({
-      id: w.id, hunger: w.hunger, starvingTicks: w.starvingTicks, efficiency: w.efficiency, buildingId: w.buildingId,
-      hauling: w.hauling, haulTargetId: w.haulTargetId, haulPhase: w.haulPhase, haulTicksLeft: w.haulTicksLeft,
-      haulLegTicks: w.haulLegTicks, haulPickupCol: w.haulPickupCol, haulPickupRow: w.haulPickupRow,
-      carrying: w.carrying, toolTicks: w.toolTicks, ageTicks: w.ageTicks, stage: w.stage, homeId: w.homeId,
-      // Null tiles are the homeless case: there is no distance to report, and
-      // the whole charge lands in the factor instead.
-      commuteTiles: tilesById.get(w.id) ?? 0, commuteFactor: factorOf(w.id),
-    }))
+    .map((w) => {
+      // Measured once per colonist, same principle as tilesById above: this
+      // one factor feeds both commuteFactor and deliveredWorkPower below, so
+      // the two published numbers can never independently drift apart.
+      const factor = factorOf(w.id);
+      return {
+        id: w.id, hunger: w.hunger, starvingTicks: w.starvingTicks, efficiency: w.efficiency, buildingId: w.buildingId,
+        hauling: w.hauling, haulTargetId: w.haulTargetId, haulPhase: w.haulPhase, haulTicksLeft: w.haulTicksLeft,
+        haulLegTicks: w.haulLegTicks, haulPickupCol: w.haulPickupCol, haulPickupRow: w.haulPickupRow,
+        carrying: w.carrying, toolTicks: w.toolTicks, ageTicks: w.ageTicks, stage: w.stage, homeId: w.homeId,
+        // Null tiles are the homeless case: there is no distance to report, and
+        // the whole charge lands in the factor instead.
+        commuteTiles: tilesById.get(w.id) ?? 0, commuteFactor: factor,
+        deliveredWorkPower: deliveredWorkPowerOf(w, factor),
+      };
+    })
     .sort((a, b) => a.id - b.id);
 
   // Occupancy read from who points at a house, never counted on the building

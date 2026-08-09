@@ -37,6 +37,8 @@ function worker(id: number, overrides: Partial<ColonistSnapshot> = {}): Colonist
     // The world renderer never reads the commute either — static zeros, same
     // reason as `homeless` and the empty stockpile cast below.
     commuteTiles: 0, commuteFactor: 1,
+    // Nor deliveredWorkPower — same reason.
+    deliveredWorkPower: null,
     ...overrides,
   };
 }

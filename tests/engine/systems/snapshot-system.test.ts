@@ -187,6 +187,18 @@ describe('SnapshotSystem', () => {
 
     // ...and the published workPower is that same 0.76, not a full-power 1.
     expect(snapshot.buildings.find((b) => b.id === workId)!.workPower).toBeCloseTo(0.76, 5);
+
+    // deliveredWorkPower (OBS-6-06): colonist 1 is the only worker at workId,
+    // fresh-spawned (efficiency 1, no tool), so their own published share IS
+    // the building's whole workPower — not a second, independently-drifting
+    // computation of the same 0.76.
+    expect(byId(1).deliveredWorkPower).toBeCloseTo(0.76, 5);
+    // Colonist 2 hauls — buildingId is null by construction — and colonist 3
+    // is idle. Neither is assigned to a building, so neither has a work-power
+    // share of one to report; a hauler's throughput is carried capacity
+    // (haulerCapacity, HaulSystem), a wholly different number.
+    expect(byId(2).deliveredWorkPower).toBeNull();
+    expect(byId(3).deliveredWorkPower).toBeNull();
   });
 
   it('reports a relocating building as relocating, with its remaining ticks', async () => {

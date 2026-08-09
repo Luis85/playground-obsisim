@@ -107,6 +107,26 @@ export interface ColonistSnapshot {
    * source of truth for a number the simulation has already spent.
    */
   commuteFactor: number;
+  /**
+   * This colonist's own share of `workerWorkPower(efficiency, toolTicks,
+   * commuteFactor)` — the exact expression `buildEntitySections` already sums
+   * into `BuildingSnapshot.workPower` for the building they're assigned to.
+   * Published per colonist rather than left for a view to recompute (that
+   * would be a third copy of an expression two engine call sites already
+   * share — see workerWorkPower's own doc comment), so the Population view
+   * can show the number that actually reflects hunger, a lapsed tool AND a
+   * bad commute together, not `efficiency` alone: a colonist can read 100%
+   * there while a commute cuts what they actually deliver in half (OBS-6-06).
+   *
+   * Null, not 0, when this colonist is not assigned to a building: an idle
+   * colonist and a hauler both have `buildingId === null`, and a hauler's
+   * throughput is carried capacity, not work power (`haulerCapacity`,
+   * HaulSystem charges their commute separately) — 0 would claim they
+   * deliver nothing, which is true for the idle case but wrong for the
+   * hauling one. Null reads the same as it does for `commuteTiles`: this
+   * number does not apply here, rather than having been measured at zero.
+   */
+  deliveredWorkPower: number | null;
 }
 
 export interface ResourceStats {

@@ -147,6 +147,45 @@ describe('PopulationView', () => {
     expect(homeless.classes()).toContain('obsisim-warning');
   });
 
+  // Efficiency is hunger alone; Delivered is the full efficiency x tool x
+  // commute product that actually lands in the building's workPower — OBS-6-06
+  // exists because only the first of those was ever shown per colonist. Four
+  // colonists so every branch renders: staffed-and-housed, staffed-and-homeless
+  // (the exact confusion the note names — 100% beside 0.50 on one row),
+  // idle, and hauling.
+  it('states each colonist\'s delivered work power beside their efficiency, and dashes when nobody is waiting on it', async () => {
+    const { wrapper } = mountPopulationView({
+      colonists: [
+        makeWorker(1, {
+          buildingId: 10, efficiency: 1, toolTicks: 0, homeId: 9, commuteTiles: 12, commuteFactor: 0.7, deliveredWorkPower: 0.7,
+        }),
+        makeWorker(2, {
+          buildingId: 10, efficiency: 1, toolTicks: 0, homeId: null, commuteTiles: 0,
+          commuteFactor: BALANCE.homelessFactor, deliveredWorkPower: BALANCE.homelessFactor,
+        }),
+        makeWorker(3, { buildingId: null, hauling: false, deliveredWorkPower: null }),
+        makeWorker(4, { buildingId: null, hauling: true, deliveredWorkPower: null }),
+      ],
+    });
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.get('[data-test="efficiency-1"]').text()).toBe('100%');
+    expect(wrapper.get('[data-test="delivered-1"]').text()).toBe('0.70');
+
+    // The exact confusion OBS-6-06 names, resolved by reading the two cells
+    // together: Efficiency alone still reads 100% for a homeless colonist — it
+    // is a hunger-only figure, unrelated to housing — but Delivered on the
+    // very same row states what the commute actually cut that down to.
+    expect(wrapper.get('[data-test="efficiency-2"]').text()).toBe('100%');
+    expect(wrapper.get('[data-test="delivered-2"]').text()).toBe('0.50');
+
+    // Nobody is waiting on either of these: an idle colonist contributes to no
+    // building, and a hauler's throughput is carried capacity, not work power
+    // — "—" states that plainly rather than a misleading "0.00".
+    expect(wrapper.get('[data-test="delivered-3"]').text()).toBe('—');
+    expect(wrapper.get('[data-test="delivered-4"]').text()).toBe('—');
+  });
+
   it('flags a starving colonist with a countdown, and leaves the others alone', async () => {
     const { wrapper } = mountPopulationView(ROSTER);
     await wrapper.vm.$nextTick();

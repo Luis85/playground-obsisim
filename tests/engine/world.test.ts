@@ -1334,9 +1334,13 @@ describe('live-world projections agree', () => {
   // `commuteTiles` and `commuteFactor` stay, for the FIRST reason: they are
   // recomputed every tick from two entities' live positions, exactly like
   // `efficiency` and `stage`, so there is nothing to persist.
+  // `deliveredWorkPower` (OBS-6-06) joined them for the same reason, one step
+  // removed: it IS `workerWorkPower(efficiency, toolTicks, commuteFactor)`, so
+  // anything that makes `efficiency` or `commuteFactor` unpersistable makes
+  // this one too — there is no independent state in it to save.
   const DERIVED = [
     'efficiency', 'stage', 'haulTargetId', 'haulPhase', 'haulTicksLeft', 'haulLegTicks', 'haulPickupCol', 'haulPickupRow',
-    'carrying', 'commuteTiles', 'commuteFactor',
+    'carrying', 'commuteTiles', 'commuteFactor', 'deliveredWorkPower',
   ] as const;
 
   function persisted(workers: readonly object[]): Record<string, unknown>[] {

@@ -305,6 +305,20 @@ export class RemovalLedger {
   drain(): Readonly<IEntity>[] {
     return this.pending.splice(0, this.pending.length);
   }
+
+  /**
+   * Put drained entries back, at the FRONT: they were queued before anything
+   * that reached the ledger since, so the front is where they belong.
+   *
+   * `drain` empties the ledger before `applyRemovals` starts detaching, which
+   * means a throw part-way through would otherwise lose the entry that failed
+   * AND every entry it never reached. This is how they survive. Same generic
+   * `world.getResource` lookup as `drain`, so the same blind spot.
+   */
+  // fallow-ignore-next-line unused-class-member
+  requeue(entities: readonly Readonly<IEntity>[]): void {
+    this.pending.unshift(...entities);
+  }
 }
 
 /**

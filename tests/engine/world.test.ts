@@ -1493,6 +1493,44 @@ describe('applyRemovals', () => {
 
     expect(() => applyRemovals(stubWorld)).toThrow(boom);
   });
+
+  it('keeps the failed removal and the ones after it on the ledger when a detachment throws', async () => {
+    // The re-throw arm above is the ONLY way out of applyRemovals other than
+    // returning, and `drain()` empties the ledger before the first detach — so
+    // a throw on entry two used to discard entry two AND entry three with it.
+    // GameEngine.runStep catches and pauses; start() clears the error and
+    // resumes; so those removals were gone permanently and nothing would ever
+    // try them again. The case is defensive — sim-ecs 0.6.4 deletes before it
+    // throws, so `hasEntity` is false and detach swallows it — which is why
+    // the failure has to be staged rather than provoked.
+    const world = await createColonyWorld();
+    const colonists = [...world.getEntities()].filter((e) => e.hasComponent(Colonist));
+    expect(colonists).toHaveLength(3); // fixture precondition: enough for a middle entry
+    for (const entity of colonists) world.getResource(RemovalLedger).remove(entity);
+
+    // The shape detach re-throws on, staged on the real world: removeEntity
+    // throws for ONE entity and leaves it in place. Every other entity goes
+    // through sim-ecs's own removeEntity, including its harmless post-delete
+    // throw, so the entries either side are removed for real.
+    const mutable = world as IRuntimeWorld & { removeEntity(entity: unknown): void };
+    const real = mutable.removeEntity.bind(world);
+    const boom = new Error('removal genuinely failed');
+    mutable.removeEntity = (entity: unknown) => {
+      if (entity === colonists[1]) throw boom;
+      real(entity);
+    };
+
+    expect(() => applyRemovals(world)).toThrow(boom);
+    expect(world.hasEntity(colonists[0])).toBe(false); // the one that got through, gone
+    expect(world.hasEntity(colonists[1])).toBe(true);  // the one that threw, still here
+    expect(world.hasEntity(colonists[2])).toBe(true);  // never even visited
+
+    // The assertion this test exists for: BOTH survivors are still queued, so
+    // the next tick finishes the job instead of leaving them alive forever.
+    mutable.removeEntity = real;
+    expect(applyRemovals(world)).toBe(2);
+    expect([...world.getEntities()].filter((e) => e.hasComponent(Colonist))).toHaveLength(0);
+  });
 });
 
 describe('buildColonyPrepWorld system order', () => {

@@ -417,10 +417,44 @@ function detach(world: IRuntimeWorld, entity: Readonly<IEntity>): void {
  * One removal per call, deliberately. Batching them through sim-ecs's command
  * queue is what froze the simulation for a tick per extra corpse — see
  * RemovalLedger.
+ *
+ * The re-queue below covers `detach`'s re-throw arm, which as far as anyone
+ * knows is UNREACHABLE against sim-ecs 0.6.4: its bug deletes the entity and
+ * only then throws, so `hasEntity` is false and the throw is swallowed. This
+ * is a defensive path made correct, not a live player-facing bug fixed. The
+ * arm exists to fire if a sim-ecs upgrade changes that — the thing OBS-6-02's
+ * note names as the item to re-check on upgrade — and on the day it does fire,
+ * losing the queue silently is the wrong way to find out.
  */
 export function applyRemovals(world: IRuntimeWorld): number {
-  const removed = world.getResource(RemovalLedger).drain();
-  for (const entity of removed) detach(world, entity);
+  const ledger = world.getResource(RemovalLedger);
+  const removed = ledger.drain();
+  for (let i = 0; i < removed.length; i++) {
+    try {
+      detach(world, removed[i]);
+    } catch (err) {
+      // `drain()` already emptied the ledger, so without this the entry that
+      // threw and every entry after it are gone for good — and the player can
+      // resume straight past the error, because GameEngine.start() clears it.
+      // A demolition whose command was already consumed would leave a
+      // refunded, cleared building standing with nothing left to remove it.
+      //
+      // This is an UNBOUNDED retry: an entry that fails permanently is
+      // re-attempted every tick, forever. It is tolerable only because
+      // `GameEngine.runStep` catches and PAUSES rather than continuing to
+      // tick, so "forever" costs one attempt per deliberate resume. That is a
+      // load-bearing assumption about a DIFFERENT file: if runStep ever keeps
+      // ticking through this, the retry becomes a per-tick throw.
+      //
+      // Bounding it was considered and rejected. Every bound ends in either
+      // dropping the entry — which is exactly the harm above, only silent — or
+      // throwing forever anyway, which is this without the chance to recover.
+      // The arm that reaches here exists for a sim-ecs change nobody has
+      // characterised, so a policy that discards state on it would be guessing.
+      ledger.requeue(removed.slice(i));
+      throw err;
+    }
+  }
   return removed.length;
 }
 

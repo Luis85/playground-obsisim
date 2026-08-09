@@ -853,13 +853,24 @@ it('demolishing a producer loses both its buffers, and says so', async () => {
   // expensive to bulldoze.
 });
 
-it('cancelling a supply trip refunds the load to the site it came from', async () => {
-  // FOUR cancellation paths, not three: demolition of the TARGET,
-  // unassignHauler, the "building gone" branch in the load handler, and
-  // standDown in population-handlers.ts — which lives in another system,
-  // runs BEFORE HaulSystem in the tick, and banks with stockpile.add() today.
-  // That was right while every carried load was collected output. refundAt for
-  // a supply load, addAt for a pickup, decided by `pickedUp`.
+it('a cancelled trip disposes of its load by whether a hauler is left to walk', async () => {
+  // FOUR paths, and they split TWO ways — grouping them was the defect here.
+  //
+  // Nobody left to walk it -> bank immediately (refundAt for a supply load,
+  // addAt for a pickup, decided by `pickedUp`):
+  //   - unassignHauler
+  //   - standDown in population-handlers.ts, which lives in another system,
+  //     runs BEFORE HaulSystem in the tick, and banks with stockpile.add()
+  //     today — right while every carried load was collected output.
+  //
+  // Hauler survives and can carry it -> start a RETURNING leg with the load:
+  //   - the target demolished under an outbound hauler
+  //   - the "building gone" branch on arrival
+  // Banking these teleports cargo out of a walking hauler's hands, which §2.4
+  // forbids, and understates haul time in the direction that flatters §4.
+  //
+  // Assert the TICKS for the surviving-hauler cases, not just the destination:
+  // an assertion that the goods arrived passes for a teleport.
 });
 
 it('a hauler who dies mid-supply-trip refunds rather than delivers', async () => {

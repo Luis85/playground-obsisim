@@ -561,7 +561,20 @@ than re-litigates:
   the hauler, arriving at a building that is already gone, and — the one that
   is easiest to miss because it lives in another system entirely —
   **`standDown` in `PopulationSystem`**, when a hauler retires, starves or
-  dies mid-trip. That last one runs *before* `HaulSystem` in the tick and banks
+  dies mid-trip.
+
+  **They split two ways, and the split is whether a hauler is left to walk.**
+  Banking the load immediately is right only for the paths where nobody
+  remains: `unassignHauler` and `standDown`, where the colonist stops being a
+  hauler or stops being alive. In the other two — the target demolished, or
+  found already gone on arrival — the hauler is still a hauler, still standing
+  somewhere on the map, and perfectly able to carry what it holds. Banking
+  there would teleport the cargo out of its hands from mid-route, which is the
+  thing §2.4 forbids and which understates haul time in exactly the direction
+  that flatters §4's measurements. A surviving hauler therefore starts a
+  `returning` leg carrying its load — to the load's source if it is an
+  undelivered remainder, to the nearest site with room if it is collected
+  output — and `pickedUp` already tells the two apart. That last one runs *before* `HaulSystem` in the tick and banks
   with `stockpile.add` today, which records a delivery. Correct while every
   carried load was collected output; wrong the moment a hauler can be carrying
   goods the colony already owned. All four route through `pickedUp` (§2.4):

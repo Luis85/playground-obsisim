@@ -374,7 +374,7 @@ export function refreshEntitySections(world: IRuntimeWorld): void {
   const store = world.getResource(SnapshotStore);
   if (store.latest === null) return;
   const { workers, buildings } = gatherEntityFacts(world);
-  const stock = world.getResource(Stockpile).toJSON() as Record<string, number>;
+  const stock = world.getResource(Stockpile).colonyStock() as Record<string, number>;
   store.latest = { ...store.latest, ...buildEntitySections(workers, buildings, stock) };
 }
 

@@ -1454,6 +1454,40 @@ describe('live-world projections agree', () => {
     expect(persisted(fromQueryPath)).toEqual(saved.map((w) => ({ ...w })));
   });
 
+  it('the walk path publishes colony-wide mealsPerHead, not the camp-only figure, on a refreshing tick', async () => {
+    // Exactly what two storehouses cost, so the camp is fully drained and can
+    // never itself hold food: a camp-only read has nothing to fall back on
+    // but 0, so a wrong read is caught on the VALUE, not merely a total that
+    // happens to differ from the right one.
+    const save = initialSave();
+    save.stockpile = { wood: 40, planks: 20 };
+    const engine = await GameEngine.create(save);
+
+    engine.dispatch({ type: 'constructBuilding', buildingDefId: 'storehouse' });
+    await engine.stepOnce(); // an entity-creating tick, but no food banked yet
+    const depot = engine.snapshot!.buildings.find((b) => b.defId === 'storehouse')!;
+
+    // Bank bread straight into the depot, bypassing HaulSystem for
+    // determinism: 33 units, weight 1, never touching the camp.
+    const world = (engine as unknown as { world: IRuntimeWorld }).world;
+    world.getResource(Stockpile).addAt(
+      { id: depot.id, col: depot.col, row: depot.row, capacity: BALANCE.storehouseCapacity }, 'bread', 33,
+    );
+
+    // A second entity-creating tick: it consumes an id, so GameEngine.runStep's
+    // post-step gate fires refreshEntitySections THIS tick, overwriting the
+    // mealsPerHead SnapshotSystem already published with buildEntitySections'
+    // own recomputation from the walk path — the seam this test pins.
+    engine.dispatch({ type: 'constructBuilding', buildingDefId: 'storehouse' });
+    await engine.stepOnce();
+
+    // Sanity: population is unchanged at the 3 founders, so the assertion
+    // below is on the stock read, not a denominator surprise.
+    expect(engine.snapshot!.population).toBe(3);
+    // 33 bread / 4 heads = 8.25 -- a camp-only read sees 0 bread and publishes 0.
+    expect(engine.snapshot!.mealsPerHead).toBeCloseTo(8.25);
+  });
+
   it('every non-derived worker fact is represented in the save record', async () => {
     const engine = await busyColony();
     const factKeys = Object.keys(engine.snapshot!.colonists[0])

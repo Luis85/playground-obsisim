@@ -859,6 +859,12 @@ The base model needed a pass at the top of every tick to re-resolve haulers whos
 
 Eleven separate mutations, each of which must redden exactly one test: drop the arrival-time staffing recheck (a fixture where the target's only worker is unassigned mid-leg, asserting the goods come home rather than sitting in an unstaffed mill); carry the *claimed* fetch amount instead of `takeAt`'s return value (the construction-during-fetch conservation fixture); drop the `amount` argument from `nearestSiteWithRoom` so it only skips full sites (the partial-room fixture); let `refundAt` ignore reservations (the cancellation-plus-return fixture); read the destination from `destSiteId`'s live tile rather than the frozen one (the relocated-mid-return fixture); drop the destination reservation (the two-haulers-one-depot fixture); drop the `sourceSiteId` claim (the three-haulers-one-job fixture); restrict supply sources to the site the hauler stands on (**all five** reachability fixtures — this is the base model creeping back, and it should be loud); drop the unload (`row.input.add`); drop the return-leg load; and force `pickedUp = true` unconditionally (the delivery-inflation test).
 
+- [ ] **Step 5b: Un-skip the integration chain test — this task is what unblocks it**
+
+Task 3 stopped inputs teleporting; nothing delivered them until now, so a multi-building chain could not run and `tests/engine/integration.test.ts` has a chain test sitting under `it.skip` with that justification. **The supply leg you just built is what makes it passable again.** Remove the skip and confirm it goes green on its own merits.
+
+If it does not pass, that is a finding about this task, not a reason to leave it skipped — a chain that still cannot run means supply dispatch is not reaching a real multi-stage colony, which is the whole point of the increment. Report it rather than re-skipping.
+
 - [ ] **Step 6: Gates and commit**
 
 ```bash

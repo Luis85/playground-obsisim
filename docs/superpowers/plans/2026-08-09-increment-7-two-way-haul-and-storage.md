@@ -52,15 +52,17 @@ into it or by merging the branch half-finished. Two things about it:
   expect(errors).toHaveLength(0);   // and the mutation makes this fail
   ```
 
-- **Confirm every mutation actually applied.** `sed` exits 0 when its pattern matches nothing, so a stale pattern leaves the file untouched and the test passes against the *unmutated* implementation. After each `sed`: `git diff --quiet <file> && echo "MUTATION DID NOT APPLY"`.
+- **Confirm every mutation actually applied.** `sed` exits 0 when its pattern matches nothing, so a stale pattern leaves the file untouched and the test passes against the *unmutated* implementation. Confirm by diffing against **the backup copy you just took**, not against HEAD: `diff -q /tmp/mut-backup <file> && echo "MUTATION DID NOT APPLY"`.
+
+  **Not `git diff --quiet <file>`**, which is what an earlier draft of this section said. That compares the file to **HEAD**, and a mutation check runs on *uncommitted* work — so when the mutation happens to restore the value HEAD already holds (reverting a fix back to the bug it fixed, which is the most natural mutation for a fix), the working tree matches HEAD, `git diff --quiet` succeeds, and the guard fires **"MUTATION DID NOT APPLY" on a mutation that applied perfectly**. Task 6's second fix wave hit exactly that false alarm. The backup copy is the state you actually want to detect a change from, and it is correct in both cases.
 - **Restore a mutation by copy, never by `git checkout <file>`.** Mutation checks run in the TDD gap between green and commit, so the file's real content is *uncommitted* — and `git checkout <file>` restores it from HEAD, silently destroying the entire implementation rather than just the mutation. Task 1 hit this and recovered only because it had a scratch copy. Use:
 
   ```bash
-  cp <file> /tmp/mut-backup            # before the sed
+  cp <file> /tmp/mut-backup                  # before the sed
   sed -i 's/…/…/' <file>
-  git diff --quiet <file> && echo "MUTATION DID NOT APPLY"
-  npx vitest run <focused test file>   # expect ONLY the named test red
-  cp /tmp/mut-backup <file>            # restore — NOT git checkout
+  diff -q /tmp/mut-backup <file> && echo "MUTATION DID NOT APPLY"   # vs the copy, NOT HEAD
+  npx vitest run <focused test file>         # expect ONLY the named test red
+  cp /tmp/mut-backup <file>                  # restore — NOT git checkout
   ```
 
   The same trap applies to `git stash` and `git restore`. If you have already committed the work, `git checkout` is safe again — but the copy is safe in both cases, so just use the copy.
@@ -215,7 +217,7 @@ export function nearestSiteWithRoom(
 ```bash
 cp src/shared/haul.ts /tmp/mut-haul     # MAKE the backup — the restore below needs it
 sed -i 's/heldAt(site.id) + amount > site.capacity/heldAt(site.id) >= site.capacity/' src/shared/haul.ts
-git diff --quiet src/shared/haul.ts && echo "MUTATION DID NOT APPLY"
+diff -q /tmp/mut-haul src/shared/haul.ts && echo "MUTATION DID NOT APPLY"
 npx vitest run tests/shared/haul.test.ts   # expect the exact-fit test red, and only it
 cp /tmp/mut-haul src/shared/haul.ts     # NOT git checkout — see Global Constraints
 ```
@@ -341,7 +343,7 @@ private readonly sites = new Map<number, Map<ResourceId, number>>();
 ```bash
 cp src/engine/stockpile.ts /tmp/mut-stockpile
 sed -i 's/\.sort((a, b) => a - b)/.sort((a, b) => b - a)/' src/engine/stockpile.ts
-git diff --quiet src/engine/stockpile.ts && echo "MUTATION DID NOT APPLY"
+diff -q /tmp/mut-stockpile src/engine/stockpile.ts && echo "MUTATION DID NOT APPLY"
 npx vitest run tests/engine/stockpile.test.ts   # expect ONLY the draw-order test red
 cp /tmp/mut-stockpile src/engine/stockpile.ts   # NOT git checkout: this file is UNTRACKED
 # at this point, so checkout cannot restore it and would leave the mutation in place.

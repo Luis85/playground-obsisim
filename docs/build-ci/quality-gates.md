@@ -15,16 +15,25 @@ day CI turns on.
 | LOC ratchet | `npm run check:loc` | `lint` | Any `src/**/*.{ts,vue}` file growing past 500 nonblank lines without a justified, shrink-only baseline entry |
 | CSS `!important` ratchet | `npm run check:css` | `lint` | New `!important` uses in `styles.css` without a justified, shrink-only baseline entry |
 | Quality ratchet | `npm run check:quality` | `quality` | Dead code, circular/re-export cycles, architecture boundary violations, clone groups, complexity hotspots — via `fallow` |
+| Test-project wiring | `npm run check:test-projects` | `lint` | A test file matched by no vitest project, an empty `balance` project, a `check:all` that stopped running balance, a CI balance job that is missing, conditional, or allowed to fail — see [test-projects.md](test-projects.md) |
 | Typecheck | `npm run typecheck` | `typecheck` | Type errors across `.ts` and `.vue` (via `vue-tsc`, which also type-checks `<script setup>` blocks `tsc` alone cannot see) |
-| Tests | `npm test` | `test` | Behavioral regressions across the engine, shared law, store, components, and the quality gate itself |
-| Coverage floors | `npm run test:coverage` | `coverage` | Undertested engine/shared/store code — hard statement/branch/function/line floors |
+| Tests (fast) | `npm test` | `test` | Behavioral regressions across the engine, shared law, store, components, and the quality gate itself — the `unit` project, ~14s |
+| Balance | `npm run test:balance` | `balance` | Long-horizon simulation regressions and permanently-zero sentinels (`frozenSteps`) — the `balance` project, ~2 min. OBS-6-04 |
+| Coverage floors | `npm run test:coverage` | `coverage` | Undertested engine/shared/store code — hard statement/branch/function/line floors. Unfiltered, so it covers both projects |
 | Build + artifact smoke | `npm run build && npm run check:artifacts` | `build` | Broken bundling, missing/empty/oversized plugin artifacts, `package.json`/`manifest.json` version desync, missing `minAppVersion` |
+| CI aggregator | — | `gate` | Any job that did not report `success` — including skipped and cancelled ones. **This is the check to require on the branch** |
 
 `npm run check:all` runs the local-equivalent chain in one pass: `lint` →
-`check:loc` → `check:css` → `check:quality` → `typecheck` → `test` → `build`
-→ `check:artifacts`. It deliberately excludes `test:coverage` — see
+`check:loc` → `check:css` → `check:quality` → `check:test-projects` →
+`typecheck` → `test` → `test:balance` → `build` → `check:artifacts`. It
+deliberately excludes `test:coverage` — see
 [The `coverage/` gotcha](#the-coverage-gotcha) below — so run
 `npm run test:coverage` as a separate, final step.
+
+It deliberately **includes** `test:balance`, which is most of its two-minute
+runtime. That is the OBS-6-04 decision and not an oversight: the fast suite no
+longer covers balance at all, so the pre-commit gate is the only thing that
+does when CI is not running. Do not trim it back.
 
 ## Lint severity policy
 

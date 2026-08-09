@@ -151,6 +151,11 @@ simulated production chains — in tables and, since Increment 2, a live
   increment that found them
 - Process: `docs/process/agent-workflow.md` — working agreements for
   agent-driven increments
+- Product backlog: `docs/requirements/` — Epics → Features → PBIs for
+  everything shipped so far, clustered by product area (economy, world &
+  placement, logistics, population, engineering quality) rather than by a
+  single catch-all epic; `docs/Product Backlog.base` is the Backlog plugin
+  view over it (and over `docs/issues/`)
 
 ## Architecture (one paragraph)
 

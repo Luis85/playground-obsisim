@@ -414,11 +414,17 @@ export function handleAssignHauler(ctx: CommandContext): void {
  * entity-iteration order — which could interrupt a loaded worker most of the way
  * home while an idle one stood at the camp (OBS-4-08).
  *
- * Cheapest trip to throw away first: an idle hauler wastes nothing, an outbound
- * one wastes only the walk out (it carries nothing yet), and a returning one
- * wastes the walk it has already done — so among those, take the one closest to
- * home, whose remaining walk is smallest. Ties break by the same
- * entity-iteration order as before, which keeps the choice deterministic.
+ * Cheapest trip to throw away first, ranked by PHASE: idle, then outbound, then
+ * returning — take the one closest to home among those, whose remaining walk is
+ * smallest. Ties break by the same entity-iteration order as before, which keeps
+ * the choice deterministic.
+ *
+ * The reasoning that ordering was built on ("an outbound hauler carries nothing
+ * yet") stopped being true with the supply leg: an outbound SUPPLY hauler is
+ * carrying inputs, and a `fetching` one is empty but is not in the ordering at
+ * all. Ranking on `trip.amount` — which is what carrying actually means — is
+ * spec §2.7 / Task 8 Step 3b, deliberately not changed here: release order is
+ * balance-visible, and a task that only had comments to fix should not move it.
  */
 export function cheapestHaulerToRelease(workers: WorkerRow[]): WorkerRow | undefined {
   const haulers = workers.filter(({ job }) => job.hauling);
@@ -439,9 +445,10 @@ export function handleUnassignHauler(ctx: CommandContext): void {
     return;
   }
   hauler.job.hauling = false;
-  // Anything already in hand goes to the store: those goods left the building
-  // and must land somewhere. Only a returning hauler carries — an outbound one
-  // is empty — so this is exactly the mid-return case.
+  // Anything already in hand goes to the store: those goods left their site and
+  // must land somewhere. NOT the mid-return case alone since the supply leg —
+  // an outbound hauler can be carrying inputs it fetched from a store — which is
+  // why this is guarded on `amount` rather than on the phase.
   if (hauler.trip.resource !== null && hauler.trip.amount > 0) {
     ctx.stockpile.add(hauler.trip.resource, hauler.trip.amount);
   }

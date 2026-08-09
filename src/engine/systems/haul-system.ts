@@ -8,7 +8,7 @@ import { BUILDINGS } from '../content/buildings';
 import { RESOURCE_IDS } from '../content/resources';
 import { Building, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Relocation } from '../components';
 import { PendingChanges, Stockpile } from '../resources';
-import type { BuildingRow, Claims, DispatchInputs, WorkerRow } from './haul-dispatch';
+import type { BuildingRow, Claims, DispatchInputs, StaffedSet, WorkerRow } from './haul-dispatch';
 import { chooseJob, claimsOf, startLeg } from './haul-dispatch';
 import { storeSitesOf, type StoreSiteRow } from './haul-sites';
 
@@ -77,7 +77,7 @@ interface TickContext {
   byId: ReadonlyMap<number, BuildingRow>;
   sites: readonly StoreSite[];
   siteById: ReadonlyMap<number, StoreSite>;
-  staffed: ReadonlySet<number | null>;
+  staffed: StaffedSet;
   claims: Claims;
 }
 
@@ -296,15 +296,19 @@ export const HaulSystem = () => createSystem({
     const sites = storeSitesOf(storeRowsOf(buildingRows), pending);
     const capacityOf = (row: WorkerRow) => haulerCapacity(homeTileOf(row.home.buildingId, byId, pending));
     const claims = claimsOf(workerRows, stockpile, capacityOf);
+    // ONE derivation, read by the dispatch filter and by the arrival recheck.
+    // They are the same rule seen from two ends of a leg, so a second copy of
+    // this expression is how the recheck stops matching what it rechecks.
+    const staffed: StaffedSet = new Set(workerRows.map((row) => row.job.buildingId));
     const ctx: TickContext = {
       stockpile,
       byId,
       sites,
       siteById: new Map(sites.map((site) => [site.id, site])),
-      staffed: new Set(workerRows.map((row) => row.job.buildingId)),
+      staffed,
       claims,
     };
-    const inputs: DispatchInputs = { buildings: buildingRows, sites, workers: workerRows, claims };
+    const inputs: DispatchInputs = { buildings: buildingRows, sites, staffed, claims };
 
     for (const row of workerRows) {
       if (!row.job.hauling) continue;

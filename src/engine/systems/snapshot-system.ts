@@ -40,9 +40,12 @@ export const SnapshotSystem = () => createSystem({
       buildingFacts.push(buildingFactsOf(building, slots, production, position, buffer, relocation));
     }
 
+    // colonyStock, not toJSON: mealsPerHead answers "how long can the colony
+    // eat", and it eats out of every site — reading the camp alone underreports
+    // by whatever the storehouses hold.
     const {
       colonists: workerSnaps, buildings: buildingSnaps, population, idleAdults, homeless, beds, demographics, mealsPerHead,
-    } = buildEntitySections(workerFacts, buildingFacts, stockpile.toJSON());
+    } = buildEntitySections(workerFacts, buildingFacts, stockpile.colonyStock());
 
     const stockpileStats = {} as Record<ResourceId, ResourceStats>;
     let colonyWealth = 0;

@@ -127,6 +127,21 @@ describe('Stockpile — multi-site (increment 7)', () => {
     expect(s.siteJSON(7)).toEqual({ wood: 15 });
   });
 
+  it('colonyStock sums every site, where toJSON reports the camp alone', () => {
+    // The pair, in one case, because the whole point is that they DIFFER: the
+    // save format is camp-shaped, and anything asking what the colony can
+    // afford has to read the other one. Two resources and two sites, with no
+    // figure repeated, so neither projection can be mistaken for the other.
+    const s = new Stockpile({ wood: 10, bread: 3 });
+    s.refundAt(depot(60), 'wood', 15);
+    s.refundAt(depot(60, 8), 'bread', 24);
+    expect(s.toJSON()).toEqual({ wood: 10, bread: 3 });
+    expect(s.colonyStock()).toEqual({ wood: 25, bread: 27 });
+    // ...and it agrees with `get`, which is what `pay` and `take` spend from.
+    expect(s.colonyStock().wood).toBe(s.get('wood'));
+    expect(s.colonyStock().bread).toBe(s.get('bread'));
+  });
+
   it('refundAt does not count as a delivery', () => {
     const s = new Stockpile();
     s.refundAt(depot(60), 'wood', 5);

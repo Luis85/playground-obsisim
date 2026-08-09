@@ -127,6 +127,9 @@ const legTicks = (from: TileRef, to: TileRef) => haulTicksBetween(from, to, BALA
 const MILL = { col: 12, row: 8 };
 const DEPOT = { col: 20, row: 10 };
 const BESIDE_DEPOT = { col: 21, row: 10 };
+/** A depot two tiles from the mill and eleven from the camp — the tile that
+ * makes "back to the source" and "to the nearest site" different answers. */
+const BESIDE_MILL = { col: 14, row: 9 };
 
 describe('where a hauler starts', () => {
   // Every other number on HaulTrip defaults to zero, so this one field is the
@@ -237,6 +240,118 @@ describe('the supply leg', () => {
     await step(legTicks(MILL, CAMP_TILE));
     expect(stockpile.get('wheat')).toBe(16);
     expect(colonyTotal(world, 'wheat')).toBe(28);
+  });
+
+  it('a remainder walks back to the site it came from, past a nearer depot standing open', async () => {
+    // §2.5 step 4's rule, and the ONLY fixture that can see it: every other
+    // remainder case gives the colony a single site, where "back to your
+    // source" and "to the nearest site" are the same answer. Here the camp is
+    // the source and eleven ticks away, while an empty depot stands two ticks
+    // from the mill — so routing onward would turn camp wheat into depot stock
+    // without it ever being consumed, the store-to-store transfer §2.13
+    // excludes.
+    const { world, buildings, haulers, step, stockpile } = await setup([
+      { defId: 'mill', ...MILL, inputBuffer: { wheat: 8 }, crew: 1 },
+      { defId: 'storehouse', ...BESIDE_MILL },
+    ], 1, { camp: { wheat: 20 } });
+    const [mill, depot] = buildings;
+    // The two answers really are tellable apart, and by a wide margin.
+    expect(legTicks(MILL, BESIDE_MILL)).toBeLessThan(legTicks(MILL, CAMP_TILE));
+    expect(colonyTotal(world, 'wheat')).toBe(28);
+
+    await step(1);
+    // Sourced at the CAMP, not at the empty depot beside it: that is what makes
+    // the walk home the long one.
+    expect(tripOf(haulers[0])).toMatchObject({ phase: 'fetching', sourceSiteId: CAMP_SITE_ID, plannedAmount: 4 });
+    await step(legTicks(CAMP_TILE, CAMP_TILE));
+    expect(tripOf(haulers[0]).amount).toBe(4);
+
+    // Another hauler fills the in-tray behind this one's back, so the whole
+    // load comes back undelivered.
+    stockpile.takeAt(CAMP_SITE_ID, 'wheat', 4);
+    inputOf(mill).add('wheat', 4);
+
+    await step(legTicks(CAMP_TILE, MILL));
+    expect(tripOf(haulers[0])).toMatchObject({
+      phase: 'returning', resource: 'wheat', amount: 4, pickedUp: false,
+      destSiteId: CAMP_SITE_ID, legTicks: legTicks(MILL, CAMP_TILE),
+      legToCol: CAMP_TILE.col, legToRow: CAMP_TILE.row,
+    });
+
+    await step(legTicks(MILL, CAMP_TILE));
+    expect(stockpile.getAt(CAMP_SITE_ID, 'wheat')).toBe(16);
+    expect(stockpile.totalAt(idOf(depot))).toBe(0); // the depot never sees it
+    expect(colonyTotal(world, 'wheat')).toBe(28);
+  });
+
+  it('a remainder whose own source has filled up falls back to the nearest site with room', async () => {
+    // The other half of the rule above: the source is preferred, not forced.
+    // The depot the load came out of is packed to its last unit by the time the
+    // hauler turns round, so the remainder has to walk the eleven ticks to the
+    // camp rather than be shoved into a store with no room for it.
+    const { world, buildings, haulers, step, stockpile } = await setup([
+      { defId: 'storehouse', ...DEPOT, stored: { wheat: 12 } },
+      { defId: 'mill', ...BESIDE_DEPOT, inputBuffer: { wheat: 8 }, crew: 1 },
+    ], 1);
+    const [depot, mill] = buildings;
+    const depotId = idOf(depot);
+    expect(colonyTotal(world, 'wheat')).toBe(20);
+
+    await step(1);
+    expect(tripOf(haulers[0])).toMatchObject({ phase: 'fetching', sourceSiteId: depotId, plannedAmount: 4 });
+    await step(legTicks(CAMP_TILE, DEPOT));
+    expect(tripOf(haulers[0]).amount).toBe(4);
+
+    // Behind the hauler's back: the in-tray fills, and the depot is packed to
+    // exactly its capacity with something else.
+    stockpile.takeAt(depotId, 'wheat', 4);
+    inputOf(mill).add('wheat', 4);
+    stockpile.refundAt(siteOf(depot), 'planks', 56);
+    expect(stockpile.totalAt(depotId)).toBe(BALANCE.storehouseCapacity);
+
+    await step(legTicks(DEPOT, BESIDE_DEPOT));
+    expect(tripOf(haulers[0])).toMatchObject({
+      phase: 'returning', resource: 'wheat', amount: 4, pickedUp: false,
+      destSiteId: CAMP_SITE_ID, legTicks: legTicks(BESIDE_DEPOT, CAMP_TILE),
+    });
+    // The full source and the camp are a whole map apart, so this leg cannot be
+    // mistaken for the one-tick hop back to the depot underfoot.
+    expect(legTicks(BESIDE_DEPOT, DEPOT)).toBeLessThan(legTicks(BESIDE_DEPOT, CAMP_TILE));
+
+    await step(legTicks(BESIDE_DEPOT, CAMP_TILE));
+    expect(stockpile.getAt(CAMP_SITE_ID, 'wheat')).toBe(4);
+    expect(stockpile.totalAt(depotId)).toBe(BALANCE.storehouseCapacity); // still exactly full
+    expect(colonyTotal(world, 'wheat')).toBe(20);
+  });
+
+  it('demolishing the target under a LOADED outbound hauler destroys none of the load', async () => {
+    // The demolition guard (`&& trip.amount === 0`) and the branch it enables,
+    // together. Before the supply leg an outbound hauler was always empty, so
+    // cancelling it on the demolish tick cost nothing; now it can be carrying
+    // inputs it drew out of a store, and cancelling deletes them.
+    const { world, buildings, haulers, step, stockpile } = await setup(
+      [{ defId: 'mill', ...MILL, crew: 1 }], 1, { systems: [CommandSystem, HaulSystem], camp: { wheat: 20 } },
+    );
+    expect(colonyTotal(world, 'wheat')).toBe(20);
+    await step(1 + legTicks(CAMP_TILE, CAMP_TILE));
+    expect(tripOf(haulers[0])).toMatchObject({ phase: 'outbound', amount: 6, pickedUp: false });
+    expect(stockpile.get('wheat')).toBe(14); // out of the ledger, in a pair of hands
+
+    enqueue(world, { type: 'demolishBuilding', buildingId: idOf(buildings[0]) });
+    await step(1);
+    expect(world.hasEntity(buildings[0])).toBe(false); // the target really did go
+    expect(tripOf(haulers[0])).toMatchObject({ phase: 'outbound', amount: 6 });
+    // THE assertion, and it is colony-wide rather than on the trip: a cancel
+    // here reads amount 0 on a field the handler just cleared, and 14 here.
+    expect(colonyTotal(world, 'wheat')).toBe(20);
+
+    await step(legTicks(CAMP_TILE, MILL) - 1); // walks on to a tile with nothing on it
+    expect(tripOf(haulers[0])).toMatchObject({ phase: 'returning', amount: 6, destSiteId: CAMP_SITE_ID });
+    expect(colonyTotal(world, 'wheat')).toBe(20);
+
+    await step(legTicks(MILL, CAMP_TILE)); // and carries it home rather than teleporting it
+    expect(stockpile.get('wheat')).toBe(20);
+    expect(colonyTotal(world, 'wheat')).toBe(20);
   });
 
   it('a returning supply remainder is not counted as a delivery', async () => {
@@ -476,7 +591,12 @@ describe('reservations', () => {
   it('a returning hauler re-resolving a moved depot does not count its own reservation', async () => {
     // 54 of 60 again: the depot fits this load only if the trip's own
     // reservation is excluded from the lookup.
-    const moved = { col: 20, row: 12 };
+    //
+    // The depot moves EIGHT tiles, not two: the first leg
+    // (BESIDE_DEPOT -> DEPOT) is one tick, so a two-tile move makes the second
+    // leg one tick as well and the assertion below cannot tell a leg that was
+    // freshly resolved from one that was simply left alone.
+    const moved = { col: 20, row: 2 };
     const { buildings, haulers, step } = await setup(
       [{ defId: 'storehouse', ...DEPOT, stored: { wheat: 54 } }, { defId: 'forester', ...BESIDE_DEPOT, buffer: { wood: 6 } }], 1,
     );
@@ -487,13 +607,17 @@ describe('reservations', () => {
     buildings[0].getComponent(Position)!.row = moved.row; // the depot is somewhere else now
     await step(legTicks(BESIDE_DEPOT, DEPOT));
     expect(tripOf(haulers[0])).toMatchObject({ phase: 'returning', destSiteId: depotId, legTicks: legTicks(DEPOT, moved) });
+    // ...and that really is a NEW leg, not the old one left running.
+    expect(legTicks(DEPOT, moved)).not.toBe(legTicks(BESIDE_DEPOT, DEPOT));
   });
 
   it('a depot that moves mid-return is walked to, not banked into from where the hauler stands', async () => {
     // Roomy on purpose (10 of 60), so the only thing under test is whether the
     // arrival is decided by the frozen TILE or by the site id: a storehouse
-    // that relocates keeps its id and changes its tile.
-    const moved = { col: 20, row: 12 };
+    // that relocates keeps its id and changes its tile. Six tiles, so the
+    // second leg (3 ticks) is a different number from the first (1) — a
+    // one-tick move would leave `ticksLeft` unable to tell them apart.
+    const moved = { col: 20, row: 4 };
     const { world, buildings, haulers, step, stockpile } = await setup(
       [{ defId: 'storehouse', ...DEPOT, stored: { wheat: 10 } }, { defId: 'forester', ...BESIDE_DEPOT, buffer: { wood: 6 } }], 1,
     );
@@ -507,6 +631,7 @@ describe('reservations', () => {
     expect(tripOf(haulers[0])).toMatchObject({
       phase: 'returning', amount: 6, ticksLeft: legTicks(DEPOT, moved), legToCol: moved.col, legToRow: moved.row,
     });
+    expect(legTicks(DEPOT, moved)).not.toBe(legTicks(BESIDE_DEPOT, DEPOT)); // a fresh leg, not the old one
     expect(stockpile.getAt(depotId, 'wood')).toBe(0);
 
     await step(legTicks(DEPOT, moved));

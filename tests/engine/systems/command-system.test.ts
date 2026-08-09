@@ -192,6 +192,49 @@ describe('CommandSystem', () => {
     expect(snapshot().population).toBe(3);
   });
 
+  /**
+   * The nomad fixture with its food SPLIT between the camp and a storehouse —
+   * the only shape that can tell a colony-wide food gate from a camp-only one.
+   * A fixture holding all its bread at the camp passes either way, and one
+   * holding it all in a depot fails on a total rather than on where it sits.
+   */
+  async function nomadWithSplitFood(campBread: number, depotBread: number) {
+    const base = saveThatCanHouseArrivals();
+    const depot = { id: 92, col: 9, row: 3 };
+    const save: SaveGameV5 = {
+      ...base,
+      buildings: [...base.buildings, {
+        ...depot, defId: 'storehouse', progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0,
+      }],
+      stockpile: { bread: campBread },
+    };
+    const fixture = await setup(save);
+    fixture.world.getResource(Stockpile)
+      .refundAt({ ...depot, capacity: BALANCE.storehouseCapacity }, 'bread', depotBread);
+    return fixture;
+  }
+
+  it('welcomes a nomad on food the camp alone could not feed them with', async () => {
+    // 3 founders, so the gate needs 20 meals x 4 heads = 80. The camp holds 40
+    // and the storehouse 44: neither figure clears the bar, their sum does, and
+    // the meals really are spendable — `pay` draws across every site.
+    const { tick, dispatch, snapshot } = await nomadWithSplitFood(40, 44);
+    await dispatch({ type: 'recruitWorker' });
+    expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Colonist #100 joined the colony.' }]);
+    await tick(); // the arrival is synced into the queries a tick later
+    expect(snapshot().population).toBe(4);
+  });
+
+  it('refuses that same nomad when the depot half of the food is not there', async () => {
+    // The discriminating half: identical colony, identical camp stock, only the
+    // storehouse emptied. Without it the case above passes for a colony that is
+    // simply well fed.
+    const { dispatch, snapshot } = await nomadWithSplitFood(40, 0);
+    await dispatch({ type: 'recruitWorker' });
+    expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'Not enough food stored to feed another colonist.' }]);
+    expect(snapshot().population).toBe(3);
+  });
+
   it('re-seats a nomad in the other house when the one it landed in moves in the same drain', async () => {
     // The relocation twin of the demolition case. recruitWorker seats the
     // nomad in house 90 (lowest id with room), then moveBuilding starts 90

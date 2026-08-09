@@ -115,7 +115,10 @@ export const CommandSystem = () => createSystem({
       // Derives freeBeds through the SAME helper tryBirth uses, so the two
       // arrival paths cannot disagree about how many beds are spare.
       nomadGate: () => ({
-        stock: stockpile.toJSON(),
+        // colonyStock, not toJSON: a nomad's meals are paid through `pay`,
+        // which draws across every site, so food in a storehouse is food this
+        // gate must count. toJSON is the camp alone (the save's shape).
+        stock: stockpile.colonyStock(),
         weights: MEAL_WEIGHTS,
         population: ctx.workers.length + pending.arrivals.length,
         freeBeds: spareBeds(ctx.shelters(), ctx.workers.length, pending),

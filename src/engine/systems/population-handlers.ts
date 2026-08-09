@@ -381,7 +381,9 @@ export function tryBirth(ctx: PopulationContext): void {
   // A nomad welcomed earlier this tick holds a bed and eats, but is not in
   // `rows` yet — count them, or both arrivals take the same last bed.
   const blocker = birthBlocker({
-    stock: ctx.stockpile.toJSON(),
+    // colonyStock, not toJSON: the child's meals are drawn across every site,
+    // so a depot full of bread has to count here too (see Stockpile).
+    stock: ctx.stockpile.colonyStock(),
     weights: MEAL_WEIGHTS,
     population: rows.length + ctx.pending.arrivals.length,
     // Arrivals count on BOTH sides, or the gate charges for a mouth it will

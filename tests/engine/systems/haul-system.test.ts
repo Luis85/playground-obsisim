@@ -157,11 +157,49 @@ describe('HaulSystem', () => {
 
     await step(3); // delivered
     expect(stockpile.get('wood')).toBe(BALANCE.haulCarryCapacity);
+    // No atCol/atRow here: this trip ends AT the camp, which is also the field's
+    // constructor default, so an assertion on it could not tell "stood where the
+    // leg ended" from "never moved". Where a finished leg leaves a hauler is
+    // pinned by the depot cases in haul-dispatch.test.ts, and where an
+    // interrupted one leaves them by the release case below.
     expect(tripOf(haulers[0])).toMatchObject({
       phase: 'idle', legTicks: 0, legFromCol: 0, legFromRow: 0, legToCol: 0, legToRow: 0,
-      // ...and the hauler is standing where the leg ended, not back at a default.
-      atCol: CAMP_TILE.col, atRow: CAMP_TILE.row,
     });
+  });
+
+  it('a hauler released part-way along a leg stops where it had actually walked', async () => {
+    // The interpolation in `cancel()`, at the only place it can be SEEN: every
+    // other cancellation in the suite fires with the leg fully walked, where
+    // legProgress is 1 and "interpolate" and "snap to the destination" agree.
+    //
+    // (23,15) is the map's far corner — 13 ticks from the camp at (2,0) — and
+    // the release lands with 9 of those ticks left, so the hauler is 4/13 of
+    // the way along. That fraction is not a whole tile, not either endpoint,
+    // and not any other number in this fixture.
+    const { world, haulers, step } = await setup([{ col: 23, row: 15, wood: 9 }], 1, [CommandSystem]);
+    await step(1);
+    expect(tripOf(haulers[0])).toMatchObject({
+      phase: 'outbound', ticksLeft: 13, legTicks: 13,
+      legFromCol: CAMP_TILE.col, legFromRow: CAMP_TILE.row, legToCol: 23, legToRow: 15,
+    });
+
+    await step(4); // four ticks of walking, nine still to go
+    expect(tripOf(haulers[0]).ticksLeft).toBe(9);
+    enqueue(world, { type: 'unassignHauler' });
+    await step(1); // CommandSystem runs first, so the release sees ticksLeft 9
+
+    const trip = tripOf(haulers[0]);
+    const travelled = 4 / 13;
+    expect(trip.phase).toBe('idle');
+    expect(trip.atCol).toBeCloseTo(CAMP_TILE.col + (23 - CAMP_TILE.col) * travelled, 10);
+    expect(trip.atRow).toBeCloseTo(CAMP_TILE.row + (15 - CAMP_TILE.row) * travelled, 10);
+    // Strictly BETWEEN the two endpoints, stated on its own: pinning the value
+    // alone would still pass if the fixture ever made the midpoint coincide
+    // with one of them.
+    expect(trip.atCol).toBeGreaterThan(CAMP_TILE.col);
+    expect(trip.atCol).toBeLessThan(23);
+    expect(trip.atRow).toBeGreaterThan(CAMP_TILE.row);
+    expect(trip.atRow).toBeLessThan(15);
   });
 
   it('charges a tick each way even beside the camp — no trip is free', async () => {

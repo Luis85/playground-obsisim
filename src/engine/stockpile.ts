@@ -240,6 +240,27 @@ export class Stockpile {
     return this.siteJSON(CAMP_SITE_ID);
   }
 
+  /**
+   * Every site summed, in the same shape `toJSON` returns — what a caller
+   * asking "what does the colony hold?" needs, as opposed to "what does the
+   * save format record?".
+   *
+   * The two are NOT interchangeable, and the food gates are why this exists:
+   * meals are paid through `pay`/`take`, which draw across every site, so
+   * food banked in a storehouse is spendable. A gate reading `toJSON` sees the
+   * camp alone and refuses a birth or a nomad over food the colony can
+   * actually feed them with — invisible only because a hauler put it in a
+   * depot. Anything deciding what the colony can AFFORD reads this; only the
+   * save reads `toJSON`.
+   */
+  colonyStock(): Partial<Record<ResourceId, number>> {
+    const totals: Partial<Record<ResourceId, number>> = {};
+    for (const site of this.sites.values()) {
+      for (const [id, amount] of site) totals[id] = (totals[id] ?? 0) + amount;
+    }
+    return totals;
+  }
+
   /** Draws `amount` across sites in `drawOrder`, camp first: the shared tail
    * of `pay` and `take`, called only once the caller has confirmed the whole
    * colony (not any one site) can afford it. */

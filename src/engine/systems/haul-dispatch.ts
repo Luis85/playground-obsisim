@@ -23,6 +23,18 @@ export interface BuildingRow {
 export interface WorkerRow { job: JobAssignment; trip: HaulTrip; home: Home; }
 
 /**
+ * Which buildings have at least one colonist assigned — the workplace ids of
+ * the whole roster, `null` included and harmlessly ignored.
+ *
+ * Derived ONCE per tick and passed to both readers, because they must agree:
+ * the dispatch filter below decides that an unstaffed building is not a supply
+ * target, and `HaulSystem`'s arrival recheck decides that an unstaffed target
+ * is not unloaded into. Two verbatim copies of the same expression is exactly
+ * how a recheck silently stops matching the filter it is rechecking.
+ */
+export type StaffedSet = ReadonlySet<number | null>;
+
+/**
  * The four claims §2.6 requires, each derived from LIVE components on every
  * call rather than snapshotted at the top of the tick. That is what makes
  * dispatch a pure function of world state — and it is also what makes a trip
@@ -141,10 +153,9 @@ function worthMoving(movable: number, held: number): boolean {
  * use it.
  */
 function supplyCandidates(
-  buildings: readonly BuildingRow[], sites: readonly StoreSite[], workers: readonly WorkerRow[],
+  buildings: readonly BuildingRow[], sites: readonly StoreSite[], staffed: StaffedSet,
   claims: Claims, capacity: number,
 ): SupplyCandidate[] {
-  const staffed = new Set(workers.map((row) => row.job.buildingId));
   const candidates: SupplyCandidate[] = [];
   for (const row of buildings) {
     if (!staffed.has(row.building.id)) continue;
@@ -208,7 +219,7 @@ function beginCollect(trip: HaulTrip, at: TileRef, target: HaulCandidate): void 
 export interface DispatchInputs {
   buildings: readonly BuildingRow[];
   sites: readonly StoreSite[];
-  workers: readonly WorkerRow[];
+  staffed: StaffedSet;
   claims: Claims;
 }
 
@@ -229,8 +240,8 @@ export interface DispatchInputs {
  * walking to it.
  */
 export function chooseJob(trip: HaulTrip, at: TileRef, inputs: DispatchInputs, capacity: number): void {
-  const { buildings, sites, workers, claims } = inputs;
-  const supply = nextSupplyTarget(supplyCandidates(buildings, sites, workers, claims, capacity), at);
+  const { buildings, sites, staffed, claims } = inputs;
+  const supply = nextSupplyTarget(supplyCandidates(buildings, sites, staffed, claims, capacity), at);
   if (supply !== null) {
     beginSupply(trip, at, supply);
     return;

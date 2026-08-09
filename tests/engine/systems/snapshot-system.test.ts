@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Building, OutputBuffer, Production } from '../../../src/engine/components';
-import { IdCounter, NoticeBoard, SnapshotStore } from '../../../src/engine/resources';
+import { IdCounter, NoticeBoard, SnapshotStore, Stockpile } from '../../../src/engine/resources';
 import { HaulSystem } from '../../../src/engine/systems/haul-system';
 import { ProductionSystem } from '../../../src/engine/systems/production-system';
 import { SnapshotSystem } from '../../../src/engine/systems/snapshot-system';
@@ -46,6 +46,37 @@ describe('SnapshotSystem', () => {
 
     expect(snapshot.colonists.map((w) => w.buildingId)).toEqual([buildingId, null]);
     expect(snapshot.colonists[0].toolTicks).toBe(10);
+  });
+
+  it('counts food standing in a storehouse toward meals per head', async () => {
+    // The headline number on the Dashboard, and it has to describe the food the
+    // colony can actually EAT: meals are paid through `pay`, which draws across
+    // every site, so bread a hauler banked in a depot is bread these colonists
+    // will be fed from. Split 3 at the camp and 24 in the storehouse, against
+    // two colonists: 27 meals over three heads is 9, where the camp alone would
+    // publish 1.
+    const save = initialSave();
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
+    save.stockpile = { bread: 3 };
+    const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
+    const ids = getPrepResource(prep, IdCounter);
+    const depotAt = { col: 6, row: 2 };
+    const depot = spawnBuilding(prep, ids, { defId: 'storehouse', progress: 0, batchActive: false, ...depotAt, relocatingTicks: 0 });
+    spawnColonist(prep, ids, { ageTicks: BALANCE.lifeBands.matureTicks });
+    spawnColonist(prep, ids, { ageTicks: BALANCE.lifeBands.matureTicks });
+
+    const world = await prep.prepareRun();
+    world.getResource(Stockpile).refundAt(
+      { id: depot.getComponent(Building)!.id, ...depotAt, capacity: BALANCE.storehouseCapacity }, 'bread', 24,
+    );
+    await world.step();
+    const snapshot = world.getResource(SnapshotStore).latest!;
+
+    expect(snapshot.population).toBe(2);
+    expect(snapshot.mealsPerHead).toBeCloseTo(9);
+    // Non-vacuous: the camp's own share is a different, smaller number.
+    expect(snapshot.stockpile.bread.stock).toBe(27);
   });
 
   it('marks unstaffed and waiting states', async () => {
@@ -96,8 +127,8 @@ describe('SnapshotSystem', () => {
     // outbound dot at the doorstep and let a fixed-speed walk do the rest. The
     // layout now interpolates from `haulTicksLeft`, so a returning hauler needs
     // the building it is walking BACK from, and both legs need their remaining
-    // ticks (OBS-4-09). `trip.targetId` survives the phase flip; only
-    // trip.reset() clears it. `haulLegTicks`/`haulPickupCol`/`haulPickupRow`
+    // ticks (OBS-4-09). `trip.targetId` survives the phase flip; only ending
+    // the trip through `cancel()` clears it. `haulLegTicks`/`haulPickupCol`/`haulPickupRow`
     // (OBS-5-01) follow the same rule: published so the layout never has to
     // re-derive them from the building's live tile.
     const save = initialSave();

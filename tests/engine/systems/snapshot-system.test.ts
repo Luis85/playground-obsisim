@@ -319,7 +319,13 @@ describe('SnapshotSystem', () => {
     // 1.00, and summed that same 1.00 into the building's own workPower. That
     // is the mechanism/display disagreement OBS-6-06 exists to expose, in the
     // column added to expose it, plus its pre-existing building-level twin.
-    const { world, movingId, stillId, progressOf, moving, still, snap } = await relocationFixture(3);
+    //
+    // TWO ticks, not more, and that is load-bearing: after one tick the
+    // published `relocatingTicks` is exactly 1, the single value that separates
+    // the correct `> 0` from the `> 1` this project has already shipped and
+    // reverted once (task 6). At 3 ticks the published 2 satisfies both, and
+    // this test would wave the old mistake straight through.
+    const { world, movingId, stillId, progressOf, moving, still, snap } = await relocationFixture(2);
     await stepTick(world);
 
     // The mechanism first: nothing was banked at the moving building, a whole
@@ -342,7 +348,9 @@ describe('SnapshotSystem', () => {
     // And the crew is still counted as staffing it — they are assigned, just
     // not working. Zeroing the head count would be a different, wrong claim.
     expect(building(movingId).workers).toBe(1);
-    expect(building(movingId).relocatingTicks).toBe(2); // 3, decremented once by the skip
+    // The published value the gate above was read against: 1, not 2 — see the
+    // note at the top of this test on why that separates `> 0` from `> 1`.
+    expect(building(movingId).relocatingTicks).toBe(1);
   });
 
   it('overstates by exactly one tick on the landing tick, and is exact read forwards', async () => {

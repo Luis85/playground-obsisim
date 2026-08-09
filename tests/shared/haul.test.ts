@@ -142,6 +142,12 @@ describe('nearestSiteWithRoom', () => {
     // this answer, so a mutation that ignores capacity fails here and nowhere else.
     expect(nearestSiteWithRoom(21, 14, [camp, depot], (id) => (id === 7 ? 60 : 0), 6)?.id).toBe(CAMP_SITE_ID);
   });
+  it('accepts a load that fills a depot EXACTLY', () => {
+    // heldAt + amount === capacity must still be a valid destination. Without
+    // this case the prescribed `>` -> `>=` mutation reddens no test at all,
+    // which makes that mutation check vacuous.
+    expect(nearestSiteWithRoom(21, 14, [camp, depot], (id) => (id === 7 ? 54 : 0), 6)?.id).toBe(7);
+  });
   it('rejects a depot with SOME room but not enough for the load', () => {
     // The case the `amount` parameter exists for. 55 of 60 held, 12 to bank:
     // a predicate that only skips FULL sites picks the depot and splits the

@@ -89,14 +89,17 @@ describe('Stockpile — multi-site (increment 7)', () => {
   });
 
   it('spends the camp first, then sites by ascending id', () => {
-    // Discriminating: three DIFFERENT amounts, so any draw order other than the
-    // documented one leaves a different residue at each site.
-    const s = new Stockpile({ wood: 4 });
+    // Discriminating: no PREFIX of the draw order sums to the payment. A
+    // fixture where some prefix happens to equal the payment (e.g. camp +
+    // site 3 == 12 here previously) leaves the same residue regardless of
+    // whether the camp or that site is drawn first, so it cannot tell the
+    // two orders apart.
+    const s = new Stockpile({ wood: 5 });
     s.addAt(depot(60, 9), 'wood', 2);
     s.addAt(depot(60, 3), 'wood', 8);
-    expect(s.pay({ wood: 12 })).toBe(true);
+    expect(s.pay({ wood: 10 })).toBe(true);
     expect(s.getAt(CAMP_SITE_ID, 'wood')).toBe(0);
-    expect(s.getAt(3, 'wood')).toBe(0);
+    expect(s.getAt(3, 'wood')).toBe(3);
     expect(s.getAt(9, 'wood')).toBe(2);
   });
 

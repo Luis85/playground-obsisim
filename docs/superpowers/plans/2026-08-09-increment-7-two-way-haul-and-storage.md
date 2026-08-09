@@ -1217,6 +1217,8 @@ No-WebGL parity — the promise made in increment 3 §1.1 and kept ever since (�
 - Modify: `src/app/views/BuildingsView.vue`, `src/app/components/SelectionPanel.vue`, `src/app/views/EconomyView.vue`
 - Test: `tests/app/views/*.test.ts`
 
+- [ ] **Step 0: `recipeLabel` renders "Shelters 0" for a storehouse.** Task 4 added the def and left this deliberately, as out of its scope. It has three roles to describe now, not two — produces, shelters, stores — so give it a storage case rather than letting a shed advertise zero beds.
+
 - [ ] **Step 1:** Buildings table gains an `In` column beside `Waiting`; a storehouse row shows `held / capacity`; the state column shows `Waiting for input`.
 - [ ] **Step 2:** Selection panel shows both buffers, and a storehouse's contents against capacity.
 - [ ] **Step 3:** Economy view names the **input** backlog beside the output backlog it already names — units short, and how many buildings are idle waiting for them. This is the answer to "why is my bakery stopped?" and it is in scope.

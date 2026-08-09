@@ -76,12 +76,37 @@ export const BALANCE = {
    * the opening has a free bed and the second house is the first growth
    * decision the player makes. */
   houseBeds: 4,
-  /** Meals per head a colony must hold before a birth is allowed. Lower than
-   * the nomad gate: your own child is cheaper to take on than a stranger. */
-  birthFoodPerHead: 6,
+  /**
+   * Meals per head a colony must hold before a birth is allowed. Lower than the
+   * nomad gate: your own child is cheaper to take on than a stranger. Twelve
+   * meals is six years of food banked per mouth — a colonist eats one meal per
+   * mealThreshold ticks, so yearTicks buys two.
+   *
+   * RETUNED from 6 by measurement (spec 4.1). This is a STOCK test, so what it
+   * really sets is the reserve a colony still holds at the moment growth stops:
+   * births halt while the store is worth perHead * (population + 1). That
+   * reserve has to absorb the overshoot matureTicks guarantees — a child eats
+   * from birth and works ten years later, and at one birth per
+   * birthCooldownTicks the colony can commit to roughly twenty extra mouths
+   * before the first of them pays anything back. Twenty is an ABSOLUTE number,
+   * not a proportion, so six meals a head is ample at 120 colonists and far too
+   * thin at 40: swept on 4.1's own scenario, 6 through 9 go extinct and 10
+   * upward do not. 12 is the lowest round value clear of that cliff, and clear
+   * of it under every hauler count and chain size measured. Not higher, because
+   * a birth gate should be the weakest governor that does the job — 16 and 20
+   * also hold a deliberately under-hauled colony together, which only hides a
+   * logistics failure the player should be made to see.
+   */
+  birthFoodPerHead: 12,
   /** Meals per head before a nomad may join — the recovery valve's price, and
-   * deliberately the higher of the two (spec 2.7). */
-  nomadFoodPerHead: 10,
+   * deliberately the higher of the two (spec 2.7). Moved with the birth gate,
+   * keeping the 5:3 proportion the pair shipped with, so "a nomad costs more
+   * than a birth" stays a relationship rather than becoming an accident of two
+   * literals that were retuned one at a time: ten years of stored food a head
+   * against the birth gate's six. Measured reachable — a colony below its food
+   * chain's ceiling clears 20 for most of a run, one already at its ceiling
+   * never does, which is exactly the trap spec 2.7 asks the valve to be. */
+  nomadFoodPerHead: 20,
   /** Ticks between births, colony-wide. */
   birthCooldownTicks: 50,
   /** Work power multiplier for a colonist with nowhere to live. Equal to

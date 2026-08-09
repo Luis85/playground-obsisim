@@ -107,6 +107,16 @@ describe('content catalog', () => {
 
   it('a nomad costs more stored food than a birth', () => {
     // Spec 2.7: the recovery valve is itself a trap, and this is the price.
+    //
+    // This assertion earned its keep during the increment-6 balance retune.
+    // `birthFoodPerHead` was raised 6 -> 12 on measurement while
+    // `nomadFoodPerHead` still sat at 10, and this is the test that failed —
+    // the pair had silently inverted, making a stranger CHEAPER than your own
+    // child and turning the trap into the easy option. The resolution was to
+    // move the nomad gate with it (to 20, holding the 5:3 proportion the pair
+    // shipped with), never to soften the comparison. A relationship two
+    // literals happen to satisfy is one retune away from being false; this
+    // line is what makes it a rule.
     expect(BALANCE.nomadFoodPerHead).toBeGreaterThan(BALANCE.birthFoodPerHead);
   });
 

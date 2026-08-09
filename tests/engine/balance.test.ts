@@ -223,7 +223,7 @@ const peakOf = (r: { samples: { children: number; adults: number; elders: number
   Math.max(...r.samples.map(populationOf));
 
 describe('population balance — the long curve', () => {
-  it('a colony feeding itself is capped by its FOOD CHAIN, overshoots that cap, and starves back down', async () => {
+  it('a colony feeding itself settles at its FOOD CHAIN and holds there for a whole generation', async () => {
     // 12,000 ticks and generous housing, so FOOD and demographics — not bed
     // count — decide the curve. This is the minimum that answers the question,
     // not a round number: founders start at matureTicks and the first
@@ -241,7 +241,7 @@ describe('population balance — the long curve', () => {
     // and one birth per 50 ticks fills the 44 openings in ~2,200 of 12,000 —
     // so if food turned out to sustain that many, this "roomy" curve would be a
     // housing plateau, and Task 13 could not tell stability from a cap.
-    // Measured: the ceiling is 41 against 48 beds.
+    // Measured: the ceiling is 40 against 48 beds.
     expect(roomyPeak).toBeLessThan(ROOMY_HOUSES * BALANCE.houseBeds);
 
     // And the cap is BEDS in the control, not food: one house is four beds for
@@ -250,15 +250,34 @@ describe('population balance — the long curve', () => {
     expect(capped.births).toBeLessThan(roomy.births);
     expect(capped.deathsByStarvation).toBe(0);
 
-    // THE FINDING, and the reason this test is not called "plateaus". The
-    // roomy colony does not settle at its food ceiling: the birth gate tests
-    // meals in STORE per head, which a young colony banks faster than it eats,
-    // so births continue past the population the chain can feed. The store then
-    // drains, births stop for a whole maturity span, and when the one
-    // synchronised cohort retires there is nobody behind it. Measured: peak 41
-    // at tick ~2,600, extinct by tick ~8,000, 24 starvation deaths.
-    expect(roomy.deathsByStarvation).toBeGreaterThan(0);
-    expect(populationOf(roomy.samples.at(-1)!)).toBeLessThan(roomyPeak / 2);
+    // THE FINDING, and what this test asserted the opposite of until the
+    // birthFoodPerHead retune. At 6 the same fixture peaked at 41 and was
+    // extinct by tick 7,800 with 24 starvation deaths; the conclusion drawn
+    // from that — that no store threshold could help, because a stock test
+    // cannot ask "is there work for this colonist" — was wrong. A stock test
+    // sets the RESERVE a colony still holds when growth stops, and a reserve
+    // is exactly what absorbs the overshoot matureTicks guarantees. At 12 the
+    // curve is a plateau: peak 40 around tick 4,000, 39 at tick 12,000, and
+    // nobody starves at any point in between. See spec section 4.1 for the
+    // sweep, including the four values below 10 that still die.
+    //
+    // Nothing here is a range chosen to fit. `toBe(0)` on starvation is the
+    // strongest form available and fails at 24 for the shipped value; the
+    // 0.8 floor fails at 0. Both would fail again on any retune back down.
+    expect(roomy.deathsByStarvation).toBe(0);
+    expect(populationOf(roomy.samples.at(-1)!)).toBeGreaterThan(roomyPeak * 0.8);
+    // The original acceptance criterion Task 12 proposed and could not meet.
+    // Kept as its own line, well below the assertion above, because it is the
+    // bar the increment set rather than the one the measurement reached.
+    expect(populationOf(roomy.samples.at(-1)!)).toBeGreaterThan(chain.startingAdults);
+
+    // And a plateau rather than a lucky endpoint: the deepest trough after the
+    // founders' generation has died out still holds most of the peak. Without
+    // this the two assertions above are satisfied by a colony that collapsed
+    // to 3 at tick 6,000 and rebuilt by 12,000 — which is the overshoot
+    // failure, merely caught on an upswing. Measured trough: 34.
+    const trough = Math.min(...roomy.samples.filter((s) => s.tick >= 3000).map(populationOf));
+    expect(trough).toBeGreaterThan(roomyPeak * 0.6);
   }, 300000);
 
   it('that ceiling is the chain PRODUCING, not the harness under-hauling it', async () => {
@@ -268,9 +287,10 @@ describe('population balance — the long curve', () => {
     // nothing about birthFoodPerHead. Same colony, one extra hauler, and the
     // ceiling has to be unchanged.
     //
-    // 3,500 ticks, not 12,000: the peak is reached around 2,600 and this
-    // compares peaks, not endings. Two full-length runs would cost a minute to
-    // measure a number both would have settled long before.
+    // 3,500 ticks, not 12,000: the colony is within a few colonists of its
+    // ceiling by then (37 of an eventual 40) and this compares ceilings, not
+    // endings. Two full-length runs would cost a minute to measure a number
+    // both would have settled long before.
     const short = { ticks: 3500, sampleEvery: 100, houses: ROOMY_HOUSES };
     const twoHaulers = await runPopulationScenario({ ...chain, ...short });
     const threeHaulers = await runPopulationScenario({ ...chain, ...short, haulers: 3, startingAdults: 5 });
@@ -348,6 +368,19 @@ describe('population report', () => {
       'starvation warning, 3 colonists, no food at all',
       `  first starvingTicks at ${firstStarving}, first death at ${firstDeath},` +
       ` window ${firstDeath - firstStarving} ticks against an autosave interval of ${BALANCE.autosaveEveryTicks}`,
+      // frozenSteps printed BY HAND, because this is the only scenario in the
+      // report where it is non-zero and it is the only one that does not go
+      // through curveLines. All three colonists starve within a couple of ticks
+      // of each other, so OBS-6-02 fires and the run loses a step per extra
+      // corpse. Printing the field only on the curves — every one of which
+      // reports 0 — made it "published rather than hidden" in the type and
+      // invisible in the output, which is the opposite of the point.
+      //
+      // The two ticks above are unaffected: both freezes land ON or AFTER the
+      // first death, so nothing between firstStarving and firstDeath was lost.
+      // That is why the window can still be quoted as exact.
+      `  frozen steps ${starved.frozenSteps} — OBS-6-02, and the reason the two ticks above are` +
+      ' quotable: every frozen step falls at or after the first death, outside the window',
     ].join('\n'));
   }, 600000);
 });

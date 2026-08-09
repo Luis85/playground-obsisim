@@ -740,6 +740,19 @@ The leg itself:
 // cancel: no disposal, no remainder.
 if (targetGone(trip)) { trip.reset(); return; }
 //
+// And the SOURCE, by tile rather than by id — round nineteen's lesson applied
+// to the other end of the trip. A storehouse that relocates keeps its
+// sourceSiteId and moves; §2.3 drops it from the site list only while it is IN
+// transit, so a hauler arriving after the move completes finds the id alive
+// again at a different tile, and an id-keyed takeAt would draw goods out of a
+// building standing somewhere the hauler is not. legTo is the tile this leg
+// was priced against, so it is the tile that has to still be there.
+const source = siteById.get(trip.sourceSiteId);
+if (source === undefined || source.col !== trip.legToCol || source.row !== trip.legToRow) {
+  trip.reset();   // clean: nothing has been taken yet
+  return;
+}
+//
 // trip.amount MUST become what takeAt ACTUALLY RETURNED, never the amount
 // claimed at dispatch. A source claim reserves stock against other HAULERS;
 // it does not bind Stockpile.pay, which spends camp-first across every site
@@ -929,6 +942,19 @@ it('cancelling a supply trip whose source was demolished in the same drain loses
 The short version, so nobody reopens it mid-task: pricing the bypass needs *persisted demolition history*, because the cheap version does not work — charging downtime only when a construct lands on the same tick as a matching demolish is defeated by waiting a tick. A save field, its guard, its migration and its clamp is a real cost for a gap worth a few ticks to a player willing to demolish, wait and rebuild. `[[Construction as Work]]` closes it for free as a side effect, which is where it should be closed.
 
 **If you disagree after reading the note, say so rather than implementing something** — that is a scope change, not a task detail.
+
+- [ ] **Step 3b: `cheapestHaulerToRelease` has to learn about `fetching`**
+
+OBS-4-08 gave `unassignHauler` a rule — release the cheapest trip to throw away — ordered `idle`, then `outbound`, then `returning`, on the reasoning that an outbound hauler carries nothing so only its walk out is lost. **Three legs break that reasoning**, and the ordering silently inverts:
+
+- a `fetching` hauler is **empty** (it has not reached its source), and is not in the enum at all;
+- an `outbound` hauler on a *supply* trip is **carrying inputs**.
+
+So with one hauler fetching empty-handed and another outbound with a load, the untouched rule releases the loaded one — teleporting its cargo home while leaving the empty worker on duty, which is the opposite of what the rule is for.
+
+Rank on **what is actually carried** rather than on phase name: empty hands first (`idle`, `fetching`, and a `collect` trip's outbound leg), then loaded (`returning`, and a `supply` trip's outbound leg), with the existing fewest-`ticksLeft` and entity-order tie-breaks underneath. `pickedUp` and `kind` already distinguish every case; no new state.
+
+Test the mixed-phase case specifically — one fetching hauler and one loaded outbound hauler, asserting the empty one goes. A fixture with only one phase present cannot catch an inverted order.
 
 - [ ] **Step 4: OBS-6-08 — one path to a relocating crew's work power**
 

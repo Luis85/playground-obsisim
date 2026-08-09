@@ -371,8 +371,12 @@ trip with one leading leg to pick the goods up. That is the whole difference:
      tile. The stock it intends to take is claimed now, so a second hauler is
      not sent at the same last six wheat.
    - `collect` → phase `outbound`, leg from `atCol`/`atRow` to the building.
-2. **Fetching** → on arrival, **recheck that the target building still
-   exists** before taking anything: the demolition handler cancels trips
+2. **Fetching** → on arrival, **recheck both ends** before taking anything —
+   the source by *tile*, not by id, since a storehouse that relocates keeps its
+   id and moves, and §2.3 drops it from the site list only while it is in
+   transit; a hauler arriving after the move completes would otherwise draw
+   goods out of a building standing somewhere it is not. And **recheck that the
+   target building still exists**: the demolition handler cancels trips
    *outbound to* a building, and a fetching hauler is walking to a source, so
    nothing else catches this. Taking the stock anyway would carry it to a
    building already known to be gone and tie up both until the arrival path

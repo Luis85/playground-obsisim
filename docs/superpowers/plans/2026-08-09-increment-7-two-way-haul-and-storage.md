@@ -524,7 +524,7 @@ The heart of it (§2.5, §2.6). `haul-system.ts` is 157 lines and roughly double
 - `HaulTrip` gains, all runtime-only:
   - `kind: HaulKind = 'collect'`
   - `atCol` / `atRow` — **where this hauler physically is** when not on a leg. A position, not a site id: no membership to dangle when a storehouse is demolished, nothing to repair at the top of a tick. This one edit deletes the whole reachability class (spec §2.5). **Defaults to `CAMP_TILE`, not `(0, 0)`** — every other numeric field on `HaulTrip` defaults to zero, so a fresh or restored hauler would otherwise start in the map's corner and price its first leg from a tile it has never stood on. Set in `colonistComponents` (the single shared spawn list), and covered for both a recruited and a restored hauler.
-  - `sourceSiteId` — the site a supply trip fetches from, and the claim on its stock
+  - `sourceSiteId` and `plannedAmount` — the site a supply trip is fetching from, and **how much it intends to take**. The quantity needs its own field and must not be folded into `amount`: the claim map has to subtract a pending take so two haulers do not both plan the last six wheat, but a fetching hauler is carrying *nothing* until it arrives — and `buildSaveFromWorld` banks `trip.amount` into the save as real cargo (increment 4's mid-trip simplification). Overloading `amount` therefore either leaves concurrent haulers unable to see the pending quantity, or **duplicates goods on any save taken mid-fetch**: banked into the stockpile by the producer while still sitting at the source. `amount` keeps meaning cargo in hand, and `plannedAmount` becomes 0 the moment `takeAt` returns the real figure.
   - `destSiteId: number = CAMP_SITE_ID` — where the return leg is headed
   - `legFromCol` / `legFromRow` and `legToCol` / `legToRow` — **both endpoints of whichever leg is running, frozen when that leg begins.** Every leg, not just the return: a `fetching` or `outbound` trip cancelled part-way needs the same interpolation, and reading endpoints that were only ever populated for the return leg puts the hauler at a default or a stale tile — which is the cancellation bug of the previous round, surviving its own fix.
 
@@ -709,7 +709,8 @@ The leg itself:
 // for construction costs and meals. So a build ordered while this hauler was
 // walking can legitimately have spent the wheat it set out to fetch. Carrying
 // the claimed figure regardless would CREATE goods out of nothing.
-trip.amount = stockpile.takeAt(trip.sourceSiteId, trip.resource, claimed);
+trip.amount = stockpile.takeAt(trip.sourceSiteId, trip.resource, trip.plannedAmount);
+trip.plannedAmount = 0;   // the claim is spent; `amount` is cargo from here on
 if (trip.amount === 0) { /* nothing to deliver: continue as a collect trip */ }
 ```
 
@@ -798,7 +799,15 @@ Conservation (§2.7) plus OBS-6-08 (§2.12); OBS-5-03 is settled without code (S
 
 ```ts
 // Resolve the hauler's live base and measure from it, not from the camp.
-const ticks = haulTicksBetween(legOrigin(trip), to, BALANCE.haulTilesPerTick);
+// From where the hauler IS, not where its leg began. Measuring from the old
+// origin restarts the journey: the dot jumps backward and the walk already
+// covered is charged a second time. The cancellation rule in Task 6 already
+// derives the current position; reuse it, freeze THAT as the new leg origin,
+// and price only the remaining walk.
+const at = positionAlong(trip);                 // legFrom + (legTo - legFrom) * legProgress
+trip.legFromCol = at.col; trip.legFromRow = at.row;
+trip.legToCol = to.col;   trip.legToRow = to.row;
+const ticks = haulTicksBetween(at, to, BALANCE.haulTilesPerTick);
 ```
 
   The test needs a fixture where the two figures **differ** — a depot in the far corner and a target moved near the camp — or it passes against the camp-relative version it exists to rule out.

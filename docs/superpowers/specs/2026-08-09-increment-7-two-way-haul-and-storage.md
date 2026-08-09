@@ -304,8 +304,16 @@ increment at all.
     since it is only ever a distance origin. This works for all three leg kinds
     **only because every leg freezes both its endpoints** (above); the first
     version of this rule read endpoints that only the return leg ever set.
-- `sourceSiteId` — the site a supply trip is fetching from, and the claim on
-  its stock (§2.6);
+- `sourceSiteId` and `plannedAmount` — the site a supply trip is fetching from,
+  and how much it intends to take. The quantity is its own field rather than a
+  reuse of `amount`, for a reason that only shows up at save time: a fetching
+  hauler carries nothing until it arrives, while `buildSaveFromWorld` banks
+  `amount` into the save as real cargo (increment 4's mid-trip simplification,
+  §2.9). Folding a planned take into `amount` would therefore either hide the
+  pending quantity from the claim map — so two haulers both plan the last six
+  wheat — or **duplicate goods on a save taken mid-fetch**, banking them into
+  the stockpile while they still sit at the source. `amount` keeps meaning
+  cargo in hand; `plannedAmount` becomes 0 the moment `takeAt` returns;
 - `destSiteId` — where the load is going, and the reservation of room there;
 - `legFromCol` / `legFromRow` and `legToCol` / `legToRow` — **both endpoints of
   whichever leg is running, frozen when that leg begins.** Every leg, not only

@@ -275,6 +275,22 @@ describe('SnapshotSystem', () => {
     expect(world.getResource(SnapshotStore).latest!.buildings[0].state).toBe('relocating');
   });
 
+  it('pins storage precedence over housing too', async () => {
+    // A storehouse's `recipe` is null exactly like a house's, so if the
+    // housing check (recipe === null) ran before the storage check
+    // (storage > 0), this would read 'housing' instead of 'storing'.
+    const save = initialSave();
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
+    const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
+    const ids = getPrepResource(prep, IdCounter);
+    spawnBuilding(prep, ids, { defId: 'storehouse', progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 0 });
+
+    const world = await prep.prepareRun();
+    await world.step();
+    expect(world.getResource(SnapshotStore).latest!.buildings[0].state).toBe('storing');
+  });
+
   /**
    * A relocating workplace and an identical unmoved one, side by side, both
    * staffed and both housed on their own tile so the commute factor is 1.0 for

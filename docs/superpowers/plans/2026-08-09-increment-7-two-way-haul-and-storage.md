@@ -664,10 +664,16 @@ The supply-first rule and its non-deadlock belong in a comment where the fallthr
 // while one with a full output buffer has already produced and its goods are
 // safe where they stand. The obvious objection is a deadlock — every hauler
 // supplying, nobody collecting, the ledger drained — and it cannot happen
-// structurally: a supply job requires stock at the hauler's OWN site, and only
-// collection puts it there. As the ledger empties, supply candidates vanish
-// and collection resumes on its own. Measured in spec §4 q3 rather than left
-// as this argument.
+// structurally: a supply job requires stock to exist SOMEWHERE in the ledger,
+// and only collection puts it there. As the ledger empties, supply candidates
+// vanish and collection resumes on its own. Measured in spec §4 q3 rather
+// than left as this argument.
+//
+// NOT "stock at the hauler's own site" — haulers have no site. That phrasing
+// is the discarded base model, and this is the one function where it could
+// creep back in: a source is chosen across EVERY site and the trip begins by
+// walking to it. The mutation check for this step reddens all five
+// reachability fixtures if sources get restricted to where a hauler stands.
 ```
 
 - [ ] **Step 3: Implement the legs**

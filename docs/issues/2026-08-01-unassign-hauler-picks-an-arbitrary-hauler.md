@@ -14,6 +14,7 @@ tags:
   - ux
   - game-design
 type: Issue
+parent: "[[Haulers as a Staffed Role]]"
 order: 110
 started: ""
 finished: ""

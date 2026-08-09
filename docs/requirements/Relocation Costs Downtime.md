@@ -1,7 +1,7 @@
 ---
 type: PBI
-parent: "[[Increment 5 - Validated Balance]]"
-order: 20
+parent: "[[Increment 5 - Relocation Pricing]]"
+order: 10
 status: Done
 tags:
   - game-design

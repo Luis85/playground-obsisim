@@ -13,6 +13,7 @@ affects:
   - src/engine/world.ts
   - tests/engine/fixtures.ts
 type: Issue
+parent: "[[Colonist Lifecycle - Child, Adult, Elder, Death]]"
 order: 140
 started: ""
 finished: ""

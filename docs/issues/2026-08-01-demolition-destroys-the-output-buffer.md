@@ -13,6 +13,7 @@ affects:
 tags:
   - game-design
 type: Issue
+parent: "[[Output Buffers and the Output-Full Stall]]"
 order: 10
 started: ""
 finished: ""

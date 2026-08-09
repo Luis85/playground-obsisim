@@ -11,6 +11,7 @@ affects:
   - src/app/labels.ts
   - src/app/views/PopulationView.vue
 type: Issue
+parent: "[[Population View - a New Primary Screen]]"
 order: 160
 started: ""
 finished: ""

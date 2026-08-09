@@ -1,7 +1,7 @@
 ---
 type: PBI
-parent: "[[Increment 5 - Validated Balance]]"
-order: 40
+parent: "[[Increment 5 - Delivery Visibility]]"
+order: 10
 status: Done
 tags:
   - game-design

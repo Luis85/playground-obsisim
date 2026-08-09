@@ -17,6 +17,7 @@ tags:
   - metrics
   - tech-debt
 type: Issue
+parent: "[[The Quality Gate Ratchet System]]"
 order: 50
 started: ""
 finished: ""

@@ -18,6 +18,7 @@ tags:
   - rendering
   - game-feel
 type: Issue
+parent: "[[Relocation Costs Downtime]]"
 order: 60
 started: ""
 finished: ""

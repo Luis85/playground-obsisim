@@ -15,6 +15,7 @@ tags:
   - build-ci
   - process
 type: Issue
+parent: "[[The Quality Gate Ratchet System]]"
 order: 100
 started: ""
 finished: ""

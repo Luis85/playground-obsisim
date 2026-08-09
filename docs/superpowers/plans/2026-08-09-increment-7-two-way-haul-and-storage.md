@@ -1050,7 +1050,11 @@ OBS-4-08 gave `unassignHauler` a rule — release the cheapest trip to throw awa
 
 So with one hauler fetching empty-handed and another outbound with a load, the untouched rule releases the loaded one — teleporting its cargo home while leaving the empty worker on duty, which is the opposite of what the rule is for.
 
-Rank on **what is actually carried** rather than on phase name: empty hands first (`idle`, `fetching`, and a `collect` trip's outbound leg), then loaded (`returning`, and a `supply` trip's outbound leg), with the existing fewest-`ticksLeft` and entity-order tie-breaks underneath. `pickedUp` and `kind` already distinguish every case; no new state.
+Rank on **what is actually carried**, and read that from **`trip.amount`** — not from the phase or the kind. `amount > 0` *is* the definition of carrying; anything else is a proxy, and this one is already known to be wrong: when aggregate spending drains a source before a fetching hauler arrives, Step 3 sets `trip.amount = 0` and continues the trip as a collect, so a `supply`/`outbound` trip can be **empty**. Classifying by `kind` would file that hauler as loaded and release a genuinely loaded one ahead of it — the exact inversion this rule exists to prevent, reintroduced by the proxy.
+
+So: empty hands first (`amount === 0`, whatever the phase or kind), then loaded, with the existing fewest-`ticksLeft` and entity-order tie-breaks underneath. No new state — `amount` is already there.
+
+The release fixture must include a **drained-source supply hauler** alongside a loaded one, or it cannot tell `amount`-based ranking from `kind`-based ranking.
 
 Test the mixed-phase case specifically — one fetching hauler and one loaded outbound hauler, asserting the empty one goes. A fixture with only one phase present cannot catch an inverted order.
 

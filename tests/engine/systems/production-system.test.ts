@@ -1,23 +1,33 @@
 import { describe, expect, it } from 'vitest';
-import type { IEntity } from 'sim-ecs';
+import { SystemError, type IEntity } from 'sim-ecs';
 import { Building, OutputBuffer, Production } from '../../../src/engine/components';
 import { IdCounter, SnapshotStore, Stockpile } from '../../../src/engine/resources';
 import { ProductionSystem } from '../../../src/engine/systems/production-system';
 import { SnapshotSystem } from '../../../src/engine/systems/snapshot-system';
-import { buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spawnWorker } from '../../../src/engine/world';
+import {
+  ALL_SYSTEMS, buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist,
+} from '../../../src/engine/world';
 import type { BuildingDefId, ResourceId } from '../../../src/shared/content-types';
+import type { TileRef } from '../../../src/shared/placement';
 import { BALANCE } from '../../../src/engine/content/balance';
 import { BUILDINGS } from '../../../src/engine/content/buildings';
+import { stepTick } from '../fixtures';
 
 async function setup(defId: BuildingDefId, stock: Partial<Record<ResourceId, number>>, workerCount = 1, workerToolTicks = 0) {
   const save = initialSave();
-  save.workers = [];
+  save.colonists = [];
+  save.buildings = [];   // no starter house: this fixture builds its own world
   save.stockpile = stock;
   const prep = buildColonyPrepWorld({ save, systems: [ProductionSystem] });
   const ids = getPrepResource(prep, IdCounter);
   const building: IEntity = spawnBuilding(prep, ids, { defId, progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 0 });
   const buildingId = building.getComponent(Building)!.id;
-  for (let i = 0; i < workerCount; i++) spawnWorker(prep, ids, { buildingId, toolTicks: workerToolTicks });
+  // Housed at the same building it works: this file is exercising batch
+  // arithmetic in isolation (systems: [ProductionSystem], no PopulationSystem
+  // to ever rehome anyone), the same way it already holds hunger and age off
+  // to the side — homelessness is Task 6's third orthogonal axis, and an
+  // unhoused worker here would halve every power figure these tests pin.
+  for (let i = 0; i < workerCount; i++) spawnColonist(prep, ids, { buildingId, toolTicks: workerToolTicks, homeId: buildingId });
   const world = await prep.prepareRun();
   return { world, building, stockpile: world.getResource(Stockpile) };
 }
@@ -63,17 +73,92 @@ describe('ProductionSystem', () => {
     expect(building.getComponent(OutputBuffer)!.total()).toBe(1);
   });
 
+  it('a homeless worker contributes at BALANCE.homelessFactor work power', async () => {
+    // Unlike setup() (see its own comment), this worker is spawned with no
+    // homeId at all — genuinely homeless, not the housed default every other
+    // test in this file uses. forester needs 3 worker-ticks; a homeless
+    // worker contributes only BALANCE.homelessFactor (0.5) power/tick, so the
+    // batch needs 6 ticks rather than the 3 "produces raw output" pins for an
+    // otherwise-identical housed worker — the discriminating half of the
+    // pair.
+    const save = initialSave();
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
+    save.stockpile = {};
+    const prep = buildColonyPrepWorld({ save, systems: [ProductionSystem] });
+    const ids = getPrepResource(prep, IdCounter);
+    const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 0 });
+    const buildingId = building.getComponent(Building)!.id;
+    spawnColonist(prep, ids, { buildingId }); // no homeId: homeless by default
+    const world = await prep.prepareRun();
+    for (let i = 0; i < 5; i++) await world.step(); // 5 x 0.5 = 2.5 < 3
+    expect(building.getComponent(OutputBuffer)!.total()).toBe(0);
+    await world.step(); // 6 x 0.5 = 3
+    expect(building.getComponent(OutputBuffer)!.total()).toBe(1);
+  });
+
+  it('a crew housed far from work banks less than one next door, and still more than one with no home', async () => {
+    // Task 7's whole point: WHERE the house goes is a decision, not a
+    // checkbox. Three otherwise-identical worlds differing in one thing —
+    // the tile the crew sleeps on — and BOTH gaps are asserted, because
+    // either half alone passes against a broken reading. A factor that
+    // ignored distance (1 for anyone housed) still beats homeless; a factor
+    // that ignored `homeId` still falls off with distance.
+    const bankedIn30Ticks = async (houseAt: TileRef | null) => {
+      const save = initialSave();
+      save.colonists = [];
+      save.buildings = [];   // no starter house: this fixture builds its own world
+      save.stockpile = {};
+      const prep = buildColonyPrepWorld({ save, systems: [ProductionSystem] });
+      const ids = getPrepResource(prep, IdCounter);
+      const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 0 });
+      // A REAL house, so this measures the mechanic and not a stray id: the
+      // tile is all ProductionSystem reads, but a sentinel would be evicted
+      // the moment PopulationSystem is in the pipeline.
+      const home = houseAt === null
+        ? null
+        : spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: houseAt.col, row: houseAt.row, relocatingTicks: 0 });
+      spawnColonist(prep, ids, {
+        buildingId: building.getComponent(Building)!.id,
+        homeId: home === null ? null : home.getComponent(Building)!.id,
+      });
+      const world = await prep.prepareRun();
+      for (let i = 0; i < 30; i++) await world.step();
+      return building.getComponent(OutputBuffer)!.total();
+    };
+
+    // (5,1) is 1 tile from work — inside BALANCE.commute.freeTiles, so a full
+    // 1.0. (14,1) is 10 tiles: 8 charged tiles, 0.76, deliberately chosen to
+    // land strictly BETWEEN 1.0 and the 0.5 floor. Anything past ~19 tiles
+    // clamps to the floor and would read identically to homeless, which would
+    // make the second assertion below unfalsifiable.
+    const near = await bankedIn30Ticks({ col: 5, row: 1 });
+    const far = await bankedIn30Ticks({ col: 14, row: 1 });
+    const homeless = await bankedIn30Ticks(null);
+
+    expect(near).toBeGreaterThan(far);
+    expect(far).toBeGreaterThan(homeless);
+    // Exact, not merely ordered: 30 ticks x 1.0 / 0.76 / 0.5 power over a
+    // 3-tick batch. Ordering alone would hold for a factor an order of
+    // magnitude off, and 30 ticks stays under the 12-unit output cap in the
+    // fastest of the three, so none of them is silently stalled instead.
+    expect([near, far, homeless]).toEqual([10, 7, 5]);
+  });
+
   it('only covered workers get the multiplier (mixed staffing)', async () => {
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
     save.stockpile = {}; // starting wood would mask the 'no output yet' assertion
     const prep = buildColonyPrepWorld({ save, systems: [ProductionSystem] });
     const ids = getPrepResource(prep, IdCounter);
     // one covered worker (1.5) + one bare worker (1.0) = 2.5 power/tick, forester batch is 3
     const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 0 });
     const buildingId = building.getComponent(Building)!.id;
-    spawnWorker(prep, ids, { buildingId, toolTicks: 1000 });
-    spawnWorker(prep, ids, { buildingId });
+    // Housed (see setup()'s comment above): this test isolates the tool
+    // multiplier, not homelessness.
+    spawnColonist(prep, ids, { buildingId, toolTicks: 1000, homeId: buildingId });
+    spawnColonist(prep, ids, { buildingId, homeId: buildingId });
     const world = await prep.prepareRun();
     await world.step(); // 2.5 < 3: batch not done
     expect(building.getComponent(OutputBuffer)!.total()).toBe(0);
@@ -98,19 +183,24 @@ describe('ProductionSystem', () => {
 
   it('the work power the snapshot reports is the one production actually applied', async () => {
     // Two INDEPENDENT derivations of the same number: this system sums live
-    // components, buildEntitySections sums WorkerFacts. They agreed only by
+    // components, buildEntitySections sums ColonistFacts. They agreed only by
     // both spelling out the tool bonus, so a change to one could make the UI
     // report a work power the simulation never used. Both assertions are
     // needed: the cross-check catches a change to one derivation, the absolute
     // value catches a change to the shared formula they now both call.
     const save = initialSave();
-    save.workers = [];
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
     const prep = buildColonyPrepWorld({ save, systems: [ProductionSystem, SnapshotSystem] });
     const ids = getPrepResource(prep, IdCounter);
     const building = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 0 });
     const buildingId = building.getComponent(Building)!.id;
-    spawnWorker(prep, ids, { buildingId, toolTicks: 1000 }); // exercises the tooled branch
-    spawnWorker(prep, ids, { buildingId }); // and the untooled one
+    // Housed (see setup()'s comment above): both derivations must agree on
+    // the SAME placementFactor too, but that agreement is not what this test
+    // is pinning — an unhoused worker here would just halve both sides at
+    // once and hide a real mismatch as easily as it would hide none.
+    spawnColonist(prep, ids, { buildingId, toolTicks: 1000, homeId: buildingId }); // exercises the tooled branch
+    spawnColonist(prep, ids, { buildingId, homeId: buildingId }); // and the untooled one
     const world = await prep.prepareRun();
     await world.step();
 
@@ -136,7 +226,7 @@ describe('ProductionSystem', () => {
     const production = building.getComponent(Production)!;
     expect(buffer.total()).toBe(BALANCE.outputBufferCap);
     expect(production.batchActive).toBe(true);
-    expect(production.progress).toBe(BUILDINGS.forester.recipe.ticksPerBatch); // work done, waiting on a cart
+    expect(production.progress).toBe(BUILDINGS.forester.recipe!.ticksPerBatch); // forester always has a recipe; work done, waiting on a cart
   });
 
   it('resumes the tick after the buffer gains room', async () => {
@@ -190,5 +280,36 @@ describe('ProductionSystem', () => {
     for (let i = 0; i < 50; i++) await world.step();
     expect(stockpile.get('wheat')).toBe(0);
     expect(buffer.total()).toBe(12);
+  });
+
+  it('a house never produces, even fully staffed', async () => {
+    // Discriminating fixture: the same crew on a forester at the same tile DOES
+    // produce, so a pass here cannot come from the crew being idle for some
+    // unrelated reason.
+    const save = { ...initialSave(), colonists: [], buildings: [], stockpile: { berries: 100_000 }, nextEntityId: 100 };
+    const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
+    const ids = getPrepResource(prep, IdCounter);
+    const house = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: 5, row: 3, relocatingTicks: 0 });
+    const houseId = house.getComponent(Building)!.id;
+    spawnColonist(prep, ids, { id: 1, ageTicks: BALANCE.lifeBands.matureTicks, buildingId: houseId });
+    const world = await prep.prepareRun();
+    // Also discriminating, and load-bearing: ProductionSystem's recipe-null
+    // skip must run BEFORE advanceBatches reads BUILDINGS[...].recipe!, not
+    // merely produce a snapshot that happens to look right. Without the skip,
+    // advanceBatches throws on this exact fixture — but sim-ecs's scheduler
+    // catches a system's thrown Error and republishes it as a SystemError
+    // event instead of failing the tick (see node_modules/sim-ecs's stage
+    // executor), and the crash happens before any state mutation, so
+    // state/buffered/progress below would still read as correct. Subscribing
+    // here is what turns that swallowed crash into a real test failure.
+    let systemErrors = 0;
+    world.eventBus.subscribe(SystemError, () => { systemErrors++; });
+    for (let i = 0; i < 20; i++) await stepTick(world);
+
+    const snap = world.getResource(SnapshotStore).latest!.buildings.find((b) => b.id === houseId)!;
+    expect(systemErrors).toBe(0);
+    expect(snap.state).toBe('housing');
+    expect(snap.buffered).toBe(0);
+    expect(snap.progress).toBe(0);
   });
 });

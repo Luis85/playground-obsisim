@@ -163,9 +163,9 @@ function clickWhileMoving(m: Extract<Mode, { kind: 'move' }>, tile: { col: numbe
 }
 
 function clickIdle(pick: WorldPick | null) {
-  // workers are hover-only this increment: clicking one neither selects nor
-  // deselects — only a building selects, only empty ground clears
-  if (pick?.kind === 'worker') return;
+  // colonists are hover-only: clicking one neither selects nor deselects —
+  // only a building selects, only empty ground clears
+  if (pick?.kind === 'colonist') return;
   select(pick === null ? null : pick.id);
 }
 

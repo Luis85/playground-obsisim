@@ -7,7 +7,7 @@ import { BUILDINGS, BUILDING_IDS } from '../../engine/content';
 // (used in the State cell below) is a Record keyed by the BuildingState union,
 // so a state added to the union without a matching label is a type error here,
 // not a silently-raw string in the rendered table.
-import { BUILDING_STATE_LABELS, costLabel, downtimeLabel } from '../labels';
+import { batchLabel, BUILDING_STATE_LABELS, costLabel, downtimeLabel, recipeLabel } from '../labels';
 import TwoStepButton from '../components/TwoStepButton.vue';
 
 const engine = inject(ENGINE_KEY)!;
@@ -19,7 +19,7 @@ const store = useGameStore();
     <h3>Buildings</h3>
     <table class="obsisim-table">
       <thead>
-        <tr><th>Building</th><th>Tile</th><th>Waiting</th><th>Downtime</th><th>Workers</th><th>State</th><th>Batch</th><th>Work power</th><th>Tools</th><th /></tr>
+        <tr><th>Building</th><th>Tile</th><th>Waiting</th><th>Downtime</th><th>Workers</th><th>State</th><th>Batch / Beds</th><th>Work power</th><th>Tools</th><th /></tr>
       </thead>
       <tbody>
         <tr v-for="b in store.snapshot.buildings" :key="b.id" :data-test="`building-row-${b.id}`">
@@ -30,10 +30,10 @@ const store = useGameStore();
           <td>
             <button :data-test="`unassign-${b.id}`" :disabled="b.workers === 0" @click="engine.dispatch({ type: 'unassignWorker', buildingId: b.id })">−</button>
             {{ b.workers }} / {{ b.workerSlots }}
-            <button :data-test="`assign-${b.id}`" :disabled="b.workers >= b.workerSlots || store.snapshot.idleWorkers === 0" @click="engine.dispatch({ type: 'assignWorker', buildingId: b.id })">+</button>
+            <button :data-test="`assign-${b.id}`" :disabled="b.workers >= b.workerSlots || store.snapshot.idleAdults === 0" @click="engine.dispatch({ type: 'assignWorker', buildingId: b.id })">+</button>
           </td>
           <td>{{ BUILDING_STATE_LABELS[b.state] }}</td>
-          <td>{{ b.progressPct }}%</td>
+          <td :data-test="`batch-${b.id}`">{{ batchLabel(b.beds, b.occupants, b.progressPct) }}</td>
           <td>{{ b.workPower.toFixed(2) }}</td>
           <td>{{ b.tooledWorkers > 0 ? `⚒ ${b.tooledWorkers}/${b.workers}` : '—' }}</td>
           <td>
@@ -62,10 +62,7 @@ const store = useGameStore();
           <td>{{ BUILDINGS[id].name }}</td>
           <td>{{ costLabel(BUILDINGS[id].cost) }}</td>
           <td>{{ BUILDINGS[id].workerSlots }}</td>
-          <td>
-            {{ costLabel(BUILDINGS[id].recipe.inputs) || '—' }} → {{ costLabel(BUILDINGS[id].recipe.outputs) }}
-            ({{ BUILDINGS[id].recipe.ticksPerBatch }}wt)
-          </td>
+          <td>{{ recipeLabel(BUILDINGS[id]) }}</td>
           <td>
             <button
               :data-test="`construct-${id}`"

@@ -1,7 +1,8 @@
 import type { ResourceStats, Snapshot } from '../../src/shared/snapshot';
 import { RESOURCE_IDS } from '../../src/engine/content/resources';
+import { BALANCE } from '../../src/engine/content/balance';
 import type { ResourceId } from '../../src/shared/content-types';
-import type { BuildingSnapshot, WorkerSnapshot } from '../../src/shared/snapshot';
+import type { BuildingSnapshot, ColonistSnapshot } from '../../src/shared/snapshot';
 
 /**
  * A full stockpile with the given resources' `stock` set, everything else at
@@ -19,8 +20,11 @@ export function stockedWith(stocks: Partial<Record<ResourceId, number>> = {}): R
 /** A minimal, valid Snapshot for app-layer tests, overridable field by field. */
 export function makeSnapshot(overrides: Partial<Snapshot> = {}): Snapshot {
   return {
-    tick: 0, lastRecruitTick: -30, map: { cols: 24, rows: 16 }, stockpile: stockedWith(), colonyWealth: 0,
-    population: 0, idleWorkers: 0, buildings: [], workers: [], notices: [],
+    tick: 0, lastRecruitTick: -30, lastBirthTick: -50, map: { cols: 24, rows: 16 }, stockpile: stockedWith(), colonyWealth: 0,
+    mealsPerHead: 0,
+    population: 0, idleAdults: 0, homeless: 0, beds: { total: 0, occupied: 0 },
+    demographics: { children: 0, adults: 0, elders: 0 },
+    buildings: [], colonists: [], notices: [],
     ...overrides,
   };
 }
@@ -32,16 +36,22 @@ export function makeBuilding(id: number, overrides: Partial<BuildingSnapshot> = 
     id, defId: 'farm', col: 4 + 2 * ((id - 1) % 5), row: 1 + 2 * (Math.floor((id - 1) / 5) % 8),
     workers: 0, workerSlots: 4, state: 'unstaffed',
     progress: 0, batchActive: false, progressPct: 0, tooledWorkers: 0, workPower: 0, buffered: 0, relocatingTicks: 0,
+    beds: 0, occupants: 0,
     ...overrides,
   };
 }
 
-export function makeWorker(id: number, overrides: Partial<WorkerSnapshot> = {}): WorkerSnapshot {
+export function makeWorker(id: number, overrides: Partial<ColonistSnapshot> = {}): ColonistSnapshot {
   return {
-    id, hunger: 0, efficiency: 1, buildingId: null, hauling: false,
+    id, hunger: 0, starvingTicks: 0, efficiency: 1, buildingId: null, hauling: false,
     haulTargetId: null, haulPhase: 'idle', haulTicksLeft: 0,
     haulLegTicks: 0, haulPickupCol: 0, haulPickupRow: 0,
-    carrying: 0, toolTicks: 0,
+    carrying: 0, toolTicks: 0, ageTicks: BALANCE.lifeBands.matureTicks, stage: 'adult', homeId: null,
+    // Consistent with `homeId: null` above: a homeless colonist has no bed to
+    // measure a distance from, and takes the flat homeless charge instead. A
+    // fixture claiming full work power for a homeless worker would be a lie
+    // the next case built on.
+    commuteTiles: 0, commuteFactor: BALANCE.homelessFactor,
     ...overrides,
   };
 }

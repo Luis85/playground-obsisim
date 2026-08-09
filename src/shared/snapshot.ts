@@ -1,8 +1,9 @@
 import type { BuildingDefId, ResourceId } from './content-types';
 import type { HaulPhase } from './haul';
+import type { LifeStage } from './population';
 import type { WorldMapSize } from './placement';
 
-export type BuildingState = 'producing' | 'waitingForInput' | 'unstaffed' | 'outputFull' | 'relocating';
+export type BuildingState = 'producing' | 'waitingForInput' | 'unstaffed' | 'outputFull' | 'relocating' | 'housing';
 
 export type NoticeKind = 'success' | 'rejection';
 
@@ -34,11 +35,18 @@ export interface BuildingSnapshot {
   buffered: number;
   /** Ticks until a moved building can work again (0 when not relocating). */
   relocatingTicks: number;
+  /** Sleeping places this building provides (0 for a producer). */
+  beds: number;
+  /** Colonists currently homed here. Derived from who points at it, never
+   * stored — so it cannot disagree with the colonists. */
+  occupants: number;
 }
 
-export interface WorkerSnapshot {
+export interface ColonistSnapshot {
   id: number;
   hunger: number;
+  /** Consecutive ticks pinned at hungerMax; death follows at BALANCE.starvationDeathTicks. */
+  starvingTicks: number;
   efficiency: number;
   buildingId: number | null;
   /** True while this worker is assigned to hauling rather than to a building. */
@@ -77,6 +85,28 @@ export interface WorkerSnapshot {
   carrying: number;
   /** Remaining ticks of this worker's tool coverage (0 = none). */
   toolTicks: number;
+  /** Ticks alive. Years are a display unit only — divide by BALANCE.yearTicks. */
+  ageTicks: number;
+  /** Derived from ageTicks, never stored: only an adult can be assigned. */
+  stage: LifeStage;
+  /** The house this colonist sleeps in, or null when homeless. */
+  homeId: number | null;
+  /**
+   * Straight-line tiles from this colonist's bed to the tile they work at —
+   * their assigned building, or the camp store for a hauler (whose trips both
+   * begin and end there). 0 when they are housed with no job to walk to, and
+   * 0 for a homeless colonist, who has no bed to measure from: their penalty
+   * arrives through `commuteFactor` below instead.
+   */
+  commuteTiles: number;
+  /**
+   * The share of their work this colonist's placement actually delivers —
+   * `commuteFactor` over `commuteTiles` when housed, `BALANCE.homelessFactor`
+   * when not. Published rather than left for a view to re-derive: the distance
+   * needs two entities' tiles, so anything recomputing it would be a second
+   * source of truth for a number the simulation has already spent.
+   */
+  commuteFactor: number;
 }
 
 export interface ResourceStats {
@@ -100,14 +130,32 @@ export interface ResourceStats {
 export interface Snapshot {
   tick: number;
   lastRecruitTick: number;
+  /** Tick of the last birth, for the same reason lastRecruitTick is published:
+   * the view derives "how long until the next one" rather than being told. */
+  lastBirthTick: number;
+  /**
+   * Meals the store holds per colonist, counting one MORE colonist than there
+   * are — the number both arrival gates test, published so the view shows the
+   * figure the engine actually gates on rather than a second derivation of it.
+   */
+  mealsPerHead: number;
   /** The colony's world dimensions in tiles. */
   map: WorldMapSize;
   stockpile: Record<ResourceId, ResourceStats>;
   colonyWealth: number;
   population: number;
-  idleWorkers: number;
+  idleAdults: number;
+  /** Colonists with no home (ColonistSnapshot.homeId === null). Nobody is
+   * homeless is the same condition rehome uses to decide a bed is free. */
+  homeless: number;
+  /** Beds actually available tonight, and how many are occupied. Excludes
+   * relocating houses from `total` — see buildEntitySections. */
+  beds: { total: number; occupied: number };
+  /** Spec 2.13's stage counts, aggregated once beside population/idleAdults
+   * rather than recomputed per view. */
+  demographics: { children: number; adults: number; elders: number };
   buildings: BuildingSnapshot[];
-  workers: WorkerSnapshot[];
+  colonists: ColonistSnapshot[];
   /** Per-tick feedback (success and rejection alike); cleared after each snapshot. */
   notices: NoticeMessage[];
 }

@@ -142,25 +142,25 @@ describe('WorldView', () => {
 
   it('shows a worker tooltip with efficiency and tool state', async () => {
     const { renderer, factory } = makeFake();
-    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'worker', id: 3 });
+    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'colonist', id: 3 });
     const { wrapper } = mountHarness(factory);
     useGameStore().ingest(makeSnapshot({
-      workers: [makeWorker(3, { hunger: 40, efficiency: 0.8, buildingId: null, toolTicks: 12 })],
+      colonists: [makeWorker(3, { hunger: 40, efficiency: 0.8, buildingId: null, toolTicks: 12 })],
     }), { paused: false, speed: 1, error: null });
     await nextTick();
     await wrapper.find('[data-test="world-host"]').trigger('pointermove', { pageX: 10, pageY: 10 });
     const tooltip = wrapper.find('[data-test="world-tooltip"]');
-    expect(tooltip.text()).toContain('Worker #3');
+    expect(tooltip.text()).toContain('Colonist #3');
     expect(tooltip.text()).toContain('efficiency 80%');
     expect(tooltip.text()).toContain('tooled (12t left)');
   });
 
   it('hides a stationary tooltip once the hovered worker is no longer under the pointer', async () => {
     const { renderer, factory } = makeFake();
-    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'worker', id: 3 });
+    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'colonist', id: 3 });
     const { wrapper } = mountHarness(factory);
     useGameStore().ingest(makeSnapshot({
-      workers: [makeWorker(3, { hunger: 0, efficiency: 1, buildingId: null, toolTicks: 0 })],
+      colonists: [makeWorker(3, { hunger: 0, efficiency: 1, buildingId: null, toolTicks: 0 })],
     }), { paused: false, speed: 1, error: null });
     await nextTick();
     await wrapper.find('[data-test="world-host"]').trigger('pointermove', { pageX: 10, pageY: 10 });
@@ -168,7 +168,7 @@ describe('WorldView', () => {
     // the worker walks away; the next snapshot re-runs the live hit-test
     (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue(null);
     useGameStore().ingest(makeSnapshot({
-      workers: [makeWorker(3, { hunger: 0, efficiency: 1, buildingId: 1, toolTicks: 0 })],
+      colonists: [makeWorker(3, { hunger: 0, efficiency: 1, buildingId: 1, toolTicks: 0 })],
     }), { paused: false, speed: 1, error: null });
     await nextTick();
     expect(wrapper.find('[data-test="world-tooltip"]').exists()).toBe(false);
@@ -178,10 +178,10 @@ describe('WorldView', () => {
     vi.useFakeTimers();
     try {
       const { renderer, factory } = makeFake();
-      (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'worker', id: 3 });
+      (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'colonist', id: 3 });
       const { wrapper } = mountHarness(factory);
       useGameStore().ingest(makeSnapshot({
-        workers: [makeWorker(3, { hunger: 0, efficiency: 1, buildingId: null, toolTicks: 0 })],
+        colonists: [makeWorker(3, { hunger: 0, efficiency: 1, buildingId: null, toolTicks: 0 })],
       }), { paused: true, speed: 1, error: null });
       await nextTick();
       await wrapper.find('[data-test="world-host"]').trigger('pointermove', { pageX: 10, pageY: 10 });
@@ -210,6 +210,10 @@ describe('WorldView', () => {
     expect(legend.text()).toContain('output full');
     expect(legend.text()).toContain('relocating');
     expect(legend.text()).toContain('carrying');
+    expect(legend.text()).toContain('housing');
+    expect(legend.text()).toContain('child');
+    expect(legend.text()).toContain('elder');
+    expect(legend.text()).toContain('homeless');
 
     // Every entry's swatch is a separate child element, sibling to the label
     // text — never the label's own element. "output full" and "carrying"
@@ -219,12 +223,12 @@ describe('WorldView', () => {
     // swatch. Checked across every entry, not just those two, so increment 5
     // cannot reintroduce the same collapse.
     //
-    // Exact counts, not thresholds: 14 entries, 13 with a swatch ("idle camp"
+    // Exact counts, not thresholds: 18 entries, 17 with a swatch ("idle camp"
     // is a literal glyph with no encoded color). A >= bound stayed green when
     // WorldLegend's "relocating" entry (added for increment 5's Relocation
     // state) was deleted outright, because 13 and 12 still satisfied it.
     const entries = legend.findAll('span');
-    expect(entries.length).toBe(14);
+    expect(entries.length).toBe(18);
     let withSwatch = 0;
     for (const entry of entries) {
       const ownsChipClass = entry.classes().includes('obsisim-chip');
@@ -235,7 +239,7 @@ describe('WorldView', () => {
       expect(swatch.text()).toBe(''); // …carrying no label text of its own
       withSwatch += 1;
     }
-    expect(withSwatch).toBe(13);
+    expect(withSwatch).toBe(17);
   });
 
   it('falls back when the renderer reports an async fatal failure', async () => {
@@ -417,7 +421,7 @@ describe('WorldView interaction', () => {
     await nextTick();
     await wrapper.find('[data-test="world-host"]').trigger('click', { pageX: 40, pageY: 40 }); // select
     expect(wrapper.find('[data-test="selection-panel"]').exists()).toBe(true);
-    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'worker', id: 3 });
+    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'colonist', id: 3 });
     await wrapper.find('[data-test="world-host"]').trigger('click', { pageX: 50, pageY: 50 });
     expect(wrapper.find('[data-test="selection-panel"]').exists()).toBe(true); // hover-only: still selected
     (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue(null);

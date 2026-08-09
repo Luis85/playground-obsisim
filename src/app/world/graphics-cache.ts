@@ -5,17 +5,20 @@ import type { GhostPreview } from './renderer-key';
 import { TILE, type PlacedBuilding } from './layout';
 import type { WorldTheme } from './theme';
 
-export const WORKER_RADIUS = 7;
+export const COLONIST_RADIUS = 7;
 export const BUILDING_SIZE = TILE - 4;
+/** Every satellite mark a colonist can wear is this size — see `mark`. */
+export const MARK_RADIUS = 3;
 
 /**
- * Building and worker looks are shared, lazily-built graphics: seven defs x
+ * Building and colonist looks are shared, lazily-built graphics: seven defs x
  * three states and five efficiency buckets x tooled-or-not. Actors swap
  * between cached variants instead of re-rasterizing anything per entity.
  */
 export class GraphicCache {
   private buildings = new Map<string, GraphicsGroup>();
-  private workers = new Map<string, Circle>();
+  private colonists = new Map<string, Circle>();
+  private marks = new Map<string, Circle>();
   private ghosts = new Map<string, GraphicsGroup>();
 
   constructor(private theme: WorldTheme) {}
@@ -54,17 +57,35 @@ export class GraphicCache {
     return group;
   }
 
-  worker(bucket: number, tooled: boolean): Circle {
+  colonist(bucket: number, tooled: boolean): Circle {
     const key = `${bucket}/${tooled}`;
-    let circle = this.workers.get(key);
+    let circle = this.colonists.get(key);
     if (!circle) {
       circle = new Circle({
-        radius: WORKER_RADIUS,
-        color: Color.fromHex(this.theme.workerColors[bucket]),
+        radius: COLONIST_RADIUS,
+        color: Color.fromHex(this.theme.colonistColors[bucket]),
         strokeColor: tooled ? Color.fromHex(this.theme.workerToolRing) : undefined,
         lineWidth: tooled ? 2 : 0,
       });
-      this.workers.set(key, circle);
+      this.colonists.set(key, circle);
+    }
+    return circle;
+  }
+
+  /**
+   * A satellite mark on a colonist: the carried load, the two life-stage
+   * marks, and the homeless mark are all the same dot at the same size, told
+   * apart only by hue and by which side of the colonist the actor hangs them
+   * on. One method keyed by COLOUR rather than four keyed by meaning, so the
+   * shape exists once — four inline `new Circle({ radius: 3, … })` copies are
+   * exactly the clone group the quality gate refuses, and they would have to
+   * be kept the same size by hand for the offsets below to stay spaced.
+   */
+  mark(color: string): Circle {
+    let circle = this.marks.get(color);
+    if (!circle) {
+      circle = new Circle({ radius: MARK_RADIUS, color: Color.fromHex(color) });
+      this.marks.set(color, circle);
     }
     return circle;
   }

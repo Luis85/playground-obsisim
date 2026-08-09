@@ -1,4 +1,4 @@
-import type { SaveGameV4 } from '../shared/save';
+import type { SaveGameV5 } from '../shared/save';
 import { MAX_SAVED_COUNTER } from '../shared/save';
 import { CAMP_COLS, isInsideMap } from '../shared/placement';
 import { BUILDINGS } from './content/buildings';
@@ -25,7 +25,7 @@ import { RESOURCES, RESOURCE_IDS } from './content/resources';
 // save): Stockpile.add saturates at that same ceiling, and buildSaveFromWorld's
 // deposit-on-save loop saturates identically, so the engine never banks an
 // amount this guard would refuse.
-export function isStockpileValid(stockpile: SaveGameV4['stockpile']): boolean {
+export function isStockpileValid(stockpile: SaveGameV5['stockpile']): boolean {
   // Key-count cap FIRST (same principle as MAX_SAVED_ENTITIES): a valid
   // stockpile has at most one key per catalog resource, and Object.entries
   // on an adversarially huge object would materialize every entry before
@@ -40,7 +40,7 @@ export function isStockpileValid(stockpile: SaveGameV4['stockpile']): boolean {
   );
 }
 
-export function isBuildingsValid(buildings: SaveGameV4['buildings']): boolean {
+export function isBuildingsValid(buildings: SaveGameV5['buildings']): boolean {
   return buildings.every((b) => {
     if (!Object.hasOwn(BUILDINGS, b.defId)) return false;
     if (b.batchActive) {
@@ -55,26 +55,89 @@ export function isBuildingsValid(buildings: SaveGameV4['buildings']): boolean {
   });
 }
 
-function isWorkerRecordValid(w: SaveGameV4['workers'][number], buildingIds: ReadonlySet<number>): boolean {
-  // Upper bounds intentionally NOT checked against current BALANCE.hungerMax /
-  // toolDurationTicks: those are clamped to current balance at spawn instead
-  // (see spawnWorker), so a save written under a higher balance value still loads.
-  if (!(w.hunger >= 0 && Number.isFinite(w.hunger))) return false;
-  if (!Number.isSafeInteger(w.toolTicks) || w.toolTicks < 0 || w.toolTicks > MAX_SAVED_COUNTER) return false;
-  if (w.buildingId === null) return true;
+/**
+ * The two kinds of building a colonist may point at, gathered once per save.
+ *
+ * You WORK at a producer and you SLEEP in a settled shelter, and neither
+ * reference may name the other kind. Precomputed as sets rather than resolved
+ * per record because the structural guard admits 10,000 buildings and 10,000
+ * colonists, and a per-record scan over the building list would be O(n^2) on a
+ * hand-edited save (the flooded-save principle: cheap checks before expensive
+ * walks).
+ *
+ * A relocating shelter is deliberately absent from `shelters`: a house in
+ * transit has no usable beds — `beds.total` excludes it and `rehome` evicts
+ * its residents on sight — so a record pairing the two is one no engine
+ * version could write. `handleMoveBuilding` sets the countdown and never
+ * touches homes; eviction is `rehome`'s job, running later in the same tick
+ * and before the end-of-tick autosave, so the pairing cannot reach a save
+ * file. Note the asymmetry with the over-capacity case, which IS repaired at
+ * load: over-capacity follows from retuning `houseBeds`, a balance value,
+ * while nothing in BALANCE can turn an evicted resident back into a housed one.
+ */
+interface ColonistTargets {
+  /** Buildings with a recipe: the only ones a job assignment may name. */
+  workplaces: ReadonlySet<number>;
+  /** Buildings with beds and no relocation in progress. */
+  shelters: ReadonlySet<number>;
+}
+
+function colonistTargets(buildings: SaveGameV5['buildings']): ColonistTargets {
+  const workplaces = new Set<number>();
+  const shelters = new Set<number>();
+  for (const b of buildings) {
+    // isBuildingsValid has already refused an unknown defId by the time
+    // isLoadableSave gets here; skipping rather than indexing keeps this
+    // total if the composition order ever changes.
+    if (!Object.hasOwn(BUILDINGS, b.defId)) continue;
+    const def = BUILDINGS[b.defId];
+    if (def.recipe !== null) workplaces.add(b.id);
+    if (def.beds > 0 && b.relocatingTicks === 0) shelters.add(b.id);
+  }
+  return { workplaces, shelters };
+}
+
+// Upper bound intentionally NOT checked against current BALANCE.hungerMax:
+// clamped to current balance at spawn instead (see spawnColonist), so a save
+// written under a higher balance value still loads. Split out, alongside
+// isValidToolTicks below, purely to keep isColonistRecordValid's own branch
+// count (and CRAP score) down — same principle as isValidAgeTicks.
+function isValidHunger(hunger: number): boolean {
+  return hunger >= 0 && Number.isFinite(hunger);
+}
+
+// Upper bound intentionally NOT checked against current BALANCE.toolDurationTicks,
+// same reasoning as isValidHunger above.
+function isValidToolTicks(toolTicks: number): boolean {
+  return Number.isSafeInteger(toolTicks) && toolTicks >= 0 && toolTicks <= MAX_SAVED_COUNTER;
+}
+
+function isColonistRecordValid(c: SaveGameV5['colonists'][number], targets: ColonistTargets): boolean {
+  if (!isValidHunger(c.hunger)) return false;
+  if (!isValidToolTicks(c.toolTicks)) return false;
+  // Present, sheltering AND settled, all three in one membership test — see
+  // ColonistTargets for why each is a record no engine version could write.
+  // (ageTicks and starvingTicks are checked structurally by isSavedColonistShape
+  // in src/shared/save.ts, which isLoadableSave runs first.)
+  if (c.homeId !== null && !targets.shelters.has(c.homeId)) return false;
+  if (c.buildingId === null) return true;
   // A worker is staffed XOR hauling, never both — handleAssignWorker refuses to
   // poach a hauler and handleAssignHauler refuses to poach a staffed worker, so
   // no version of the engine could ever write both onto one record. That makes
   // this an identity violation like the membership check below (a record no
   // playthrough could produce), not a balance-coupled value to clamp: there is
   // no "current" amount of double-staffing to grandfather down to.
-  if (w.hauling) return false;
-  return buildingIds.has(w.buildingId);
+  if (c.hauling) return false;
+  // A PRODUCER, not merely a building that exists. A colonist assigned to a
+  // house publishes as `1 / 0` workers on a zero-slot building, drops out of
+  // idleAdults, and produces nothing forever — ProductionSystem skips
+  // recipe-less buildings — and no command can create that assignment.
+  return targets.workplaces.has(c.buildingId);
 }
 
-export function isWorkersValid(data: SaveGameV4): boolean {
-  const buildingIds = new Set(data.buildings.map((b) => b.id));
-  return data.workers.every((w) => isWorkerRecordValid(w, buildingIds));
+export function isColonistsValid(data: SaveGameV5): boolean {
+  const targets = colonistTargets(data.buildings);
+  return data.colonists.every((c) => isColonistRecordValid(c, targets));
 }
 
 // Cross-array id validity: positive integers, unique across buildings AND
@@ -83,8 +146,8 @@ export function isWorkersValid(data: SaveGameV4): boolean {
 // The MAX_SAVED_COUNTER ceiling cannot ping-pong (accepted save -> play ->
 // rejected save): IdCounter saturates at that same ceiling, refusing entity
 // creation instead of writing a counter the guard would refuse to load.
-export function isIdsValid(data: SaveGameV4): boolean {
-  const allIds = [...data.buildings.map((b) => b.id), ...data.workers.map((w) => w.id)];
+export function isIdsValid(data: SaveGameV5): boolean {
+  const allIds = [...data.buildings.map((b) => b.id), ...data.colonists.map((c) => c.id)];
   // SAFE integers: past 2^53, ++ stops incrementing and ids would collide
   if (!allIds.every((id) => Number.isSafeInteger(id) && id > 0)) return false;
   if (new Set(allIds).size !== allIds.length) return false;
@@ -103,7 +166,7 @@ export function isIdsValid(data: SaveGameV4): boolean {
  * 10,000-building hand-edited save (the flooded-save principle: cheap
  * checks before expensive walks).
  */
-export function isPositionsValid(data: SaveGameV4): boolean {
+export function isPositionsValid(data: SaveGameV5): boolean {
   const tiles = new Set<string>();
   for (const b of data.buildings) {
     if (!isInsideMap(data.map, b.col, b.row) || b.col < CAMP_COLS) return false;
@@ -120,7 +183,7 @@ export function isPositionsValid(data: SaveGameV4): boolean {
  * see. The cap is NOT checked here — see spawnBuilding, which clamps an
  * over-cap buffer at load exactly as it clamps saved batch progress.
  */
-export function isBuffersValid(data: SaveGameV4): boolean {
+export function isBuffersValid(data: SaveGameV5): boolean {
   return data.buildings.every((b) => {
     const ids = Object.keys(b.buffer);
     // Key-count cap FIRST (same principle as isStockpileValid above): a valid

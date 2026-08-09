@@ -3,14 +3,15 @@ import type { IEntity } from 'sim-ecs';
 import { Hunger } from '../../../src/engine/components';
 import { IdCounter, Stockpile } from '../../../src/engine/resources';
 import { HungerSystem } from '../../../src/engine/systems/hunger-system';
-import { buildColonyPrepWorld, getPrepResource, initialSave, spawnWorker } from '../../../src/engine/world';
+import { buildColonyPrepWorld, getPrepResource, initialSave, spawnColonist } from '../../../src/engine/world';
 
 async function setup(hunger: number, stock: Partial<Record<'bread' | 'berries', number>>) {
   const save = initialSave();
-  save.workers = [];
+  save.colonists = [];
+  save.buildings = [];   // no starter house: this fixture builds its own world
   save.stockpile = stock;
   const prep = buildColonyPrepWorld({ save, systems: [HungerSystem] });
-  const worker: IEntity = spawnWorker(prep, getPrepResource(prep, IdCounter), { hunger });
+  const worker: IEntity = spawnColonist(prep, getPrepResource(prep, IdCounter), { hunger });
   const world = await prep.prepareRun();
   return { world, worker, stockpile: world.getResource(Stockpile) };
 }

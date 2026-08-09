@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { cheapestHaulerToRelease } from '../../../src/engine/systems/command-handlers';
 import type { WorkerRow } from '../../../src/engine/systems/command-handlers';
-import { HaulTrip, JobAssignment } from '../../../src/engine/components';
+import { HaulTrip, Home, JobAssignment } from '../../../src/engine/components';
 import type { HaulPhase } from '../../../src/engine/components';
 
 // The removal rule OBS-4-08 asked for, unit-tested directly: the integration
@@ -11,7 +11,10 @@ import type { HaulPhase } from '../../../src/engine/components';
 
 let nextId = 1;
 function hauler(phase: HaulPhase, ticksLeft: number, hauling = true): WorkerRow & { id: number } {
-  return { id: nextId++, job: new JobAssignment(null, hauling), trip: new HaulTrip(phase, null, ticksLeft) };
+  // stage and home are both irrelevant to release cost (phase/ticksLeft
+  // only) — 'adult' and a fresh, homeless Home() are valid, arbitrary
+  // fixture values, not a case this file is testing.
+  return { id: nextId++, job: new JobAssignment(null, hauling), trip: new HaulTrip(phase, null, ticksLeft), home: new Home(), stage: 'adult' };
 }
 
 describe('cheapestHaulerToRelease', () => {

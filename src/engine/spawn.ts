@@ -1,9 +1,9 @@
 import type { BuildingDefId, ResourceId } from '../shared/content-types';
-import { BALANCE } from './content/balance';
+import { BALANCE, MAX_AGE_TICKS } from './content/balance';
 import { BUILDINGS } from './content/buildings';
 import { RESOURCE_IDS } from './content/resources';
 import {
-  Building, Efficiency, HaulTrip, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Worker,
+  Age, Building, Efficiency, HaulTrip, Home, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Colonist,
   WorkerSlots,
 } from './components';
 
@@ -11,7 +11,7 @@ import {
  * The one place each entity kind's component set is written down.
  *
  * An entity can enter the world by two independent paths — restored from a save
- * (`spawnBuilding`/`spawnWorker` in world.ts, at preptime) or created live by a
+ * (`spawnBuilding`/`spawnColonist` in world.ts, at preptime) or created live by a
  * command (`handleConstructBuilding`/`handleRecruitWorker`, at runtime) — and
  * each used to list its own components. Forgetting one was silent, and it bit
  * twice inside a single increment: buildings constructed during play had no
@@ -33,15 +33,22 @@ import {
  * rejecting the save. `isLoadableSave` deliberately does not bounds-check these.
  *
  * They live here because three callers must agree on them: both spawn paths, and
- * `buildInitialSnapshot`, which seeds a snapshot that has to match the entities
- * actually spawned. That third mirror was maintained by hand and by comment.
+ * the restore path (`restoredColonists`, `buildInitialSnapshot`), which seeds a
+ * snapshot that has to match the entities actually spawned.
  */
 export function clampedProgress(defId: BuildingDefId, progress: number): number {
-  return Math.min(progress, BUILDINGS[defId].recipe.ticksPerBatch);
+  const { recipe } = BUILDINGS[defId];
+  // A shelter has no batch to be part-way through; any saved progress on one
+  // is meaningless and clamps to nothing rather than being rejected.
+  return recipe === null ? 0 : Math.min(progress, recipe.ticksPerBatch);
 }
 
 export function clampedHunger(hunger: number): number {
   return Math.min(hunger, BALANCE.hungerMax);
+}
+
+export function clampedStarving(ticks: number): number {
+  return Math.max(0, Math.min(ticks, BALANCE.starvationDeathTicks));
 }
 
 export function clampedToolTicks(toolTicks: number): number {
@@ -51,7 +58,7 @@ export function clampedToolTicks(toolTicks: number): number {
 /**
  * A saved relocation countdown, clamped to what current balance can produce.
  * Exported (promoted back from module-private) because `buildInitialSnapshot`
- * in world.ts now needs it: the seeded snapshot's `relocatingTicks` fact must
+ * needs it too: the seeded snapshot's `relocatingTicks` fact must
  * be clamped the same way `buildingComponents` below clamps the live
  * `Relocation` component, or the two would disagree about a saved building
  * that outlived a balance retune (same principle as clampedProgress,
@@ -59,6 +66,10 @@ export function clampedToolTicks(toolTicks: number): number {
  */
 export function clampedRelocation(ticksLeft: number): number {
   return Math.max(0, Math.min(ticksLeft, BALANCE.maxRelocationTicks));
+}
+
+export function clampedAge(ticks: number): number {
+  return Math.max(0, Math.min(ticks, MAX_AGE_TICKS));
 }
 
 /**
@@ -105,25 +116,39 @@ export function buildingComponents(spec: BuildingSpec): object[] {
 }
 
 /** Initial values for a worker, from a save record or from a recruit command. */
-export interface WorkerSpec {
+export interface ColonistSpec {
   id: number;
   hunger?: number;
+  starvingTicks?: number;
   buildingId?: number | null;
   hauling?: boolean;
   efficiency?: number;
   toolTicks?: number;
+  ageTicks?: number;
+  homeId?: number | null;
 }
 
 /** Every component a worker needs, in one list. Order is not significant. */
-export function workerComponents(spec: WorkerSpec): object[] {
+export function colonistComponents(spec: ColonistSpec): object[] {
   return [
-    new Worker(spec.id),
-    new Hunger(clampedHunger(spec.hunger ?? 0)),
+    new Colonist(spec.id),
+    new Hunger(clampedHunger(spec.hunger ?? 0), clampedStarving(spec.starvingTicks ?? 0)),
     new JobAssignment(spec.buildingId ?? null, spec.hauling ?? false),
     new Efficiency(spec.efficiency ?? 1),
     new ToolCoverage(clampedToolTicks(spec.toolTicks ?? 0)),
     // Runtime-only, never saved — but every worker carries one, so a hauler can
     // be assigned without the snapshot query losing sight of them.
     new HaulTrip(),
+    // Defaults to a founder's starting age, not 0: an unspecified age means
+    // "a spec that does not care", and BALANCE.startingAgeTicks (spec 2.2) is
+    // already the documented age new founders begin at. 0 would make every
+    // colonist created without an explicit age a child — including every
+    // fixture colonist — silently ineligible for the assign command.
+    new Age(clampedAge(spec.ageTicks ?? BALANCE.startingAgeTicks)),
+    // Saved since v5, so a restored colonist wakes in the bed they went to
+    // sleep in rather than homeless until the next rehome pass. Unspecified
+    // still means homeless: a colonist created by a command without one (an
+    // arrival whose gate found no bed) genuinely has nowhere to live.
+    new Home(spec.homeId ?? null),
   ];
 }

@@ -91,8 +91,8 @@ check('scene is static once the walk settles', settledB.equals(settledA));
 
 const probe = await page.evaluate(() => window.__probe());
 check(
-  `pick() resolves buildings, workers, and empty ground through the live camera (${JSON.stringify(probe)})`,
-  probe.building > 0 && probe.worker > 0 && probe.empty > 0,
+  `pick() resolves buildings, colonists, and empty ground through the live camera (${JSON.stringify(probe)})`,
+  probe.building > 0 && probe.colonist > 0 && probe.empty > 0,
 );
 
 await step(2); // stop()
@@ -163,22 +163,57 @@ await step(14); // colony reset: tick regresses, ids recycle
 await wait(400);
 const afterReset = await page.evaluate(() => window.__probe());
 check(
-  `reset clears the old colony (buildings gone, fresh workers at camp) (${JSON.stringify(afterReset)})`,
-  afterReset.building === 0 && afterReset.worker > 0,
+  `reset clears the old colony (buildings gone, fresh colonists at camp) (${JSON.stringify(afterReset)})`,
+  afterReset.building === 0 && afterReset.colonist > 0,
 );
 
 await step(15); // same-tick reset: a new snapshot at the same tick is a new timeline
 await wait(400);
 const afterSameTickReset = await page.evaluate(() => window.__probe());
 check(
-  // worker > 0, not an exact count: the probe grid's nearest sample sits
+  // colonist > 0, not an exact count: the probe grid's nearest sample sits
   // within ~1px of the pick radius at this zoom — an exact count flips on
   // any TILE/margin/host change and would read as a renderer regression
   `same-tick reset also clears the previous colony (${JSON.stringify(afterSameTickReset)})`,
-  afterSameTickReset.building === 0 && afterSameTickReset.worker > 0,
+  afterSameTickReset.building === 0 && afterSameTickReset.colonist > 0,
 );
 
-await step(16); // dispose()
+// Demographics. One change per phase (see homeScene in the harness), so each
+// check below fails for the reason it names and nothing else: the scene is two
+// settled dots at the camp, and the only thing that moves is the house
+// arriving, then one field on colonist 4.
+const preHouse = await shot();
+
+await step(16); // a house appears — nothing else moves
+await wait(400);
+const withHouse = await shot();
+check('a house is drawn on the canvas', !withHouse.equals(preHouse));
+
+await step(17); // ONE colonist's homeId becomes 1 — it stands where it stood
+await wait(400);
+const housed = await shot();
+check('the homeless mark clears when a colonist moves in', !housed.equals(withHouse));
+
+await step(18); // that SAME colonist's stage becomes 'child' — one field, one frame
+await wait(400);
+const withChild = await shot();
+check('a child is drawn differently from an adult', !withChild.equals(housed));
+
+await step(19); // that same colonist becomes 'elder' — one field, one frame
+await wait(400);
+const withElder = await shot();
+// Against the ADULT frame as well as the child one, deliberately. `!==` the
+// child frame alone is satisfied by an elder mark that is never drawn at all
+// (no mark differs from a yellow one just as much as a silver one does) — the
+// precise "green with the feature removed" failure OBS-4-04 is about. The
+// adult frame is the unmarked baseline, so the pair pins both halves: the mark
+// exists, and it is not the child's colour.
+check(
+  'an elder is drawn differently from a child and from an unmarked adult',
+  !withElder.equals(withChild) && !withElder.equals(housed),
+);
+
+await step(20); // dispose()
 await wait(300);
 check('dispose() raises no errors', pageErrors.length === 0);
 

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import { useGameStore } from '../../src/app/stores/game-store';
-import type { EngineStatus } from '../../src/shared/snapshot';
+import type { EngineStatus, Snapshot } from '../../src/shared/snapshot';
 import { makeSnapshot, stockedWith, makeBuilding, makeWorker } from './fixtures';
 
 // wheat is edible ONLY in this mock: the hardcoded getter ignores it (test
@@ -132,7 +132,7 @@ describe('useGameStore', () => {
     const store = useGameStore();
     const base = {
       col: 0, row: 0, workers: 0, workerSlots: 2, progress: 0, batchActive: false,
-      progressPct: 0, tooledWorkers: 0, workPower: 0, buffered: 0, relocatingTicks: 0,
+      progressPct: 0, tooledWorkers: 0, workPower: 0, buffered: 0, relocatingTicks: 0, beds: 0, occupants: 0,
     };
     store.ingest(makeSnapshot({
       buildings: [
@@ -172,7 +172,7 @@ describe('useGameStore', () => {
         makeBuilding(2, { buffered: 3, state: 'producing' }),
         makeBuilding(3, { buffered: 0, state: 'unstaffed' }),
       ],
-      workers: [makeWorker(1, { hauling: true }), makeWorker(2, { hauling: true }), makeWorker(3, {})],
+      colonists: [makeWorker(1, { hauling: true }), makeWorker(2, { hauling: true }), makeWorker(3, {})],
     }), { paused: false, speed: 1, error: null });
     expect(store.haulerCount).toBe(2);
     expect(store.unitsWaiting).toBe(15);
@@ -184,5 +184,71 @@ describe('useGameStore', () => {
     expect(store.haulerCount).toBe(0);
     expect(store.unitsWaiting).toBe(0);
     expect(store.stalledBuildings).toBe(0);
+  });
+
+  // A colony that clears every nomad gate: a spare bed, food far past
+  // nomadFoodPerHead, and the recruit cooldown long elapsed. Each case below
+  // spoils exactly one of the three, so a getter that collapsed them into a
+  // single catch-all could not satisfy all four at once.
+  const welcoming = (overrides: Partial<Snapshot> = {}): Snapshot => makeSnapshot({
+    population: 3,
+    beds: { total: 4, occupied: 3 },
+    stockpile: stockedWith({ bread: 500 }),
+    tick: 1000,
+    lastRecruitTick: 0,
+    ...overrides,
+  });
+
+  it('bedsFree charges every colonist a bed, homeless ones included', () => {
+    const store = useGameStore();
+    store.ingest(welcoming(), status);
+    expect(store.bedsFree).toBe(1); // 4 beds, 3 colonists
+
+    // `occupied` and `population` disagree here, which they never do after a
+    // tick's homing phase has run — that is exactly what tells the two
+    // candidate formulas apart. The engine's own gate input (spareBeds)
+    // subtracts the POPULATION, because a homeless colonist still has a claim
+    // on a bed; subtracting `occupied` would advertise four free beds to a
+    // nomad while four residents were still queueing for them.
+    store.ingest(welcoming({ population: 6, beds: { total: 6, occupied: 2 } }), status);
+    expect(store.bedsFree).toBe(0);
+    store.ingest(welcoming({ population: 4, beds: { total: 6, occupied: 2 } }), status);
+    expect(store.bedsFree).toBe(2);
+  });
+
+  it('nomadBlocker names each gate, in the order the player can act on it', () => {
+    const store = useGameStore();
+    store.ingest(welcoming({ beds: { total: 3, occupied: 3 } }), status);
+    expect(store.nomadBlocker).toBe('noBed');
+
+    store.ingest(welcoming({ stockpile: stockedWith({ bread: 1 }) }), status);
+    expect(store.nomadBlocker).toBe('notEnoughFood');
+
+    store.ingest(welcoming({ tick: 5, lastRecruitTick: 0 }), status);
+    expect(store.nomadBlocker).toBe('cooldown');
+
+    expect(store.nomadBlocker).not.toBeNull(); // the three above are genuinely blocking
+    store.ingest(welcoming(), status);
+    expect(store.nomadBlocker).toBeNull();
+  });
+
+  // Food is measured from the STOCKPILE, not read off the published
+  // mealsPerHead: the ratio counts one more head than the colony has, so a
+  // getter trusting the field would answer a different question the moment
+  // population changed. Bread here is deliberately far under the bar while
+  // mealsPerHead claims the opposite.
+  it('nomadBlocker recomputes the food ratio rather than trusting the published one', () => {
+    const store = useGameStore();
+    store.ingest(welcoming({ stockpile: stockedWith({ bread: 1 }), mealsPerHead: 9999 }), status);
+    expect(store.nomadBlocker).toBe('notEnoughFood');
+  });
+
+  it('nomadBlocker refuses, and bedsFree is zero, before the first snapshot', () => {
+    // The button must render disabled while App.vue is still loading, and it
+    // must name a gate rather than an empty string: a null blocker would mean
+    // "go ahead" against a colony this store knows nothing about.
+    const store = useGameStore();
+    expect(store.bedsFree).toBe(0);
+    expect(store.nomadBlocker).toBe('noBed');
   });
 });

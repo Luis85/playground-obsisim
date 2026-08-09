@@ -53,7 +53,7 @@ describe('resolveWorldTheme', () => {
     expect(theme.stateRing.producing).toMatch(HEX);
     expect(theme.stateRing.waitingForInput).toMatch(HEX);
     expect(theme.stateRing.unstaffed).toMatch(HEX);
-    for (const color of theme.workerColors) expect(color).toMatch(HEX);
+    for (const color of theme.colonistColors) expect(color).toMatch(HEX);
     expect(theme.workerToolRing).toMatch(HEX);
     expect(theme.progressFill).toMatch(HEX);
     expect(theme.ground[0]).toMatch(HEX);
@@ -71,7 +71,7 @@ describe('resolveWorldTheme', () => {
   it('danger is the resolved red', () => {
     const themed = resolveWorldTheme((name) => (name === '--color-red' ? '#aa1122' : ''));
     expect(themed.danger).toBe('#aa1122');
-    expect(themed.workerColors[0]).toBe('#aa1122'); // same source as starving-worker red
+    expect(themed.colonistColors[0]).toBe('#aa1122'); // same source as starving-worker red
   });
 
   it('gives the output-full stall its own ring, distinct from every other state', () => {
@@ -95,6 +95,34 @@ describe('resolveWorldTheme', () => {
     expect(minChannelDistance(theme.carriedLoad, theme.progressFill)).toBeGreaterThan(3);
   });
 
+  it('resolves the demographic tokens to concrete colours', () => {
+    const theme = resolveWorldTheme(() => '');   // no vault variables: fallbacks
+    expect(theme.buildingGlyph.house).toBe('🏠');
+    expect(theme.homelessMark).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(theme.stageMark.child).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(theme.stageMark.elder).toMatch(/^#[0-9a-f]{6}$/i);
+    // Discriminating: the two stage marks must differ from each other AND from
+    // the hues already spoken for, or the canvas says two things with one colour.
+    const claimed = [theme.workerToolRing, theme.progressFill, theme.carriedLoad, theme.accent, theme.danger];
+    expect(theme.stageMark.child).not.toBe(theme.stageMark.elder);
+    expect(claimed).not.toContain(theme.stageMark.child);
+    expect(claimed).not.toContain(theme.stageMark.elder);
+    expect(claimed).not.toContain(theme.homelessMark);
+  });
+
+  it('keeps the demographic marks off every building state ring as well', () => {
+    // The brief's `claimed` list above covers the colonist-scale hues but not
+    // the building rings, and a house is drawn beside the colonists standing
+    // in it — a stage mark in the housing blue (or the relocating cyan) would
+    // read as a property of the wrong object.
+    const theme = resolveWorldTheme(() => '');
+    const rings = Object.values(theme.stateRing);
+    for (const mark of [theme.stageMark.child, theme.stageMark.elder, theme.homelessMark]) {
+      expect(rings).not.toContain(mark);
+    }
+    expect(new Set([theme.stageMark.child, theme.stageMark.elder, theme.homelessMark]).size).toBe(3);
+  });
+
   // Deliberate, not a coincidence: carriedLoad's doc comment (theme.ts) and
   // the relocating case in resolveWorldTheme both say "in transit" and
   // intentionally resolve to the same --color-cyan. Pinned as equality so a
@@ -109,7 +137,7 @@ describe('efficiencyBucket', () => {
   it('maps starving to the first bucket and healthy to the last', () => {
     const theme = resolveWorldTheme(none);
     expect(efficiencyBucket(0.2)).toBe(0);
-    expect(efficiencyBucket(1.5)).toBe(theme.workerColors.length - 1);
+    expect(efficiencyBucket(1.5)).toBe(theme.colonistColors.length - 1);
   });
 
   it('is monotonic in efficiency', () => {

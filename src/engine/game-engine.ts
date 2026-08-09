@@ -1,16 +1,16 @@
 import type { IRuntimeWorld } from 'sim-ecs';
 import type { Command } from '../shared/commands';
 import type { EngineStatus, Snapshot } from '../shared/snapshot';
-import type { SaveGameV4 } from '../shared/save';
+import type { SaveGameV5 } from '../shared/save';
 import { LATEST_SAVE_VERSION, MAX_SAVED_COUNTER } from '../shared/save';
 import { BALANCE } from './content/balance';
 import { CommandQueue, IdCounter, RemovalLedger, SimClock, SnapshotStore, Stockpile, WorldMap } from './resources';
-import { gatherEntityFacts, savedBuildingOf, savedWorkerOf } from './snapshot-builder';
+import { gatherEntityFacts, savedBuildingOf, savedColonistOf } from './snapshot-builder';
 import { createColonyWorld, initialSave, refreshEntitySections } from './world';
 
 export type UpdateListener = (snapshot: Snapshot | null, status: EngineStatus) => void;
 
-export function buildSaveFromWorld(world: IRuntimeWorld): SaveGameV4 {
+export function buildSaveFromWorld(world: IRuntimeWorld): SaveGameV5 {
   const clock = world.getResource(SimClock);
   const facts = gatherEntityFacts(world);
   const stockpile = world.getResource(Stockpile).toJSON();
@@ -33,10 +33,14 @@ export function buildSaveFromWorld(world: IRuntimeWorld): SaveGameV4 {
     version: LATEST_SAVE_VERSION,
     tick: clock.tick,
     lastRecruitTick: clock.lastRecruitTick,
+    // Persisted for the reason lastRecruitTick is: a cooldown a reload could
+    // cancel is not a cooldown. Dropping it would let a player save and reload
+    // to skip the wait between births.
+    lastBirthTick: clock.lastBirthTick,
     stockpile,
     map: { cols: world.getResource(WorldMap).cols, rows: world.getResource(WorldMap).rows },
     buildings: facts.buildings.map(savedBuildingOf).sort((a, b) => a.id - b.id),
-    workers: facts.workers.map(savedWorkerOf).sort((a, b) => a.id - b.id),
+    colonists: facts.workers.map(savedColonistOf).sort((a, b) => a.id - b.id),
     nextEntityId: world.getResource(IdCounter).peek(),
   };
 }
@@ -49,11 +53,11 @@ export class GameEngine {
   private stepping = false;
   private inFlight: Promise<void> | null = null;
   private readonly updateListeners: UpdateListener[] = [];
-  private autosaveListener: ((save: SaveGameV4) => void) | null = null;
+  private autosaveListener: ((save: SaveGameV5) => void) | null = null;
 
   private constructor(private world: IRuntimeWorld) {}
 
-  static async create(save?: SaveGameV4 | null): Promise<GameEngine> {
+  static async create(save?: SaveGameV5 | null): Promise<GameEngine> {
     return new GameEngine(await createColonyWorld(save ?? initialSave()));
   }
 
@@ -70,7 +74,7 @@ export class GameEngine {
     listener(this.snapshot, this.status);
   }
 
-  onAutosave(listener: (save: SaveGameV4) => void): void {
+  onAutosave(listener: (save: SaveGameV5) => void): void {
     this.autosaveListener = listener;
   }
 
@@ -168,7 +172,7 @@ export class GameEngine {
     this.publish();
   }
 
-  serialize(): SaveGameV4 {
+  serialize(): SaveGameV5 {
     // live ECS state, never the snapshot — see buildSaveFromWorld
     return buildSaveFromWorld(this.world);
   }

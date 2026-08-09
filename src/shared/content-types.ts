@@ -7,7 +7,8 @@ export type BuildingDefId =
   | 'bakery'
   | 'forester'
   | 'sawmill'
-  | 'workshop';
+  | 'workshop'
+  | 'house';
 
 export type ResourceTier = 'raw' | 'processed' | 'finished';
 
@@ -24,7 +25,7 @@ export interface ResourceDef {
 export interface RecipeDef {
   inputs: CostMap;
   outputs: CostMap;
-  /** Worker-ticks of accumulated progress needed to finish one batch. */
+  /** Colonist-ticks of accumulated progress needed to finish one batch. */
   ticksPerBatch: number;
 }
 
@@ -33,7 +34,11 @@ export interface BuildingDef {
   name: string;
   cost: CostMap;
   workerSlots: number;
-  recipe: RecipeDef;
+  /** Null for a building that shelters instead of producing. Exactly one of
+   * `recipe` and `beds` is set — pinned by a content test. */
+  recipe: RecipeDef | null;
+  /** Sleeping places this building provides. 0 for a producer. */
+  beds: number;
 }
 
 export interface ChainStep {

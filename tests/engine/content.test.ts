@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { BALANCE, STARTING_STOCK, workerEfficiency } from '../../src/engine/content/balance';
-import { RESOURCES, RESOURCE_IDS } from '../../src/engine/content/resources';
+import { BALANCE, STARTING_STOCK, colonistEfficiency } from '../../src/engine/content/balance';
+import { MEAL_WEIGHTS, RESOURCES, RESOURCE_IDS } from '../../src/engine/content/resources';
 import { BUILDINGS, BUILDING_IDS } from '../../src/engine/content/buildings';
 import { CHAINS } from '../../src/engine/content/chains';
+import { MIGRATION_CONSTANTS } from '../../src/shared/save-migration';
 import type { ResourceId } from '../../src/shared/content-types';
 
 // Content validation (spec §7.1): the catalog is plain typed data, so nothing
@@ -11,12 +12,12 @@ import type { ResourceId } from '../../src/shared/content-types';
 // balance numbers are the sim tests' concern.
 
 const hasProducer = (res: string) =>
-  BUILDING_IDS.some((b) => (BUILDINGS[b].recipe.outputs[res as ResourceId] ?? 0) > 0);
+  BUILDING_IDS.some((b) => (BUILDINGS[b].recipe?.outputs[res as ResourceId] ?? 0) > 0);
 
 describe('content catalog', () => {
-  it('has 7 resources and 7 buildings', () => {
+  it('has 7 resources and 8 buildings', () => {
     expect(RESOURCE_IDS).toHaveLength(7);
-    expect(BUILDING_IDS).toHaveLength(7);
+    expect(BUILDING_IDS).toHaveLength(8);
   });
 
   describe.each(BUILDING_IDS)('%s', (id) => {
@@ -25,13 +26,16 @@ describe('content catalog', () => {
     it('references only existing resources', () => {
       const referenced = [
         ...Object.keys(def.cost),
-        ...Object.keys(def.recipe.inputs),
-        ...Object.keys(def.recipe.outputs),
+        ...Object.keys(def.recipe?.inputs ?? {}),
+        ...Object.keys(def.recipe?.outputs ?? {}),
       ];
       for (const res of referenced) expect(RESOURCES[res as ResourceId], `${res} missing`).toBeDefined();
     });
 
     it('has positive batch length and worker slots', () => {
+      // A shelter has no batch and no crew — the exactly-one-of-recipe-or-beds
+      // test below covers it instead.
+      if (def.recipe === null) return;
       expect(def.recipe.ticksPerBatch).toBeGreaterThan(0);
       expect(def.workerSlots).toBeGreaterThan(0);
     });
@@ -56,7 +60,7 @@ describe('content catalog', () => {
       for (const step of chain.steps) {
         const def = BUILDINGS[step.building];
         expect(def).toBeDefined();
-        expect((def.recipe.outputs[step.output] ?? 0) > 0).toBe(true);
+        expect((def.recipe?.outputs[step.output] ?? 0) > 0).toBe(true);
       }
     },
   );
@@ -66,10 +70,87 @@ describe('content catalog', () => {
     expect(edible.sort()).toEqual(['berries', 'bread']);
   });
 
-  it('workerEfficiency matches the spec curve', () => {
-    expect(workerEfficiency(0)).toBe(1);
-    expect(workerEfficiency(BALANCE.mealThreshold)).toBe(1);
-    expect(workerEfficiency(75)).toBeCloseTo(0.6);
-    expect(workerEfficiency(100)).toBeCloseTo(0.2);
+  it('colonistEfficiency matches the spec curve', () => {
+    expect(colonistEfficiency(0)).toBe(1);
+    expect(colonistEfficiency(BALANCE.mealThreshold)).toBe(1);
+    expect(colonistEfficiency(75)).toBeCloseTo(0.6);
+    expect(colonistEfficiency(100)).toBeCloseTo(0.2);
+  });
+
+  it('every building def has exactly one of a recipe or beds', () => {
+    // The rule that keeps `recipe: RecipeDef | null` honest: a def with neither
+    // does nothing at all, and a def with both is two mechanics in one entry.
+    for (const def of Object.values(BUILDINGS)) {
+      const produces = def.recipe !== null;
+      const shelters = def.beds > 0;
+      expect(produces !== shelters, `${def.id} must produce or shelter, not neither or both`).toBe(true);
+    }
+  });
+
+  it('every edible has a meal weight, and nothing else does', () => {
+    // Both directions. A new edible with no weight is invisible to the food
+    // gates — the colony would starve while the store looked full — and a
+    // weight for something nobody eats inflates mealsPerHead against food
+    // that can never be eaten. Derived from the catalog's own `edible` flag
+    // rather than a second hand-written list, which is the thing that drifts.
+    const edible = RESOURCE_IDS.filter((id) => RESOURCES[id].edible).sort();
+    expect(Object.keys(MEAL_WEIGHTS).sort()).toEqual(edible);
+  });
+
+  it('a meal weight is what that food restores, relative to one meal', () => {
+    // Pins the derivation, not the literal: retune berriesHungerRestore and
+    // this still holds, while a hand-typed 0.6 would silently be wrong.
+    expect(MEAL_WEIGHTS.bread).toBe(1);
+    expect(MEAL_WEIGHTS.berries).toBe(BALANCE.berriesHungerRestore / BALANCE.mealThreshold);
+    expect(MEAL_WEIGHTS.berries).toBeLessThan(MEAL_WEIGHTS.bread); // discriminating: not all 1
+  });
+
+  it('a nomad costs more stored food than a birth', () => {
+    // Spec 2.7: the recovery valve is itself a trap, and this is the price.
+    //
+    // This assertion earned its keep during the increment-6 balance retune.
+    // `birthFoodPerHead` was raised 6 -> 12 on measurement while
+    // `nomadFoodPerHead` still sat at 10, and this is the test that failed —
+    // the pair had silently inverted, making a stranger CHEAPER than your own
+    // child and turning the trap into the easy option. The resolution was to
+    // move the nomad gate with it (to 20, holding the 5:3 proportion the pair
+    // shipped with), never to soften the comparison. A relationship two
+    // literals happen to satisfy is one retune away from being false; this
+    // line is what makes it a rule.
+    expect(BALANCE.nomadFoodPerHead).toBeGreaterThan(BALANCE.birthFoodPerHead);
+  });
+
+  it('homelessness is exactly as bad as the worst commute', () => {
+    // Spec 4: one number for the player to beat. A drift between these two
+    // would make being homeless quietly better than living far away.
+    expect(BALANCE.homelessFactor).toBe(BALANCE.commute.floor);
+  });
+
+  it('the migration constants match the balance they duplicate', () => {
+    // The duplication is forced — src/shared/save-migration.ts may not import
+    // BALANCE — so each one is pinned instead of trusted. Drift here would age
+    // or house a migrated colony differently from a fresh one, silently.
+    expect(MIGRATION_CONSTANTS.houseBeds).toBe(BALANCE.houseBeds);
+    expect(MIGRATION_CONSTANTS.startingAgeTicks).toBe(BALANCE.startingAgeTicks);
+    expect(MIGRATION_CONSTANTS.spreadTicks).toBe(BALANCE.lifeBands.spreadTicks);
+    expect(MIGRATION_CONSTANTS.birthCooldownTicks).toBe(BALANCE.birthCooldownTicks);
+  });
+
+  it("'house' is still the only sheltering def the migration can name", () => {
+    // The migration identifies a saved shelter as `defId === 'house'`, because
+    // src/shared/** cannot import BUILDINGS. That literal is a duplicated fact
+    // like the numbers above, and it fails in a nastier way: add a second
+    // building with beds and the migration silently stops seeing it as
+    // housing, seeding its residents homeless with nothing to point at.
+    const sheltering = BUILDING_IDS.filter((id) => BUILDINGS[id].beds > 0);
+    expect(sheltering).toEqual(['house']);
+  });
+
+  it('the house shelters and never produces', () => {
+    expect(BUILDINGS.house.recipe).toBeNull();
+    expect(BUILDINGS.house.beds).toBe(BALANCE.houseBeds);
+    expect(BUILDINGS.house.workerSlots).toBe(0);
+    // Costs planks, which before this had no demand outside mill/bakery/workshop.
+    expect(BUILDINGS.house.cost.planks).toBeGreaterThan(0);
   });
 });

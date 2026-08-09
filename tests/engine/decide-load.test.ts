@@ -33,9 +33,15 @@ describe('decideLoad', () => {
     const decision = decideLoad(v1);
     expect(decision.kind).toBe('restore');
     if (decision.kind !== 'restore') return;
-    expect(decision.save.version).toBe(4);
+    expect(decision.save.version).toBe(5);
     expect(decision.save.map).toEqual({ cols: 24, rows: 16 });
-    expect(decision.save.buildings.map((b) => [b.col, b.row])).toEqual([[4, 1], [6, 1]]);
+    // The two legacy buildings on the legacy pattern, plus the starter house
+    // v4->v5 gives a colony that has never had anywhere to live — on the next
+    // tile the plot sequence yields, and with the worker already in it.
+    expect(decision.save.buildings.map((b) => [b.defId, b.col, b.row])).toEqual([
+      ['forester', 4, 1], ['farm', 6, 1], ['house', 8, 1],
+    ]);
+    expect(decision.save.colonists.every((c) => c.homeId !== null)).toBe(true);
   });
 
   it('routes a save with an unknown version to backup', () => {
@@ -51,6 +57,15 @@ describe('decideLoad', () => {
     const save = initialSave();
     save.buildings = [{ id: 99, defId: 'notABuilding' as never, progress: 0, batchActive: false, col: 4, row: 1, buffer: {}, relocatingTicks: 0 }];
     save.nextEntityId = 100;
+    expect(decideLoad(save)).toEqual({ kind: 'backup' });
+  });
+
+  it('routes a save with a corrupted (non-numeric) ageTicks to backup, not a silent population loss', () => {
+    // Without the guard, this load would have succeeded: clampedAge('abc') is
+    // NaN, and resolveOldAge removes any colonist whose age fails `< lifespanFor`
+    // — which NaN always does — killing it on the very first tick post-load.
+    const save = initialSave();
+    save.colonists[0].ageTicks = 'abc' as never;
     expect(decideLoad(save)).toEqual({ kind: 'backup' });
   });
 

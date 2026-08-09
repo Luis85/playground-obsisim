@@ -73,6 +73,8 @@ Pure shared law, no engine changes, landed first so every later task has a vocab
   - `export function nextSupplyTarget(candidates, from: TileRef): SupplyCandidate | null`
 - **Unchanged on purpose:** `CAMP_TILE`, `haulDistance`, `haulTicks`, `legProgress`, `HaulCandidate`, `claimableAt`, `compareHaulCandidates`, `nextHaulTarget`. `haulTicks` is re-expressed in terms of `haulTicksBetween` but keeps its signature — `haulerCapacity` and the commute charge still measure from the camp.
 
+> **`tests/shared/haul.test.ts` already contains a partial draft of this step**, committed in `c6468e8` from an implementation run that started against an older version of this plan. **Rewrite it rather than extending it.** It predates the building–source *pair* shape of `SupplyCandidate`, so its tie-break fixtures encode only building coordinates — which means a comparator that ignores the source leg entirely and ranks plain hauler-to-building distance still passes them. That is the specific defect Step 1 below now guards against, and it is invisible unless you compare the fixture against the interface.
+
 - [ ] **Step 1: Write the failing tests**
 
 Append to `tests/shared/haul.test.ts`. The cases that matter are the ones an implementation can get subtly wrong:
@@ -116,7 +118,7 @@ describe('nearestSiteWithRoom', () => {
 });
 ```
 
-For `nextSupplyTarget`, mirror the existing `nextHaulTarget` tests: most movable first, then nearest **to the hauler's site** (not to the camp — this is the difference from the collect comparator and the thing to pin), then lowest building id.
+For `nextSupplyTarget`, the fixture must exercise the **whole route**, because a candidate is a building–source pair: most movable first, then `hauler → source → building` ascending, then lowest building id, then lowest site id. Pin it with **one building reachable from two sites** whose ordering differs depending on whether the source leg is counted — a fixture encoding only building coordinates cannot tell a correct comparator from one that ignores the source entirely, and that is exactly what the draft in the working tree does.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -658,8 +660,11 @@ const arrive = (trip: HaulTrip, row: BuildingRow, capacity: number): void => {
   const ticks = haulTicksBetween(row.position, dest, BALANCE.haulTilesPerTick);
   trip.ticksLeft = ticks;
   trip.legTicks = ticks;
-  trip.legFromCol = row.position.col;
-  trip.pickupRow = row.position.row;
+  // ALL FOUR, every leg. Setting one and leaving the rest at defaults is the
+  // failure this four-field model exists to prevent, and this snippet had
+  // exactly that shape for a round.
+  trip.legFromCol = row.position.col;  trip.legFromRow = row.position.row;
+  trip.legToCol = dest.col;            trip.legToRow = dest.row;
 };
 ```
 
@@ -679,7 +684,12 @@ The one case reservation cannot cover is a destination that **stops existing** �
 // a load-time spill); using it here would teleport goods to the camp while the
 // hauler stands at the depot, and §4 q2 measures exactly whether a depot pays
 // for itself.
-if (dest === null || dest.id !== siteUnderfoot.id) { startReturnLeg(trip, from, dest ?? camp); return; }
+// Compare the TILE this leg was aimed at, not the site id. A storehouse that
+// finishes relocating mid-leg keeps its id and changes its tile, so an
+// id-only test passes and the load is deposited at a depot the hauler never
+// walked to. The frozen legTo is what the walk was actually priced against.
+const arrived = dest !== null && dest.col === trip.legToCol && dest.row === trip.legToRow;
+if (!arrived) { startReturnLeg(trip, at, dest ?? camp); return; }
 ```
 
 The camp is unbounded and cannot vanish, so the walk terminates. **The test asserts the ticks**, not only that the goods reached the camp — an arrival-count assertion passes for a teleport, which is the whole thing this rule prevents.

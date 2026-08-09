@@ -933,8 +933,14 @@ the other is decided and deliberately not fixed.
 4. With zero haulers assigned, every input-consuming building eventually stops,
    and the Economy view states how many are idle for want of inputs and how
    many units are short — separately from the output backlog it already names.
-5. Job selection is deterministic across both kinds: the same world state
-   produces the same claims across runs and across a save/load cycle.
+5. Job selection is deterministic across both kinds: the same **live** world
+   state produces the same claims across runs. Deliberately **not** across a
+   save/load cycle — `HaulTrip` is not persisted (§2.9), so an idle hauler
+   beside a depot reloads at the camp and carried cargo is banked there, and
+   the reloaded colony can legitimately choose different claims. §2.5 states
+   what survives a reload instead: exact conservation, every site's stock still
+   reachable, and work resuming within a bounded number of ticks. Requiring
+   equal claims here would fail a correct implementation.
 6. A v5 save loads as a v6 colony with empty input buffers, no storehouses, and
    its stockpile intact at the camp — buildings exactly where increment 6 left
    them, colonists exactly as old.

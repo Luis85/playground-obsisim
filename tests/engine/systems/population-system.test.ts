@@ -623,21 +623,53 @@ interface Exercised {
    * SAME drain, recruit first — the state `reseatArrivalsOf` exists for. */
   contested: number;
   /** Ticks on which a bed `rehome` could have filled actually stood free —
-   * without which the fourth clause below is true of an empty question. */
+   * without which the fifth clause below is true of an empty question. */
   spare: number;
+  /**
+   * Ticks that were BOTH — a contested drain AND one with a bed standing free
+   * for the displaced arrival to be re-seated INTO. That conjunction, not
+   * either half, is the only state in which the fifth clause can fail at all:
+   * with no contest nothing displaces an arrival, and with no slack the
+   * arrival is legitimately homeless whether or not the re-seat happens.
+   * Measured: 2 of the 8 contested drains, and the fifth clause fails on
+   * exactly those two ticks under a move that evicts without re-seating.
+   * Guarding `contested` and `spare` separately leaves it unpinned — see the
+   * demonstration in the vacuity guard below (OBS-6-07 I1).
+   *
+   * Read BEFORE the drain, deliberately. The obvious form — `contested` with
+   * this tick's `spare` — is unassertable: measured, `spare` is 0 on all 8
+   * contested ticks, because when there IS a bed the re-seat takes it, and
+   * when there is not the arrival ends homeless with nothing free. The state
+   * has to be read on the way in, not on the way out.
+   */
+  contestedWithSlack: number;
 }
 
-/** Tally one tick against those states, from what the engine said it did. */
-function tally(seen: Exercised, snap: Snapshot, recruitFirst: boolean, spare: number): void {
+/**
+ * Tally one tick against those states, from what the engine said it did.
+ *
+ * One `Record<keyof Exercised, boolean>` rather than a run of `if`s, so a
+ * counter added to `Exercised` fails to compile until its condition is written
+ * here — an unincremented counter would read as a state the run never reached,
+ * which is the exact lie the vacuity guard exists to prevent.
+ */
+function tally(seen: Exercised, snap: Snapshot, recruitFirst: boolean, spare: number, slackBefore: number): void {
   const said = (pattern: RegExp) => snap.notices.some((n) => pattern.test(n.message));
   const joined = said(/joined the colony/);
   const moved = said(/Moved the/);
-  if (joined) seen.joined++;
-  if (moved) seen.moved++;
-  if (said(/Demolished the/)) seen.demolished++;
-  if (snap.beds.total <= snap.population) seen.saturated++;
-  if (joined && moved && recruitFirst) seen.contested++;
-  if (spare > 0) seen.spare++;
+  const contested = joined && moved && recruitFirst;
+  const reached: Record<keyof Exercised, boolean> = {
+    joined,
+    moved,
+    demolished: said(/Demolished the/),
+    saturated: snap.beds.total <= snap.population,
+    contested,
+    spare: spare > 0,
+    contestedWithSlack: contested && slackBefore > 0,
+  };
+  for (const key of Object.keys(reached) as (keyof Exercised)[]) {
+    if (reached[key]) seen[key]++;
+  }
 }
 
 /**
@@ -843,8 +875,8 @@ describe('PopulationSystem — births and the nomad gate', () => {
    * `spokenFor < beds` mean an over-admission can only ever produce a homeless
    * colonist — never an over-occupied house, and never more occupants than
    * beds. It passed with `spareBeds` mutated to drop `pending.arrivals.length`.
-   * The churn is what put beds in motion under the arrivals; the third clause
-   * is what an over-admission actually violates; the fourth is the only one
+   * The churn is what put beds in motion under the arrivals; the fourth clause
+   * is what an over-admission actually violates; the third is the only one
    * that sees a `homeId` naming a house that is mid-relocation.
    *
    * The colony is the contended one the scenario tests above use — one house,
@@ -855,16 +887,25 @@ describe('PopulationSystem — births and the nomad gate', () => {
     const { world } = await fedColony(1, 3, 1_000_000, { wood: 1_000_000, planks: 1_000_000 });
     const snap = () => world.getResource(SnapshotStore).latest!;
     const known = new Set(snap().colonists.map((c) => c.id));
-    const seen: Exercised = { joined: 0, moved: 0, demolished: 0, saturated: 0, contested: 0, spare: 0 };
+    const seen: Exercised = { joined: 0, moved: 0, demolished: 0, saturated: 0, contested: 0, spare: 0, contestedWithSlack: 0 };
     // What `rehome` will read as each house's relocation countdown NEXT tick,
     // carried across the loop — see `usableBedsStandingFree` for why the
     // published figure cannot be read on the tick it is wanted.
     let relocatingBefore = new Map(housesOf(snap()).map((h) => [h.id, h.relocatingTicks]));
 
     for (let t = 0; t < 600; t++) {
-      const churn = churnFor(t, snap());
+      const before = snap();
+      const churn = churnFor(t, before);
+      const moving = movingThisTick(churn);
       const recruitFirst = t % 2 === 0;
       const recruit: Command[] = offersANomad(t) ? [{ type: 'recruitWorker' }] : [];
+      // Room a displaced arrival could be re-seated into, read the way
+      // `reseatArrivalsOf` will see it — the SAME reader as the fifth clause
+      // below, aimed at the pre-drain snapshot instead of the post-tick one.
+      // `relocatingBefore` is the right map on both sides: last tick's
+      // published countdown IS the live `ticksLeft` CommandSystem reads this
+      // tick, because ProductionSystem decrements after it.
+      const slackBefore = usableBedsStandingFree(before, moving, relocatingBefore);
       // Both drain orders across the run: `4012dd2` fixed one defect per order
       // — a stale `shelters` snapshot seating a nomad in a house the SAME
       // drain had already started moving (move first), and a move that could
@@ -887,10 +928,15 @@ describe('PopulationSystem — births and the nomad gate', () => {
       // command violates while breaking none of the four above: a stranded
       // colonist leaves the colony too EMPTY, not too full. Asserted
       // unconditionally, no `if`, so the run cannot pass this line by never
-      // reaching the question; `seen.spare` records how often it was a real one.
-      const spare = usableBedsStandingFree(s, movingThisTick(churn), relocatingBefore);
+      // reaching the question; `seen.spare` records how often it was a real one
+      // and `seen.contestedWithSlack` how often it was the DECISIVE one.
+      //
+      // Numbering: the OBS-6-07 issue note calls this "the fourth clause".
+      // It is the FIFTH here — this file counts the aggregate cap and the
+      // per-house cap as two, where the note counts them as one.
+      const spare = usableBedsStandingFree(s, moving, relocatingBefore);
       expect({ tick: s.tick, strandedBeds: s.homeless > 0 ? spare : 0 }).toEqual({ tick: s.tick, strandedBeds: 0 });
-      tally(seen, s, recruitFirst, spare);
+      tally(seen, s, recruitFirst, spare, slackBefore);
       relocatingBefore = new Map(housesOf(s).map((h) => [h.id, h.relocatingTicks]));
     }
     return seen;
@@ -920,11 +966,13 @@ describe('PopulationSystem — births and the nomad gate', () => {
     // Vacuity guard, and the reason this test discriminates at all: every
     // assertion above passes trivially against a colony that never admits
     // anyone, never moves or demolishes a house, or always has a bed going
-    // spare. Bounds are well under what the runs actually reach — 12 / 26 / 5 /
-    // 412 / 0 / 180 offering every tick, 11 / 26 / 5 / 322 / 8 / 267 saving the
-    // cooldown — so ordinary drift does not trip them, but a balance change
-    // that made this colony comfortable would fail HERE, loudly, instead of
-    // quietly turning the invariants above back into decoration.
+    // spare. Bounds are well under what the runs actually reach —
+    // 12 / 26 / 5 / 412 / 0 / 180 / 0 offering every tick,
+    // 11 / 26 / 5 / 322 / 8 / 267 / 2 saving the cooldown (joined, moved,
+    // demolished, saturated, contested, spare, contestedWithSlack) — so
+    // ordinary drift does not trip them, but a balance change that made this
+    // colony comfortable would fail HERE, loudly, instead of quietly turning
+    // the invariants above back into decoration.
     for (const seen of [always, saved]) {
       expect(seen.joined).toBeGreaterThan(5);
       expect(seen.moved).toBeGreaterThan(5);
@@ -940,5 +988,21 @@ describe('PopulationSystem — births and the nomad gate', () => {
     // the one interaction it was built for.
     expect(always.contested).toBe(0);
     expect(saved.contested).toBeGreaterThan(3);
+    // And the conjunction, which is the one the fifth clause actually needs: a
+    // contested drain WITH a bed free elsewhere. Guarding `contested > 3` and
+    // `spare > 100` separately does not pin it, and the gap is not theoretical
+    // — measured, `CONTESTED_PERIOD = 4 * MOVE_PERIOD` (a plausible retune)
+    // leaves every bound above green, `contested` at 4, and this at ZERO, with
+    // the evict-without-re-seat mutation no longer caught by anything.
+    //
+    // Bounded at > 0, not at the measured 2, and the reason is worth stating
+    // rather than hiding: 2 IS the whole discriminating margin. One tick is
+    // enough for the clause to have power, so `> 0` is exactly the condition
+    // "the question was asked"; a tighter bound would go red on a retune that
+    // left the clause perfectly able to fail. The cost is that losing ONE of
+    // the two ticks halves that margin silently. If this ever needs to be
+    // sturdier it wants a regime that stages the contested-with-slack drain
+    // more often, not a bigger number here.
+    expect(saved.contestedWithSlack).toBeGreaterThan(0);
   }, 60000);
 });

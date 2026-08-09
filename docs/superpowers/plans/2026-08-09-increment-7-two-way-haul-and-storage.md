@@ -25,6 +25,17 @@
   ```
 
 - **Confirm every mutation actually applied.** `sed` exits 0 when its pattern matches nothing, so a stale pattern leaves the file untouched and the test passes against the *unmutated* implementation. After each `sed`: `git diff --quiet <file> && echo "MUTATION DID NOT APPLY"`.
+- **Restore a mutation by copy, never by `git checkout <file>`.** Mutation checks run in the TDD gap between green and commit, so the file's real content is *uncommitted* — and `git checkout <file>` restores it from HEAD, silently destroying the entire implementation rather than just the mutation. Task 1 hit this and recovered only because it had a scratch copy. Use:
+
+  ```bash
+  cp <file> /tmp/mut-backup            # before the sed
+  sed -i 's/…/…/' <file>
+  git diff --quiet <file> && echo "MUTATION DID NOT APPLY"
+  npx vitest run <focused test file>   # expect ONLY the named test red
+  cp /tmp/mut-backup <file>            # restore — NOT git checkout
+  ```
+
+  The same trap applies to `git stash` and `git restore`. If you have already committed the work, `git checkout` is safe again — but the copy is safe in both cases, so just use the copy.
 - **The 500-line cap is a design constraint in this increment, not a formality.** Five files this plan must touch are already close to it. The split is named in the task that trips it, and **no baseline is loosened**:
 
   | file | now | owner of its split |
@@ -170,7 +181,7 @@ export function nearestSiteWithRoom(
 sed -i 's/heldAt(site.id) + amount > site.capacity/heldAt(site.id) >= site.capacity/' src/shared/haul.ts
 git diff --quiet src/shared/haul.ts && echo "MUTATION DID NOT APPLY"
 npx vitest run tests/shared/haul.test.ts   # expect ONLY the partial-room test red
-git checkout src/shared/haul.ts
+cp /tmp/mut-backup src/shared/haul.ts   # NOT git checkout — see Global Constraints
 ```
 
 - [ ] **Step 5: Gates and commit**

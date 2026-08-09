@@ -19,7 +19,7 @@ affects:
 
 # Three long-horizon balance tests are nine tenths of the default dev loop
 
-**Status:** resolved 2026-08-09 by the second option below — a separate
+**Status:** resolved 2026-08-09 (`2f300f9`) by the second option below — a separate
 `balance` vitest project. `npm test` is back to 13.8s over 619 tests; the
 balance project is 15 tests in 115.9s; 619 + 15 = 634, the pre-split total, so
 nothing was dropped. `check:all` deliberately runs BOTH and stays at ~2

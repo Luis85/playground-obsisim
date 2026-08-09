@@ -371,8 +371,19 @@ trip with one leading leg to pick the goods up. That is the whole difference:
      tile. The stock it intends to take is claimed now, so a second hauler is
      not sent at the same last six wheat.
    - `collect` → phase `outbound`, leg from `atCol`/`atRow` to the building.
-2. **Fetching** → on arrival, `takeAt` the load from the source site (recording
-   nothing — the goods are in transit, not gone: §2.4). Phase `outbound`, leg
+2. **Fetching** → on arrival, **recheck that the target building still
+   exists** before taking anything: the demolition handler cancels trips
+   *outbound to* a building, and a fetching hauler is walking to a source, so
+   nothing else catches this. Taking the stock anyway would carry it to a
+   building already known to be gone and tie up both until the arrival path
+   disposes of them. Nothing has been picked up yet, so a fetching trip always
+   cancels clean — no load, no disposal, no remainder. (This is the first
+   application of the rule above: the target's existence is a dispatch-time
+   condition, so it is either reserved or rechecked, and it cannot be
+   reserved.)
+
+   Otherwise `takeAt` the load from the source site (recording nothing — the
+   goods are in transit, not gone: §2.4). Phase `outbound`, leg
    from the source tile to the building.
 3. **Outbound** → on arrival:
    - **staffing is rechecked here, not only at dispatch.** A building's last

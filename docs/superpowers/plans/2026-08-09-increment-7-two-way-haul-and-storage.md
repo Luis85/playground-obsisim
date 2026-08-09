@@ -720,6 +720,16 @@ The leg itself:
 // On arrival, takeAt the load (recording NOTHING — goods in transit are not
 // gone, §2.4) and switch to 'outbound' from the source tile to the building.
 //
+// The target is rechecked HERE, before taking anything. §2.5's rule — any
+// condition a dispatch decision rests on is either reserved or rechecked on
+// arrival — covers the target's existence too: handleDemolishBuilding cancels
+// OUTBOUND trips aimed at the building, and a fetching hauler is walking to a
+// SOURCE, so nothing cancels it today. It would draw stock out of the source
+// and carry it to a building already known to be gone, tying up both until the
+// arrival path refunds them. Nothing has been taken yet, so this is a clean
+// cancel: no disposal, no remainder.
+if (targetGone(trip)) { trip.reset(); return; }
+//
 // trip.amount MUST become what takeAt ACTUALLY RETURNED, never the amount
 // claimed at dispatch. A source claim reserves stock against other HAULERS;
 // it does not bind Stockpile.pay, which spends camp-first across every site
@@ -855,6 +865,10 @@ it('demolishing a producer loses both its buffers, and says so', async () => {
 
 it('a cancelled trip disposes of its load by whether a hauler is left to walk', async () => {
   // FOUR paths, and they split TWO ways — grouping them was the defect here.
+  //
+  // A FETCHING hauler cancels clean in every one of these: nothing has been
+  // taken from the source yet, so there is no load to dispose of. Only
+  // outbound and returning trips reach the split below.
   //
   // Nobody left to walk it -> bank immediately (refundAt for a supply load,
   // addAt for a pickup, decided by `pickedUp`):
@@ -1050,7 +1064,15 @@ Cover all three states in the layout test, including **idle at a depot** — an 
 
 `buildInitialSnapshot` derives stock, wealth, meals per head and therefore affordability from `save.stockpile` — camp-only from Task 9 on. Its own doc comment says why that is not a transient: *"a restored engine starts PAUSED — so this is not a placeholder that a tick will shortly correct, it is what the player looks at for as long as they leave the game paused."* A colony reopened with its planks in a depot shows a short wealth figure, a meals-per-head the birth gate disagrees with, and a build palette refusing buildings it can afford.
 
-Aggregate the camp with every building's restored `stored`, and clamp input buffers the way `buildingFactsOfSaved` already clamps output buffers. The test reads the snapshot **before the first tick**, from a save with distinct camp and depot balances — equal balances, or a total that happens to match, would pass with one side ignored.
+Aggregate the camp with every building's restored `stored`. Then **project every clamp and every default the spawn path applies**, because this projection bypasses both the components and the restore path and so inherits neither:
+
+- **Input buffers** clamp the way `buildingFactsOfSaved` already clamps output buffers.
+- **`stored` clamps and spills exactly as Task 9's restore does.** A depot saved at 60 under a `storehouseCapacity` since reduced to 30 must read `30 / 30` with the other 30 at the camp — not `60 / 30`, which is what a straight aggregation shows, and which the first tick would then silently correct under the player's eyes.
+- **`haulAt*` seeds from `CAMP_TILE`**, not from a numeric zero. Task 6 initialises the spawned `HaulTrip` there, but this function projects the *saved colonist* directly and never touches that component — so an idle hauler's dot sits at `(0, 0)` until the first tick moves it to `(2, 0)`. This is round eleven's spawn-path defect in the other producer, and it is the second time these two have needed the same edit (Task 9 Step 0 was the first).
+
+`buildInitialSnapshot`'s own doc comment is the standard to hold this to: *anything derived here independently would be a second source of truth that the first tick silently overwrites.* Each bullet above is one of those.
+
+The test reads the snapshot **before the first tick** — from a save with distinct camp and depot balances (equal balances, or a total that happens to match, would pass with one side ignored), an over-capacity depot, and an idle hauler.
 
 - [ ] **Step 5: Store getters, mutation-checked, gates, commit.**
 

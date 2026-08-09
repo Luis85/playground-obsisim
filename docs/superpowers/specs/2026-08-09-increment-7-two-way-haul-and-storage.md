@@ -186,16 +186,37 @@ and becomes a map per site.
 - New site-aware API, used only by `HaulSystem`, the command handlers and the
   save:
   - `getAt(siteId, resource)` / `totalAt(siteId)`
-  - `addAt(siteId, resource, amount, capacity): number` — banks what fits,
-    returns what was banked, records a delivery (`producedThisTick`) exactly as
-    `add` does today.
-  - `refundAt(siteId, resource, amount)` — banks without recording a delivery,
-    for the same reason `refund` exists (`Stockpile.refund`'s own doc comment).
+  - `addAt(site: StoreSite, resource, amount)` — banks at that site, recording
+    a delivery (`producedThisTick`) exactly as `add` does today.
+  - `refundAt(site: StoreSite, resource, amount)` — banks without recording a
+    delivery, for the same reason `refund` exists (`Stockpile.refund`'s own doc
+    comment).
   - `takeAt(siteId, resource, amount): number` — takes up to `amount` from one
     site, returns what was taken.
   - `spillTo(siteId, from)` — move a whole site's contents into another.
     Used by demolition (§2.7) and by load-time clamping (§2.9).
   - `siteJSON(siteId)` — one site's contents, for serialization.
+
+**Two invariants the banking calls enforce rather than document**, because
+every way of getting them wrong loses goods silently:
+
+1. **A bank never partially fails.** `addAt` and `refundAt` put what fits at
+   the named site and **forward the shortfall to the camp**, which is
+   unbounded and therefore cannot refuse. Callers get no remainder to
+   mishandle. Without this, every caller has to remember the overflow rule —
+   and the ones most likely to forget are the cancellation paths (§2.7), which
+   run once in a rare branch and are exactly where a dropped remainder would go
+   unnoticed.
+2. **No site entry may exist without a live building behind it.** This is why
+   both take a resolved `StoreSite` rather than a bare id: a `StoreSite` can
+   only come from `storeSitesOf` (§2.3), which returns only live, non-relocating
+   stores, so banking into a demolished storehouse is not expressible. It has to
+   be impossible rather than merely avoided, because a storehouse's contents are
+   serialized *off its building record* (§2.9) — an orphaned site's goods would
+   count in `colonyWealth`, be unreachable by any hauler, and then vanish at the
+   next save with nothing reporting it. A save-time sentinel asserts the same
+   invariant from the other end: every ledger site other than the camp names a
+   building in the save.
 - `toJSON()` returns the **camp's** contents, which is what makes the save
   migration in §2.9 a no-op for a v5 colony: a v5 stockpile *was* the camp.
   **`toJSON()` is therefore no longer sufficient to serialize the ledger** —
@@ -266,10 +287,10 @@ second system:
      `legTicks` / `pickupCol` / `pickupRow` frozen here exactly as today
      (OBS-5-01).
 3. **Returning** → decrement. On arrival, bank the load at the destination —
-   `addAt` when `pickedUp`, `refundAt` when not (§2.4). Overflow beyond the
-   destination's capacity goes to the camp rather than being dropped, because
-   these goods are already in the ledger and deleting them would delete banked
-   colony wealth. Set `atSiteId` to the destination, reset the trip to `idle`.
+   `addAt` when `pickedUp`, `refundAt` when not (§2.4). A destination that
+   filled, or stopped being a site, while the hauler walked does not drop the
+   load: §2.4's first invariant forwards it to the camp. Set `atSiteId` to the
+   destination actually used, reset the trip to `idle`.
 
 A hauler therefore migrates naturally to wherever the work is: deposit at a
 remote storehouse and you are standing at it next tick, ready to supply the
@@ -346,6 +367,26 @@ than re-litigates:
   any hauler `returning` **to** it re-resolves its destination on arrival
   rather than at dispatch, so a storehouse that went into transit mid-leg sends
   the load on to the camp instead of into a hole.
+- **A cancelled supply trip is carrying goods**, unlike every cancellation
+  increment 4 had to handle. Demolishing the target, unassigning the hauler,
+  or arriving at a building that is already gone all end a trip that may hold
+  an undelivered load, and `HaulTrip.reset()` clears it. Every such path banks
+  the load first, with `refundAt` — the colony already owned it, so it is not a
+  delivery. **Which site** it goes back to is where this gets sharp: the source
+  storehouse may have filled while the hauler was walking, or may itself have
+  been demolished earlier in the same drain. Neither loses a unit, because
+  §2.4's invariants make the load either land at the resolved site or fall
+  through to the camp, and make "bank into a storehouse that no longer exists"
+  inexpressible.
+- **Retargeting an outbound hauler when its building moves** must recompute the
+  leg from **the hauler's own base**, not from the camp. `handleMoveBuilding`
+  today calls `haulTicks(to.col, to.row, …)`, which is camp-relative and was
+  correct while the camp was the only origin; once §2.5 dispatches from
+  `atSiteId`, a hauler based at a remote depot would be charged a camp-to-target
+  walk it is not walking. That is precisely the OBS-5-01 failure — a leg length
+  disagreeing with the leg the sim is actually running — and it desyncs the
+  drawn dot the same way, since the renderer derives its position from
+  `legTicks`. Use `haulTicksBetween(base tile, new tile, …)`.
 - **Haulers based at a store that stops being one.** Both cases above strand
   every hauler whose `atSiteId` names that store — and so does a load, where
   `atSiteId` is not persisted at all. This is handled once, in `HaulSystem`,
@@ -471,6 +512,14 @@ tables, the promise made in increment 3 §1.1 and kept ever since:
   - a supply remainder banked on the return leg, asserting that
     `Delivered/t` does **not** move for it while a collect load of the same
     size does — one fixture, two runs, and the difference is the assertion;
+  - a supply trip cancelled while its source storehouse is **full**, and again
+    while that storehouse has been **demolished in the same drain** — the
+    colony's total is unchanged in both, and no ledger site survives without a
+    building behind it (§2.4);
+  - a building moved while a hauler **based at a remote depot** is outbound to
+    it: the recomputed leg matches `haulTicksBetween(depot, new tile)`, not the
+    camp-relative figure, and a fixture where those two differ is the only kind
+    that proves anything;
   - a storehouse demolished with goods inside — `colonyWealth` is unchanged
     across the tick, which is the assertion that actually tests §2.7;
   - the deadlock §2.6 argues away: a colony whose ledger is empty and whose

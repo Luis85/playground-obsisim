@@ -42,7 +42,7 @@
 - **Commit by pathspec** (`git commit <path> -m …`), never `git add` + bare `git commit`. A new file needs one `git add` immediately before its commit.
 - **Systems must be listed in `ALL_SYSTEMS` order** — `buildColonyPrepWorld` throws otherwise. This increment does not add or reorder a system.
 - **Balance constants live only in `src/engine/content/balance.ts`.** Shared law takes them as parameters — `src/shared/**` may import nothing outside itself. This is why `haulTicks` takes `tilesPerTick` and why `nearestSiteWithRoom` takes an occupancy lookup rather than reaching for `Stockpile`.
-- **Conservation is the invariant this increment can most easily break.** Goods now exist in four places (camp, storehouse, input buffer, output buffer) plus a hauler's hands. Every cancellation path — demolition, relocation, unassignment, a target that vanished — must put a carried load *somewhere*. Prefer `refundAt` over `addAt` for anything a hauler did not actually complete a delivery of, or the Economy view's `Delivered/t` inflates for goods nobody hauled.
+- **Conservation is the invariant this increment can most easily break.** Goods now exist in four places (camp, storehouse, input buffer, output buffer) plus a hauler's hands. Every cancellation path — demolition, relocation, unassignment, a target that vanished — must put a carried load *somewhere*. Prefer `refundAt` over `addAt` for anything a hauler did not actually complete a delivery of, or the Economy view's `Delivered/t` inflates for goods nobody hauled. Task 2's two banking invariants exist so that "somewhere" cannot be nowhere: a bank never partially fails, and no ledger site can outlive the building behind it. **Assert on a colony-wide total, not on the field you just wrote** — the total is what a player would notice being violated, and it is what a future refactor cannot accidentally satisfy.
 - `npm run check:all` must be green at the end of every task. Run `rm -rf coverage` first: `check:quality` hard-fails if `coverage/` exists.
 - **A raw `await world.step()` does NOT refresh the snapshot's entity sections.** Use `stepTick` from `tests/engine/fixtures.ts` in any test that asserts on entities appearing or disappearing.
 
@@ -188,20 +188,21 @@ The reinterpretation the rest of the increment stands on (§2.4). The aggregate 
 - Produces (new, site-aware — used only by `HaulSystem`, the command handlers and the save):
   - `getAt(siteId: number, id: ResourceId): number`
   - `totalAt(siteId: number): number`
-  - `addAt(siteId: number, id: ResourceId, amount: number, capacity: number | null): number` — banks what fits, returns what was banked, records into `producedThisTick`
-  - `refundAt(siteId, id, amount, capacity): number` — same, without recording a delivery
+  - `addAt(site: StoreSite, id: ResourceId, amount: number): void` — banks at that site, records into `producedThisTick`
+  - `refundAt(site: StoreSite, id: ResourceId, amount: number): void` — same, without recording a delivery
   - `takeAt(siteId, id, amount): number` — takes up to `amount`, returns what was taken
   - `spillTo(toSiteId: number, fromSiteId: number): void`
   - `siteIds(): number[]`, `siteJSON(siteId): Partial<Record<ResourceId, number>>`
   - `recordConsumed(id: ResourceId, amount: number): void` — record consumption without removing anything. Needed because §2.4 moves the moment of consumption away from the moment goods leave a site: a supply load leaves the camp on one tick and enters a building's input buffer several ticks later, and only the second is the colony actually spending it.
 - **Unchanged, and pinned by tests:** `get`, `total`, `canAfford`, `pay`, `take`, `add`, `refund`, `resetTickFlows`, `producedThisTick`, `consumedThisTick`, `toJSON`.
+- **The two banking calls take a resolved `StoreSite`, not a site id, and neither can partially fail** (§2.4). Whatever does not fit at the named site is forwarded to the camp, which is unbounded and cannot refuse, so no caller is handed a remainder to mishandle — and the callers most likely to mishandle one are the cancellation paths in Task 8, which run in rare branches where a dropped remainder goes unnoticed. Taking a `StoreSite` is the other half: a `StoreSite` only comes from `storeSitesOf` (Task 5), which returns live non-relocating stores only, so **banking into a demolished storehouse is not expressible**. That has to be impossible rather than merely avoided, because Task 9 serializes a storehouse's contents off its *building record*: an orphaned site's goods would count in `colonyWealth`, be unreachable by any hauler, and vanish at the next save with nothing reporting it.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
 it('a colony with goods split across sites spends as one', () => {
   const s = new Stockpile({ wood: 10 });          // camp
-  s.addAt(7, 'wood', 15, 60);                     // a depot
+  s.addAt(depot(60), 'wood', 15);                 // a depot
   expect(s.get('wood')).toBe(25);
   expect(s.pay({ wood: 20 })).toBe(true);         // neither site alone could
   expect(s.get('wood')).toBe(5);
@@ -211,35 +212,41 @@ it('spends the camp first, then sites by ascending id', () => {
   // Discriminating: three DIFFERENT amounts, so any draw order other than the
   // documented one leaves a different residue at each site.
   const s = new Stockpile({ wood: 4 });
-  s.addAt(9, 'wood', 2, 60);
-  s.addAt(3, 'wood', 8, 60);
+  s.addAt(depot(60, 9), 'wood', 2);
+  s.addAt(depot(60, 3), 'wood', 8);
   expect(s.pay({ wood: 12 })).toBe(true);
   expect(s.getAt(CAMP_SITE_ID, 'wood')).toBe(0);
   expect(s.getAt(3, 'wood')).toBe(0);
   expect(s.getAt(9, 'wood')).toBe(2);
 });
 
-it('addAt banks only what fits and reports it', () => {
+it('a bank beyond a site capacity spills to the camp rather than being lost', () => {
+  // §2.4 invariant 1. DISCRIMINATING: assert BOTH sides — 60 at the depot and
+  // 40 at the camp. An implementation that simply drops the excess passes any
+  // assertion that only checks the depot.
   const s = new Stockpile();
-  expect(s.addAt(7, 'wood', 100, 60)).toBe(60);
-  expect(s.get('wood')).toBe(60);
+  s.addAt(depot(60), 'wood', 100);
+  expect(s.getAt(7, 'wood')).toBe(60);
+  expect(s.getAt(CAMP_SITE_ID, 'wood')).toBe(40);
+  expect(s.get('wood')).toBe(100);
 });
 
 it('the camp is unbounded', () => {
   const s = new Stockpile();
-  expect(s.addAt(CAMP_SITE_ID, 'wood', 10_000, null)).toBe(10_000);
+  s.addAt(camp(), 'wood', 10_000);
+  expect(s.get('wood')).toBe(10_000);
 });
 
 it('toJSON is the camp alone, so a v5 stockpile round-trips unchanged', () => {
   const s = new Stockpile({ wood: 10 });
-  s.addAt(7, 'wood', 15, 60);
+  s.addAt(depot(60), 'wood', 15);
   expect(s.toJSON()).toEqual({ wood: 10 });
   expect(s.siteJSON(7)).toEqual({ wood: 15 });
 });
 
 it('refundAt does not count as a delivery', () => {
   const s = new Stockpile();
-  s.refundAt(7, 'wood', 5, 60);
+  s.refundAt(depot(60), 'wood', 5);
   expect(s.producedThisTick.get('wood') ?? 0).toBe(0);   // and addAt makes this 5
 });
 ```
@@ -690,6 +697,16 @@ Conservation (§2.7) plus OBS-5-03 and OBS-6-08 (§2.12). `command-handlers.ts` 
 
 - [ ] **Step 1: Move the handlers, green suite, commit that alone.** A move and a behaviour change in one commit is two mistakes waiting to be attributed to each other.
 
+  **Then read what you moved, rather than assuming a verbatim move is finished.** `handleMoveBuilding` retargets an outbound hauler with `haulTicks(to.col, to.row, BALANCE.haulTilesPerTick)` — camp-relative, and correct only while the camp was the only origin a trip could start from. Task 6 dispatches from `atSiteId`, so a hauler based at a remote depot now gets charged a camp-to-target walk it is not walking, and the renderer derives the dot's position from that same `legTicks`. That is OBS-5-01 exactly — a leg length disagreeing with the leg the sim is running — reintroduced by a task that only moved code:
+
+```ts
+// Resolve the hauler's live base and measure from it, not from the camp.
+const base = siteById.get(trip.atSiteId) ?? campSite;
+const ticks = haulTicksBetween(base, to, BALANCE.haulTilesPerTick);
+```
+
+  The test needs a fixture where the two figures **differ** — a depot in the far corner and a target moved near the camp — or it passes against the camp-relative version it exists to rule out.
+
 - [ ] **Step 2: Demolition, three rules with one test each**
 
 ```ts
@@ -709,6 +726,22 @@ it('cancelling a supply trip refunds the load to the site it came from', async (
   // Every cancellation path: demolition of the TARGET, unassignHauler, and the
   // "building gone" branch in the load handler. refundAt, not addAt — the
   // delivery never happened and must not inflate Delivered/t.
+});
+
+it('cancelling a supply trip whose source filled meanwhile loses nothing', async () => {
+  // The source depot is BOUNDED and back at capacity by the time the trip is
+  // cancelled. Task 2's invariant sends the overflow to the camp; without it
+  // the reset() that follows deletes whatever refundAt could not bank.
+  // Assert the colony total, and the camp's share.
+});
+
+it('cancelling a supply trip whose source was demolished in the same drain loses nothing', async () => {
+  // Sharper, and the reason addAt/refundAt take a resolved StoreSite: banking
+  // into a dead storehouse would create a ledger site no building owns. Those
+  // goods would count in colonyWealth, be unreachable by any hauler, and
+  // disappear at the next save — because Task 9 serializes site contents off
+  // the BUILDING record. Assert the total AND that no site survives without a
+  // building; the second is the one that catches an orphan.
 });
 ```
 
@@ -770,6 +803,14 @@ it('a colony with goods in the camp AND a storehouse round-trips both', () => {
   // The producer test. Distinct amounts at each site — 30 wood at the camp,
   // 17 planks in the depot — so a save that writes only one of them fails on
   // the value, not merely on a total that happens to differ.
+});
+
+it('every ledger site other than the camp names a building in the save', () => {
+  // The sentinel for Task 2's second invariant, asserted from the other end.
+  // A site with no building behind it is unserializable BY CONSTRUCTION here —
+  // savedBuildingOf walks buildings — so its goods would vanish silently. Four
+  // lines, and it catches the whole class rather than the one path that
+  // produced it. Run it over a colony that has been through a demolition.
 });
 
 it('a hauler mid-supply-trip banks its load at the camp and stands there on load', () => {

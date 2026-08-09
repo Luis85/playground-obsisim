@@ -41,6 +41,7 @@ folder being tidy.
 | --- | --- | --- |
 | OBS-6-01 | minor | [A demolished tile is still occupied for the rest of the drain](2026-08-08-a-demolished-tile-is-still-occupied-for-the-rest-of-the-drain.md) |
 | OBS-6-02 | important | [Two colonists dying on the same tick freeze the whole simulation for a tick each](2026-08-08-simultaneous-deaths-freeze-the-simulation.md) |
+| OBS-6-03 | minor | [An idle adult crossing the elder band retires silently, while a working one is announced](2026-08-08-an-idle-adult-retires-without-a-notice.md) |
 
 ## Open — increment 5 (validated balance)
 

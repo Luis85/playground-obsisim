@@ -6,9 +6,10 @@ severity: important
 area: engine
 increment: 6
 created: 2026-08-08
-source: increment-6 Task 12 (population balance harness) — found by running, not by reading
+source: increment-6 Task 12 (population balance harness) — found by running, not by reading; the autosave consequence added at Task 13 close-out, after PR #9's bot reached the same defect independently
 affects:
   - src/engine/systems/population-handlers.ts
+  - src/engine/game-engine.ts
   - src/engine/world.ts
   - tests/engine/fixtures.ts
 ---
@@ -94,9 +95,47 @@ It reproduces identically under the default `executionFunction` and under
   starving together; a synchronised cohort dies of old age together too. The
   frozen window is proportional to how bad the disaster is, so the simulation
   stutters hardest exactly when the player is watching.
-- **Autosave cadence drifts.** `SimClock.tick` crosses `autosaveEveryTicks`
-  during a freeze like any other tick, so a save can be written from a world
-  mid-drain, with corpses still present as entities.
+- **A save can be written mid-freeze, advertising colonists who are already
+  dead.** `GameEngine.runStep` autosaves on `clock.tick % autosaveEveryTicks
+  === 0`, inside the same `try` that stepped the world, and the clock crosses
+  that boundary during a freeze like any other tick. `serialize()` then walks
+  the live entities — which still include everyone whose `removeEntity` is
+  stuck in the queue — so the file contains colonists the simulation has
+  already killed.
+
+  The sharp edge is that **nothing rejects it**. Those records are
+  structurally well-formed: a real id, a real age, a `homeId` naming a real
+  house. `isLoadableSave` accepts the save, and the two death causes then
+  diverge — neither in the player's favour:
+
+  - **A starvation victim is restored alive and dies on tick 1.**
+    `clampedStarving` clamps to `BALANCE.starvationDeathTicks` *inclusive*, and
+    `resolveStarvation` fires on `>=`, so the colonist loads at exactly the
+    threshold and is killed by the first tick the player runs — a death whose
+    cause happened before the save was written.
+  - **An old-age victim never loads at all.** The past-own-lifespan guard
+    (`257acf6`) drops them during restore, so the colony silently comes back
+    smaller than the file describes, with no notice and nothing in the log.
+
+  Both are the same wrong from opposite ends: the file records a population the
+  simulation had already revoked.
+
+  This is the third arrival of one principle in this increment: **the seed must
+  not advertise a state tick 1 revokes.** The other two — the homing phase
+  running before the first tick rather than after, and refusing to restore a
+  colonist already past their own lifespan — were both closed. This one is
+  open, and it is the same defect with the freeze standing in for the missing
+  guard. Fixing the removal batching (below) closes it at the root; a
+  `deadIds`-aware `serialize()` would only paper over it.
+
+- **It silently inflates every tick-indexed measurement.** `SimClock.tick`
+  advances across frozen steps, and the snapshot published after a drain
+  carries that inflated tick — so "extinct by tick 7,800" would mean fewer than
+  7,800 ticks of actual simulation whenever a freeze occurred. Increment 6's
+  published curves happen to report `frozen steps 0` (the id-derived lifespan
+  spread desynchronises deaths), so their labels are exact, but that is luck
+  rather than protection. `runPopulationScenario` publishes `frozenSteps` on
+  every curve so a future measurement cannot be quoted without checking it.
 
 ## Suggested fix
 
@@ -125,3 +164,10 @@ ticks, and that the survivor's `ageTicks` advances by one on every one of those
 ticks. The existing `PopulationSystem` death tests all kill exactly one
 colonist — including the one that deliberately gives two colonists different
 lifespans so that only one dies — so none of them can see this.
+
+A second test for the save consequence, which the first would not catch: run
+the same simultaneous die-off with the clock positioned so `autosaveEveryTicks`
+lands inside the freeze, capture what the autosave listener receives, and
+assert its colonist roster does not contain anyone the snapshot has already
+reported dead. Asserting only that the save *loads* passes today — the whole
+problem is that it does.

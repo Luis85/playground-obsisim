@@ -574,6 +574,43 @@ unnecessary it is dropped — but the baseline is not loosened either way.
     do, and §4 of this document is rewritten with measured values rather than
     the starting points below.
 
+### 3.1 Checked at close-out
+
+Every criterion above against what actually shipped, at Task 13. **One fails**,
+and it is recorded as failing rather than reworded to fit.
+
+| # | verdict | evidence |
+| ---: | --- | --- |
+| 1 | **met** | `births a child when fed and housed…`; children are excluded from `idleAdults` (`snapshot-builder.ts`) and from both assign handlers' idle scan, and the assign buttons disable on `idleAdults === 0`; `HungerSystem` queries `Hunger` with no stage filter, so a child eats a full ration; `stageOf`'s boundary test pins year 10 as the first adult tick |
+| 2 | **met** | `retires an adult who crosses the elder band, freeing its job slot`; `kills a colonist who reaches its own lifespan, not a shared one` |
+| 3 | **FAILS, narrowly** | the counter is visible for **99 ticks**, not the full year the criterion asks for. See below |
+| 4 | **met, and exceeded** | homing lands on the build tick, not "the next tick": `houses a homeless colonist on the tick its house is built, not the tick after`, `charges a colonist housed by a same-tick construction as housed, not homeless`, `makes a demolished house homeless immediately, not next tick`, `re-homes an evicted colonist once its relocating house lands` |
+| 5 | **met** | measured 264 vs 130 delivered (§4.1 q3) |
+| 6 | **met, by construction** | `NOMAD_REJECTIONS` is a single exported record imported by both `PopulationView.vue` and `command-handlers.ts`, so the button's reason and the engine's rejection are the same string, not two strings kept in step |
+| 7 | **met** | `round-trips a mid-starvation, mid-cooldown colony`; `v4 -> v5: colonists become adults, a starter house appears, and its beds are already assigned`; `a migrated colony is housed in the SEEDED snapshot, before any tick runs`; `migrates a v1 save all the way to the latest version in one call` |
+| 8 | **met** | `npm run balance:report` prints three population curves beside the sweep; all 16 sweep rows are byte-identical to increment 5's, and the four distance/hauler assertions pass at their existing thresholds |
+| 9 | **met** | `renderer.ts` is 445 non-blank lines, and appears in neither `loc-baseline.json` nor `quality-baseline.json`. The split §2.13 planned for was not needed and was dropped, as that section allowed |
+| 10 | **met** | `refuses a nomad to a wiped-out colony with an empty store` |
+| 11 | **met** | this document's §3.1 and §4, and the README's Increment 6 section |
+
+**Why 3 fails.** It asks for the starvation counter to be "visible on the
+Population view for a full year before the first death". A year is 100 ticks;
+the measured window is 99 (§4.1 q2). It is a fencepost — the tick the counter
+*reaches* `starvationDeathTicks` is the tick the colonist dies on, so the last
+snapshot a player can still act on is one earlier — and the wider slide from a
+colony's last meal to its first death is ~199 ticks, or two autosave intervals.
+The criterion is still not met as written, and `starvationDeathTicks` was left
+at 100 rather than raised to 101 to buy the word "full": a constant should move
+because of a measurement, not because of an adjective.
+
+**What no criterion covered, and should have.** None of the eleven asks whether
+a colony left alone *survives*. §4.1 q1 measures that it does not — a
+self-feeding colony overshoots its chain and goes extinct. Task 12's own brief
+proposed `finalOf(roomy).adults + finalOf(roomy).children > 4` as an assertion;
+it does not hold, and no `BALANCE` constant was changed to make it hold. That
+gap between "every acceptance criterion passes" and "the game works" is the
+most useful thing this increment learned about its own criteria.
+
 ---
 
 ## 4. Balance values
@@ -698,3 +735,75 @@ tick each — sim-ecs 0.6.4 throws inside `removeEntity` on the second removal o
 a batch, swallows the error, and drains the rest one per step with no system
 running. It distorts any per-tick tally taken from `SnapshotStore.latest`, which
 is how it was found. See `docs/issues/`.
+
+A third consequence, verified at close-out and added to the note: the autosave
+fires on `clock.tick % autosaveEveryTicks` **inside `runStep`**, and the clock
+increments on frozen steps like any other, so a save can land mid-freeze holding
+colonists who are logically dead. That save is structurally valid and loads
+cleanly; those colonists then die on the first tick after the reload. It is the
+same principle this increment enforced twice already — **the seed must not
+advertise a state tick 1 revokes** — arriving from a third direction, after the
+homing phase and the past-own-lifespan restore guard.
+
+**How much it distorted §4.1: none, this time.** Every curve above reports
+`frozen steps 0`, so the tick labels are exact. Deaths in these runs never
+coincided, because §2.12's id-derived lifespan spread desynchronises them — the
+primitive introduced to widen the demographic wave also happens to keep this
+defect from firing. That is luck, not protection: a narrower spread, a
+synchronised famine, or a retune of `lifespanSpreadYears` would collide deaths
+and inflate every tick label by the total frozen ticks. `runPopulationScenario`
+publishes `frozenSteps` on every curve precisely so that a future run cannot
+inflate its numbers quietly, and **any re-measurement must check it is still 0
+before quoting a tick.**
+
+### 4.3 Two fixtures that hold their conclusions by margin, not by assertion
+
+Neither of these is unguarded — both carry two-sided vacuity bounds, and a
+retune that pushed either run out of its intended regime would fail loudly
+rather than quietly. What is *not* asserted in either case is the **margin** the
+prose conclusion actually rests on. They are recorded so that a future retune
+re-reads the conclusion rather than only the green tick.
+
+**The chain test's `huts: 2`.** `a colony feeding itself is capped by its FOOD
+CHAIN…` brackets the peak on both sides: `> startingAdults * 4` (16) so a colony
+that never grew cannot pass, and `< ROOMY_HOUSES * houseBeds` (48) so a housing
+plateau cannot pass. At **4** huts the chain out-produces 48 beds and the upper
+bound fails at exactly 48, so the fixture choice is defended.
+
+The gap is between the assertion and the claim. The assertion is `peak < 48`;
+the claim §4.1 draws from it is *"the ceiling is genuinely food and not
+housing"*, and that needs **room** below 48, not merely a value below it. Today
+the peak is 41 — seven colonists of headroom. At 47 the assertion would still be
+green while the colony was effectively bed-capped and the paragraph above it
+false. Anything that moves food supply or demand against bed supply narrows that
+headroom: `houseBeds`, the hunger rate, `mealThreshold`, the gatherers' hut
+recipe or its `workerSlots`. **After any such retune, re-read the peak against
+the bed count rather than only checking the suite is green**, and confirm the
+one-house control still takes 0 births — those two together are what make the
+run a measurement of food rather than of beds.
+
+**The housing property test's periods.** `never over-houses, admits an arrival
+it has no bed for, or ends a tick it cannot reload` drives churn on three
+coprime periods — construct every 61, relocate every 23, demolish every 101 —
+deliberately *below* what the two arrival cooldowns (30 and 50) could admit, so
+the colony spends most of the run with no spare bed. That saturated regime is
+the only one in which the admission gates decide anything; the predecessor of
+this test passed under a broken `spareBeds` precisely because beds were going
+spare.
+
+This is guarded, and well: the run must reach `joined > 5`, `moved > 5`,
+`demolished > 2` and `saturated > 100` of 600 ticks, against actuals of
+12 / 26 / 5 / **412**. A retune that made the colony comfortable would trip the
+saturation bound.
+
+The residual risk is narrower than "it stops being saturated", and it is that
+**reaching a state is not the same as the assertions discriminating inside it**.
+`saturated` counts ticks where `beds.total <= population`; it does not check
+that an arrival and a churn command ever contended for the *same* bed in the
+same drain, which is the interaction `4012dd2` was about and the thing the
+coprime periods exist to produce. A change to `birthCooldownTicks`, the recruit
+cooldown, or `houseBeds` could keep saturation at 400 while the phases realigned
+so that contention stopped happening. **The honest safeguard after such a retune
+is to re-run the mutations that originally falsified this test** — drop
+`pending.arrivals.length` from `spareBeds`, and disable the relocation eviction
+— and confirm each still turns it red.

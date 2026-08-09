@@ -1,15 +1,16 @@
 # ObsiSim
 
 A Banished-inspired colony simulation game that runs inside Obsidian.
-Grow a settlement from three workers into an economic powerhouse through
+Grow a settlement from three colonists into an economic powerhouse through
 simulated production chains — in tables and, since Increment 2, a live
-2D world view.
+2D world view. Since Increment 6 the colony can also die out.
 
 ## Increment 1 — Economy Core
 
 - Deterministic tick simulation (sim-ecs): 2 ticks/s, pause / 2× / 4× / single-step
 - Two production chains: berries & wheat→flour→bread, wood→planks→tools
-- Workers with hunger-driven efficiency (soft pressure — nobody dies)
+- Workers with hunger-driven efficiency — soft pressure, and nobody died in
+  its day; Increment 6 made starvation lethal and renamed the worker a colonist
 - Tooled workers gain +50% efficiency while their tool lasts (1 tool per worker per 300 ticks)
 - Single-slot autosave into the plugin's data.json
 
@@ -74,6 +75,42 @@ simulated production chains — in tables and, since Increment 2, a live
 - Save v4 adds the relocation countdown; the v1→v4 migration chain stays
   intact
 
+## Increment 6 — Survival & Population
+
+- Colonists are people, not units: they are born, they age through **child →
+  adult → elder**, and they die — of old age, or of starvation. Only adults can
+  work, so every child is a ten-year bet and every elder a cost you planned for
+- Build **houses** and the colony grows itself. A birth needs a free bed, two
+  adults and food in the store, so beds are the throttle: no spare bed, no
+  children, and the second house is the first real growth decision you make
+- Where people sleep is now part of the map game. A colonist walks from home to
+  work and a bad commute costs up to half their output — but housing beside a
+  distant forester beats housing at the camp by ~1.9×, so clustering everything
+  on the camp band is a tradeoff rather than the obvious play
+- Food is counted in **meals per head** — roughly years of food per colonist —
+  and it gates both births and arrivals. "Recruit" is now **Welcome a nomad**,
+  and the button tells you which gate is shut (no bed / not enough food /
+  cooldown) instead of always looking available
+- Starving is slow, visible and survivable: hunger climbs to its maximum, then
+  a starvation clock ticks on the Population view for most of a year before
+  anyone dies — about 199 ticks from a colony's last meal to its first death
+- The **Population** view is the new main screen — stage counts, beds used,
+  meals/head against the birth threshold, and a colonist table with age, stage,
+  home, commute, hunger and the starvation clock. The world view gains a house
+  glyph, stage markers and a homeless flag, each with a legend entry
+- Save v5 carries age, home and the starvation clock; a v4 colony opens as
+  adults with a starter house already placed and its first four colonists
+  already housed, rather than being taxed as homeless on load
+- **Measured, and it does not balance yet.** `npm run balance:population` runs
+  a colony that feeds itself for 12,000 ticks: it peaks at 41 against 48 beds,
+  overshoots what its chain can feed, and is **extinct by tick 7,800** — 44
+  births, 24 deaths of old age, 24 starved. The birth gate tests food *in
+  store*, which a young colony banks faster than it eats, so births continue
+  past the population the chain can support. No `BALANCE` constant was moved to
+  hide this: raising the threshold delays the overshoot rather than removing
+  it. §4 of the increment 6 spec has the curve and the two structural fixes a
+  later increment has to choose between
+
 ## Development
 
 - `npm install`
@@ -100,6 +137,12 @@ simulated production chains — in tables and, since Increment 2, a live
 - Increment 4 plan: `docs/superpowers/plans/2026-07-31-increment-4-logistics.md`
 - Increment 5 spec: `docs/superpowers/specs/2026-08-01-increment-5-validated-balance.md`
 - Increment 5 plan: `docs/superpowers/plans/2026-08-01-increment-5-validated-balance.md`
+- Increment 6 spec: `docs/superpowers/specs/2026-08-08-increment-6-survival-and-population.md`
+  — §3.1 checks every acceptance criterion against what shipped, §4 records
+  what the harness measured
+- Increment 6 plan: `docs/superpowers/plans/2026-08-08-increment-6-survival-and-population.md`
+- Issues: `docs/issues/README.md` — findings judged real and not fixed in the
+  increment that found them
 - Process: `docs/process/agent-workflow.md` — working agreements for
   agent-driven increments
 

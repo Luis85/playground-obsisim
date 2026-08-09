@@ -294,10 +294,12 @@ private readonly sites = new Map<number, Map<ResourceId, number>>();
 - [ ] **Step 4: Mutation-check the draw order and the cap**
 
 ```bash
+cp src/engine/stockpile.ts /tmp/mut-stockpile
 sed -i 's/\.sort((a, b) => a - b)/.sort((a, b) => b - a)/' src/engine/stockpile.ts
 git diff --quiet src/engine/stockpile.ts && echo "MUTATION DID NOT APPLY"
 npx vitest run tests/engine/stockpile.test.ts   # expect ONLY the draw-order test red
-git checkout src/engine/stockpile.ts
+cp /tmp/mut-stockpile src/engine/stockpile.ts   # NOT git checkout: this file is UNTRACKED
+# at this point, so checkout cannot restore it and would leave the mutation in place.
 ```
 
 - [ ] **Step 5: Gates and commit**
@@ -411,10 +413,12 @@ function startBatch(production: Production, input: InputBuffer, buffer: OutputBu
 - [ ] **Step 6: Mutation-check**
 
 ```bash
+cp src/engine/systems/production-system.ts /tmp/mut-production
 sed -i 's/if (payFrom(input, recipe.inputs))/if (stockpile.pay(recipe.inputs))/' src/engine/systems/production-system.ts
 # (restore the resource declaration by hand for this check, then:)
 npx vitest run tests/engine/systems/production-system.test.ts   # the first test above must go red
-git checkout src/engine/systems/production-system.ts
+cp /tmp/mut-production src/engine/systems/production-system.ts   # NOT git checkout — it
+# would reset a TRACKED file to HEAD and discard the whole uncommitted implementation.
 ```
 
 - [ ] **Step 7: Gates and commit**

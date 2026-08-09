@@ -281,21 +281,22 @@ export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Com
     // destroy the load (mirrors handleMoveBuilding's guard below).
     if (trip.phase === 'outbound' && trip.targetId === command.buildingId) trip.reset();
   }
-  // Colonists spawned EARLIER THIS TICK are not in ctx.workers — the query
-  // cannot see them until the post-step sync — so a nomad welcomed before
-  // this demolition would keep a homeId pointing at the building being
-  // removed, the autosave would serialize that dangling reference, and the
-  // v5 load guard would refuse the save. Same no-op as freeBeds' arrivals
-  // exclusion today, and for the same reason: nothing populates
-  // ctx.pending.arrivals until Task 8 wires nomad welcoming, so this loop
-  // currently has nothing to walk.
-  for (const { home } of ctx.pending.arrivals) {
-    if (home.buildingId === command.buildingId) home.buildingId = null;
-  }
   ctx.remove(found.entity);
   ctx.demolishedIds.add(command.buildingId);
   ctx.pending.demolished.add(command.buildingId);
   ctx.removals.dirty = true;
+  // Colonists spawned EARLIER THIS TICK are not in ctx.workers — the query
+  // cannot see them until the post-step sync — so a nomad welcomed before this
+  // demolition keeps a homeId pointing at the building being removed unless
+  // something reaches them through the pending ledger. Since Task 8 wires nomad
+  // welcoming, ctx.pending.arrivals genuinely fills: recruitWorker and
+  // demolishBuilding in one drain is a reachable pair, not a hypothetical.
+  //
+  // AFTER the two demolished-ledger writes above, deliberately:
+  // reseatArrivalsOf re-seats through shelterWithRoom, which skips
+  // pending.demolished — re-seating any earlier would hand the arrival a bed in
+  // the very house being removed.
+  reseatArrivalsOf(ctx, command.buildingId);
   // A zero-units clause would be noise on the common case, so the empty
   // buffer keeps the plain wording rather than gaining an empty ", lost."
   let notice = lost === ''
@@ -307,7 +308,8 @@ export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Com
 
 /**
  * Move this drain's own arrivals out of a house that just stopped sheltering,
- * into whichever house still has room.
+ * into whichever house still has room. Both ways a house stops sheltering call
+ * it: `handleMoveBuilding` (in transit) and `handleDemolishBuilding` (gone).
  *
  * A nomad welcomed EARLIER THIS SAME DRAIN is invisible to `ctx.workers` — the
  * query cannot see an entity until the post-step sync — so `rehome`

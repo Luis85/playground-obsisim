@@ -194,6 +194,31 @@ describe('CommandSystem', () => {
     expect(nomad!.getComponent(Home)!.buildingId).toBe(91);
   });
 
+  it('re-seats a nomad in the other house when the one it landed in is demolished in the same drain', async () => {
+    // The demolition half of the pair above, and the site `reseatArrivalsOf`
+    // was written for but never wired to: `handleDemolishBuilding` used to only
+    // NULL the arrival's home. Nulling stops the dangling reference the v5 load
+    // guard refuses, but it leaves the nomad homeless for the rest of the tick
+    // with house 91 standing on four empty beds — and rehome cannot repair it,
+    // because a colonist spawned earlier in this drain has no query row until
+    // the post-step sync. Paused, that contradiction persists indefinitely.
+    const { world, dispatch, snapshot } = await setup(saveThatCanHouseArrivals());
+    await dispatch(
+      { type: 'recruitWorker' },
+      { type: 'demolishBuilding', buildingId: 90 },
+    );
+    // Both commands genuinely applied — same guard as the relocation twin.
+    expect(snapshot().notices).toEqual([
+      { kind: 'success', message: 'Colonist #100 joined the colony.' },
+      { kind: 'success', message: 'Demolished the House — cost refunded.' },
+    ]);
+    const nomad = [...world.getEntities()].find((e) => e.getComponent(Colonist)?.id === 100);
+    expect(nomad, 'the recruited nomad never reached the world').toBeDefined();
+    // 91, never 90: the re-seat runs after the demolition is on the pending
+    // ledger, so `shelterWithRoom` cannot hand back the house being removed.
+    expect(nomad!.getComponent(Home)!.buildingId).toBe(91);
+  });
+
   it('assigns and unassigns workers within slot limits', async () => {
     const { tick, dispatch, snapshot } = await setup();
     await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });

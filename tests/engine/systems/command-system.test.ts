@@ -823,12 +823,13 @@ describe('CommandSystem', () => {
     // The trip must be reset, not merely handed off: buildSaveFromWorld banks a
     // carried load into the save filtered on `carrying`, NOT on `hauling`, so a
     // load left in hand here would be banked a second time on the next save —
-    // the same units twice. legTicks and the pickup tile were genuinely
+    // the same units twice. legTicks and the leg's endpoints were genuinely
     // non-zero the moment before this (the carrier was mid-return-leg from
-    // (5,4)) — reset() must clear them along with everything else, the same
-    // way it clears phase/targetId/resource/amount.
+    // (5,4) to the camp) — cancel() must clear them along with everything
+    // else, the same way it clears phase/targetId/resource/amount.
     expect(carrier.getComponent(HaulTrip)!).toMatchObject({
-      phase: 'idle', targetId: null, resource: null, amount: 0, legTicks: 0, pickupCol: 0, pickupRow: 0,
+      phase: 'idle', targetId: null, resource: null, amount: 0, legTicks: 0,
+      legFromCol: 0, legFromRow: 0, legToCol: 0, legToRow: 0,
     });
     expect(buildSaveFromWorld(world).stockpile.wood).toBe(before + ONE_LOAD);
   });
@@ -925,7 +926,7 @@ describe('CommandSystem', () => {
     const trip = () => hauler.getComponent(HaulTrip)!;
     await tick(); await tick(); await tick(); // walks the 3 ticks out and loads
     expect(trip()).toMatchObject({
-      phase: 'returning', ticksLeft: 3, legTicks: 3, pickupCol: 5, pickupRow: 4,
+      phase: 'returning', ticksLeft: 3, legTicks: 3, legFromCol: 5, legFromRow: 4,
       resource: 'wood', amount: ONE_LOAD,
     });
 
@@ -935,11 +936,11 @@ describe('CommandSystem', () => {
     expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Moved the Forester.' }]);
     // Only HaulSystem's ordinary per-tick decrement (3 -> 2), nothing extra
     // from the move: ticksLeft and the load it is carrying are untouched — and
-    // neither are legTicks or the pickup tile. OBS-5-01: a returning trip's
-    // origin does not follow the building; pickupCol/pickupRow must still read
-    // the OLD (5,4), never the new (9,6) the building moved to.
+    // neither are legTicks or the leg's frozen origin. OBS-5-01: a returning
+    // trip's origin does not follow the building; legFromCol/legFromRow must
+    // still read the OLD (5,4), never the new (9,6) the building moved to.
     expect(trip()).toMatchObject({
-      phase: 'returning', ticksLeft: 2, legTicks: 3, pickupCol: 5, pickupRow: 4,
+      phase: 'returning', ticksLeft: 2, legTicks: 3, legFromCol: 5, legFromRow: 4,
       resource: 'wood', amount: ONE_LOAD,
     });
 

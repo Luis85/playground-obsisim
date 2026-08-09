@@ -23,14 +23,13 @@ async function run(world: Awaited<ReturnType<typeof createColonyWorld>>, ticks: 
  * without them the chain stalls at each building's OutputBuffer exactly as
  * tests/engine/systems/haul-system.test.ts pins in isolation.
  *
- * NOTE (increment 7, Task 3): as of `ProductionSystem` drawing a recipe's
- * inputs from the building's own `InputBuffer` rather than the colony
- * `Stockpile`, `HaulSystem` has no way to fill that buffer yet — today it
- * only moves goods FROM a building's `OutputBuffer` TO the `Stockpile`
- * ("collect" trips). A downstream building's input arriving there at all is
- * Task 6's "supply leg", not this one's. Until it lands, the it.skip below
- * on the multi-building chain test is the honest state of the world; the
- * fixture itself is left as-is so Task 6 only has to remove the skip.
+ * Since increment 7 Task 6 those 5 haulers do BOTH halves of the job: they
+ * collect finished goods out of each building's `OutputBuffer` and they
+ * supply each downstream building's `InputBuffer` from the store. The chain
+ * below is the end-to-end proof that the two halves compose — a mill that is
+ * never delivered wheat produces no flour, and a bakery with no flour bakes
+ * no bread, so the two `deliveredRate` assertions at the bottom cannot pass
+ * without a working supply leg.
  *
  * It also houses all 18, because since increment 6 a colony that houses
  * nobody is a colony working at half power (BALANCE.homelessFactor) and
@@ -68,11 +67,7 @@ function richSave(): SaveGameV5 {
 }
 
 describe('full colony integration', () => {
-  // SKIPPED since Task 3 (increment 7): a mill/bakery/sawmill/workshop can no
-  // longer be fed by a hauler alone — their recipe inputs come from their own
-  // InputBuffer, and nothing yet delivers into one (see the fixture comment
-  // above). Restore this once Task 6's supply leg exists.
-  it.skip('bootstraps both chains to steady bread and tools production', async () => {
+  it('bootstraps both chains to steady bread and tools production', async () => {
     const world = await createColonyWorld(richSave());
     dispatch(
       world,

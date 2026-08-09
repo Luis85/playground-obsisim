@@ -73,7 +73,7 @@ function standDown(ctx: PopulationContext, row: ColonistRow): void {
   row.job.buildingId = null;
   row.job.hauling = false;
   if (row.trip.resource !== null && row.trip.amount > 0) ctx.stockpile.add(row.trip.resource, row.trip.amount);
-  row.trip.reset();
+  row.trip.cancel();
 }
 
 /**

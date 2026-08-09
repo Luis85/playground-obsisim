@@ -1,5 +1,5 @@
 import type { BuildingDefId, RecipeDef, ResourceId } from '../shared/content-types';
-import type { HaulPhase } from '../shared/haul';
+import { CAMP_SITE_ID, CAMP_TILE, legProgress, type HaulKind, type HaulPhase } from '../shared/haul';
 
 export class Building {
   constructor(public id: number, public defId: BuildingDefId) {}
@@ -191,9 +191,9 @@ export class InputBuffer extends ResourceBuffer {
   }
 }
 
-// Defined in src/shared/haul.ts (the snapshot publishes it, and shared may
+// Defined in src/shared/haul.ts (the snapshot publishes them, and shared may
 // not import the engine); re-exported here so component consumers need one import.
-export type { HaulPhase };
+export type { HaulKind, HaulPhase };
 
 /**
  * Ticks a building is still out of action after being moved. Unlike HaulTrip,
@@ -210,42 +210,122 @@ export class Relocation {
 }
 
 /**
+ * Empty hands, no job, no leg — everything about a trip except where the
+ * hauler stands.
+ *
+ * A module-private FUNCTION rather than a private method, and the reason is
+ * sim-ecs rather than taste: a query row's type is `Required<Omit<HaulTrip,
+ * never>>`, which drops private members, and TypeScript then compares the two
+ * nominally and rejects every row a system iterates. Being unreachable from
+ * outside this file is the point either way — `cancel` is the only way to end
+ * a trip, because every branch that ends one first has to say where its hauler
+ * stopped.
+ */
+function clearTrip(trip: HaulTrip): void {
+  trip.phase = 'idle';
+  trip.kind = 'collect';
+  trip.targetId = null;
+  trip.ticksLeft = 0;
+  trip.resource = null;
+  trip.amount = 0;
+  trip.plannedAmount = 0;
+  trip.sourceSiteId = CAMP_SITE_ID;
+  trip.destSiteId = CAMP_SITE_ID;
+  trip.pickedUp = false;
+  trip.legTicks = 0;
+  trip.legFromCol = 0;
+  trip.legFromRow = 0;
+  trip.legToCol = 0;
+  trip.legToRow = 0;
+}
+
+/**
  * A hauler's current trip. Runtime-only: it never enters the save — a hauler
  * caught mid-trip banks its load into the saved stockpile instead — so nothing
  * here needs a load guard or a migration. Present on every worker; anyone who
  * is not hauling simply sits at 'idle'.
  *
- * `legTicks` and the pickup tile freeze facts about the CURRENT leg at the
- * moment it begins, so the snapshot can publish them instead of the app layer
- * re-deriving them from the building's live position — which desyncs a
+ * `legTicks` and the two leg endpoints freeze facts about the CURRENT leg at
+ * the moment it begins, so the snapshot can publish them instead of the app
+ * layer re-deriving them from the building's live position — which desyncs a
  * returning hauler's drawn walk once its building moves mid-leg (OBS-5-01).
  */
 export class HaulTrip {
   constructor(
     public phase: HaulPhase = 'idle',
+    /** The job this hauler was dispatched on, frozen at dispatch. It stops
+     * describing the CARGO the moment the round trip works as intended — a
+     * supply trip carrying collected output home is still `'supply'` — so
+     * anything asking "what is in this hauler's hands" reads `pickedUp`. */
+    public kind: HaulKind = 'collect',
     public targetId: number | null = null,
     public ticksLeft = 0,
     public resource: ResourceId | null = null,
+    /** Units in hand right now, and only that. A fetching hauler carries
+     * nothing until it arrives, which is why the quantity it PLANS to take
+     * is a separate field: `buildSaveFromWorld` banks `amount` into the save
+     * as real cargo, so folding a planned take in here would duplicate goods
+     * on any save written mid-fetch. */
     public amount = 0,
-    // What `haulTicks` charged for the CURRENT leg — frozen, unlike `ticksLeft`,
+    /** How much a fetching trip intends to take from `sourceSiteId` — its
+     * claim on that site's stock, so two haulers cannot both plan the same
+     * last six wheat. Becomes 0 the moment `takeAt` returns the real figure. */
+    public plannedAmount = 0,
+    public sourceSiteId = CAMP_SITE_ID,
+    /** Where the return leg is headed, and the reservation of room there:
+     * every bounded site's free space is measured net of what returning
+     * haulers have already been promised. */
+    public destSiteId = CAMP_SITE_ID,
+    /** Whether the load in hand came out of a building's output buffer. The
+     * flow-accounting discriminator: by the time a load reaches a site, a
+     * genuine delivery (`addAt`) and an undelivered supply remainder
+     * (`refundAt`) are indistinguishable without it. */
+    public pickedUp = false,
+    // What the leg was charged when it began — frozen, unlike `ticksLeft`,
     // which counts down. Set beside `ticksLeft` at every site that assigns it.
     public legTicks = 0,
-    // The return leg's origin tile: the building's position at the moment this
-    // hauler loaded, frozen for the rest of that leg. Meaningful only once
-    // `phase` is 'returning'.
-    public pickupCol = 0,
-    public pickupRow = 0,
+    // BOTH endpoints of whichever leg is running, frozen when that leg begins
+    // — every leg, not only the return one, because a fetching or outbound
+    // trip cancelled part-way needs the same interpolation to say where its
+    // hauler stopped. Tiles, not site ids: a depot that relocates mid-leg
+    // resolves the same id to a different tile, leaving no origin to price
+    // the onward leg from (OBS-5-01).
+    public legFromCol = 0,
+    public legFromRow = 0,
+    public legToCol = 0,
+    public legToRow = 0,
+    // Where this hauler physically STANDS when no leg is running. A position
+    // rather than a site id, so a demolished storehouse leaves no membership
+    // dangling. Defaults to the camp tile, not (0, 0): every other number here
+    // defaults to zero, and a fresh or restored hauler starting in the map's
+    // corner would price and draw its first leg from a tile it has never
+    // stood on.
+    public atCol = CAMP_TILE.col,
+    public atRow = CAMP_TILE.row,
   ) {}
 
-  /** Back to standing at the camp with empty hands. */
-  reset(): void {
-    this.phase = 'idle';
-    this.targetId = null;
-    this.ticksLeft = 0;
-    this.resource = null;
-    this.amount = 0;
-    this.legTicks = 0;
-    this.pickupCol = 0;
-    this.pickupRow = 0;
+  /**
+   * End this trip where the hauler is actually standing.
+   *
+   * THE way a trip ends — `reset` is private precisely so every branch comes
+   * through here, including the ones added later by someone reading the
+   * surrounding code rather than this comment. While a leg runs,
+   * `legFrom`/`legTo` name its endpoints and `atCol`/`atRow` still hold its
+   * ORIGIN, so resetting without this would snap the hauler back over every
+   * tile it had walked — and the arrival-time cancellations are the sharp
+   * case, since they fire with the leg fully walked. `legProgress` decides
+   * how far it got, which is the same interpolation the renderer uses to
+   * place the dot, so the hauler stops exactly where the player last saw it.
+   * A fractional position is fine: it is only ever a distance origin.
+   */
+  cancel(): void {
+    // An idle trip has no leg to interpolate — its endpoints are cleared, and
+    // reading them would teleport a standing hauler to the map's corner.
+    if (this.phase !== 'idle') {
+      const travelled = legProgress(this.ticksLeft, this.legTicks);
+      this.atCol = this.legFromCol + (this.legToCol - this.legFromCol) * travelled;
+      this.atRow = this.legFromRow + (this.legToRow - this.legFromRow) * travelled;
+    }
+    clearTrip(this);
   }
 }

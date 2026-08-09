@@ -287,7 +287,13 @@ export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Com
     // snapshot no longer contains. Outbound only: a returning hauler is carrying
     // those goods to the camp, which did not move, and resetting it would
     // destroy the load (mirrors handleMoveBuilding's guard below).
-    if (trip.phase === 'outbound' && trip.targetId === command.buildingId) trip.reset();
+    //
+    // Empty-handed only, for that same reason: since increment 7 an OUTBOUND
+    // hauler can be carrying a supply load it fetched from a store, and
+    // cancelling that here would destroy goods the colony already owned. One
+    // still walks to the demolished tile and finds nothing there, which is
+    // where HaulSystem turns it for home with its load intact.
+    if (trip.phase === 'outbound' && trip.targetId === command.buildingId && trip.amount === 0) trip.cancel();
   }
   ctx.removals.remove(found.entity);
   ctx.demolishedIds.add(command.buildingId);
@@ -439,6 +445,6 @@ export function handleUnassignHauler(ctx: CommandContext): void {
   if (hauler.trip.resource !== null && hauler.trip.amount > 0) {
     ctx.stockpile.add(hauler.trip.resource, hauler.trip.amount);
   }
-  hauler.trip.reset();
+  hauler.trip.cancel();
   ctx.notices.succeed('Unassigned a hauler.');
 }

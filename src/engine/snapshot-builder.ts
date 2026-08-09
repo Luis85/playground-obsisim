@@ -349,17 +349,18 @@ export function colonistFactsOf(
     // Published on BOTH legs now: the layout interpolates the dot along the
     // camp<->building line, so a returning hauler still needs to know which
     // building it is walking back from (OBS-4-09). `trip.targetId` survives the
-    // phase flip and is cleared only by trip.reset().
+    // phase flip and is cleared only when the trip ends.
     haulTargetId: trip.targetId,
     haulPhase: trip.phase,
     haulTicksLeft: trip.ticksLeft,
-    // The leg total and the return leg's origin, frozen by HaulTrip when the
-    // leg began — published so the layout reads them instead of recomputing
-    // from the building's live tile, which desyncs once the building moves
-    // mid-leg (OBS-5-01).
+    // The leg total and the leg's frozen ORIGIN — published so the layout
+    // reads them instead of recomputing from the building's live tile, which
+    // desyncs once the building moves mid-leg (OBS-5-01). Named for the return
+    // leg's pickup because that is the only leg the app draws from it today;
+    // the component now freezes both endpoints of every leg.
     haulLegTicks: trip.legTicks,
-    haulPickupCol: trip.pickupCol,
-    haulPickupRow: trip.pickupRow,
+    haulPickupCol: trip.legFromCol,
+    haulPickupRow: trip.legFromRow,
     carrying: trip.amount,
     carryingResource: trip.resource,
     toolTicks: coverage.remainingTicks,

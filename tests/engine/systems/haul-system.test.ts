@@ -8,6 +8,7 @@ import { BUILDINGS } from '../../../src/engine/content/buildings';
 import { HaulSystem, haulerCapacity } from '../../../src/engine/systems/haul-system';
 import { CommandSystem } from '../../../src/engine/systems/command-system';
 import { PopulationSystem } from '../../../src/engine/systems/population-system';
+import { CAMP_TILE } from '../../../src/shared/haul';
 import { campAdjacentFreeTile, enqueue } from '../fixtures';
 import {
   applyRemovals, buildColonyPrepWorld, createColonyWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist,
@@ -134,23 +135,33 @@ describe('HaulSystem', () => {
     expect(tripOf(haulers[0]).phase).toBe('idle');
   });
 
-  // OBS-5-01: legTicks and the pickup tile are frozen at the two sites that
-  // begin a leg (dispatch, and load/turn-for-home) and must survive exactly
-  // as long as the leg they describe — cleared only once the trip resets.
-  it('freezes the leg total and the return-leg pickup tile when each leg begins, and clears both on reset', async () => {
-    // Same (5,4) trip as the test above: 3 ticks each way.
+  // OBS-5-01: legTicks and BOTH leg endpoints are frozen at every site that
+  // begins a leg (dispatch, and load/turn-for-home) and must survive exactly
+  // as long as the leg they describe — cleared only once the trip ends.
+  it('freezes the leg total and both leg endpoints when each leg begins, and clears them when the trip ends', async () => {
+    // Same (5,4) trip as the test above: 3 ticks each way. Every number below
+    // is distinct from every other — the camp is (2,0), the building (5,4),
+    // the leg 3 ticks — so no field can read a neighbour's value and pass.
     const { haulers, step, stockpile } = await setup([{ col: 5, row: 4, wood: 9 }], 1);
-    await step(1); // dispatched: outbound leg begins
-    expect(tripOf(haulers[0])).toMatchObject({ phase: 'outbound', ticksLeft: 3, legTicks: 3 });
+    await step(1); // dispatched: the outbound leg begins AT THE CAMP TILE
+    expect(tripOf(haulers[0])).toMatchObject({
+      phase: 'outbound', ticksLeft: 3, legTicks: 3,
+      legFromCol: CAMP_TILE.col, legFromRow: CAMP_TILE.row, legToCol: 5, legToRow: 4,
+    });
 
     await step(3); // arrives, loads, turns for home: the return leg begins here
     expect(tripOf(haulers[0])).toMatchObject({
-      phase: 'returning', ticksLeft: 3, legTicks: 3, pickupCol: 5, pickupRow: 4,
+      phase: 'returning', ticksLeft: 3, legTicks: 3,
+      legFromCol: 5, legFromRow: 4, legToCol: CAMP_TILE.col, legToRow: CAMP_TILE.row,
     });
 
     await step(3); // delivered
     expect(stockpile.get('wood')).toBe(BALANCE.haulCarryCapacity);
-    expect(tripOf(haulers[0])).toMatchObject({ phase: 'idle', legTicks: 0, pickupCol: 0, pickupRow: 0 });
+    expect(tripOf(haulers[0])).toMatchObject({
+      phase: 'idle', legTicks: 0, legFromCol: 0, legFromRow: 0, legToCol: 0, legToRow: 0,
+      // ...and the hauler is standing where the leg ended, not back at a default.
+      atCol: CAMP_TILE.col, atRow: CAMP_TILE.row,
+    });
   });
 
   it('charges a tick each way even beside the camp — no trip is free', async () => {

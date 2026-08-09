@@ -14,7 +14,10 @@ function hauler(phase: HaulPhase, ticksLeft: number, hauling = true): WorkerRow 
   // stage and home are both irrelevant to release cost (phase/ticksLeft
   // only) — 'adult' and a fresh, homeless Home() are valid, arbitrary
   // fixture values, not a case this file is testing.
-  return { id: nextId++, job: new JobAssignment(null, hauling), trip: new HaulTrip(phase, null, ticksLeft), home: new Home(), stage: 'adult' };
+  return {
+    id: nextId++, job: new JobAssignment(null, hauling), trip: new HaulTrip(phase, 'collect', null, ticksLeft),
+    home: new Home(), stage: 'adult',
+  };
 }
 
 describe('cheapestHaulerToRelease', () => {

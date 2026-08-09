@@ -1,3 +1,17 @@
+---
+id: OBS-6-01
+title: A demolished tile is still occupied for the rest of the drain
+status: open
+severity: minor
+area: engine
+increment: 6
+created: 2026-08-08
+source: increment-6 review (automated PR review on #9) — a pre-existing increment-3 defect surfaced while reviewing this increment
+affects:
+  - src/engine/systems/command-handlers.ts
+  - tests/engine/systems/command-system.test.ts
+---
+
 # A demolished tile is still occupied for the rest of the drain
 
 **Found:** 2026-08-08, during increment 6 review (automated PR review on #9).

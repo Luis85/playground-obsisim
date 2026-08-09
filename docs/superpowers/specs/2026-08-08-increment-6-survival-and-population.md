@@ -604,12 +604,15 @@ at 100 rather than raised to 101 to buy the word "full": a constant should move
 because of a measurement, not because of an adjective.
 
 **What no criterion covered, and should have.** None of the eleven asks whether
-a colony left alone *survives*. §4.1 q1 measures that it does not — a
-self-feeding colony overshoots its chain and goes extinct. Task 12's own brief
+a colony left alone *survives*. At the values this increment shipped with, it
+did not — and every acceptance criterion still passed. Task 12's own brief
 proposed `finalOf(roomy).adults + finalOf(roomy).children > 4` as an assertion;
-it does not hold, and no `BALANCE` constant was changed to make it hold. That
+against `birthFoodPerHead: 6` it failed, at a final population of zero. That
 gap between "every acceptance criterion passes" and "the game works" is the
-most useful thing this increment learned about its own criteria.
+most useful thing this increment learned about its own criteria, and it is
+worth keeping in view even though the constant has since been retuned (§4.1 q1)
+and the assertion now holds by a wide margin. The criterion was missing; adding
+the measurement is what found that out.
 
 ---
 
@@ -631,8 +634,8 @@ outcome "validated, unchanged", which is a legitimate result.
 | `startingAgeYears` | 25 | Founders staggered by the same spread. |
 | `nomadArrivalYears` | 20 | Arrives with most of a working life ahead, which is what makes the higher food gate a fair price. |
 | `starvationDeathTicks` | 100 | One year pinned at max hunger. |
-| `birthFoodPerHead` | 6 meals | ~3 years of food per colonist. |
-| `nomadFoodPerHead` | 10 meals | ~5 years — strictly above the birth gate, per §2.7. |
+| `birthFoodPerHead` | 6 meals | ~3 years of food per colonist. **Retuned to 12 — see §4.1 q1.** |
+| `nomadFoodPerHead` | 10 meals | ~5 years — strictly above the birth gate, per §2.7. **Retuned to 20 with it, holding that ratio.** |
 | `birthCooldownTicks` | 50 | Half a year between births, colony-wide. |
 | `commuteFreeTiles` | 2 | Living next door to your job is free — and, per §2.4, this is what keeps increment 5's measurements from shifting under a floor they never paid. |
 | `commutePenaltyPerTile` | 0.03 | Distance 10 costs ~24%; the floor arrives around distance 19, well inside the default map but only for genuinely bad siting. |
@@ -644,50 +647,175 @@ outcome "validated, unchanged", which is a legitimate result.
 
 Task 12 built the instrument (`tests/support/population-harness.ts`,
 `runPopulationScenario`) and ran the three questions above. Reproduce any of
-this with `npm run balance:population`. **No constant in the table above was
-changed.** Two of the three questions came back clean; the first did not, and
-what it returned is recorded here rather than tuned away.
+this with `npm run balance:population`. **Two constants in the table above
+moved: `birthFoodPerHead` 6 → 12 and `nomadFoodPerHead` 10 → 20.** Questions 2
+and 3 came back clean and changed nothing.
+
+**What the instrument does NOT do, and it matters for reading q1.** The
+harness's `autoStaffSystem` stands in for the player, but only as a *foreman*:
+every tick it puts idle adults into free work slots and tops the hauling pool
+back up. **It cannot build.** So a scenario's huts, houses and haulers are
+fixed for the whole run — in q1's case four gatherer slots feeding the colony
+for all 12,000 ticks, while a real player would lay down a third hut the moment
+meals/head started sliding. Every number below therefore describes a colony
+that grows into a food chain it is *not allowed to extend*. That is the right
+control for tuning a birth gate, because it isolates the gate from the player's
+skill, but it is a floor on colony performance and not a forecast of one.
 
 **1. Does a colony left alone with a working food chain reach a stable
 population, or does it oscillate?**
 
-**Neither. It overshoots and dies.** Twelve houses (48 beds), two gatherers'
-huts, two haulers, four founders, 12,000 ticks, the colony feeding itself:
+**Both, and that is the healthy answer: a stable population carried by an
+oscillating age structure.** Twelve houses (48 beds), two gatherers' huts, two
+haulers, four founders, 12,000 ticks, the colony feeding itself, at the retuned
+`birthFoodPerHead: 12`:
 
-| tick | 1,000 | 2,200 | 3,200 | 5,200 | 7,000 | 7,800 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| population | 22 | **41** | 41 | 41 | 27 | **0** |
-| meals/head | 6.0 | 5.7 | 4.1 | 0.1 | 6.9 | – |
+| tick | 1,600 | 2,200 | 4,000 | 6,000 | 8,200 | 10,400 | 12,000 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| children | 12 | 20 | 1 | 0 | 18 | 0 | 0 |
+| adults | 12 | 16 | 37 | 28 | 10 | 39 | 34 |
+| elders | 0 | 0 | 0 | 6 | 12 | 1 | 5 |
+| **population** | 24 | 36 | 38 | 34 | 40 | 40 | **39** |
+| meals/head | 13.5 | 11.7 | 11.6 | 11.3 | 11.8 | 11.0 | 11.0 |
 
-44 births, 24 deaths of old age, **24 starvation deaths**, extinct by tick
-7,800.
+73 births, 38 deaths of old age, **0 starvation deaths**, peak 40, final 39,
+and the deepest trough after the founders' generation dies out is 34. Two
+complete birth-to-retirement waves are visible — children peak at 20 (tick
+2,200) and again at 18 (tick 8,200), a full `retireTicks` apart — while the
+total never leaves the band 34–40. Meals per head self-regulates just under the
+gate, which is the governor working: the store buys the next birth, the birth
+spends it back.
 
-The ceiling is genuinely food and not housing — 41 against 48 beds — and it is
-the chain *producing*, not the harness under-hauling: adding a third hauler
-does not move the peak, while cutting `haulCarryCapacity` to 1 moves it by 8.
-A one-house control takes 0 births and 0 starvation deaths, so beds gate births
-exactly as §2.6 says.
+The ceiling is genuinely food and not housing — 40 against 48 beds — and it is
+the chain *producing*, not the harness under-hauling: a third hauler moves the
+peak by 1 (38 → 37). That control was re-falsified at the retuned value rather
+than trusted from the old one: cutting `haulCarryCapacity` to 1, so that
+haulage genuinely binds, the third hauler moves the peak by **6** (11 → 17) and
+the control fails as it should. A one-house control takes 0 births and 0
+starvation deaths, so beds gate births exactly as §2.6 says.
 
-The mechanism is that **`birthFoodPerHead` is a stock test, not a flow test.**
-`mealsPerHead` measures what is in the store; a young colony banks that faster
-than it eats, so births continue past the population the chain can feed. The
-store then drains (meals/head 5.7 → 0.1 over 3,000 ticks), births stop for
-longer than a maturity span, and the age pyramid empties from the bottom. When
-the single synchronised cohort retires — from tick 4,600 onward — there is
-nobody behind it, production stops, and the colony starves.
+#### Why the constant moved, and why to 12
 
-So the diagnosis the table above anticipated — "an unbounded ramp means
-`birthFoodPerHead` is too low" — is half right. The ramp is bounded, by
-starvation. Raising `birthFoodPerHead` would delay the overshoot without
-removing it, because no value of a store threshold answers "is there work for
-this colonist". The candidate fixes, for a later increment to choose between:
+At the shipped `birthFoodPerHead: 6` this same fixture peaked at 41 around tick
+2,600 and was **extinct by tick 7,800** — 44 births, 24 old age, 24 starved,
+meals/head sliding 5.7 → 0.1 over 3,000 ticks. Task 12 recorded that and
+declined to retune, arguing that `birthFoodPerHead` is a *stock* test and "no
+value of a store threshold answers 'is there work for this colonist'", so
+raising it would delay the overshoot rather than remove it. **That argument is
+wrong, and the measurement below is what refutes it.** A stock test does not
+need to answer that question. What it actually sets is the **reserve the colony
+still holds at the moment growth stops**: births halt while the store is worth
+`perHead × (population + 1)`, so a higher gate does not slow the colony down
+much — it stops it earlier *with more food banked*. And a reserve is precisely
+what has to absorb the overshoot `matureTicks` guarantees, because a child eats
+from birth and works ten years later.
 
-- gate births on `netFlow` for edibles as well as on stock, so a colony that is
-  eating into its store stops breeding before the store is gone;
-- or gate on idle adults, so a colony with no work for its people stops making
-  more of them.
+The overshoot is roughly a fixed *size*: one birth per `birthCooldownTicks` for
+`matureTicks` is about twenty mouths committed before the first of them pays
+anything back, whatever the colony's size. Twenty is half of a 40-colonist
+chain and a sixth of a 120-colonist one — which is why six meals a head is
+enough for a large colony and fatal for a small one.
 
-Neither is a constant change, which is why nothing in the table moved.
+Sweeping `birthFoodPerHead` alone on this scenario, nothing else changed:
+
+| value | peak | final | trough after t3,000 | births | starved |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 6 (shipped) | 41 | **0** | 0 | 44 | 24 |
+| 7 | 41 | **0** | 0 | 42 | 21 |
+| 8 | 41 | **0** | 0 | 44 | 22 |
+| 9 | 40 | **0** | 0 | 48 | 26 |
+| 10 | 42 | 42 | 23 | 77 | 0 |
+| 11 | 41 | 40 | 34 | 74 | 0 |
+| **12** | **40** | **39** | **34** | **73** | **0** |
+| 14 | 39 | 39 | 34 | 73 | 0 |
+| 16 | 39 | 39 | 34 | 72 | 0 |
+| 20 | 38 | 38 | 33 | 71 | 0 |
+| 24 | 38 | 38 | 31 | 70 | 0 |
+| 32 | 38 | 37 | 27 | 67 | 0 |
+| 48 | 36 | 36 | 20 | 62 | 0 |
+
+A clean cliff between 9 and 10, a flat band from 11 to 20 in which the runs are
+indistinguishable, and a slow decay above 24 as births become too rare to refill
+the pyramid. So the value is chosen from a band, not from the first number that
+passed:
+
+- **Not 10.** It survives, but its trough is 23 against the band's 34, and it
+  equals the current `nomadFoodPerHead` — it cannot be picked without moving
+  that too, and it sits one unit from the cliff.
+- **Not 16 or 20**, though both measure the same here. A deliberately
+  under-hauled chain (four huts, three haulers) dies at 12 and survives at 16 —
+  a stricter birth gate covers for missing haulers, which hides a logistics
+  failure the player should be made to see. A birth gate should be the weakest
+  governor that does the job.
+- **12** is the lowest round value clear of the cliff, and in the spec's own
+  unit it is a clean doubling: a colonist eats one meal per `mealThreshold`
+  ticks, so `yearTicks` buys two, and 12 meals is six years of food a head
+  against the shipped three.
+
+**Robustness, because a cliff this sharp invites a knife-edge.** The same
+12,000-tick run under perturbation — haulers and founders varied together, and
+the food chain scaled up:
+
+| fixture | at 6 | at 12 |
+| --- | --- | --- |
+| 2 huts, 2 haulers, 4 founders | **extinct**, 24 starved | final 39, 0 starved |
+| 2 huts, 3 haulers, 5 founders | **extinct**, 31 starved | final 39, 0 starved |
+| 2 huts, 4 haulers, 6 founders | final 36, 16 starved | final 36, 0 starved |
+| 2 huts, 6 haulers, 8 founders | **extinct**, 31 starved | final 36, 0 starved |
+| 4 huts, 4 haulers, 24 houses | – | final 49, 0 starved |
+| 6 huts, 6 haulers, 36 houses | final 125, 0 starved | final 109, 0 starved |
+
+Two things follow, and the second is the honest qualification on the first.
+**12 is stable everywhere measured; 6 is stable only in parts of the space**,
+and flips between extinction and survival on a change as small as two extra
+haulers — non-monotonically, which is what a balance sitting exactly on a
+boundary looks like. But **6 is not universally fatal**: give the colony a
+six-hut chain with haulers to match and it holds 125 without a single
+starvation death. The failure the shipped value had was a *small-colony*
+failure, and the harness cannot build its way out of one, which is exactly the
+limitation stated at the top of this section. A player who keeps extending the
+food chain would have been fine at 6; a player who builds twelve houses and
+two huts and then watches was not.
+
+The two structural fixes Task 12 proposed are therefore **not** required to
+make the colony survive, and are demoted from "the fix" to "worth having
+anyway": gating births on `netFlow` for edibles as well as on stock would make
+the governor react to a draining store rather than to its level, and gating on
+idle adults would stop a colony breeding when it has no work for its people.
+Both remain candidates for a later increment; neither is load-bearing now.
+
+#### Why `nomadFoodPerHead` moved too
+
+Raising the birth gate to 12 while leaving the nomad gate at 10 **inverts
+§2.7**: a stranger who eats today would become cheaper to take on than your own
+child, and the recovery valve would stop being a trap and start being the easy
+option. The content test `a nomad costs more stored food than a birth` failed
+on exactly that, which is what a pinned relationship is for — the pair had been
+two literals that happened to be ordered correctly, and the test is what makes
+the ordering a rule.
+
+Resolved by moving both and holding the 5:3 proportion they shipped with: **20
+meals, ten years of stored food a head against the birth gate's six.** The
+alternative of preserving the absolute +4 gap was rejected because 4 was never
+a stated principle — §4's own table justifies the pair in *years* ("~3" and
+"~5"), which is a proportional claim.
+
+Reachability was measured rather than assumed, since a valve nobody can ever
+open is not a trap but a dead mechanic. Sampling `mealsPerHead` across four
+colony sizes, the share of a run in which a gate of 20 stands open:
+
+| colony | first tick ≥ 20 | share of run open |
+| --- | ---: | ---: |
+| 1 house, 1 hut, 3 founders | 325 | 85% |
+| 2 houses, 1 hut, 3 founders | 650 | 79% |
+| 6 houses, 2 huts, 4 founders | 2,200 | 64% |
+| 12 houses, 2 huts, 4 founders (at its ceiling) | never | 0% |
+
+Which is precisely the shape §2.7 asks for. A colony with slack in its food
+chain can buy a nomad within a few years of founding; a colony that has already
+grown into its chain can never buy one, no matter how long it waits. The valve
+is open exactly when taking a stranger is affordable and shut exactly when it
+would be the mistake that finishes you.
 
 **2. How many ticks of warning between `starvingTicks` climbing and the first
 death?**
@@ -745,16 +873,25 @@ same principle this increment enforced twice already — **the seed must not
 advertise a state tick 1 revokes** — arriving from a third direction, after the
 homing phase and the past-own-lifespan restore guard.
 
-**How much it distorted §4.1: none, this time.** Every curve above reports
-`frozen steps 0`, so the tick labels are exact. Deaths in these runs never
-coincided, because §2.12's id-derived lifespan spread desynchronises them — the
-primitive introduced to widen the demographic wave also happens to keep this
-defect from firing. That is luck, not protection: a narrower spread, a
-synchronised famine, or a retune of `lifespanSpreadYears` would collide deaths
-and inflate every tick label by the total frozen ticks. `runPopulationScenario`
-publishes `frozenSteps` on every curve precisely so that a future run cannot
-inflate its numbers quietly, and **any re-measurement must check it is still 0
-before quoting a tick.**
+**How much it distorted §4.1: nothing that is quoted here.** All three long
+curves report `frozen steps 0`, so their tick labels are exact. Deaths in those
+runs never coincided, because §2.12's id-derived lifespan spread desynchronises
+them — the primitive introduced to widen the demographic wave also happens to
+keep this defect from firing. That is luck, not protection: a narrower spread,
+a synchronised famine, or a retune of `lifespanSpreadYears` would collide
+deaths and inflate every tick label by the total frozen ticks.
+
+The one scenario that *does* freeze is q2's, and it is the reason `frozenSteps`
+is now printed for it by hand rather than only through the curve printer. Three
+colonists with no food at all starve within two ticks of each other, so the run
+loses **2 steps**. Both of them fall in the single gap tick 199 → 202, which is
+*after* the first death — so the 99-tick window q2 quotes spans no frozen step
+and is exact. That was checked, not assumed. Until this fix pass, `frozenSteps`
+was published on the `PopulationResult` type and printed only by `curveLines`,
+which this scenario does not go through — so the field was visible in the code
+and absent from every report the code produced, and the claim that it was
+"published rather than hidden" was not true of the output. **Any
+re-measurement must still read the figure before quoting a tick.**
 
 ### 4.3 Two fixtures that hold their conclusions by margin, not by assertion
 
@@ -764,7 +901,7 @@ rather than quietly. What is *not* asserted in either case is the **margin** the
 prose conclusion actually rests on. They are recorded so that a future retune
 re-reads the conclusion rather than only the green tick.
 
-**The chain test's `huts: 2`.** `a colony feeding itself is capped by its FOOD
+**The chain test's `huts: 2`.** `a colony feeding itself settles at its FOOD
 CHAIN…` brackets the peak on both sides: `> startingAdults * 4` (16) so a colony
 that never grew cannot pass, and `< ROOMY_HOUSES * houseBeds` (48) so a housing
 plateau cannot pass. At **4** huts the chain out-produces 48 beds and the upper
@@ -773,14 +910,23 @@ bound fails at exactly 48, so the fixture choice is defended.
 The gap is between the assertion and the claim. The assertion is `peak < 48`;
 the claim §4.1 draws from it is *"the ceiling is genuinely food and not
 housing"*, and that needs **room** below 48, not merely a value below it. Today
-the peak is 41 — seven colonists of headroom. At 47 the assertion would still be
-green while the colony was effectively bed-capped and the paragraph above it
-false. Anything that moves food supply or demand against bed supply narrows that
-headroom: `houseBeds`, the hunger rate, `mealThreshold`, the gatherers' hut
-recipe or its `workerSlots`. **After any such retune, re-read the peak against
-the bed count rather than only checking the suite is green**, and confirm the
-one-house control still takes 0 births — those two together are what make the
-run a measurement of food rather than of beds.
+the peak is 40 — eight colonists of headroom, one more than before the retune,
+since a higher birth gate stops growth slightly earlier. At 47 the assertion
+would still be green while the colony was effectively bed-capped and the
+paragraph above it false. Anything that moves food supply or demand against bed
+supply narrows that headroom: `houseBeds`, the hunger rate, `mealThreshold`, the
+gatherers' hut recipe or its `workerSlots`. **After any such retune, re-read the
+peak against the bed count rather than only checking the suite is green**, and
+confirm the one-house control still takes 0 births — those two together are what
+make the run a measurement of food rather than of beds.
+
+The retune added a third assertion with the same character: `trough > peak *
+0.6`, measured at 34 against 40. Its job is to stop a colony that crashed and
+rebuilt from passing as a plateau, and like the two above it is a *bracket*
+rather than the claim. The claim is that the population never leaves a narrow
+band; the bracket only rules out losing more than 40% of it. **A retune that
+brought the trough to 25 would still be green and the word "plateau" would
+still be wrong** — so re-read the printed curve, not only the tick.
 
 **The housing property test's periods.** `never over-houses, admits an arrival
 it has no bed for, or ends a tick it cannot reload` drives churn on three

@@ -32,9 +32,14 @@ the part in question. So two colonists crossing `retireTicks` on the same tick
 get different treatment purely on whether they happened to be employed: the one
 staffing a forester is announced, the one standing idle at the camp is not.
 
-It is not rare. In the extinction curve of spec §4.1 the colony peaks at 41
-against roughly six job slots, so the large majority of retirements in the
-increment's own headline measurement are the silent kind.
+It is not rare. In the self-feeding curve of spec §4.1 the colony holds 34–40
+against roughly six job slots — four in the huts and two hauling — so the large
+majority of the 38 retirements in the increment's own headline measurement are
+the silent kind. (The figure was 41 against the same six slots before the
+`birthFoodPerHead` retune, when that curve ended in extinction rather than a
+plateau. The retune changed the ending, not this ratio: the harness's chain is
+the same size either way, so the gap between population and job slots is what
+it always was.)
 
 ## Why this is filed rather than fixed
 

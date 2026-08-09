@@ -101,15 +101,21 @@ simulated production chains — in tables and, since Increment 2, a live
 - Save v5 carries age, home and the starvation clock; a v4 colony opens as
   adults with a starter house already placed and its first four colonists
   already housed, rather than being taxed as homeless on load
-- **Measured, and it does not balance yet.** `npm run balance:population` runs
-  a colony that feeds itself for 12,000 ticks: it peaks at 41 against 48 beds,
-  overshoots what its chain can feed, and is **extinct by tick 7,800** — 44
-  births, 24 deaths of old age, 24 starved. The birth gate tests food *in
-  store*, which a young colony banks faster than it eats, so births continue
-  past the population the chain can support. No `BALANCE` constant was moved to
-  hide this: raising the threshold delays the overshoot rather than removing
-  it. §4 of the increment 6 spec has the curve and the two structural fixes a
-  later increment has to choose between
+- **Measured, and retuned once because of it.** `npm run balance:population`
+  runs a colony that feeds itself for 12,000 ticks. At the birth threshold this
+  increment first shipped, it overshot what its chain could feed and was
+  **extinct by tick 7,800**. The threshold was the problem: it gates on food
+  *in store*, so what it really sets is the reserve a colony still holds when
+  growth stops — and that reserve is what has to cover the ten years between a
+  child being born and working. `birthFoodPerHead` moved 6 → 12 (and
+  `nomadFoodPerHead` 10 → 20 with it, so a stranger stays dearer than your own
+  child). The same run now holds **34–40 colonists through two full
+  generations with nobody starving**, its age structure swinging while the
+  total does not. Caveat worth knowing: that harness staffs buildings but
+  cannot *build* them, so it measures a colony pinned to four gatherer slots
+  for the whole run — a player who keeps extending the food chain survived even
+  at the old value. §4.1 of the increment 6 spec has the curve, the sweep the
+  value was picked from, and the two structural fixes still worth having
 
 ## Development
 

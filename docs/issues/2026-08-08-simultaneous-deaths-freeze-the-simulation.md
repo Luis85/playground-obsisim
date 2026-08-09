@@ -130,12 +130,22 @@ It reproduces identically under the default `executionFunction` and under
 
 - **It silently inflates every tick-indexed measurement.** `SimClock.tick`
   advances across frozen steps, and the snapshot published after a drain
-  carries that inflated tick — so "extinct by tick 7,800" would mean fewer than
-  7,800 ticks of actual simulation whenever a freeze occurred. Increment 6's
-  published curves happen to report `frozen steps 0` (the id-derived lifespan
-  spread desynchronises deaths), so their labels are exact, but that is luck
-  rather than protection. `runPopulationScenario` publishes `frozenSteps` on
-  every curve so a future measurement cannot be quoted without checking it.
+  carries that inflated tick — so a quoted "by tick 7,800" would mean fewer
+  than 7,800 ticks of actual simulation whenever a freeze occurred. Increment
+  6's published long curves happen to report `frozen steps 0` (the id-derived
+  lifespan spread desynchronises deaths), so their labels are exact, but that
+  is luck rather than protection. `runPopulationScenario` publishes
+  `frozenSteps` so a future measurement cannot be quoted without checking it.
+
+  The starvation-warning scenario is the one that *does* freeze: three
+  colonists with no food at all die within two ticks of each other and the run
+  loses **2 steps**, both inside the single gap tick 199 → 202. Because that
+  gap is after the first death, the 99-tick warning window §4.1 q2 quotes spans
+  no frozen step and is exact — but the figure has to be *read* to know that,
+  and until the increment-6 fix pass it was printed nowhere: `frozenSteps`
+  reached the report only through `curveLines`, and this is the one scenario
+  that does not go through it. Publishing a number on a type and never emitting
+  it is the same as not publishing it.
 
 ## Suggested fix
 

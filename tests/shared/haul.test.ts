@@ -4,7 +4,7 @@ import {
   CAMP_SITE_ID, CAMP_TILE, claimableAt, compareHaulCandidates, compareSupplyCandidates,
   haulDistance, haulTicks, haulTicksBetween, nearestSite, nearestSiteWithRoom, nextHaulTarget,
   nextSupplyTarget, sitesHolding,
-  type HaulCandidate, type HaulPhase, type StoreSite, type SupplyCandidate,
+  type HaulCandidate, type HaulKind, type HaulPhase, type StoreSite, type SupplyCandidate,
 } from '../../src/shared/haul';
 
 function candidate(overrides: Partial<HaulCandidate> = {}): HaulCandidate {
@@ -102,6 +102,13 @@ describe('HaulPhase', () => {
   });
 });
 
+describe('HaulKind', () => {
+  it('names the two jobs a hauler can be doing', () => {
+    const kinds: HaulKind[] = ['collect', 'supply'];
+    expect(kinds).toEqual(['collect', 'supply']);
+  });
+});
+
 describe('nearestSite', () => {
   const camp: StoreSite = { id: CAMP_SITE_ID, col: 2, row: 0, capacity: null };
   const depot: StoreSite = { id: 7, col: 20, row: 14, capacity: 60 };
@@ -128,35 +135,29 @@ describe('nearestSiteWithRoom', () => {
   const depot: StoreSite = { id: 7, col: 20, row: 14, capacity: 60 };
 
   it('prefers the depot for a building beside it', () => {
-    expect(nearestSiteWithRoom(21, 14, [camp, depot], () => 0, 10)?.id).toBe(7);
+    expect(nearestSiteWithRoom(21, 14, [camp, depot], () => 0, 6)?.id).toBe(7);
   });
-
-  it('falls through to the camp when the depot has no room at all', () => {
+  it('falls through to the camp when the depot is full', () => {
     // Discriminating: the depot is still NEARER. Only the room check can move
     // this answer, so a mutation that ignores capacity fails here and nowhere else.
-    expect(nearestSiteWithRoom(21, 14, [camp, depot], (id) => (id === 7 ? 60 : 0), 10)?.id).toBe(CAMP_SITE_ID);
+    expect(nearestSiteWithRoom(21, 14, [camp, depot], (id) => (id === 7 ? 60 : 0), 6)?.id).toBe(CAMP_SITE_ID);
   });
-
-  it('falls through to the camp when a held load would overflow the depot, even though the depot is not yet full', () => {
-    // The depot holds 55 of 60. A predicate that only skips already-full sites
-    // would still route a 12-unit load here and split it on arrival.
+  it('rejects a depot with SOME room but not enough for the load', () => {
+    // The case the `amount` parameter exists for. 55 of 60 held, 12 to bank:
+    // a predicate that only skips FULL sites picks the depot and splits the
+    // load on arrival.
     expect(nearestSiteWithRoom(21, 14, [camp, depot], (id) => (id === 7 ? 55 : 0), 12)?.id).toBe(CAMP_SITE_ID);
-  });
-
-  it('sends the depot a load that fills it exactly', () => {
-    expect(nearestSiteWithRoom(21, 14, [camp, depot], (id) => (id === 7 ? 55 : 0), 5)?.id).toBe(7);
   });
 
   it('never runs out of destinations while the camp exists', () => {
     // capacity: null is unbounded, so the camp is the guaranteed fallback.
-    expect(nearestSiteWithRoom(21, 14, [camp], () => 1e9, 1)).not.toBeNull();
+    expect(nearestSiteWithRoom(21, 14, [camp], () => 1e9, 6)).not.toBeNull();
   });
-
   it('breaks a distance tie by site id, not by argument order', () => {
     const a: StoreSite = { id: 9, col: 4, row: 0, capacity: 60 };
     const b: StoreSite = { id: 3, col: 0, row: 0, capacity: 60 };
-    expect(nearestSiteWithRoom(2, 0, [a, b], () => 0, 5)?.id).toBe(3);
-    expect(nearestSiteWithRoom(2, 0, [b, a], () => 0, 5)?.id).toBe(3);
+    expect(nearestSiteWithRoom(2, 0, [a, b], () => 0, 6)?.id).toBe(3);
+    expect(nearestSiteWithRoom(2, 0, [b, a], () => 0, 6)?.id).toBe(3);
   });
 });
 
@@ -173,41 +174,89 @@ describe('sitesHolding', () => {
   });
 });
 
+// A candidate is a building-SOURCE pair, not just a building: the same
+// building reachable from two different sites is two candidates. Every
+// fixture below that is meant to discriminate the route from the plain
+// hauler-to-building distance therefore varies the site fields, not just the
+// building fields — a comparator that ignores the source leg entirely would
+// still pass a fixture that only varied buildingCol/buildingRow.
 function supplyCandidate(overrides: Partial<SupplyCandidate> = {}): SupplyCandidate {
-  return { buildingId: 1, col: 4, row: 1, resource: 'wheat', movable: 4, ...overrides };
+  return {
+    buildingId: 1, buildingCol: 4, buildingRow: 1,
+    siteId: CAMP_SITE_ID, siteCol: CAMP_TILE.col, siteRow: CAMP_TILE.row,
+    resource: 'wheat', movable: 4,
+    ...overrides,
+  };
 }
 
 describe('supply job selection', () => {
-  it('serves the most movable stock first, even when it is farther from the hauler', () => {
+  it('serves the most movable stock first, even when it is farther via its whole route', () => {
     const from: TileRef = { col: 2, row: 0 };
-    const near = supplyCandidate({ buildingId: 1, col: 4, row: 1, movable: 3 });
-    const far = supplyCandidate({ buildingId: 2, col: 20, row: 10, movable: 9 });
+    const near = supplyCandidate({ buildingId: 1, buildingCol: 4, buildingRow: 1, movable: 3 });
+    const far = supplyCandidate({ buildingId: 2, buildingCol: 20, buildingRow: 10, movable: 9 });
     expect(nextSupplyTarget([near, far], from)?.buildingId).toBe(2);
   });
 
-  it('breaks a tie on movable by distance to the HAULER, not the camp', () => {
-    // Discriminating from compareHaulCandidates: the camp sits at (2, 0).
-    // Building 1 is nearer the camp; building 2 is nearer this hauler's
-    // current site. A comparator that measured from the camp (like the
+  it('breaks a tie on movable by the route from the HAULER, not the camp', () => {
+    // Discriminating from compareHaulCandidates: the camp sits at (2, 0). Each
+    // candidate's source here coincides with its own building (leg two is
+    // zero), so the route reduces to hauler-to-building — building 1 is
+    // nearer the camp; building 2 is nearer this hauler's current tile. A
+    // comparator that measured from CAMP_TILE instead of `from` (like the
     // collect law) would pick building 1 and fail this assertion.
     const from: TileRef = { col: 18, row: 10 };
-    const nearCamp = supplyCandidate({ buildingId: 1, col: 4, row: 0, movable: 5 });
-    const nearHauler = supplyCandidate({ buildingId: 2, col: 20, row: 10, movable: 5 });
+    const nearCamp = supplyCandidate({
+      buildingId: 1, buildingCol: 4, buildingRow: 0, siteId: 1, siteCol: 4, siteRow: 0, movable: 5,
+    });
+    const nearHauler = supplyCandidate({
+      buildingId: 2, buildingCol: 20, buildingRow: 10, siteId: 2, siteCol: 20, siteRow: 10, movable: 5,
+    });
     expect(nextSupplyTarget([nearCamp, nearHauler], from)?.buildingId).toBe(2);
   });
 
-  it('breaks a full tie by lowest building id, so selection cannot depend on order', () => {
-    const from: TileRef = { col: 2, row: 3 };
-    const a = supplyCandidate({ buildingId: 7, col: 2, row: 3, movable: 4 });
-    const b = supplyCandidate({ buildingId: 3, col: 2, row: 3, movable: 4 });
+  it('ranks by the WHOLE route — hauler to source to building — not by the building alone', () => {
+    // Both candidates serve the SAME building (5), so buildingCol/buildingRow
+    // and buildingId cannot break the tie: only the source leg can. A
+    // comparator that ignores the source sees two identical-distance
+    // candidates, falls through the building-id tie (also equal), and lands
+    // on the siteId tie-break — picking the FAR site (id 1, route 190) over
+    // the near one (id 2, route 10). The whole-route comparator must pick
+    // the near site instead.
+    const from: TileRef = { col: 0, row: 0 };
+    const viaFarSite = supplyCandidate({
+      buildingId: 5, buildingCol: 10, buildingRow: 0, siteId: 1, siteCol: 100, siteRow: 0, movable: 4,
+    });
+    const viaNearSite = supplyCandidate({
+      buildingId: 5, buildingCol: 10, buildingRow: 0, siteId: 2, siteCol: 0, siteRow: 0, movable: 4,
+    });
+    expect(nextSupplyTarget([viaFarSite, viaNearSite], from)?.siteId).toBe(2);
+    expect(nextSupplyTarget([viaNearSite, viaFarSite], from)?.siteId).toBe(2);
+  });
+
+  it('breaks a route tie by lowest building id, so selection cannot depend on order', () => {
+    const from: TileRef = { col: 2, row: 0 };
+    const a = supplyCandidate({ buildingId: 7, buildingCol: 2, buildingRow: 3, movable: 4 });
+    const b = supplyCandidate({ buildingId: 3, buildingCol: 2, buildingRow: 3, movable: 4 });
     expect(nextSupplyTarget([a, b], from)?.buildingId).toBe(3);
     expect(nextSupplyTarget([b, a], from)?.buildingId).toBe(3);
+  });
+
+  it('breaks a full tie (same building, same route length) by lowest site id', () => {
+    const from: TileRef = { col: 0, row: 0 };
+    const viaA = supplyCandidate({
+      buildingId: 1, buildingCol: 0, buildingRow: 0, siteId: 9, siteCol: 5, siteRow: 0, movable: 4,
+    });
+    const viaB = supplyCandidate({
+      buildingId: 1, buildingCol: 0, buildingRow: 0, siteId: 3, siteCol: -5, siteRow: 0, movable: 4,
+    });
+    expect(nextSupplyTarget([viaA, viaB], from)?.siteId).toBe(3);
+    expect(nextSupplyTarget([viaB, viaA], from)?.siteId).toBe(3);
   });
 
   it('ignores candidates with nothing movable, and returns null when nothing is available', () => {
     const from: TileRef = { col: 2, row: 0 };
     const empty = supplyCandidate({ buildingId: 1, movable: 0 });
-    const open = supplyCandidate({ buildingId: 2, col: 20, row: 10, movable: 1 });
+    const open = supplyCandidate({ buildingId: 2, buildingCol: 20, buildingRow: 10, movable: 1 });
     expect(nextSupplyTarget([empty, open], from)?.buildingId).toBe(2);
     expect(nextSupplyTarget([empty], from)).toBeNull();
     expect(nextSupplyTarget([], from)).toBeNull();
@@ -216,9 +265,9 @@ describe('supply job selection', () => {
   it('sorts a list the same way it picks a single target', () => {
     const from: TileRef = { col: 2, row: 0 };
     const list = [
-      supplyCandidate({ buildingId: 1, col: 4, row: 1, movable: 2 }),
-      supplyCandidate({ buildingId: 2, col: 6, row: 1, movable: 8 }),
-      supplyCandidate({ buildingId: 3, col: 5, row: 0, movable: 8 }),
+      supplyCandidate({ buildingId: 1, buildingCol: 4, buildingRow: 1, movable: 2 }),
+      supplyCandidate({ buildingId: 2, buildingCol: 6, buildingRow: 1, movable: 8 }),
+      supplyCandidate({ buildingId: 3, buildingCol: 5, buildingRow: 0, movable: 8 }),
     ];
     const sorted = [...list].sort((a, b) => compareSupplyCandidates(a, b, from));
     expect(sorted.map((c) => c.buildingId)).toEqual([3, 2, 1]);

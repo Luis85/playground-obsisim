@@ -1,4 +1,5 @@
 import { ticksForDistance, type TileRef } from './placement';
+import type { ResourceId } from './content-types';
 
 /**
  * The colony's store: where every hauled good ends up, and the point every
@@ -7,6 +8,26 @@ import { ticksForDistance, type TileRef } from './placement';
  * charges and the walk the player watches describe the same journey.
  */
 export const CAMP_TILE: TileRef = { col: 2, row: 0 };
+
+/**
+ * The camp's id in the `StoreSite` list. It is always present and always
+ * unbounded (see `StoreSite.capacity`), so it is the guaranteed fallback
+ * destination `nearestSiteWithRoom` can never fail to find.
+ */
+export const CAMP_SITE_ID = 0;
+
+/**
+ * A place goods can be stored: the camp, or a `storehouse`. `capacity` is
+ * null for the camp (unbounded) and a finite unit count for everything else
+ * — the distinction `nearestSiteWithRoom` uses to decide whether a site can
+ * even be asked whether it has room.
+ */
+export interface StoreSite {
+  id: number;
+  col: number;
+  row: number;
+  capacity: number | null;
+}
 
 /**
  * Straight-line tiles from the camp store to a tile. Euclidean, not Manhattan:
@@ -18,23 +39,44 @@ export function haulDistance(col: number, row: number): number {
 }
 
 /**
- * One-way trip length in ticks. `tilesPerTick` arrives as an argument rather
- * than an import: this module lives in src/shared/, which may import nothing
- * outside itself, while the tunable rate belongs to engine content (BALANCE).
+ * One-way trip length in ticks between two arbitrary tiles — the
+ * generalisation `haulTicks` is now defined through. `tilesPerTick` arrives
+ * as an argument rather than an import: this module lives in src/shared/,
+ * which may import nothing outside itself, while the tunable rate belongs to
+ * engine content (BALANCE).
  *
- * Never zero — a building beside the camp still costs a tick, so no placement
- * is ever free and no hauler can complete a round trip inside one tick.
+ * Never zero — two adjacent tiles still cost a tick, so no leg of a trip is
+ * ever free and no hauler can complete a round trip inside one tick.
+ */
+export function haulTicksBetween(from: TileRef, to: TileRef, tilesPerTick: number): number {
+  return ticksForDistance(Math.hypot(to.col - from.col, to.row - from.row), tilesPerTick);
+}
+
+/**
+ * One-way trip length in ticks between the camp and a tile. Kept
+ * camp-relative on purpose: `haulerCapacity` and the commute charge were
+ * measured against this exact function in increment 6, and a test pins
+ * `haulTicksBetween(CAMP_TILE, ...)` to this so a future edit to one cannot
+ * silently re-price every existing trip.
  */
 export function haulTicks(col: number, row: number, tilesPerTick: number): number {
-  return ticksForDistance(haulDistance(col, row), tilesPerTick);
+  return haulTicksBetween(CAMP_TILE, { col, row }, tilesPerTick);
 }
 
 /**
  * Where a hauler is in its round trip. Lives here, in shared law, rather than
  * on the engine's `HaulTrip` component, because the snapshot publishes it and
  * `src/shared/**` may not import the engine.
+ *
+ * `'fetching'` is a hauler walking empty to the site it will load a supply
+ * trip from — the leg a `collect` trip never has, because collect always
+ * starts at a building's own output buffer.
  */
-export type HaulPhase = 'idle' | 'outbound' | 'returning';
+export type HaulPhase = 'idle' | 'outbound' | 'returning' | 'fetching';
+
+/** The two jobs a hauler can be doing: bringing raw goods in, or moving
+ * stored goods out to a building that needs them. */
+export type HaulKind = 'collect' | 'supply';
 
 /**
  * How far along a leg a hauler is, as 0 (just left) to 1 (arrived).
@@ -101,6 +143,116 @@ export function nextHaulTarget(candidates: readonly HaulCandidate[]): HaulCandid
   for (const candidate of candidates) {
     if (claimableAt(candidate) <= 0) continue;
     if (best === null || compareHaulCandidates(candidate, best) < 0) best = candidate;
+  }
+  return best;
+}
+
+/**
+ * Distance from an arbitrary tile to a site, then site id — the same
+ * "distance, then id" order `compareHaulCandidates` ends on, and for the
+ * same reason: the answer must never depend on array order.
+ */
+function closer(a: StoreSite, b: StoreSite, col: number, row: number): boolean {
+  const da = Math.hypot(a.col - col, a.row - row);
+  const db = Math.hypot(b.col - col, b.row - row);
+  if (da !== db) return da < db;
+  return a.id < b.id;
+}
+
+/** The site actually closest to a tile, ignoring capacity entirely. Null only
+ * when `sites` is empty — every real call site always includes the camp. */
+export function nearestSite(col: number, row: number, sites: readonly StoreSite[]): StoreSite | null {
+  let best: StoreSite | null = null;
+  for (const site of sites) {
+    if (best === null || closer(site, best, col, row)) best = site;
+  }
+  return best;
+}
+
+/**
+ * The closest site that can actually take a load of `amount` units, or null
+ * only if `sites` omits the camp (which never happens: the camp's capacity
+ * is unbounded, so it is always a legal destination).
+ *
+ * `heldAt` rather than a `Stockpile`: `src/shared/**` imports nothing outside
+ * itself, and a site's current occupancy lives in engine state.
+ */
+export function nearestSiteWithRoom(
+  col: number, row: number, sites: readonly StoreSite[], heldAt: (siteId: number) => number, amount: number,
+): StoreSite | null {
+  let best: StoreSite | null = null;
+  for (const site of sites) {
+    // The WHOLE load must fit: `>= capacity` skips only sites already full and
+    // lets a 12-unit load pick a depot holding 55 of 60.
+    if (site.capacity !== null && heldAt(site.id) + amount > site.capacity) continue;
+    if (best === null || closer(site, best, col, row)) best = site;
+  }
+  return best;
+}
+
+/** Every site holding unclaimed stock of some resource — the pool §2.6's
+ * supply dispatch draws candidates from. `unclaimedAt` closes over the
+ * resource, the same way `heldAt` closes over nothing but the site. */
+export function sitesHolding(
+  sites: readonly StoreSite[], unclaimedAt: (siteId: number) => number,
+): StoreSite[] {
+  return sites.filter((site) => unclaimedAt(site.id) > 0);
+}
+
+/**
+ * What one building could be supplied with, from one site, right now. A
+ * candidate is a building-SOURCE pair rather than just a building: a
+ * building suppliable from both the camp and a depot is two candidates. The
+ * tile fields are named for the two ends of a route rather than a bare
+ * `col`/`row`, because on a two-ended thing that would read as the
+ * building's to everyone including the tests.
+ */
+export interface SupplyCandidate {
+  buildingId: number;
+  buildingCol: number;
+  buildingRow: number;
+  siteId: number;
+  siteCol: number;
+  siteRow: number;
+  resource: ResourceId;
+  movable: number;
+}
+
+/** Hauler-to-site-to-building: the full trip a supply candidate costs,
+ * measured from wherever the hauler currently is rather than the camp. */
+function supplyRouteDistance(candidate: SupplyCandidate, from: TileRef): number {
+  const toSite = Math.hypot(candidate.siteCol - from.col, candidate.siteRow - from.row);
+  const toBuilding = Math.hypot(candidate.buildingCol - candidate.siteCol, candidate.buildingRow - candidate.siteRow);
+  return toSite + toBuilding;
+}
+
+/**
+ * THE supply job-selection order: clear the most movable stock first, then
+ * prefer the cheapest whole route (hauler to source to building — not the
+ * building's distance alone, or two candidates for the same building from
+ * different sites could not be told apart), then lowest building id, then
+ * lowest site id. The final tie-break is what makes selection independent of
+ * candidate order, the same guarantee `compareHaulCandidates` gives collect.
+ */
+export function compareSupplyCandidates(a: SupplyCandidate, b: SupplyCandidate, from: TileRef): number {
+  const byMovable = b.movable - a.movable;
+  if (byMovable !== 0) return byMovable;
+  const byRoute = supplyRouteDistance(a, from) - supplyRouteDistance(b, from);
+  if (byRoute !== 0) return byRoute;
+  const byBuilding = a.buildingId - b.buildingId;
+  if (byBuilding !== 0) return byBuilding;
+  return a.siteId - b.siteId;
+}
+
+/** The building-source pair a hauler should supply next, or null when
+ * nothing is movable. */
+export function nextSupplyTarget(
+  candidates: readonly SupplyCandidate[], from: TileRef,
+): SupplyCandidate | null {
+  let best: SupplyCandidate | null = null;
+  for (const candidate of candidates) {
+    if (candidate.movable <= 0) continue;
+    if (best === null || compareSupplyCandidates(candidate, best, from) < 0) best = candidate;
   }
   return best;
 }

@@ -891,6 +891,162 @@ describe('balance-coupled states a save is repaired into, not rejected for', () 
   });
 });
 
+/**
+ * `rehome` is EVICT-then-FILL (spec 2.3), and the load repair has to be both
+ * halves or the seeded snapshot advertises a housing state the first tick
+ * revokes — the same principle the repairs above enforce, applied to the half
+ * that was missing. Every case here asserts the property directly: the paused
+ * player's snapshot IS what tick 1 produces, in `homeless`, `beds` and every
+ * colonist's `homeId`.
+ *
+ * Equality alone is not the whole bar — the fill also has to reproduce
+ * `rehome`'s ORDER (ascending colonist id into ascending building id), or the
+ * seed lands on a different-but-equally-full assignment and tick 1 shuffles
+ * people between houses. So each case pins the concrete homeId too.
+ */
+describe('the load repair fills as well as evicts, in rehome\'s own order', () => {
+  /**
+   * `initialSave()` with exactly the houses and roster named, and NO FOOD.
+   *
+   * Empty stockpile is load-bearing, not scenery: `initialSave()` seeds
+   * `lastBirthTick` off cooldown, so tick 1 of a colony with spare beds and a
+   * full larder produces a BIRTH — a fifth colonist claiming a bed, which
+   * moves `homeless`, `beds.occupied` and the roster all at once and would
+   * fail every equality below for a reason having nothing to do with homing.
+   */
+  function colonyOf(houseIds: readonly number[], colonists: Partial<SavedColonist>[]): SaveGameV5 {
+    const base = initialSave();
+    return {
+      ...base,
+      stockpile: {},
+      buildings: houseIds.map((id, index) => ({
+        id, defId: 'house' as const, col: 5 + index * 2, row: 3,
+        progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0,
+      })),
+      colonists: colonists.map((overrides, index) => ({
+        id: index + 2, hunger: 0, buildingId: null, toolTicks: 0, hauling: false,
+        ageTicks: BALANCE.startingAgeTicks, homeId: null, starvingTicks: 0, ...overrides,
+      })),
+      nextEntityId: 200,
+    };
+  }
+
+  /** The three fields the brief names, keyed by colonist id so snapshot
+   * ordering cannot make two disagreeing rosters compare equal. */
+  function housing(snap: Snapshot) {
+    return {
+      homeless: snap.homeless,
+      beds: snap.beds,
+      homes: [...snap.colonists].sort((a, b) => a.id - b.id).map((c) => [c.id, c.homeId]),
+    };
+  }
+
+  /** Load the save paused, read the seed, run exactly one tick, read again. */
+  async function seedAndTick(save: SaveGameV5) {
+    const world = await createColonyWorld(save);
+    const seeded = housing(world.getResource(SnapshotStore).latest!);
+    await stepTick(world);
+    return { seeded, ticked: housing(world.getResource(SnapshotStore).latest!) };
+  }
+
+  it('re-houses the colonist the over-capacity eviction just displaced', async () => {
+    // Route 1: what a houseBeds retune from 5 to 4 writes, with a second house
+    // standing empty. The eviction repair is itself the producer here — it
+    // creates the homelessness, and without the fill the seed reported
+    // `homeless 1` while tick 1 reported 0 with colonist 6 in house 91.
+    const save = colonyOf([90, 91], Array.from({ length: BALANCE.houseBeds + 1 }, () => ({ homeId: 90 })));
+    expect(isLoadableSave(save)).toBe(true); // accepted, then repaired
+
+    const { seeded, ticked } = await seedAndTick(save);
+    expect(seeded.homeless).toBe(0);
+    expect(seeded.homes).toEqual([[2, 90], [3, 90], [4, 90], [5, 90], [6, 91]]);
+    expect(seeded).toEqual(ticked);
+  });
+
+  it('re-houses into the bed a colonist the rules already killed just freed', async () => {
+    // Route 2: no over-capacity anywhere. `hasLifeLeft` drops colonist 2 (a
+    // lifespan retune put them past their own draw), which frees the fourth
+    // bed in house 90 — and colonist 6, whom the save itself wrote homeless,
+    // is the one rehome puts in it on tick 1.
+    const save = colonyOf([90], [
+      { homeId: 90, ageTicks: lifespanFor(2, BALANCE.lifeBands) },
+      { homeId: 90 }, { homeId: 90 }, { homeId: 90 },
+      { homeId: null },
+    ]);
+    expect(isLoadableSave(save)).toBe(true);
+
+    const { seeded, ticked } = await seedAndTick(save);
+    expect(seeded.homes.map(([id]) => id)).toEqual([3, 4, 5, 6]); // the dead one is gone: pop 4
+    expect(seeded.homeless).toBe(0);
+    expect(seeded.homes).toEqual([[3, 90], [4, 90], [5, 90], [6, 90]]);
+    expect(seeded).toEqual(ticked);
+  });
+
+  it('fills from beds left AFTER the eviction pass, not from the catalog\'s bed counts', async () => {
+    // Route 3, and the one that discriminates the ORDER rule from "any free
+    // bed will do": house 90 is over capacity and house 91 is exactly full, so
+    // the only real opening is 92. A fill reading `BUILDINGS[defId].beds`
+    // instead of what the eviction pass left would put colonist 6 straight
+    // back into 90 — the lowest id with a nonzero catalog count — and tick 1
+    // would evict them all over again.
+    const save = colonyOf([90, 91, 92], [
+      ...Array.from({ length: BALANCE.houseBeds + 1 }, () => ({ homeId: 90 })),
+      ...Array.from({ length: BALANCE.houseBeds }, () => ({ homeId: 91 })),
+    ]);
+    expect(isLoadableSave(save)).toBe(true);
+
+    const { seeded, ticked } = await seedAndTick(save);
+    expect(seeded.homeless).toBe(0);
+    expect(seeded.homes).toEqual([
+      [2, 90], [3, 90], [4, 90], [5, 90], [6, 92],
+      [7, 91], [8, 91], [9, 91], [10, 91],
+    ]);
+    expect(seeded).toEqual(ticked);
+  });
+
+  it('fills ascending colonist id into ascending building id, not merely into some free bed', async () => {
+    // The ORDER rule on its own, which the equality property above cannot
+    // reach: with two homeless colonists and one opening in each of two
+    // houses, BOTH assignments are stable across tick 1 — rehome keeps
+    // whatever the seed wrote, because everybody is housed and nothing is over
+    // capacity. Only the concrete pairing distinguishes `rehome`'s rule from
+    // "find some free bed", and getting it wrong means a reload silently
+    // swaps two colonists between houses (and their commutes with them).
+    const save = colonyOf([90, 91], [
+      ...Array.from({ length: BALANCE.houseBeds - 1 }, () => ({ homeId: 90 })),
+      ...Array.from({ length: BALANCE.houseBeds - 1 }, () => ({ homeId: 91 })),
+      { homeId: null }, { homeId: null },
+    ]);
+    expect(isLoadableSave(save)).toBe(true);
+
+    const { seeded, ticked } = await seedAndTick(save);
+    expect(seeded.homeless).toBe(0);
+    // 8 before 9, and 90 before 91: the LOWER id takes the LOWER house.
+    expect(seeded.homes).toEqual([
+      [2, 90], [3, 90], [4, 90], [5, 91], [6, 91], [7, 91], [8, 90], [9, 91],
+    ]);
+    expect(seeded).toEqual(ticked);
+  });
+
+  it('does not fill a homeless colonist into a house that is in transit', async () => {
+    // The exclusion every other bed count already makes (`spareBeds`,
+    // `shelterWithRoom`, `freeBeds`, the eviction's own map): a house in
+    // transit offers no beds. The fill has to match, or the seed houses
+    // someone tick 1 immediately evicts — the inverse of the bug above and
+    // just as much a contradiction. Nobody is homed here, so the save stays
+    // guard-valid: it is `homeId` naming a RELOCATING house that rule 3
+    // refuses, not the house existing.
+    const save = colonyOf([90], [{ homeId: null }]);
+    save.buildings[0].relocatingTicks = 6;
+    expect(isLoadableSave(save)).toBe(true);
+
+    const { seeded, ticked } = await seedAndTick(save);
+    expect(seeded.homeless).toBe(1);
+    expect(seeded.homes).toEqual([[2, null]]);
+    expect(seeded).toEqual(ticked);
+  });
+});
+
 describe('createColonyWorld', () => {
   it('builds a runnable world with resources initialized from the save', async () => {
     const world = await createColonyWorld();
@@ -1040,26 +1196,37 @@ describe('createColonyWorld', () => {
   });
 
   it('round-trips who sleeps where, so a reload does not reshuffle the colony', async () => {
-    // The v5 field this whole bump is for. Two colonists in one house and one
-    // deliberately homeless: dropping homeId would restore all three homeless
-    // — at homelessFactor work power, on a paused engine — and the first
-    // homing pass would then hand out beds in an order the player never chose.
+    // The v5 field this whole bump is for. Dropping homeId would restore all
+    // nine homeless — at homelessFactor work power, on a paused engine — and
+    // the first homing pass would then hand out beds in an order the player
+    // never chose.
+    //
+    // Two FULL houses, with the homeless colonist in the MIDDLE of the id
+    // range, is what keeps this discriminating now that the load repair fills
+    // as well as evicts. A colonist written homeless beside a free bed is a
+    // state the engine itself never writes, and the repair no longer restores
+    // it verbatim; and a roster whose homeless one is the HIGHEST id is
+    // precisely what homing from scratch produces, so that arrangement would
+    // pass with homeId dropped entirely.
     const save = initialSave();
     save.buildings.push({
       id: 5, defId: 'house', progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0,
     });
-    save.nextEntityId = 6;
-    save.colonists[1].homeId = 5;
-    save.colonists[2].homeId = null;
+    const homes: (number | null)[] = [1, 1, 1, 1, null, 5, 5, 5, 5];
+    save.colonists = homes.map((homeId, index) => ({
+      id: index + 6, hunger: 0, buildingId: null, toolTicks: 0, hauling: false,
+      ageTicks: BALANCE.startingAgeTicks, homeId, starvingTicks: 0,
+    }));
+    save.nextEntityId = 6 + homes.length;
     expect(isLoadableSave(save)).toBe(true);
 
     const world = await createColonyWorld(save);
     const seeded = world.getResource(SnapshotStore).latest!;
-    expect(seeded.colonists.map((c) => c.homeId)).toEqual([1, 5, null]); // before any tick
+    expect(seeded.colonists.map((c) => c.homeId)).toEqual(homes); // before any tick
     expect(seeded.homeless).toBe(1);
 
     const written = buildSaveFromWorld(world);
-    expect(written.colonists.map((c) => c.homeId)).toEqual([1, 5, null]);
+    expect(written.colonists.map((c) => c.homeId)).toEqual(homes);
     expect(isLoadableSave(written)).toBe(true);
   });
 

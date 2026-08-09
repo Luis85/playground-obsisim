@@ -26,11 +26,11 @@ import { clampedAge, clampedHunger, clampedStarving, clampedToolTicks } from './
  */
 export function restoredColonists(save: SaveGameV5): SavedColonist[] {
   // Before the bed count, not after: a colonist the rules have already killed
-  // must not hold one of the beds `overCapacityEvictions` is handing out, or
-  // the repair for one balance retune displaces a living colonist on behalf of
-  // a dead one — and tick 1 would rehome them into the bed it frees.
+  // must not hold one of the beds `settledHomes` is handing out, or the repair
+  // for one balance retune displaces a living colonist on behalf of a dead one
+  // — and tick 1 would rehome them into the bed it frees.
   const living = save.colonists.filter(hasLifeLeft);
-  const evicted = overCapacityEvictions(living, save.buildings);
+  const homes = settledHomes(living, save.buildings);
   return living.map((saved) => {
     const ageTicks = clampedAge(saved.ageTicks);
     // Raise matureTicks in a retune and a save restores a colonist who is now
@@ -49,7 +49,9 @@ export function restoredColonists(save: SaveGameV5): SavedColonist[] {
       starvingTicks: clampedStarving(saved.starvingTicks),
       buildingId: adult ? saved.buildingId : null,
       hauling: adult && saved.hauling,
-      homeId: evicted.has(saved.id) ? null : saved.homeId,
+      // Every living colonist has an entry, so `?? null` never fires on a
+      // missing key — it only narrows the map's `number | null` value.
+      homeId: homes.get(saved.id) ?? null,
     };
   });
 }
@@ -95,48 +97,102 @@ function hasLifeLeft(saved: SavedColonist): boolean {
 }
 
 /**
- * Colonists a house cannot actually sleep, by id.
+ * Beds a restored colony can actually sleep someone in, by shelter id.
  *
- * A save with five colonists in a four-bed house is exactly what a `houseBeds`
- * retune from 5 to 4 produces, and rejecting it would orphan a save for a
- * balance change. So the excess is evicted instead, filling in ASCENDING
- * colonist id — `rehome`'s own documented rule, which means the highest ids
- * are displaced and a reload lands on the same assignment the engine would.
+ * Relocating shelters are excluded, as they already are from `spareBeds`,
+ * `shelterWithRoom` and `freeBeds`: a house in transit offers no beds, and
+ * `rehome` evicts its residents on the first tick. Counting them made this the
+ * one place that treated a relocating shelter as usable, and evicted its
+ * overflow as though a `houseBeds` retune had put them there. Leaving it out
+ * drops such a `homeId` into the same untouched branch as a `homeId` naming
+ * nothing at all — both are reference states `isLoadableSave` refuses the whole
+ * save for, not balance-coupled values to repair. Unreachable through a
+ * guard-valid save (rule 3 rejects the pairing); reachable through
+ * `createColonyWorld`, which tests call directly with saves nobody validated.
  *
- * A `homeId` that names no shelter at all is left alone here: that is a
- * record no engine version could write, and `isLoadableSave` refuses the
- * whole save for it rather than quietly patching one field. A `homeId` naming
- * a RELOCATING shelter is left alone for exactly the same reason — see the
- * bed map below.
+ * The same exclusion governs the FILL half below, for the same one-line reason:
+ * a bed in a house in transit is not a bed to move anyone into either.
  */
-function overCapacityEvictions(
-  colonists: readonly SavedColonist[],
-  buildings: SaveGameV5['buildings'],
-): ReadonlySet<number> {
+function usableBeds(buildings: SaveGameV5['buildings']): Map<number, number> {
   const beds = new Map<number, number>();
   for (const b of buildings) {
     if (!Object.hasOwn(BUILDINGS, b.defId)) continue;
     const { beds: count } = BUILDINGS[b.defId];
-    // Relocating shelters are excluded, as they already are from `spareBeds`,
-    // `shelterWithRoom` and `freeBeds`: a house in transit offers no beds, and
-    // `rehome` evicts its residents on the first tick. Counting them made this
-    // the one place that treated a relocating shelter as usable, and evicted
-    // its overflow as though a `houseBeds` retune had put them there. Leaving
-    // it out drops such a `homeId` into the same untouched branch below as a
-    // `homeId` naming nothing at all — both are reference states
-    // `isLoadableSave` refuses the whole save for, not balance-coupled values
-    // to repair. Unreachable through a guard-valid save (rule 3 rejects the
-    // pairing); reachable through `createColonyWorld`, which tests call
-    // directly with saves nobody validated.
     if (count > 0 && b.relocatingTicks === 0) beds.set(b.id, count);
   }
-  const evicted = new Set<number>();
-  for (const c of [...colonists].sort((a, b) => a.id - b.id)) {
-    if (c.homeId === null) continue;
-    const remaining = beds.get(c.homeId);
-    if (remaining === undefined) continue;
-    if (remaining > 0) beds.set(c.homeId, remaining - 1);
-    else evicted.add(c.id);
+  return beds;
+}
+
+/**
+ * Eviction half, for one colonist: the home they keep, and one bed taken off
+ * `beds` when they keep it. Mirrors `settleExistingHome` in
+ * population-handlers.ts, with one deliberate divergence — a `homeId` absent
+ * from `beds` is LEFT AS WRITTEN here, where `rehome` nulls it. That is the
+ * reference-state boundary `usableBeds` documents: a home naming nothing, or
+ * naming a house in transit, is a record `isLoadableSave` refuses the whole
+ * save for rather than a balance-coupled value to repair.
+ */
+function settledHome(saved: SavedColonist, beds: Map<number, number>): number | null {
+  if (saved.homeId === null) return null;
+  const remaining = beds.get(saved.homeId);
+  if (remaining === undefined) return saved.homeId;
+  // Over capacity evicts rather than overflowing — what a `houseBeds` retune
+  // from 5 to 4 leaves in every existing house. Ascending colonist id means the
+  // HIGHEST ids are the ones displaced, deterministically.
+  if (remaining === 0) return null;
+  beds.set(saved.homeId, remaining - 1);
+  return saved.homeId;
+}
+
+/**
+ * Fill half, for one homeless colonist: the lowest-id opening with room, or
+ * null when none is left. Entries are mutated in place so a shelter fills
+ * before the next colonist is offered it — `claimOpening`'s rule in
+ * population-handlers.ts, reproduced.
+ */
+function claimOpening(openings: [number, number][]): number | null {
+  const opening = openings.find(([, free]) => free > 0);
+  if (opening === undefined) return null;
+  opening[1]--;
+  return opening[0];
+}
+
+/**
+ * Where each restored colonist actually sleeps, by id: `rehome`'s EVICT-then-
+ * FILL (spec 2.3) applied at load, in `rehome`'s own order.
+ *
+ * Both halves, because `rehome` is both halves. Evicting alone was the state
+ * this module exists to prevent, one step removed: a save with five colonists
+ * in a four-bed house and a second house standing empty seeded `homeless 1`,
+ * and tick 1 — which a paused player may not reach for a long time — showed
+ * `homeless 0` with the displaced colonist next door. The eviction repair was
+ * itself creating the state it should have resolved.
+ *
+ * Reproducing the ORDER is the point, not merely finding somebody a bed:
+ * ascending colonist id into ascending building id, greedy, against the beds
+ * the eviction pass LEFT rather than the catalog's counts. Any other rule
+ * lands on a different-but-equally-full assignment, and the seed then
+ * disagrees with the engine in a subtler way than not filling at all — tick 1
+ * shuffles people between houses for no reason the player can see.
+ */
+function settledHomes(
+  colonists: readonly SavedColonist[],
+  buildings: SaveGameV5['buildings'],
+): ReadonlyMap<number, number | null> {
+  const beds = usableBeds(buildings);
+  const rows = [...colonists].sort((a, b) => a.id - b.id);
+  const homes = new Map<number, number | null>();
+  for (const saved of rows) homes.set(saved.id, settledHome(saved, beds));
+
+  // Built AFTER the eviction pass, from what it left — the same sequencing
+  // `rehome` uses, and what makes a bed freed by an eviction (or by a colonist
+  // `hasLifeLeft` dropped) available to the next colonist in id order.
+  const openings = [...beds.entries()].filter(([, free]) => free > 0).sort((a, b) => a[0] - b[0]);
+  for (const saved of rows) {
+    if (homes.get(saved.id) !== null) continue;
+    const claimed = claimOpening(openings);
+    if (claimed === null) break; // no beds left: the rest stay homeless
+    homes.set(saved.id, claimed);
   }
-  return evicted;
+  return homes;
 }

@@ -208,9 +208,13 @@ describe('CommandSystem', () => {
       { type: 'demolishBuilding', buildingId: 90 },
     );
     // Both commands genuinely applied — same guard as the relocation twin.
+    // The displaced count is 3, not 4: the load repair houses the three
+    // founders in house 90, and the nomad the re-seat exists for is invisible
+    // to `ctx.workers` — which is the whole reason `displaced` cannot see them
+    // and `reseatArrivalsOf` has to.
     expect(snapshot().notices).toEqual([
       { kind: 'success', message: 'Colonist #100 joined the colony.' },
-      { kind: 'success', message: 'Demolished the House — cost refunded.' },
+      { kind: 'success', message: 'Demolished the House — cost refunded. — 3 colonist(s) displaced.' },
     ]);
     const nomad = [...world.getEntities()].find((e) => e.getComponent(Colonist)?.id === 100);
     expect(nomad, 'the recruited nomad never reached the world').toBeDefined();

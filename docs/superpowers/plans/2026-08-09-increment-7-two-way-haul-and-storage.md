@@ -535,7 +535,12 @@ if (def.recipe === null) return 'housing';
 
 - [ ] **Step 5: Mutation-check, gates, commit**
 
-Mutate `roles).toBe(1)`'s subject by giving the storehouse `beds: 1` and confirm the invariant test — and only it — goes red.
+**Two mutations, because the def and the state ladder fail independently.**
+
+1. Give the storehouse `beds: 1` and confirm the role invariant reddens. (Expect two or three tests: several places legitimately encode "a storehouse has no beds".)
+2. **Swap the storage and housing arms** in `buildingState` and confirm a storehouse reads `'storing'` only because of that order. This is the mutation the step originally omitted, and its omission is what let the arm order — the one thing Step 3 calls delicate — ship with no coverage at all: every other test here checks the *static def*, never the function.
+
+The second needs a **behavioural** test to catch it, not a def assertion. The codebase already has the pattern one file over: `tests/engine/systems/snapshot-system.test.ts`, `"pins relocating precedence over housing too"`, spawns a relocating house end-to-end for exactly this reason. Write the storage sibling beside it, same shape.
 
 ```bash
 rm -rf coverage && npm run check:all

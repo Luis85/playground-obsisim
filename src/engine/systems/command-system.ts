@@ -77,7 +77,6 @@ export const CommandSystem = () => createSystem({
       claimedTiles: [],
       removals,
       pending,
-      remove: (entity) => actions.commands.removeEntity(entity),
       demolishedIds: new Set<number>(),
       // Same shape PopulationContext uses, from the same query rows, so the
       // bed the nomad gate counts and the bed rehome later honours are one

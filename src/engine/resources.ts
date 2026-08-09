@@ -1,3 +1,4 @@
+import type { IEntity } from 'sim-ecs';
 import type { BuildingDefId, CostMap, ResourceId } from '../shared/content-types';
 import type { Command } from '../shared/commands';
 import type { NoticeMessage, Snapshot } from '../shared/snapshot';
@@ -260,13 +261,83 @@ export class WorldMap implements WorldMapSize {
 }
 
 /**
- * Entity removal consumes no id, so the id-counter delta that gates
- * GameEngine's post-step snapshot refresh cannot see it (the "INVARIANT for
- * increment 2" reserved in game-engine.ts). The demolish handler raises this
- * flag instead; runStep reads-and-clears it beside the id check.
+ * Everything this tick killed or demolished, held until the post-step drain.
+ *
+ * NOT `actions.commands.removeEntity`, which is where these used to go, and
+ * OBS-6-02 is why. sim-ecs 0.6.4's runtime removal deletes the entity and
+ * updates every query FIRST and unhooks the entity's event listeners LAST —
+ * and an entity that entered the world at prep time has no listener record to
+ * unhook, because `prepareRun` copies the preptime entity set straight into
+ * the runtime world without going through `addEntity`. That last step throws,
+ * the scheduler's sync point swallows the error, and every command still
+ * queued behind the throw is left for a later `step()` — one per step, each of
+ * them running no systems at all. Two colonists dying together therefore froze
+ * the whole colony for a tick, while `SimClock` advanced across it.
+ *
+ * What is deferred is the removal, NOT its invisibility: an entity on this
+ * ledger is still in every query for the rest of the tick, exactly as a queued
+ * command was. `standDown` and `PendingChanges.demolished` are what compensate
+ * for that, and they still have to.
+ *
+ * The ledger also answers the question a `dirty` flag used to: entity removal
+ * consumes no id, so the id-counter delta that gates the post-step snapshot
+ * refresh cannot see it (the "INVARIANT from increment 2" in game-engine.ts).
+ * A drain that returned entities IS that signal, so there is no second thing
+ * for a remover to remember to raise — the invariant now rides on the removal
+ * itself.
  */
 export class RemovalLedger {
-  dirty = false;
+  private readonly pending: Readonly<IEntity>[] = [];
+
+  /** Take this entity out of the world at the end of the tick. */
+  remove(entity: Readonly<IEntity>): void {
+    this.pending.push(entity);
+  }
+
+  /**
+   * Everything queued, in the order it was queued; empties the ledger.
+   *
+   * In production this is called only from `applyRemovals`, through
+   * `world.getResource(RemovalLedger)` — a generic lookup fallow's static
+   * analysis cannot trace back to this class, the same blind spot
+   * PendingChanges.clear() carries — so it used to need a
+   * `fallow-ignore-next-line unused-class-member`. The teardown guard
+   * (tests/support/removal-guard.ts) now calls it on a directly-typed
+   * receiver, which fallow CAN trace, and the suppression became stale.
+   * If that call ever goes away the suppression has to come back; the quality
+   * ratchet reports it either way, as an unused member or a stale suppression.
+   */
+  drain(): Readonly<IEntity>[] {
+    return this.pending.splice(0, this.pending.length);
+  }
+
+  /**
+   * Put drained entries back, at the FRONT: they were queued before anything
+   * that reached the ledger since, so the front is where they belong.
+   *
+   * `drain` empties the ledger before `applyRemovals` starts detaching, which
+   * means a throw part-way through would otherwise lose the entry that failed
+   * AND every entry it never reached. This is how they survive. Same generic
+   * `world.getResource` lookup as `drain`, so the same blind spot.
+   */
+  // fallow-ignore-next-line unused-class-member
+  requeue(entities: readonly Readonly<IEntity>[]): void {
+    this.pending.unshift(...entities);
+  }
+
+  /**
+   * Queue depth, for exactly the reason `CommandQueue.size` exists: `flush()`
+   * has to know whether there is unfinished business without being handed the
+   * array (handing it out is how a caller ends up draining it by accident).
+   *
+   * Non-zero only between a `requeue` and the retry that clears it — see
+   * `applyRemovals`. Same generic `world.getResource` lookup as `requeue`, so
+   * the same fallow blind spot.
+   */
+  // fallow-ignore-next-line unused-class-member
+  get size(): number {
+    return this.pending.length;
+  }
 }
 
 /**

@@ -1,16 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { SimClock, SnapshotStore } from '../../src/engine/resources';
+import { SnapshotStore } from '../../src/engine/resources';
 import { createColonyWorld, initialSave } from '../../src/engine/world';
 import { BALANCE } from '../../src/engine/content/balance';
-import { enqueue as dispatch } from './fixtures';
+import { enqueue as dispatch, stepTick } from './fixtures';
 import type { SaveGameV5 } from '../../src/shared/save';
 
+/**
+ * `stepTick`, not a bare `world.step()` with the clock nudged by hand, which
+ * is what this ran until OBS-6-02. An end-to-end file is the last place that
+ * should drive time differently from the game: deaths and demolitions are
+ * applied by the post-step drain now, so a raw step leaves a colonist the
+ * simulation killed standing in the world forever — which is exactly what the
+ * death case below started reporting.
+ */
 async function run(world: Awaited<ReturnType<typeof createColonyWorld>>, ticks: number) {
-  const clock = world.getResource(SimClock);
-  for (let i = 0; i < ticks; i++) {
-    clock.tick++;
-    await world.step();
-  }
+  for (let i = 0; i < ticks; i++) await stepTick(world);
 }
 
 /**
@@ -144,12 +148,13 @@ describe('full colony integration', () => {
     const save = initialSave();
     const world = await createColonyWorld(save);
     const snapshot = () => world.getResource(SnapshotStore).latest!;
-    // First death fires at raw tick 379 (population reflects it one tick
-    // later, at 380, once sim-ecs syncs the removal ahead of the next tick's
-    // systems — the same lag the 350-tick test above stops short of). 400
-    // runs comfortably past that first death while stopping well short of the
-    // ~410 mark where the other two colonists die together and empty the
-    // colony: this test is about ONE death actually happening, not extinction.
+    // First death fires at tick 379, and since OBS-6-02 the published
+    // population reflects it on that same tick rather than one later: the
+    // post-step drain removes the entity and the gated refresh re-walks the
+    // world before the snapshot is read. 400 runs comfortably past that first
+    // death while stopping well short of the ~410 mark where the other two
+    // colonists die together and empty the colony: this test is about ONE
+    // death actually happening, not extinction.
     await run(world, 400);
     expect(snapshot().population).toBe(2);
     expect(snapshot().colonists).toHaveLength(2);

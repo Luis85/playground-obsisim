@@ -16,6 +16,7 @@ jobs:
       - run: npm run lint
       - run: npm run check:loc
       - run: npm run check:css
+      - run: npm run check:test-projects
 
   quality:
     runs-on: ubuntu-latest
@@ -44,6 +45,20 @@ jobs:
       - run: npm ci
       - run: npm test
 
+  # OBS-6-04. Its own job rather than a step of `test`, so the ten-second suite
+  # reports in ten seconds and the two-minute one is still unconditional.
+  # Deliberately carries no `if:` and no `continue-on-error`: a balance job that
+  # is skipped or allowed to fail is a balance measurement that has stopped,
+  # and `gate` below refuses to call either of those a pass.
+  balance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm run test:balance
+
   coverage:
     runs-on: ubuntu-latest
     steps:
@@ -62,3 +77,28 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run check:artifacts
+
+  # The one status to require on the branch, and the reason the others can be
+  # trusted. GitHub reports a SKIPPED job as not-failed, so a required check
+  # list made of the jobs above passes when a job is filtered away, cancelled,
+  # or never dispatched. This one runs `if: always()` and demands the literal
+  # string `success` from every dependency, so anything other than a job that
+  # ran and passed is a red X.
+  #
+  # It cannot defend against the workflow never being scheduled at all — see
+  # docs/build-ci/test-projects.md, which records that exact outage.
+  gate:
+    if: always()
+    needs: [lint, quality, typecheck, test, balance, coverage, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: every job must have succeeded, not merely not-failed
+        run: |
+          results="${{ join(needs.*.result, ' ') }}"
+          echo "job results: $results"
+          for result in $results; do
+            if [ "$result" != "success" ]; then
+              echo "::error::a required job did not succeed (results: $results)"
+              exit 1
+            fi
+          done

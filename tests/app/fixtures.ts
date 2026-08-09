@@ -52,6 +52,9 @@ export function makeWorker(id: number, overrides: Partial<ColonistSnapshot> = {}
     // fixture claiming full work power for a homeless worker would be a lie
     // the next case built on.
     commuteTiles: 0, commuteFactor: BALANCE.homelessFactor,
+    // Consistent with `buildingId: null` above: nobody is assigned by
+    // default, so there is no building this colonist delivers work power to.
+    deliveredWorkPower: null,
     ...overrides,
   };
 }

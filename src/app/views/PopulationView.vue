@@ -44,6 +44,24 @@ function toolLabel(toolTicks: number): string {
   return toolTicks > 0 ? `⚒ ${toolTicks}t` : '—';
 }
 
+// Beside Efficiency rather than replacing it (OBS-6-06): efficiency is a real,
+// independently meaningful number on its own — it is what the world renderer
+// colors a colonist's dot by (layout.ts, renderer.ts), unrelated to housing —
+// so dropping it would lose a hunger-only signal the rest of the app still
+// uses. Showing both together is the fix: a colonist reading 100% under
+// Efficiency and 0.50 under Delivered on the SAME row is the exact confusion
+// OBS-6-06 names, made legible instead of hidden behind one misleading cell.
+//
+// Same em-dash convention as toolLabel above: null means this colonist isn't
+// assigned to a building right now (idle, or hauling — a hauler's throughput
+// is carried capacity, not work power), so there is nothing to show, not a
+// zero to round down to. Two decimals to match BuildingsView's own
+// `workPower.toFixed(2)`, so the two screens report the same quantity in the
+// same units — a player could sum this column, per building, against that one.
+function deliveredLabel(power: number | null): string {
+  return power === null ? '—' : power.toFixed(2);
+}
+
 // hunger reads backwards next to efficiency (higher = worse), so the cell is
 // colored once the worker is at the meal threshold and again when fully
 // starving. Bound to the hunger <td> only (Step 3): efficiency already has
@@ -93,7 +111,7 @@ function starvingClass(starvingTicks: number): string {
     </div>
     <table class="obsisim-table">
       <thead>
-        <tr><th>Colonist</th><th>Age</th><th>Stage</th><th>Home</th><th>Job</th><th>Hunger</th><th>Starving</th><th>Efficiency</th><th>Tool</th></tr>
+        <tr><th>Colonist</th><th>Age</th><th>Stage</th><th>Home</th><th>Job</th><th>Hunger</th><th>Starving</th><th>Efficiency</th><th>Delivered</th><th>Tool</th></tr>
       </thead>
       <tbody>
         <tr v-for="w in store.snapshot.colonists" :key="w.id">
@@ -104,7 +122,8 @@ function starvingClass(starvingTicks: number): string {
           <td>{{ jobLabel(w.buildingId, w.hauling) }}</td>
           <td :data-test="`hunger-${w.id}`" :class="hungerClass(w.hunger)">{{ w.hunger }} / {{ BALANCE.hungerMax }}</td>
           <td :data-test="`starving-${w.id}`" :class="starvingClass(w.starvingTicks)">{{ starvingLabel(w.starvingTicks) }}</td>
-          <td>{{ (w.efficiency * 100).toFixed(0) }}%</td>
+          <td :data-test="`efficiency-${w.id}`">{{ (w.efficiency * 100).toFixed(0) }}%</td>
+          <td :data-test="`delivered-${w.id}`">{{ deliveredLabel(w.deliveredWorkPower) }}</td>
           <td>{{ toolLabel(w.toolTicks) }}</td>
         </tr>
       </tbody>

@@ -139,6 +139,12 @@ describe('population balance', () => {
     // second, and there is no reason to measure an interval less precisely
     // than the thing being compared against.
     const starved = await runPopulationScenario({ houses: 2, startingAdults: 3, foodPerTick: 0, ticks: 300, sampleEvery: 1 });
+    // OBS-6-02's regression sentinel, and this is the scenario that earns it:
+    // three colonists with no food at all die within two ticks of each other,
+    // so before the fix this run lost 2 steps to the removal freeze and every
+    // long curve in the report reported 0. A tick label is only quotable while
+    // this is zero — see PopulationResult.frozenSteps.
+    expect(starved.frozenSteps).toBe(0);
     const tickOf = (index: number) => starved.samples[index].tick;
     const firstDeath = starved.samples.findIndex((s) => s.adults + s.children + s.elders < 3);
     // Measured from starvingTicks CLIMBING, not from the store emptying. With
@@ -368,19 +374,16 @@ describe('population report', () => {
       'starvation warning, 3 colonists, no food at all',
       `  first starvingTicks at ${firstStarving}, first death at ${firstDeath},` +
       ` window ${firstDeath - firstStarving} ticks against an autosave interval of ${BALANCE.autosaveEveryTicks}`,
-      // frozenSteps printed BY HAND, because this is the only scenario in the
-      // report where it is non-zero and it is the only one that does not go
-      // through curveLines. All three colonists starve within a couple of ticks
-      // of each other, so OBS-6-02 fires and the run loses a step per extra
-      // corpse. Printing the field only on the curves — every one of which
-      // reports 0 — made it "published rather than hidden" in the type and
-      // invisible in the output, which is the opposite of the point.
-      //
-      // The two ticks above are unaffected: both freezes land ON or AFTER the
-      // first death, so nothing between firstStarving and firstDeath was lost.
-      // That is why the window can still be quoted as exact.
-      `  frozen steps ${starved.frozenSteps} — OBS-6-02, and the reason the two ticks above are` +
-      ' quotable: every frozen step falls at or after the first death, outside the window',
+      // frozenSteps printed BY HAND, because this scenario is the only one in
+      // the report that does not go through curveLines — and it is the one
+      // that used to be non-zero, losing 2 steps to OBS-6-02 when all three
+      // colonists starved within a couple of ticks of each other. Printing the
+      // field only on the curves made it "published rather than hidden" in the
+      // type and invisible in the output, which is the opposite of the point.
+      // It reads 0 now and is asserted to; it stays in the report so that the
+      // number a tick label depends on is visible beside the label.
+      `  frozen steps ${starved.frozenSteps} — OBS-6-02's sentinel, and what makes the two ticks` +
+      ' above quotable: a non-zero figure means the run simulated fewer ticks than it counted',
     ].join('\n'));
   }, 600000);
 });

@@ -77,9 +77,19 @@ export interface PopulationResult {
   dependencyRatio: number;
   /**
    * Steps that advanced no simulation at all — see `runPopulationScenario`'s
-   * loop. Published rather than hidden because it is the one number that says
-   * how much of a run was lost to OBS-6-02, and a measurement that quietly
-   * absorbed it would report a 12,000-tick colony that only lived 11,900.
+   * loop.
+   *
+   * **A REGRESSION SENTINEL, and since OBS-6-02 was fixed it must be 0.** It
+   * was a live signal while the engine batched entity removals through
+   * sim-ecs's command queue: a die-off of `n` cost `n - 1` steps in which no
+   * system ran, so a "12,000-tick" colony could have lived 11,900, and this
+   * number was the only way to know. Removals now drain after `step()`, one
+   * per call, and nothing else in the engine can stall a tick — so the field
+   * stays because the detector behind it is four lines and the failure it
+   * catches is silent, not because it is expected to move again. The
+   * starvation-warning scenario, the one that used to lose 2 steps, asserts it
+   * is zero (tests/engine/balance.test.ts). If it is ever non-zero again,
+   * every tick-indexed figure in a report is short by that much.
    */
   frozenSteps: number;
 }
@@ -277,19 +287,21 @@ function tallyNotices(messages: readonly string[], counts: { births: number; old
  * Run the colony and sample its shape.
  *
  * The loop is deliberately driven by the SNAPSHOT's own tick rather than by
- * `t`, and it is not a stylistic choice. sim-ecs 0.6.4 throws inside
- * `removeEntity` when a second entity is removed in the same command batch
- * (OBS-6-02, docs/issues/2026-08-08-simultaneous-deaths-freeze-the-simulation.md), swallows the error at its sync point,
- * and then applies the remaining removals one per subsequent `step()` — during
- * which NO system runs and no new snapshot is published. So a die-off of `n`
- * colonists costs `n - 1` steps in which the world is frozen and
- * `SnapshotStore.latest` is the same object as the step before.
+ * `step`, and it stays that way now that OBS-6-02 is fixed — as a detector
+ * rather than as a workaround.
  *
- * Read naively, the instrument reports that as extra deaths: the first draft of
- * this runner counted `deathsByStarvation: 9` for a three-colonist colony,
- * because it re-read one frozen snapshot's three notices on each of the two
- * frozen steps. Every measurement here therefore keys off `snapshot.tick`,
- * which only moves when a tick genuinely ran.
+ * What it was written for: while the engine batched entity removals through
+ * sim-ecs's command queue, a die-off of `n` colonists cost `n - 1` steps in
+ * which no system ran at all and `SnapshotStore.latest` was the same object as
+ * the step before. Read naively, the instrument reported that as extra deaths
+ * — the first draft of this runner counted `deathsByStarvation: 9` for a
+ * three-colonist colony, because it re-read one frozen snapshot's three
+ * notices on each of the two frozen steps.
+ *
+ * Removals drain after `step()` now, so `snapshot.tick` moves on every step
+ * and `frozenSteps` is 0 in every scenario. Keeping the check costs four
+ * lines and is the only thing that would notice a stalled tick coming back:
+ * the symptom is a *quietly* wrong measurement, never an error.
  */
 export async function runPopulationScenario(scenario: PopulationScenario): Promise<PopulationResult> {
   const save = blankSave();
@@ -313,9 +325,10 @@ export async function runPopulationScenario(scenario: PopulationScenario): Promi
     simulated = snapshot.tick;
     tallyNotices(snapshot.notices.map((n) => n.message), counts);
     if (simulated < nextSample) continue;
-    // A `while`, not `+=`: a long enough freeze can carry the clock past a
-    // whole sample point, and a fixed stride would then emit that sample late
-    // and every later one at the wrong offset.
+    // A `while`, not `+=`, for the same reason `frozenSteps` is still counted:
+    // a stalled tick would carry the clock past a whole sample point, and a
+    // fixed stride would then emit that sample late and every later one at the
+    // wrong offset. Equivalent to `+=` while nothing stalls, which is now.
     while (nextSample <= simulated) nextSample += scenario.sampleEvery;
     samples.push({
       tick: simulated,

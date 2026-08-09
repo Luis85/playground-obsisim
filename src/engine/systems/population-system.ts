@@ -3,7 +3,8 @@ import { BUILDINGS } from '../content/buildings';
 import { Age, Building, Colonist, HaulTrip, Home, Hunger, JobAssignment, Position, Relocation } from '../components';
 import { IdCounter, NoticeBoard, PendingChanges, RemovalLedger, SimClock, Stockpile } from '../resources';
 import {
-  ageEveryone, rehome, resolveOldAge, resolveStarvation, standDownNonAdults, tryBirth, type PopulationContext,
+  ageEveryone, announceBandChanges, rehome, resolveOldAge, resolveStarvation, standDownNonAdults, tryBirth,
+  type PopulationContext,
 } from './population-handlers';
 
 /**
@@ -13,8 +14,8 @@ import {
  * ProductionSystem, so a colonist who retired or died this tick is unassigned
  * before work power is summed.
  *
- * Phase order within the tick is age -> deaths -> retirements -> homing,
- * extended by later tasks to -> births.
+ * Phase order within the tick is age -> deaths -> retirements -> band notices
+ * -> homing, extended by later tasks to -> births.
  */
 export const PopulationSystem = () => createSystem({
   actions: Actions,
@@ -74,13 +75,19 @@ export const PopulationSystem = () => createSystem({
         for (const component of components) entity = entity.with(component);
         entity.build();
       },
-      remove: (entity) => actions.commands.removeEntity(entity),
       deadIds: new Set<number>(),
     };
     ageEveryone(ctx);
     resolveOldAge(ctx);
     resolveStarvation(ctx);
     standDownNonAdults(ctx);
+    // AFTER THE DEATHS is the load-bearing half, and it is pinned by a test:
+    // a colonist who starves on the very tick they cross a band must not also
+    // be announced as retiring. Sitting after the stand-down rather than
+    // before it is only legibility — the notice then reads as a report on a
+    // settled fact — and its one observable effect is the order of two
+    // messages within a tick, which nothing depends on.
+    announceBandChanges(ctx);
     rehome(ctx);
     // Births LAST, after homing, so "a free bed exists" and "nobody is
     // homeless" are the same condition and the gate can test either.

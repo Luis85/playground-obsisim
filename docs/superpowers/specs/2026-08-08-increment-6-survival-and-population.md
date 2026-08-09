@@ -122,8 +122,28 @@ would make an elder's retirement a gradual invisible fade instead of a dated
 event the player can plan around.
 
 An adult who reaches the elder band is **unassigned from its job or hauling
-role** by `PopulationSystem`, freeing the slot, with a notice. The
-`assignWorker` command rejects a non-adult with a reason.
+role** by `PopulationSystem`, freeing the slot. The `assignWorker` command
+rejects a non-adult with a reason.
+
+**The notice fires on the band transition, not on the unassignment** (OBS-6-03).
+It reports that the assignable pool shrank, which is true whether or not the
+colonist happened to hold a job — so an idle adult crossing the elder band is
+announced exactly like a working one. Tying it to the unassignment made the two
+indistinguishable cases look different: §4.1's colony holds 34-40 colonists
+against roughly six job slots, so the idle, silent retirement was the large
+majority of them. **Coming of age is announced by the same rule**, since a
+child reaching `matureTicks` grows that pool exactly as an elder leaving it
+shrinks the pool.
+
+The trigger is `age.ticks === matureTicks` / `=== retireTicks`: `ageEveryone`
+increments by exactly 1, so each boundary is met on exactly one tick per
+colonist. A colonist RESTORED past a boundary never meets it and is
+deliberately not announced — only a balance retune writes such a save, and
+§4.5's load principle already treats it as a repair (`restoredColonists` clears
+a now-non-adult's job at load) rather than as an event in the colony's life.
+The **"is too young to work"** message stays keyed to the unassignment for that
+same reason: it is that repair's explanation for an emptied building, not a
+life event, and it is unreachable except through a `matureTicks` retune.
 
 ### 2.3 Housing
 
@@ -346,9 +366,15 @@ CommandSystem → HungerSystem → PopulationSystem → EfficiencySystem
   retired or died this tick is unassigned before work power is summed.
   Otherwise a corpse contributes for one tick.
 
-Within the system the order is: **age → deaths → retirements → homing →
-births**. Homing precedes births so §2.6's free-bed test is meaningful, and
-deaths precede homing so a bed freed this tick is reusable this tick.
+Within the system the order is: **age → deaths → retirements → band notices →
+homing → births**. Homing precedes births so §2.6's free-bed test is
+meaningful, and deaths precede homing so a bed freed this tick is reusable this
+tick. Band notices (§2.2) follow the deaths for the same kind of reason — a
+colonist who starves on the very tick they cross a band is not also announced
+as retiring. They also follow the retirements, but that half is only
+legibility: the notice then reads as a report on a settled fact, and its one
+observable effect is the order of two messages within a tick, which nothing
+depends on.
 
 ### 2.10 Save v5
 
@@ -474,7 +500,8 @@ producers).
 - **World view** gains a house glyph, a stage marker on colonists, and a
   homeless flag — each with a legend entry, per the standing rule that every
   encoding is explained under the canvas.
-- **Notices** for birth, death (naming the cause), and retirement.
+- **Notices** for birth, death (naming the cause), coming of age, and
+  retirement. The last two are the two halves of one rule — see §2.2.
 
 `src/app/world/renderer.ts` is at **419 non-blank lines against the hard
 500-line LOC gate**, with nothing baselined — 81 lines of headroom for a house
@@ -542,8 +569,11 @@ unnecessary it is dropped — but the baseline is not loosened either way.
 1. A colony with surplus food and a free bed produces a child; that child
    cannot be assigned to a building, eats like everyone else, and becomes
    assignable at year 10.
-2. An adult reaching year 55 is automatically unassigned from its job with a
-   notice, keeps eating, and dies of old age within the spread around year 65 —
+2. An adult reaching year 55 is automatically unassigned from its job and
+   announced with a notice on that same tick (the two are separate rules since
+   OBS-6-03 — see §2.2 — but an *employed* adult, which is what this criterion
+   describes, still gets both), keeps eating, and dies of old age within the
+   spread around year 65 —
    and two colonists of *identical age* but different ids do not die on the
    same tick. (They cannot be born on the same tick — births are cooldown-gated
    colony-wide — so the test seeds equal ages directly.)
@@ -650,6 +680,11 @@ Task 12 built the instrument (`tests/support/population-harness.ts`,
 this with `npm run balance:population`. **Two constants in the table above
 moved: `birthFoodPerHead` 6 → 12 and `nomadFoodPerHead` 10 → 20.** Questions 2
 and 3 came back clean and changed nothing.
+
+Every figure below was **re-measured after `OBS-6-02` was fixed** (§4.2) and
+came back byte-identical, curve rows included — the freeze had never fired in
+these runs, and the diff proves it rather than the `frozen steps 0` label
+merely asserting it.
 
 **What the instrument does NOT do, and it matters for reading q1.** The
 harness's `autoStaffSystem` stands in for the player, but only as a *foreman*:
@@ -859,39 +894,48 @@ is a real decision with a real cost, not a dominant strategy.
 ### 4.2 Not a balance value, but found while measuring
 
 `OBS-6-02`: two colonists dying on the same tick freeze the simulation for one
-tick each — sim-ecs 0.6.4 throws inside `removeEntity` on the second removal of
-a batch, swallows the error, and drains the rest one per step with no system
-running. It distorts any per-tick tally taken from `SnapshotStore.latest`, which
-is how it was found. See `docs/issues/`.
+tick each — sim-ecs 0.6.4 throws inside `removeEntity` on a removal of any
+entity spawned at prep time, swallows the error, and leaves every command
+queued behind it to drain one per step with no system running. It distorts any
+per-tick tally taken from `SnapshotStore.latest`, which is how it was found.
 
-A third consequence, verified at close-out and added to the note: the autosave
-fires on `clock.tick % autosaveEveryTicks` **inside `runStep`**, and the clock
-increments on frozen steps like any other, so a save can land mid-freeze holding
-colonists who are logically dead. That save is structurally valid and loads
-cleanly; those colonists then die on the first tick after the reload. It is the
-same principle this increment enforced twice already — **the seed must not
-advertise a state tick 1 revokes** — arriving from a third direction, after the
-homing phase and the past-own-lifespan restore guard.
+A third consequence, verified at close-out: the autosave fires on `clock.tick %
+autosaveEveryTicks` **inside `runStep`**, and the clock increments on frozen
+steps like any other, so a save could land mid-freeze holding colonists who are
+logically dead. That save is structurally valid and loads cleanly; those
+colonists then die on the first tick after the reload. It is the same principle
+this increment enforced twice already — **the seed must not advertise a state
+tick 1 revokes** — arriving from a third direction, after the homing phase and
+the past-own-lifespan restore guard.
 
-**How much it distorted §4.1: nothing that is quoted here.** All three long
-curves report `frozen steps 0`, so their tick labels are exact. Deaths in those
-runs never coincided, because §2.12's id-derived lifespan spread desynchronises
-them — the primitive introduced to widen the demographic wave also happens to
-keep this defect from firing. That is luck, not protection: a narrower spread,
-a synchronised famine, or a retune of `lifespanSpreadYears` would collide
-deaths and inflate every tick label by the total frozen ticks.
+**Resolved 2026-08-09 (`6916cb3`).** `RemovalLedger` carries the entities
+rather than a dirty flag, and `applyRemovals` drains it after `world.step()`
+resolves — one `removeEntity` per call, which is the case sim-ecs handles.
+`frozenSteps` can no longer be non-zero and is now a regression sentinel,
+asserted on q2's scenario. See `docs/issues/` for the full resolution,
+including two facts the note originally got wrong: the throw is not conditional
+on a *second* removal (every prep-time entity throws, so a lone death could
+also cost a tick if a birth landed with it), and `stepTick` was not the only
+harness that had to change.
 
-The one scenario that *does* freeze is q2's, and it is the reason `frozenSteps`
-is now printed for it by hand rather than only through the curve printer. Three
-colonists with no food at all starve within two ticks of each other, so the run
-loses **2 steps**. Both of them fall in the single gap tick 199 → 202, which is
-*after* the first death — so the 99-tick window q2 quotes spans no frozen step
-and is exact. That was checked, not assumed. Until this fix pass, `frozenSteps`
-was published on the `PopulationResult` type and printed only by `curveLines`,
-which this scenario does not go through — so the field was visible in the code
-and absent from every report the code produced, and the claim that it was
-"published rather than hidden" was not true of the output. **Any
-re-measurement must still read the figure before quoting a tick.**
+**How much it distorted §4.1: nothing, and this was re-measured rather than
+argued.** All three long curves already reported `frozen steps 0` — deaths in
+those runs never coincided, because §2.12's id-derived lifespan spread
+desynchronises them. The whole report was re-run before and after the fix and
+diffed: **the 16-row haul sweep and every population curve row are
+byte-identical**, as are births, deaths, peak, final and dependency for all
+three curves. One line moved, and only one:
+
+| figure | before | after |
+| --- | ---: | ---: |
+| q2 starvation scenario, `frozen steps` | 2 | **0** |
+
+q2's own numbers are unchanged (`first starvingTicks at 100, first death at
+199, window 99`), which is what the old note predicted: both lost steps fell in
+the single gap tick 199 → 202, *after* the first death, so the window never
+spanned one. **Any future re-measurement must still read `frozenSteps` before
+quoting a tick** — it is zero now, and a non-zero figure would mean the run
+simulated fewer ticks than its labels claim.
 
 ### 4.3 Two fixtures that hold their conclusions by margin, not by assertion
 

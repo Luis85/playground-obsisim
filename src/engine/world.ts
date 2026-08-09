@@ -372,6 +372,110 @@ export function refreshEntitySections(world: IRuntimeWorld): void {
 }
 
 /**
+ * sim-ecs types entity removal on `IMutableWorld` and on the concrete
+ * `RuntimeWorld` class, but `IRuntimeWorld` — the type GameEngine and every
+ * fixture hold a world by — extends only `IImmutableWorld`. The runtime world
+ * genuinely implements both, so this narrows to what the object already is
+ * rather than granting it anything. Declared once here, not at the call site.
+ */
+type MutableEntities = { removeEntity(entity: Readonly<IEntity>): void };
+
+/**
+ * Take one entity out of the world, tolerating sim-ecs 0.6.4's own bug and
+ * nothing else.
+ *
+ * Its runtime `removeEntity` deletes the entity and updates every query, and
+ * only THEN unhooks the entity's event listeners — which throws a TypeError
+ * for any entity that entered the world at prep time, because `prepareRun`
+ * copies the preptime entity set into the runtime world without going through
+ * `addEntity` and so never records listeners for it. The removal has already
+ * happened by the time it throws, so the throw is noise; but that is a claim
+ * with a postcondition, and the postcondition is checked. Anything that leaves
+ * the entity still in the world is a real failure and is re-thrown, rather
+ * than swallowed the way the sync point used to swallow this one (OBS-6-02).
+ */
+function detach(world: IRuntimeWorld, entity: Readonly<IEntity>): void {
+  try {
+    (world as IRuntimeWorld & MutableEntities).removeEntity(entity);
+  } catch (err) {
+    if (world.hasEntity(entity)) throw err;
+  }
+}
+
+/**
+ * Apply the removals this tick recorded, now that `world.step()` has resolved
+ * and every system has had its last look at the entities. Returns how many
+ * were removed.
+ *
+ * That count is the refresh signal: removal consumes no id, so the id-counter
+ * delta the post-step `refreshEntitySections` gate is built on cannot see one.
+ * Both drivers of a tick — `GameEngine.runStep` and `tests/engine/fixtures.ts`'s
+ * `stepTick` — call this immediately after `step()` and before the gate, and
+ * they MUST keep doing the same thing: a tick driven any other way removes
+ * nobody at all.
+ *
+ * Both also call it AGAIN before the step, which is a no-op on every tick that
+ * did not inherit a re-queued entry (below) and is the whole defence when one
+ * did. The post-step call cannot simply move to the top instead: OBS-6-02 put
+ * it after the step so that a death lands before the same tick's
+ * `refreshEntitySections` and autosave, and a tick that publishes or persists
+ * somebody it has already killed is the defect that motivated the ledger.
+ *
+ * One removal per call, deliberately. Batching them through sim-ecs's command
+ * queue is what froze the simulation for a tick per extra corpse — see
+ * RemovalLedger.
+ *
+ * The re-queue below covers `detach`'s re-throw arm, which as far as anyone
+ * knows is UNREACHABLE against sim-ecs 0.6.4: its bug deletes the entity and
+ * only then throws, so `hasEntity` is false and the throw is swallowed. This
+ * is a defensive path made correct, not a live player-facing bug fixed. The
+ * arm exists to fire if a sim-ecs upgrade changes that — the thing OBS-6-02's
+ * note names as the item to re-check on upgrade — and on the day it does fire,
+ * losing the queue silently is the wrong way to find out.
+ */
+export function applyRemovals(world: IRuntimeWorld): number {
+  const ledger = world.getResource(RemovalLedger);
+  const removed = ledger.drain();
+  for (let i = 0; i < removed.length; i++) {
+    try {
+      detach(world, removed[i]);
+    } catch (err) {
+      // `drain()` already emptied the ledger, so without this the entry that
+      // threw and every entry after it are gone for good — and the player can
+      // resume straight past the error, because GameEngine.start() clears it.
+      // A demolition whose command was already consumed would leave a
+      // refunded, cleared building standing with nothing left to remove it.
+      //
+      // This is an UNBOUNDED retry: an entry that fails permanently is
+      // re-attempted every tick, forever. It is tolerable only because
+      // `GameEngine.runStep` catches and PAUSES rather than continuing to
+      // tick, so "forever" costs one attempt per deliberate resume. That is a
+      // load-bearing assumption about a DIFFERENT file: if runStep ever keeps
+      // ticking through this, the retry becomes a per-tick throw.
+      //
+      // And because the ledger is FIFO and the re-queue goes to the front, a
+      // permanently stuck entry does not just retry forever — it blocks every
+      // entry behind it forever too, including ones queued long after it by
+      // something unrelated. That is deliberate: the entries are ordered, the
+      // loop this catch sits in is the only thing that applies them, and
+      // skipping past a failure to keep the queue moving would mean deciding
+      // an uncharacterised sim-ecs failure is safe to ignore for THIS entry —
+      // the guess the paragraph below rejects. Stated here because it is
+      // invisible from the code.
+      //
+      // Bounding it was considered and rejected. Every bound ends in either
+      // dropping the entry — which is exactly the harm above, only silent — or
+      // throwing forever anyway, which is this without the chance to recover.
+      // The arm that reaches here exists for a sim-ecs change nobody has
+      // characterised, so a policy that discards state on it would be guessing.
+      ledger.requeue(removed.slice(i));
+      throw err;
+    }
+  }
+  return removed.length;
+}
+
+/**
  * sim-ecs's Scheduler drives each step() through `requestAnimationFrame` (or,
  * absent that global, `setTimeout`) purely to yield a macrotask between frames
  * for continuous run loops. GameEngine already owns pacing via its own

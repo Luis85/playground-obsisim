@@ -1,12 +1,13 @@
 ---
 id: OBS-6-01
 title: A demolished tile is still occupied for the rest of the drain
-status: Open
+status: Done
 severity: minor
 area: engine
 increment: 6
 created: 2026-08-08
-source: increment-6 review (automated PR review on
+resolved: 2026-08-09
+source: "increment-6 review (automated PR review on #9) — a pre-existing increment-3 defect surfaced while reviewing this increment"
 affects:
   - src/engine/systems/command-handlers.ts
   - tests/engine/systems/command-system.test.ts
@@ -24,8 +25,8 @@ due: ""
 
 **Found:** 2026-08-08, during increment 6 review (automated PR review on #9).
 **Introduced:** `b4f9677`, 2026-07-31 — increment 3, player-chosen construction tiles.
-**Status:** open. Not fixed in increment 6: pre-existing and unrelated to that
-increment's mechanics, on a branch already carrying thirty-odd commits.
+**Status:** resolved 2026-08-09 (`f27e9fe`), exactly as suggested below. See
+[Resolution](#resolution-f27e9fe).
 
 ## What happens
 
@@ -104,3 +105,29 @@ the *interaction*. Increment 6 added a mixed-drain round-trip test
 (`pin the reject rules against what the live engine can actually write`) for
 the same structural reason; extending that pattern to tile occupancy is
 probably the cheaper long-term answer than a bespoke case.
+
+## Resolution (f27e9fe)
+
+Fixed exactly as suggested. `occupiedTiles` (`src/engine/systems/command-handlers.ts`)
+now filters `ctx.demolishedIds` before mapping building rows to tiles — the
+same exclusion `findBuilding` already applied immediately below it. One change
+covers both call sites, `handleConstructBuilding` and `handleMoveBuilding`,
+since both read tile occupancy through this one function rather than through
+two separate lookups.
+
+`tests/engine/systems/command-system.test.ts` gained the mixed-drain case the
+note asked for. The existing test that had pinned the buggy same-drain
+rejection as expected behaviour — renamed from "a tile freed by demolition is
+buildable again on the NEXT tick" to "...in the SAME drain" — now asserts both
+commands succeed with no rejection anywhere on the notice board, not merely
+that a second, later attempt succeeds. A new sibling, "a tile freed by
+demolition is a valid MOVE target in the same drain", covers the
+`handleMoveBuilding` twin the note called out separately.
+
+This was the third and last open instance of the family the note named — "an
+exclusion applied at some call sites and not others." The other two the note
+cites (bed-seating reading `PendingChanges.demolished` live while freezing
+`ShelterRow.relocating`; `PopulationSystem`'s shelter list folding in
+`pending.constructed` while `CommandSystem`'s did not) were already fixed
+earlier in increment 6, per the note's own account — this was the one still
+standing.

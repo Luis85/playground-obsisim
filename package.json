@@ -9,8 +9,9 @@
   "scripts": {
     "dev": "vite build --watch",
     "build": "vite build",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "test": "vitest run --project unit",
+    "test:watch": "vitest --project unit",
+    "test:balance": "vitest run --project balance",
     "test:coverage": "vitest run --coverage",
     "lint": "eslint .",
     "typecheck": "vue-tsc --noEmit",
@@ -18,11 +19,12 @@
     "check:css": "node scripts/check-css-important.mjs",
     "check:quality": "node scripts/check-quality.mjs",
     "check:artifacts": "node scripts/check-artifacts.mjs",
-    "check:all": "npm run lint && npm run check:loc && npm run check:css && npm run check:quality && npm run typecheck && npm run test && npm run build && npm run check:artifacts",
+    "check:test-projects": "node scripts/check-test-projects.mjs",
+    "check:all": "npm run lint && npm run check:loc && npm run check:css && npm run check:quality && npm run check:test-projects && npm run typecheck && npm run test && npm run test:balance && npm run build && npm run check:artifacts",
     "smoke:world": "node scripts/world-smoke.mjs",
     "test-build": "node scripts/test-build.mjs",
-    "balance:report": "BALANCE_REPORT=1 vitest run tests/engine/balance.test.ts",
-    "balance:population": "BALANCE_REPORT=1 vitest run tests/engine/balance.test.ts -t population"
+    "balance:report": "BALANCE_REPORT=1 vitest run --project balance",
+    "balance:population": "BALANCE_REPORT=1 vitest run --project balance -t population"
   },
   "dependencies": {
     "excalibur": "0.32.0",

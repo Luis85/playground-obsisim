@@ -1,16 +1,20 @@
 ---
 id: OBS-6-04
 title: Three long-horizon balance tests are nine tenths of the default dev loop
-status: Open
+status: Done
 severity: important
 area: tests
 increment: 6
 created: 2026-08-09
+resolved: 2026-08-09
 source: increment-6 review of Task 12, raised again in the Task 12 fix pass — filed rather than fixed because retiming the suite is a decision about how every future increment is developed
 affects:
   - tests/engine/balance.test.ts
   - package.json
   - vitest.config.ts
+  - .github/workflows/ci.yml
+  - scripts/check-test-projects.mjs
+  - docs/build-ci/test-projects.md
 type: Issue
 parent: "[[Measured and Retuned - the Birth Threshold]]"
 order: 180
@@ -22,6 +26,14 @@ due: ""
 ---
 
 # Three long-horizon balance tests are nine tenths of the default dev loop
+
+**Status:** resolved 2026-08-09 (`2f300f9`) by the second option below — a separate
+`balance` vitest project. `npm test` is back to 13.8s over 619 tests; the
+balance project is 15 tests in 115.9s; 619 + 15 = 634, the pre-split total, so
+nothing was dropped. `check:all` deliberately runs BOTH and stays at ~2
+minutes, because the fast suite no longer covers balance at all. The reasoning,
+the measurements, and what the CI wiring can and cannot defend against are in
+[docs/build-ci/test-projects.md](../build-ci/test-projects.md).
 
 ## What happens
 

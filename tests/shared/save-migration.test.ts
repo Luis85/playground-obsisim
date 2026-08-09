@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { MigrationStep, SaveGuards } from '../../src/shared/save-migration';
 import { MIGRATION_CONSTANTS, migrateSaveToLatest, readSaveVersion } from '../../src/shared/save-migration';
-import { ALL_SYSTEMS, buildColonyPrepWorld, getPrepResource, initialSave } from '../../src/engine/world';
+import { ALL_SYSTEMS, buildColonyPrepWorld, createColonyWorld, getPrepResource, initialSave } from '../../src/engine/world';
 import { SnapshotStore } from '../../src/engine/resources';
 import { BALANCE } from '../../src/engine/content/balance';
 import type { SaveGameV4, SaveGameV5 } from '../../src/shared/save';
+import { stepTick } from '../engine/fixtures';
 
 /** A structurally valid v1 save (pre-spatial: no map, no positions). */
 function v1Fixture(buildingCount: number) {
@@ -383,10 +384,38 @@ describe('migrateSaveToLatest (v4 -> v5)', () => {
     const v5 = migrateSaveToLatest(v4) as SaveGameV5;
 
     expect(v5.colonists.every((c) => c.homeId !== 90)).toBe(true);
-    // The colony counts as shelterless, so it DOES get the starter house — and
-    // everyone lands there rather than being left homeless.
-    const starter = v5.buildings.find((b) => b.defId === 'house' && b.id !== 90)!;
-    expect(v5.colonists.every((c) => c.homeId === starter.id)).toBe(true);
+    // The colony owns a house — mid-relocation, but a house all the same — so
+    // it does NOT count as shelterless: no starter house is gifted on top, and
+    // every colonist loads homeless until the relocation lands. See OBS-6-05.
+    expect(v5.buildings.filter((b) => b.defId === 'house')).toHaveLength(1);
+    expect(v5.colonists.every((c) => c.homeId === null)).toBe(true);
+  });
+
+  it('the homeless-until-it-lands seed matches what tick 1 produces (OBS-6-05)', async () => {
+    // The property the migration exists to preserve, checked rather than
+    // restated: restoredColonists' bed count (usableBeds) and rehome's
+    // (freeBeds) both exclude a relocating shelter exactly as savedShelterIds
+    // does, so the colony this migrates to should be homeless in the SEEDED
+    // snapshot and stay exactly as homeless after the first real tick — the
+    // same seed-equals-tick-1 property `tests/engine/world.test.ts` pins for
+    // the load repair, applied here to the migration that feeds it.
+    const v4 = v4WithThreeWorkers();
+    v4.buildings.push({
+      id: 90, defId: 'house', col: 5, row: 3,
+      progress: 0, batchActive: false, buffer: {}, relocatingTicks: 6,
+    });
+    const v5 = migrateSaveToLatest(v4) as SaveGameV5;
+
+    const world = await createColonyWorld(v5);
+    const seeded = world.getResource(SnapshotStore).latest!;
+    expect(seeded.homeless).toBe(3); // no usable shelter at all: nobody seated
+    expect(seeded.colonists.every((c) => c.homeId === null)).toBe(true);
+
+    await stepTick(world);
+    const ticked = world.getResource(SnapshotStore).latest!;
+    expect(ticked.homeless).toBe(seeded.homeless);
+    expect([...ticked.colonists].sort((a, b) => a.id - b.id).map((c) => c.homeId))
+      .toEqual([...seeded.colonists].sort((a, b) => a.id - b.id).map((c) => c.homeId));
   });
 
   it('leaves the overflow homeless when the saved houses cannot hold everyone', () => {

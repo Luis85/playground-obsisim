@@ -1,15 +1,18 @@
 ---
 id: OBS-6-03
 title: An idle adult crossing the elder band retires silently, while a working one is announced
-status: Open
+status: Done
 severity: minor
 area: engine
 increment: 6
 created: 2026-08-08
+resolved: 2026-08-09
 source: increment-6 Task 13 close-out — a deferred refinement, judged a design question rather than a bug and written down instead of settled
 affects:
   - src/engine/systems/population-handlers.ts
+  - src/engine/systems/population-system.ts
   - tests/engine/systems/population-system.test.ts
+  - tests/engine/world.test.ts
 type: Issue
 parent: "[[Colonist Lifecycle - Child, Adult, Elder, Death]]"
 order: 130
@@ -21,6 +24,10 @@ due: ""
 ---
 
 # An idle adult crossing the elder band retires silently, while a working one is announced
+
+**Status:** resolved 2026-08-09 (`87d903b`), by the second reading below —
+the product decision this note was filed to defer. See
+[Resolution](#resolution-87d903b).
 
 ## What happens
 
@@ -41,13 +48,24 @@ get different treatment purely on whether they happened to be employed: the one
 staffing a forester is announced, the one standing idle at the camp is not.
 
 It is not rare. In the self-feeding curve of spec §4.1 the colony holds 34–40
-against roughly six job slots — four in the huts and two hauling — so the large
-majority of the 38 retirements in the increment's own headline measurement are
-the silent kind. (The figure was 41 against the same six slots before the
-`birthFoodPerHead` retune, when that curve ended in extinction rather than a
-plateau. The retune changed the ending, not this ratio: the harness's chain is
-the same size either way, so the gap between population and job slots is what
-it always was.)
+against roughly six job slots — four in the huts and two hauling — so most
+colonists who cross into the elder band are idle when they do, and would have
+retired silently under the old code.
+
+No retirement count backs that "most" with a number, and none should be
+quoted as if one existed: `runPopulationScenario`'s notice tally
+(`tests/support/population-harness.ts`) counts a message containing `was
+born`, `died of old age` or `starved`, and nothing else — a "retired" notice
+matches none of the three, so retirements are not tallied anywhere in this
+codebase. The nearest published figure is **38 deaths of old age** over that
+same 12,000-tick run (§4.1), which is a related but smaller count, not a
+retirement count: every colonist who died of old age retired first, but the
+five colonists still in the elder band at tick 12,000 retired without dying
+yet, so 38 is a floor, not the total. (Before the `birthFoodPerHead` retune,
+when this fixture ended in extinction rather than a plateau, the colony peaked
+at 41 against the same six job slots — the retune changed the ending, not the
+ratio: the harness's chain is the same size either way, so the gap between
+population and job slots is what it always was.)
 
 ## Why this is filed rather than fixed
 
@@ -98,3 +116,69 @@ idle, stepped once: assert **two** retirement notices, not one. Today's suite
 cannot see it — `retires an adult who crosses the elder band, freeing its job
 slot` seeds a single colonist that holds a job, so the employed path is the only
 one exercised.
+
+## Resolution (87d903b)
+
+**§2.13's reading wins.** The notice means *your labour pool shrank*, so it
+fires on the band transition rather than on the stand-down, and an idle adult
+crossing `retireTicks` is announced exactly like a working one.
+
+**Coming of age gets the mirror notice.** The argument for the transition
+trigger is symmetric: a child reaching `matureTicks` grows the assignable pool
+exactly as an elder leaving it shrinks the pool, so announcing one without the
+other would have replaced this asymmetry with a new one. §2.13's list gains it.
+
+**The `"is too young to work"` branch stays a stand-down message.** It is
+reachable only through a save loaded after a `matureTicks` retune — a repair
+explaining why a staffed building emptied, not an event in the colony's life.
+Implementing it did not make that distinction untenable: the two live in
+different phases and are pinned apart by a test (`still calls a staffed child a
+repair, not a coming-of-age event`).
+
+A new phase, `announceBandChanges`, holds the notices — the stand-down keeps
+its own job, so neither function answers a second question with its guard.
+Phase order is now age -> deaths -> retirements -> band notices -> homing ->
+births. Both neighbours are load-bearing: after the deaths, so a colonist who
+starves on the very tick they cross is not also announced as retiring
+(`livingRows` has already dropped them); after the retirements, so "retired" is
+published once the job slot it names is free.
+
+### The restored-past-the-boundary claim, checked at both ends
+
+The note asserted this case is unreachable and attributed the clearing to
+`colonistComponents`. **The mechanism is real but the file is wrong**, and the
+distinction matters: `colonistComponents` is also the LIVE creation path and
+every fixture's spawn, and `restore.ts` documents at length why the repair is
+deliberately *not* folded into it (a test that spawns an elder holding a job to
+prove `standDownNonAdults` clears it would become vacuous). The clearing lives
+in `restoredColonists` (`src/engine/restore.ts`), whose `adult ? … : null` is
+what `world.test.ts`'s two retune cases actually pin.
+
+Measured against guard-valid saves (`isLoadableSave` true), on the fixed code:
+
+| restored at | seeded as | notices, ticks 1-5 |
+| --- | --- | --- |
+| `retireTicks + 137`, `hauling: true` | elder, job null, hauling false | none |
+| `matureTicks + 40` | adult | none |
+| exactly `retireTicks` / `matureTicks` | elder / adult | none |
+| `retireTicks - 1` / `matureTicks - 1` | adult / child | one each, on tick 1 only |
+
+So the claim holds at the retirement end for the reason the note gave, and at
+the coming-of-age end for a different one worth stating: an adult restored past
+`matureTicks` keeps their job (the repair does not touch an adult), and gets no
+notice because they came of age in an earlier session. A colonist sitting
+*exactly* on a boundary at load is not announced either — `ageEveryone` carries
+them to `boundary + 1` before the phase runs — which is correct for the same
+reason and rules out a double announcement across a save/load. All four rows
+are pinned by `never announces a band a colonist crossed OUTSIDE this session`
+(`world.test.ts`), which steps three times so an inequality in place of the
+equality cannot pass as a one-off announcement at load.
+
+### Acceptance criterion 2, re-checked rather than assumed
+
+Still met, and now for a stronger reason than "the case that already fires".
+AC2 describes an *employed* adult reaching year 55; that colonist is unassigned
+by `standDownNonAdults` and announced by `announceBandChanges` **on the same
+tick**, so both halves of the criterion land where they always did. Confirmed
+by assertion, not by reading: the new test seeds the employed colonist as id 1
+and expects `Colonist #1 retired.` in that tick's published notices.

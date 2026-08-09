@@ -1,11 +1,12 @@
 ---
 id: OBS-6-07
 title: Three correct-but-untested paths, and the property test that does not net the family it was written for
-status: Open
+status: Done
 severity: minor
 area: tests
 increment: 6
 created: 2026-08-09
+resolved: 2026-08-09
 source: increment-6 whole-branch review, recorded in the final fix pass — the three paths were verified correct by reading, so this is coverage debt rather than a defect; the net finding was re-verified by mutation during that pass
 affects:
   - tests/engine/systems/haul-system.test.ts
@@ -22,6 +23,9 @@ due: ""
 ---
 
 # Three correct-but-untested paths, and one net with a hole
+
+**Status:** resolved 2026-08-09 (`5c1439c`, `acffd76`) — the net first, then the
+three paths. See [Resolution](#resolution-5c1439c-acffd76).
 
 Recorded together because they share one cause: increment 6 added several
 same-tick-visibility mechanisms, and the tests written for them cover the reader
@@ -113,3 +117,61 @@ reason.
 
 Until that clause exists, treat the property test as covering over-housing only,
 and keep writing the scenario test as well.
+
+## Resolution (5c1439c, acffd76)
+
+### The net (`5c1439c`)
+
+A fifth clause landed — nobody is homeless while a bed `rehome` could have
+filled stands free — but measuring it first showed the hole was not quite
+where this note placed it. Deleting `handleMoveBuilding`'s `pending.arrivals`
+half (the mutation the note names) leaves the displaced nomad pointing *at*
+the moving house rather than homeless, which the property test's existing
+clauses one and three could already see. The gap the note's own mutation
+table found needed a second arrival *regime*: with a recruit offered every
+tick, the 30-tick arrival cooldown is spent the instant a bed opens, which in
+this colony is only ever right after a construction, never on a relocation
+tick — across 600 ticks, an arrival and a relocation drained together zero
+times. The fixture now rides the churn twice: the original every-tick offer is
+kept (a broken `spareBeds` needs that tightness), and a second run saves the
+cooldown for every second relocation, which stages the contended drain 8
+times. A single regime that catches both families was searched for and does
+not exist.
+
+The fifth clause reads relocation off the *previous* tick's snapshot, not the
+current one, matching `PopulationSystem` reading `ticksLeft` before
+`ProductionSystem` decrements it. Four mutations, each seen red and restored
+byte-identical; only the last needed the new clause — nothing in the suite
+caught it before, including the full 607-test run that once missed this bug's
+demolition twin entirely:
+
+| mutation | what it broke |
+| --- | --- |
+| `spareBeds` drops `pending.arrivals` | clause 4, every-tick regime |
+| `ctx.shelters` frozen at context construction | clause 1, every-tick regime |
+| `handleMoveBuilding`'s arrivals half deleted | clause 1, cooldown-saving regime |
+| move evicts without re-seating | clause 5, cooldown-saving regime |
+
+617/617 green.
+
+### The three paths (`acffd76`)
+
+Each gained the one test asserting on the reader that would actually be
+wrong, verified red under a mutation of the code it protects and restored
+byte-identical:
+
+- **`reseatArrivalsOf`'s multi-arrival branch** — driven directly from a
+  context built out of real components (spawn and `nomadGate` throw rather
+  than stub), two houses with one free bed each: live, each arrival takes one;
+  resolved once for the whole loop, both are handed the same house
+  (`expected [91,91] to equal [91,92]`).
+- **`HaulSystem`'s `pending.tileOf` fallback** — asserted on the load carried,
+  the reader its `ProductionSystem` twin was already pinned on
+  (`expected 3 to be 6` when the pending fallback is dropped).
+- **`bedsFree`'s clamp against `spareBeds`' signed answer** — one colony, 6
+  beds against 7 colonists, both readers on the same numbers: 0 for the view
+  (`spareBedsIn`'s clamp), -1 for the gate (`spareBeds`' deliberate lack of
+  one). Each direction of the divergence is now pinned rather than merely
+  true by inspection.
+
+617 -> 620 tests, all green.

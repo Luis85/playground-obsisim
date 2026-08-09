@@ -27,6 +27,16 @@ async function colonyWith(ages: { id: number; ageTicks: number; buildingId?: num
   return { world, buildingId };
 }
 
+/**
+ * The tick's notices, as plain sentences. Read off the SNAPSHOT rather than
+ * off NoticeBoard: `takeAll` empties the board during the snapshot phase, so
+ * the published snapshot is the only place a notice still exists after a tick
+ * — and it is what the player actually reads.
+ */
+const messages = (snapshot: Snapshot): string[] => snapshot.notices.map((n) => n.message);
+const retirements = (snapshot: Snapshot): string[] => messages(snapshot).filter((m) => m.includes('retired'));
+const comingsOfAge = (snapshot: Snapshot): string[] => messages(snapshot).filter((m) => m.includes('came of age'));
+
 describe('PopulationSystem — aging', () => {
   it('ages every colonist one tick per tick', async () => {
     const { world } = await colonyWith([{ id: 1, ageTicks: 0 }]);
@@ -54,6 +64,99 @@ describe('PopulationSystem — aging', () => {
     expect(me.buildingId).toBeNull();       // unassigned by retirement
     const building = world.getResource(SnapshotStore).latest!.buildings.find((b) => b.id === buildingId)!;
     expect(building.workers).toBe(0);        // and the slot is free
+  });
+
+  it('announces BOTH adults who cross the elder band, the idle one as well as the employed one', async () => {
+    // OBS-6-03. The notice used to hang off the unassignment, so an idle
+    // colonist retired in silence — and in §4.1's own curve the colony holds
+    // 34-40 against roughly six job slots, so the silent kind was the large
+    // majority. The test above cannot see it: one colonist, holding a job.
+    const { world, buildingId } = await colonyWith([
+      { id: 1, ageTicks: BALANCE.lifeBands.retireTicks - 1, buildingId: 1 },
+      { id: 2, ageTicks: BALANCE.lifeBands.retireTicks - 1 },
+    ]);
+    // Re-point ONLY the seeded assignment at the real building id — a blanket
+    // re-point would employ colonist 2 as well and erase the whole comparison.
+    const jobs = [...world.getEntities()].map((e) => e.getComponent(JobAssignment)).filter((j) => j !== undefined);
+    const staffed = jobs.filter((job) => job.buildingId !== null);
+    expect(staffed).toHaveLength(1); // fixture precondition: exactly one is employed, one idle
+    staffed[0].buildingId = buildingId;
+
+    await stepTick(world);
+    const snapshot = world.getResource(SnapshotStore).latest!;
+    expect(snapshot.colonists.map((c) => c.stage)).toEqual(['elder', 'elder']); // both crossed
+    expect(retirements(snapshot)).toEqual(['Colonist #1 retired.', 'Colonist #2 retired.']);
+
+    // And exactly once each: `>=` in place of the equality would re-announce
+    // every elder on every tick for the rest of their life.
+    await stepTick(world);
+    expect(retirements(world.getResource(SnapshotStore).latest!)).toEqual([]);
+  });
+
+  it('announces BOTH children who come of age, the mirror of retirement', async () => {
+    // The other end of the same rule (OBS-6-03): a child reaching matureTicks
+    // grows the assignable pool exactly as an elder leaving it shrinks the
+    // pool. Neither child holds a job — a child never can — so this notice is
+    // reachable ONLY from the band transition, never from a stand-down.
+    const { world } = await colonyWith([
+      { id: 1, ageTicks: BALANCE.lifeBands.matureTicks - 1 },
+      { id: 2, ageTicks: BALANCE.lifeBands.matureTicks - 1 },
+    ]);
+    await stepTick(world);
+    const snapshot = world.getResource(SnapshotStore).latest!;
+    expect(snapshot.colonists.map((c) => c.stage)).toEqual(['adult', 'adult']); // both crossed
+    expect(comingsOfAge(snapshot)).toEqual(['Colonist #1 came of age.', 'Colonist #2 came of age.']);
+
+    await stepTick(world);
+    expect(comingsOfAge(world.getResource(SnapshotStore).latest!)).toEqual([]); // once each, not every tick
+  });
+
+  it('does not announce a retirement for a colonist who starves on the very tick they cross', async () => {
+    // Why the notices phase runs AFTER the two death phases. Both are
+    // reachable together — starvation is age-independent — and a colonist
+    // announced as retiring in the same breath as their own death notice is
+    // the kind of nonsense a phase order silently produces.
+    const save = { ...initialSave(), colonists: [], buildings: [], stockpile: {}, nextEntityId: 100 };
+    const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
+    const ids = getPrepResource(prep, IdCounter);
+    // Id 1 crosses the band on the tick the starvation clock runs out; id 2 is
+    // the CONTROL — same age, well fed — without which this test would pass
+    // just as happily against a build that announced nobody at all.
+    spawnColonist(prep, ids, {
+      id: 1, ageTicks: BALANCE.lifeBands.retireTicks - 1,
+      hunger: BALANCE.hungerMax, starvingTicks: BALANCE.starvationDeathTicks - 1,
+    });
+    spawnColonist(prep, ids, { id: 2, ageTicks: BALANCE.lifeBands.retireTicks - 1 });
+    const world = await prep.prepareRun();
+
+    await stepTick(world);
+    const snapshot = world.getResource(SnapshotStore).latest!;
+    expect(snapshot.colonists.map((c) => c.id)).toEqual([2]); // 1 died this tick
+    expect(messages(snapshot)).toContain('Colonist #1 starved.');
+    expect(retirements(snapshot)).toEqual(['Colonist #2 retired.']);
+  });
+
+  it('still calls a staffed child a repair, not a coming-of-age event', async () => {
+    // The "is too young to work" branch deliberately did NOT move to a band
+    // trigger. It fires only for a save loaded after matureTicks was raised —
+    // a repair explaining why a staffed building emptied — so it must stay
+    // keyed to the stand-down, and must not be reworded into the mirror
+    // notice above. Seeded well short of the band so no transition is in play.
+    const { world, buildingId } = await colonyWith([
+      { id: 1, ageTicks: BALANCE.lifeBands.matureTicks - 50, buildingId: 1 },
+    ]);
+    const staffed = [...world.getEntities()]
+      .map((e) => e.getComponent(JobAssignment)).filter((j) => j !== undefined)
+      .filter((job) => job.buildingId !== null);
+    expect(staffed).toHaveLength(1); // fixture precondition: the child really is staffed
+    staffed[0].buildingId = buildingId;
+
+    await stepTick(world);
+    const snapshot = world.getResource(SnapshotStore).latest!;
+    expect(snapshot.colonists[0].buildingId).toBeNull(); // stood down
+    expect(messages(snapshot)).toContain('Colonist #1 is too young to work.');
+    expect(comingsOfAge(snapshot)).toEqual([]);
+    expect(retirements(snapshot)).toEqual([]);
   });
 
   it('kills a colonist who reaches its own lifespan, not a shared one', async () => {
@@ -117,6 +220,72 @@ describe('PopulationSystem — starvation', () => {
     await step();
     expect(me().starvingTicks).toBe(0);
     expect(me().hunger).toBe(0);
+  });
+});
+
+describe('PopulationSystem — a die-off of more than one colonist', () => {
+  /**
+   * OBS-6-02. Every other death test in this file kills exactly ONE colonist
+   * — including the lifespan test, which deliberately gives two colonists
+   * different lifespans so that only one dies — so none of them can see what
+   * happens when a tick removes more than one entity.
+   *
+   * What happened before the RemovalLedger carried the entities: removals went
+   * through sim-ecs's deferred command queue, and sim-ecs 0.6.4 throws inside
+   * `removeEntity` for any entity that entered the world at prep time (its
+   * event-handler record is never registered, and `removeEntity` unhooks the
+   * listeners AFTER deleting the entity). The throw was swallowed at the sync
+   * point, aborting the rest of that batch, and each leftover removal then
+   * drained on a subsequent `step()` that ran NO systems at all. A die-off of
+   * `n` cost `n - 1` steps in which nothing aged, nothing was produced and no
+   * snapshot was published — while `SimClock.tick` advanced across them.
+   *
+   * The fed survivor is the instrument: its age is the one thing that must
+   * change on every tick regardless of who died, so an age that stands still
+   * is a tick that did not happen.
+   */
+  it('kills three colonists on one tick without costing the colony a single tick', async () => {
+    const save = { ...initialSave(), colonists: [], buildings: [], stockpile: {}, nextEntityId: 100 };
+    const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
+    const ids = getPrepResource(prep, IdCounter);
+    // Three colonists one tick from starving, so the next tick's HungerSystem
+    // (empty store) pushes all three over the threshold together.
+    for (const id of [1, 2, 3]) {
+      spawnColonist(prep, ids, {
+        id, ageTicks: BALANCE.lifeBands.matureTicks, hunger: BALANCE.hungerMax,
+        starvingTicks: BALANCE.starvationDeathTicks - 1,
+      });
+    }
+    // Fed (hunger 0 with an empty store still leaves ~200 ticks of slide) and
+    // nowhere near its own lifespan, so nothing about this colonist may change
+    // over the six steps below except its age.
+    spawnColonist(prep, ids, { id: 4, ageTicks: 1000, hunger: 0 });
+    const world = await prep.prepareRun();
+
+    const snapshotTicks: number[] = [];
+    const survivorAges: number[] = [];
+    const rosters: number[][] = [];
+    let starvedNotices = 0;
+    for (let i = 0; i < 6; i++) {
+      await stepTick(world);
+      const snapshot = world.getResource(SnapshotStore).latest!;
+      snapshotTicks.push(snapshot.tick);
+      survivorAges.push(snapshot.colonists.find((c) => c.id === 4)!.ageTicks);
+      rosters.push(snapshot.colonists.map((c) => c.id));
+      starvedNotices += snapshot.notices.filter((n) => n.message.includes('starved')).length;
+    }
+
+    // All three gone in the ONE step that killed them, not one per step.
+    expect(rosters[0]).toEqual([4]);
+    // Every step advanced the simulation: the snapshot's own tick moves each
+    // time, which it cannot do unless SnapshotSystem ran.
+    expect(snapshotTicks).toEqual([1, 2, 3, 4, 5, 6]);
+    // ...and PopulationSystem ran, which SnapshotSystem alone would not prove.
+    expect(survivorAges).toEqual([1001, 1002, 1003, 1004, 1005, 1006]);
+    // Three deaths, three notices. A frozen step republishes the same
+    // Snapshot object, so a per-tick tally re-reads its notices — which is
+    // how this defect was found (nine starvation deaths for three colonists).
+    expect(starvedNotices).toBe(3);
   });
 });
 
@@ -480,18 +649,24 @@ function housesOf(snap: Snapshot) {
   return snap.buildings.filter((b) => b.beds > 0).sort((a, b) => a.id - b.id);
 }
 
+// Three coprime churn periods, so beds appear and disappear out of phase with
+// each other and with the two arrival cooldowns (30 and 50), instead of
+// settling into one repeating alignment. Named because `offersANomad` below is
+// derived from MOVE_PERIOD rather than tuned beside it.
+const CONSTRUCT_PERIOD = 61;
+const MOVE_PERIOD = 23;
+const DEMOLISH_PERIOD = 101;
+
 /**
  * The construction, relocation or demolition a churn tick issues, or nothing.
  *
- * Three coprime periods, so beds appear and disappear out of phase with each
- * other and with the two arrival cooldowns (30 and 50), instead of settling
- * into one repeating alignment. Their rates are deliberately BELOW what the
- * cooldowns could admit — a house every 61 ticks is +4 beds and a demolition
- * every 101 is -4, against a colony that could take one arrival every 19 — so
- * it spends most of the run with no spare bed at all. That is the only regime
- * in which the admission gates decide anything: a colony with beds going spare
- * admits everyone and proves nothing, which is how the predecessor of this
- * test came to pass under a broken `spareBeds`.
+ * The three rates are deliberately BELOW what the cooldowns could admit — a
+ * house every 61 ticks is +4 beds and a demolition every 101 is -4, against a
+ * colony that could take one arrival every 19 — so it spends most of the run
+ * with no spare bed at all. That is the only regime in which the admission
+ * gates decide anything: a colony with beds going spare admits everyone and
+ * proves nothing, which is how the predecessor of this test came to pass under
+ * a broken `spareBeds`.
  *
  * The relocation target is the house the NEXT arrival would be offered (lowest
  * id with a bed free): a move and an arrival contending for one house in one
@@ -500,28 +675,175 @@ function housesOf(snap: Snapshot) {
  */
 function churnFor(t: number, snap: Snapshot): Command[] {
   const houses = housesOf(snap);
-  if (t % 61 === 0) return [{ type: 'constructBuilding', buildingDefId: 'house' }];
-  if (t % 23 === 0) {
+  if (t % CONSTRUCT_PERIOD === 0) return [{ type: 'constructBuilding', buildingDefId: 'house' }];
+  if (t % MOVE_PERIOD === 0) {
     const target = houses.find((h) => h.relocatingTicks === 0 && h.occupants < h.beds) ?? houses[0];
     const to = autoPlacePosition(DEFAULT_MAP, snap.buildings);
     return target === undefined || to === null ? [] : [{ type: 'moveBuilding', buildingId: target.id, to }];
   }
   // Never below two shelters: a colony demolished down to none admits nobody,
   // and the rest of the run would prove nothing.
-  if (t % 101 === 0 && houses.length >= 3) return [{ type: 'demolishBuilding', buildingId: houses[houses.length - 1].id }];
+  if (t % DEMOLISH_PERIOD === 0 && houses.length >= 3) return [{ type: 'demolishBuilding', buildingId: houses[houses.length - 1].id }];
   return [];
 }
 
-/** How often the run reached each state the assertions below depend on. */
-interface Exercised { joined: number; moved: number; demolished: number; saturated: number }
+/**
+ * The two arrival regimes the property below is ridden through. Each is a rule
+ * for whether tick `t` offers the colony a nomad at all, and they are run as a
+ * PAIR because the defects they reach pull in opposite directions — a single
+ * regime that catches both was searched for and does not exist (OBS-6-07).
+ *
+ * `EVERY_TICK` is the fixture this test shipped with: an offer on every tick,
+ * which keeps the colony at its tightest and is what a broken `spareBeds` needs
+ * to show itself. Its cost is that the 30-tick arrival cooldown is spent the
+ * instant a bed opens — and in this colony a bed only ever opens just after a
+ * construction, never on a relocation tick. MEASURED over its 600 ticks: 12
+ * joins, 26 moves, and an arrival and a relocation drained together on exactly
+ * ZERO of them (the recruit was refused for `cooldown` on every recruit-first
+ * move tick that had a bed, and for `noBed` on the rest). So the interaction
+ * `4012dd2` fixed — a nomad seated in the very house the same drain then starts
+ * moving — was never reached under it, which is why deleting
+ * `handleMoveBuilding`'s arrivals half left this test green.
+ *
+ * `SAVING_THE_COOLDOWN` withholds the offer for the `recruitCooldownTicks`
+ * ticks before every second relocation — every second, because the drain order
+ * below puts the recruit first only on even ticks and only a recruit drained
+ * BEFORE the move can seat a nomad for the move to displace. That stages the
+ * contended drain 8 times in 600 ticks. It does NOT simply make the colony
+ * comfortable (still saturated on 322 ticks of 600, with 11 arrivals getting
+ * in), but the arrivals it skips do relieve enough pressure that the
+ * `spareBeds` defect stops reaching its own coincidence — hence both regimes,
+ * not the second alone.
+ */
+const EVERY_TICK = () => true;
+const CONTESTED_PERIOD = 2 * MOVE_PERIOD;
+const SAVING_THE_COOLDOWN = (t: number) => t % CONTESTED_PERIOD <= CONTESTED_PERIOD - BALANCE.recruitCooldownTicks;
 
-/** Tally one tick against those states, from what the engine said it did. */
-function tally(seen: Exercised, snap: Snapshot): void {
+/** How often the run reached each state the assertions below depend on. */
+interface Exercised {
+  joined: number; moved: number; demolished: number; saturated: number;
+  /** Ticks on which a nomad was admitted and a house started moving in the
+   * SAME drain, recruit first — the state `reseatArrivalsOf` exists for. */
+  contested: number;
+  /** Ticks on which a bed `rehome` could have filled actually stood free —
+   * without which the fifth clause below is true of an empty question. */
+  spare: number;
+  /**
+   * Ticks that were BOTH — a contested drain AND one with a bed standing free
+   * for the displaced arrival to be re-seated INTO. That conjunction, not
+   * either half, is the only state in which the fifth clause can fail at all:
+   * with no contest nothing displaces an arrival, and with no slack the
+   * arrival is legitimately homeless whether or not the re-seat happens.
+   * Measured: 2 of the 8 contested drains, and the fifth clause fails on
+   * exactly those two ticks under a move that evicts without re-seating.
+   * Guarding `contested` and `spare` separately leaves it unpinned — see the
+   * demonstration in the vacuity guard below (OBS-6-07 I1).
+   *
+   * Read BEFORE the drain, deliberately. The obvious form — `contested` with
+   * this tick's `spare` — is unassertable: measured, `spare` is 0 on all 8
+   * contested ticks, because when there IS a bed the re-seat takes it, and
+   * when there is not the arrival ends homeless with nothing free. The state
+   * has to be read on the way in, not on the way out.
+   */
+  contestedWithSlack: number;
+}
+
+/**
+ * Tally one tick against those states, from what the engine said it did.
+ *
+ * One `Record<keyof Exercised, boolean>` rather than a run of `if`s, so a
+ * counter added to `Exercised` fails to compile until its condition is written
+ * here — an unincremented counter would read as a state the run never reached,
+ * which is the exact lie the vacuity guard exists to prevent.
+ */
+function tally(seen: Exercised, snap: Snapshot, recruitFirst: boolean, spare: number, slackBefore: number): void {
   const said = (pattern: RegExp) => snap.notices.some((n) => pattern.test(n.message));
-  if (said(/joined the colony/)) seen.joined++;
-  if (said(/Moved the/)) seen.moved++;
-  if (said(/Demolished the/)) seen.demolished++;
-  if (snap.beds.total <= snap.population) seen.saturated++;
+  const joined = said(/joined the colony/);
+  const moved = said(/Moved the/);
+  const contested = joined && moved && recruitFirst;
+  const reached: Record<keyof Exercised, boolean> = {
+    joined,
+    moved,
+    demolished: said(/Demolished the/),
+    saturated: snap.beds.total <= snap.population,
+    contested,
+    spare: spare > 0,
+    contestedWithSlack: contested && slackBefore > 0,
+  };
+  for (const key of Object.keys(reached) as (keyof Exercised)[]) {
+    if (reached[key]) seen[key]++;
+  }
+}
+
+/**
+ * Beds standing free in a shelter `rehome` would have been willing to fill,
+ * this tick — the right-hand side of "no colonist is homeless while a usable
+ * bed stands free".
+ *
+ * "Usable" is `rehome`'s own word for it: a bed in a shelter that is neither
+ * demolished nor in transit. Demolition needs no check — a house demolished
+ * this tick is already gone from `snap.buildings` by the time `stepTick`
+ * refreshes the snapshot. Relocation cannot be read off `snap` at all, and this
+ * is the whole subtlety: `PopulationSystem` reads `Relocation.ticksLeft` BEFORE
+ * `ProductionSystem` decrements it, so the published countdown is one lower
+ * than the figure `rehome` acted on, and a house LANDING this tick publishes 0
+ * while `rehome` still (deliberately) treated it as in transit and kept its
+ * residents homeless — the transient 'does not readmit a colonist until the
+ * tick after its relocating house lands' pins. Trusting the published figure
+ * would report that house's beds free on exactly the tick they are not.
+ *
+ * The figure `rehome` saw is instead the PREVIOUS tick's published countdown,
+ * because the only thing that can change it in between is this tick's own drain
+ * — hence `movedThisTick`. A house built this tick is in neither map and scores
+ * 0 from `?? 0`, which is right: `rehome` folds `pending.constructed` in with
+ * `relocating: false`.
+ */
+function usableBedsStandingFree(
+  snap: Snapshot,
+  movedThisTick: ReadonlySet<number>,
+  relocatingBefore: ReadonlyMap<number, number>,
+): number {
+  const perHouse = residentsByHouse(snap);
+  return housesOf(snap)
+    .filter((h) => !movedThisTick.has(h.id) && (relocatingBefore.get(h.id) ?? 0) === 0)
+    .reduce((free, h) => free + Math.max(0, h.beds - (perHouse.get(h.id) ?? 0)), 0);
+}
+
+/** Which houses this tick's churn puts in transit, for the reader above. */
+function movingThisTick(churn: readonly Command[]): Set<number> {
+  return new Set(churn.flatMap((c) => (c.type === 'moveBuilding' ? [c.buildingId] : [])));
+}
+
+/**
+ * Clauses one and two of the property: the published aggregate never claims
+ * more sleepers than beds, and no single house does either. The per-house count
+ * comes from `residentsByHouse` rather than `BuildingSnapshot.occupants` so the
+ * builder cannot supply its own expectation.
+ */
+function expectNobodyOverHoused(snap: Snapshot): void {
+  expect(snap.beds.occupied).toBeLessThanOrEqual(snap.beds.total);
+  const perHouse = residentsByHouse(snap);
+  for (const house of housesOf(snap)) {
+    expect(perHouse.get(house.id) ?? 0).toBeLessThanOrEqual(house.beds);
+  }
+}
+
+/**
+ * Clause four: nobody is admitted into a bed that does not exist. Both gates
+ * promise it — `spareBeds` counts what is genuinely spare and `shelterWithRoom`
+ * then finds it — so a colonist created this tick ends the tick housed.
+ *
+ * Exempt only when this tick's own churn took beds away: a move or a demolition
+ * drained AFTER an arrival legitimately unseats it, and the engine cannot see a
+ * command it has not read yet. `known` is the running roster and is extended in
+ * place, so each colonist is judged on the one tick they first appear.
+ */
+function expectArrivalsHoused(snap: Snapshot, known: Set<number>, tookBedsAway: boolean): void {
+  for (const c of snap.colonists) {
+    if (known.has(c.id)) continue;
+    known.add(c.id);
+    if (!tookBedsAway) expect(c.homeId).not.toBeNull();
+  }
 }
 
 /**
@@ -641,74 +963,149 @@ describe('PopulationSystem — births and the nomad gate', () => {
     expect(isLoadableSave(buildSaveFromWorld(world))).toBe(true);
   });
 
-  it('never over-houses, admits an arrival it has no bed for, or ends a tick it cannot reload', async () => {
-    // Property, not scenario: the bed-contention defects found in review were
-    // several routes to one broken state, and a case-by-case test would only
-    // have caught whichever one it was written for.
-    //
-    // Its predecessor ran `recruitWorker` against three STATIC houses, and was
-    // therefore unfalsifiable in both of its assertions: with no relocation,
-    // demolition or construction, `rehome`'s per-house cap and
-    // `shelterWithRoom`'s `spokenFor < beds` mean an over-admission can only
-    // ever produce a homeless colonist — never an over-occupied house, and
-    // never more occupants than beds. It passed with `spareBeds` mutated to
-    // drop `pending.arrivals.length`. Three things changed: the churn above,
-    // so beds move under the arrivals; the third assertion below, which is
-    // what an over-admission actually violates; and the fourth, which is the
-    // only one that sees a `homeId` naming a house that is mid-relocation.
-    // The same contended colony the scenario test above uses — one house, one
-    // bed spare — ridden 600 ticks with materials and food to spare, so beds
-    // are the only thing that is ever scarce.
+  /**
+   * 600 ticks of the churn above, offering a nomad on the ticks `offersANomad`
+   * allows, asserting all five clauses of the property every tick and returning
+   * how often the run reached the states those clauses depend on.
+   *
+   * Property, not scenario: the bed-contention defects found in review were
+   * several routes to one broken state, and a case-by-case test would only have
+   * caught whichever one it was written for.
+   *
+   * The predecessor of this run used three STATIC houses and was therefore
+   * unfalsifiable in both of its assertions: with no relocation, demolition or
+   * construction, `rehome`'s per-house cap and `shelterWithRoom`'s
+   * `spokenFor < beds` mean an over-admission can only ever produce a homeless
+   * colonist — never an over-occupied house, and never more occupants than
+   * beds. It passed with `spareBeds` mutated to drop `pending.arrivals.length`.
+   * The churn is what put beds in motion under the arrivals; the fourth clause
+   * is what an over-admission actually violates; the third is the only one
+   * that sees a `homeId` naming a house that is mid-relocation.
+   *
+   * The colony is the contended one the scenario tests above use — one house,
+   * one bed spare — with materials and food to spare, so beds are the only
+   * thing that is ever scarce.
+   */
+  async function rideOutTheChurn(offersANomad: (t: number) => boolean): Promise<Exercised> {
     const { world } = await fedColony(1, 3, 1_000_000, { wood: 1_000_000, planks: 1_000_000 });
     const snap = () => world.getResource(SnapshotStore).latest!;
     const known = new Set(snap().colonists.map((c) => c.id));
-    const seen: Exercised = { joined: 0, moved: 0, demolished: 0, saturated: 0 };
+    const seen: Exercised = { joined: 0, moved: 0, demolished: 0, saturated: 0, contested: 0, spare: 0, contestedWithSlack: 0 };
+    // What `rehome` will read as each house's relocation countdown NEXT tick,
+    // carried across the loop — see `usableBedsStandingFree` for why the
+    // published figure cannot be read on the tick it is wanted.
+    let relocatingBefore = new Map(housesOf(snap()).map((h) => [h.id, h.relocatingTicks]));
 
     for (let t = 0; t < 600; t++) {
-      const churn = churnFor(t, snap());
-      const recruit: Command = { type: 'recruitWorker' };
+      const before = snap();
+      const churn = churnFor(t, before);
+      const moving = movingThisTick(churn);
+      const recruitFirst = t % 2 === 0;
+      const recruit: Command[] = offersANomad(t) ? [{ type: 'recruitWorker' }] : [];
+      // Room a displaced arrival could be re-seated into, read the way
+      // `reseatArrivalsOf` will see it — the SAME reader as the fifth clause
+      // below, aimed at the pre-drain snapshot instead of the post-tick one.
+      // `relocatingBefore` is the right map on both sides: last tick's
+      // published countdown IS the live `ticksLeft` CommandSystem reads this
+      // tick, because ProductionSystem decrements after it.
+      const slackBefore = usableBedsStandingFree(before, moving, relocatingBefore);
       // Both drain orders across the run: `4012dd2` fixed one defect per order
       // — a stale `shelters` snapshot seating a nomad in a house the SAME
       // drain had already started moving (move first), and a move that could
       // not evict a nomad welcomed moments earlier (recruit first).
-      enqueue(world, ...(t % 2 === 0 ? [recruit, ...churn] : [...churn, recruit]));
+      enqueue(world, ...(recruitFirst ? [...recruit, ...churn] : [...churn, ...recruit]));
       await stepTick(world);
 
       const s = snap();
-      expect(s.beds.occupied).toBeLessThanOrEqual(s.beds.total);
-      const perHouse = residentsByHouse(s);
-      for (const house of housesOf(s)) {
-        expect(perHouse.get(house.id) ?? 0).toBeLessThanOrEqual(house.beds);
-      }
+      expectNobodyOverHoused(s);
       // The tick's own end state must be one the engine can restore. This is
-      // the assertion that catches a `homeId` naming a relocating house: the
+      // the clause that catches a `homeId` naming a relocating house: the
       // v5 guard rejects that pairing outright, so an autosave written here
       // would send a live colony down decideLoad's corrupt-backup path.
       expect(isLoadableSave(buildSaveFromWorld(world))).toBe(true);
-      // Nobody is admitted into a bed that does not exist. Both gates promise
-      // this: `spareBeds` counts what is genuinely spare and `shelterWithRoom`
-      // then finds it, so a colonist created this tick ends the tick housed.
-      // Exempt only when this tick's own churn took beds away — a move or a
-      // demolition drained AFTER an arrival legitimately unseats it, and the
-      // engine cannot see a command it has not read yet.
-      const tookBedsAway = churn.some((c) => c.type === 'moveBuilding' || c.type === 'demolishBuilding');
-      for (const c of s.colonists) {
-        if (known.has(c.id)) continue;
-        known.add(c.id);
-        if (!tookBedsAway) expect(c.homeId).not.toBeNull();
-      }
-      tally(seen, s);
+      expectArrivalsHoused(s, known, churn.some((c) => c.type === 'moveBuilding' || c.type === 'demolishBuilding'));
+      // Nobody is homeless while a bed they could have been given stands free
+      // (OBS-6-07). This is `rehome`'s own postcondition — it evicts, then
+      // fills every homeless colonist in ascending id until the openings run
+      // out — and it is the one thing a colonist stranded by a same-tick
+      // command violates while breaking none of the four above: a stranded
+      // colonist leaves the colony too EMPTY, not too full. Asserted
+      // unconditionally, no `if`, so the run cannot pass this line by never
+      // reaching the question; `seen.spare` records how often it was a real one
+      // and `seen.contestedWithSlack` how often it was the DECISIVE one.
+      //
+      // Numbering: the OBS-6-07 issue note calls this "the fourth clause".
+      // It is the FIFTH here — this file counts the aggregate cap and the
+      // per-house cap as two, where the note counts them as one.
+      const spare = usableBedsStandingFree(s, moving, relocatingBefore);
+      expect({ tick: s.tick, strandedBeds: s.homeless > 0 ? spare : 0 }).toEqual({ tick: s.tick, strandedBeds: 0 });
+      tally(seen, s, recruitFirst, spare, slackBefore);
+      relocatingBefore = new Map(housesOf(s).map((h) => [h.id, h.relocatingTicks]));
     }
+    return seen;
+  }
+
+  it('never over-houses, admits an arrival it has no bed for, strands a bed, or ends a tick it cannot reload', async () => {
+    // TWO runs of one property, over the two arrival regimes described above,
+    // because no single regime reaches both families of defect. Measured, all
+    // four mutations run against both regimes (OBS-6-07):
+    //
+    //   `spareBeds` drops pending arrivals   EVERY_TICK only
+    //   `ctx.shelters` frozen at construction both
+    //   move's arrivals half deleted          SAVING_THE_COOLDOWN only
+    //   move evicts but does not re-seat      SAVING_THE_COOLDOWN only
+    //
+    // The last two are the ones this test was blind to for the whole of
+    // increment 6, and the reason is worth stating exactly, because the issue
+    // note diagnosed it as a missing assertion: deleting the arrivals half
+    // leaves the displaced nomad pointing at the moving house, which the FIRST
+    // and THIRD clauses were always able to see — the state was simply never
+    // reached. Only the fourth mutation, which evicts that nomad without
+    // re-seating it, needs the fifth clause; nothing here caught it before, and
+    // the whole 607-test suite once missed its demolition twin.
+    const always = await rideOutTheChurn(EVERY_TICK);
+    const saved = await rideOutTheChurn(SAVING_THE_COOLDOWN);
+
     // Vacuity guard, and the reason this test discriminates at all: every
     // assertion above passes trivially against a colony that never admits
     // anyone, never moves or demolishes a house, or always has a bed going
-    // spare. Bounds are well under what the run actually reaches (12 / 26 / 5
-    // / 412), so ordinary drift does not trip them — but a balance change that
-    // made this colony comfortable would fail HERE, loudly, instead of quietly
-    // turning the invariants above back into decoration.
-    expect(seen.joined).toBeGreaterThan(5);
-    expect(seen.moved).toBeGreaterThan(5);
-    expect(seen.demolished).toBeGreaterThan(2);
-    expect(seen.saturated).toBeGreaterThan(100);
+    // spare. Bounds are well under what the runs actually reach —
+    // 12 / 26 / 5 / 412 / 0 / 180 / 0 offering every tick,
+    // 11 / 26 / 5 / 322 / 8 / 267 / 2 saving the cooldown (joined, moved,
+    // demolished, saturated, contested, spare, contestedWithSlack) — so
+    // ordinary drift does not trip them, but a balance change that made this
+    // colony comfortable would fail HERE, loudly, instead of quietly turning
+    // the invariants above back into decoration.
+    for (const seen of [always, saved]) {
+      expect(seen.joined).toBeGreaterThan(5);
+      expect(seen.moved).toBeGreaterThan(5);
+      expect(seen.demolished).toBeGreaterThan(2);
+      expect(seen.saturated).toBeGreaterThan(100);
+      expect(seen.spare).toBeGreaterThan(100);
+    }
+    // `contested` is asked of the second regime alone, and it is the number
+    // that stopped this test being decoration: it counts the ticks on which an
+    // arrival and a relocation actually drained together, recruit first. It
+    // reads ZERO for the first regime — with every other number there healthy.
+    // A fixture can exercise all the churn in the world and still never stage
+    // the one interaction it was built for.
+    expect(always.contested).toBe(0);
+    expect(saved.contested).toBeGreaterThan(3);
+    // And the conjunction, which is the one the fifth clause actually needs: a
+    // contested drain WITH a bed free elsewhere. Guarding `contested > 3` and
+    // `spare > 100` separately does not pin it, and the gap is not theoretical
+    // — measured, `CONTESTED_PERIOD = 4 * MOVE_PERIOD` (a plausible retune)
+    // leaves every bound above green, `contested` at 4, and this at ZERO, with
+    // the evict-without-re-seat mutation no longer caught by anything.
+    //
+    // Bounded at > 0, not at the measured 2, and the reason is worth stating
+    // rather than hiding: 2 IS the whole discriminating margin. One tick is
+    // enough for the clause to have power, so `> 0` is exactly the condition
+    // "the question was asked"; a tighter bound would go red on a retune that
+    // left the clause perfectly able to fail. The cost is that losing ONE of
+    // the two ticks halves that margin silently. If this ever needs to be
+    // sturdier it wants a regime that stages the contested-with-slack drain
+    // more often, not a bigger number here.
+    expect(saved.contestedWithSlack).toBeGreaterThan(0);
   }, 60000);
 });

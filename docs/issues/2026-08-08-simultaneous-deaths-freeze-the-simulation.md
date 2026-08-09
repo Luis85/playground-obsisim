@@ -1,12 +1,13 @@
 ---
 id: OBS-6-02
 title: Two colonists dying on the same tick freeze the whole simulation for a tick each
-status: Open
+status: Done
 severity: important
 area: engine
 increment: 6
 created: 2026-08-08
-source: increment-6 Task 12 (population balance harness) — found by running, not by reading; the autosave consequence added at Task 13 close-out, after PR
+resolved: 2026-08-09
+source: "increment-6 Task 12 (population balance harness) — found by running, not by reading; the autosave consequence added at Task 13 close-out, after PR #9's bot reached the same defect independently"
 affects:
   - src/engine/systems/population-handlers.ts
   - src/engine/game-engine.ts
@@ -29,9 +30,8 @@ first draft of `runPopulationScenario` reported `deathsByStarvation: 9` for a
 colony of three, which is how this surfaced.
 **Introduced:** not by any commit here — it is sim-ecs 0.6.4 behaviour that the
 engine has never had reason to trip until colonists could die.
-**Status:** open. Not fixed in increment 6: the remedy is in how the engine
-removes entities, the branch already carries thirty-odd commits, and Task 12's
-job was to measure the balance rather than change the engine underneath it.
+**Status:** resolved 2026-08-09 (`6ea3ee1`), by candidate 1 below. See
+[Resolution](#resolution-6ea3ee1).
 
 ## What happens
 
@@ -189,3 +189,106 @@ lands inside the freeze, capture what the autosave listener receives, and
 assert its colonist roster does not contain anyone the snapshot has already
 reported dead. Asserting only that the save *loads* passes today — the whole
 problem is that it does.
+
+## Resolution (6ea3ee1)
+
+Candidate 1, as written above and as an independent reviewer proposed
+separately. `RemovalLedger` carries the entities instead of a `dirty` flag,
+and `applyRemovals` (`src/engine/world.ts`) drains it after `world.step()`
+resolves — one `removeEntity` per call, which is the case sim-ecs handles.
+Both drivers of a tick call it immediately after the step: `GameEngine.runStep`
+and `tests/engine/fixtures.ts`'s `stepTick`.
+
+Four things beyond the mechanical move are worth recording.
+
+**The throw is not conditional on there being a second removal.** The "Why"
+above says the *second* removal throws; running it says every removal of a
+prep-time entity throws, and always has. The first one simply had nothing
+queued behind it to abandon. Two consequences follow that the original note did
+not name. A single death on a tick that also queued something else — the
+common case being `tryBirth`, which runs after both death phases in the same
+system — deferred that other command by a step too, so **one** death could cost
+a frozen tick if a birth landed with it. And because the drain must still call
+sim-ecs's `removeEntity`, the throw did not go away with the batching: it is
+caught in `detach`, which re-throws unless `world.hasEntity` confirms the
+entity is genuinely gone. Tolerating a known post-removal throw is a claim with
+a postcondition; the postcondition is checked, which is the one thing the sync
+point's blanket `catch` never did.
+
+**The `dirty` flag is gone rather than kept.** The drain's own count is the
+refresh signal the flag stood in for, so `refreshEntitySections` still fires on
+a tick that only removes something — but a new removal site cannot forget to
+raise it, because the signal comes from the removal itself. That was the
+"helper wired to one caller instead of to the invariant" shape this codebase
+has produced six defects from. Both death causes now go through one `die()`
+that stands the colonist down, queues the entity and marks the id dead
+together.
+
+**Three test harnesses drove time with a bare `world.step()`** and therefore
+stopped removing anything at all the moment removals left the command queue.
+They failed loudly rather than drifting: `tests/engine/integration.test.ts` now
+uses `stepTick`, and `command-system.test.ts`'s two local tickers call
+`applyRemovals` directly — not `stepTick`, whose snapshot refresh would erase
+the same-tick deferrals a dozen of that file's cases assert on. This is exactly
+the divergence the note warned about, and it is worth noting that `stepTick`
+alone was not the whole of it.
+
+**That count of three was never a closed set, and nothing at the time said it
+was.** The three above were found by hand, and so were two more sites fixed
+separately the same day — `tests/support/balance-harness.ts`'s `runScenario`
+and `tests/engine/systems/haul-system.test.ts`'s `setup()` step helper — for
+five known by inspection. Nothing then prevented a sixth: finding one still
+meant a person noticing that a test's assertions happened to depend on a
+removal actually landing.
+
+`tests/support/removal-guard.ts` (`5ff5346`, 2026-08-09) closed that gap
+instead of leaving it open. It patches `RemovalLedger.prototype.remove` to
+record which ledgers were queued on and fails any test, via a global
+`afterEach` wired through `vitest.config.ts`'s `setupFiles`, that still holds
+an entry at teardown — state, not syntax, so it reaches a site behind a helper
+nobody has written yet rather than only the call sites that existed when it was
+written. **On its first full run it found three more sites nobody knew about**,
+all in `command-system.test.ts`, all hand-rolling `clock++; await
+world.step()` instead of the file's own `ticker`: `names exactly one displaced
+resident, singular wording`, `names the exact count of several displaced
+residents`, and `demolishing a house with no residents gains no displaced
+clause`. Their notice assertions were sound — the notice is written during the
+tick, before any removal — so these were latent rather than live defects, each
+stranding one demolition on the ledger for the rest of its test. Fixed by
+calling the file's own `ticker(world)()` in all three, the same fix as the
+original three.
+
+The family was **eight sites, not the five known when the paragraph above was
+written**. Recorded here so the next reader does not inherit this as an open
+warning: the guard is what makes a ninth site a loud test failure rather than a
+silent one, and it is installed for every test file, not an allowlist of the
+eight found so far.
+
+**What did not change.** Removal is still invisible for the rest of the tick,
+so `standDown` and `PendingChanges.demolished` remain load-bearing; drain order
+is ledger order, which is ascending colonist id for deaths and drain order for
+demolitions, so nothing became less reproducible. Neither the haul sweep nor
+the §4.1 population curves moved.
+
+**Tests.** Two written to fail first and watched doing it, assertion by
+assertion:
+
+- `PopulationSystem — a die-off of more than one colonist` — three colonists
+  starve on one tick beside a fed survivor. Before: roster `[2,3,4]` instead of
+  `[4]`, snapshot ticks `1,1,1,4,5,6`, survivor ages `1001,1001,1001,1002,…`,
+  and **nine** starvation notices for three colonists.
+- `GameEngine — a save written on the tick after a die-off holds nobody the
+  colony has already killed` — the autosave at tick 100, one tick after the
+  die-off at 99, carried colonist #4 after the snapshot had announced it dead.
+
+Plus `applyRemovals` unit cases pinning that all three entities go in one call
+and that a throw leaving the entity present is re-thrown, and
+`frozenSteps === 0` asserted on the starvation-warning scenario — the only run
+in the report that ever lost steps (2 of them). Each was re-checked by mutating
+the fix: draining one entity per call kills three cases, dropping the
+`try/catch` kills ten, and dropping the `hasEntity` postcondition kills one.
+
+`frozenSteps` **can no longer be non-zero** and is re-documented as a
+regression sentinel rather than a live signal. It stays because the detector
+behind it is four lines and the failure it catches — a measurement quietly
+short of the ticks it claims — is silent by nature.

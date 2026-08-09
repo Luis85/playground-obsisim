@@ -1,6 +1,6 @@
 import type { IRuntimeWorld } from 'sim-ecs';
-import { CommandQueue, IdCounter, RemovalLedger, SimClock } from '../../src/engine/resources';
-import { refreshEntitySections } from '../../src/engine/world';
+import { CommandQueue, IdCounter, SimClock } from '../../src/engine/resources';
+import { applyRemovals, refreshEntitySections } from '../../src/engine/world';
 import { CAMP_TILE } from '../../src/shared/haul';
 import type { TileRef } from '../../src/shared/placement';
 import type { Command } from '../../src/shared/commands';
@@ -48,31 +48,38 @@ export function enqueue(world: IRuntimeWorld, ...commands: Command[]): void {
 }
 
 /**
- * One tick of the actual production sequence (mirrors GameEngine.runStep,
- * including its gate): advance the clock, step the world, then refresh the
- * snapshot's entity-derived sections ONLY if the id counter moved or
- * RemovalLedger.dirty was raised — exactly the condition game-engine.ts's
- * runStep applies, clearing the flag the same way. A bare `await world.step()`
- * is NOT equivalent — sim-ecs only syncs a tick's entity creations/removals
- * after step() resolves, so SnapshotStore.latest can still show an entity that
- * died (or omit one that was born) this same tick until refreshEntitySections
- * re-walks the world. Any test asserting on population, a corpse's absence, or
- * a newborn's presence needs this, not a raw step().
+ * One tick of the actual production sequence, mirroring GameEngine.runStep
+ * line for line: RETRY ANY LEFTOVER REMOVAL, advance the clock, step the
+ * world, DRAIN THE REMOVAL LEDGER, then refresh the snapshot's entity-derived
+ * sections only if the id counter moved or something was removed.
  *
- * The gate matters beyond mirroring production faithfully: an UNconditional
- * refresh here would make every remover's `removals.dirty = true` untestable
- * — the snapshot would refresh anyway, and a handler that forgot to raise the
- * flag would still pass. Gating identically means a missing `dirty = true`
- * genuinely fails a test, the same way it would silently stale-publish in
- * production.
+ * The leading drain is a no-op on every tick that did not inherit a re-queued
+ * entry from a detach that threw, and it is mirrored here rather than left to
+ * production because a fixture that skips it would let a test observe the
+ * rehome-into-a-doomed-shelter sequence runStep now makes impossible.
+ *
+ * A bare `await world.step()` is NOT equivalent, and since OBS-6-02 it is
+ * short of the truth in two ways rather than one. It never applied a tick's
+ * creations to the published snapshot; it now also never applies a tick's
+ * REMOVALS to the world at all, because deaths and demolitions no longer go
+ * through sim-ecs's command queue — they go onto RemovalLedger, and
+ * `applyRemovals` is the only thing that takes them off it. A test that
+ * demolishes or kills and then steps raw leaves the entity standing.
+ *
+ * The refresh gate matters beyond faithfulness: an UNconditional refresh here
+ * would hide a removal that never reached the ledger, since the snapshot would
+ * be re-walked either way. Gating on the drain's own count means a removal
+ * that did not happen genuinely fails a test — and, unlike the `dirty` flag
+ * this replaced, the count cannot be forgotten by a new removal site, because
+ * it comes from the removal itself.
  */
 export async function stepTick(world: IRuntimeWorld): Promise<void> {
+  applyRemovals(world);
   const idsBefore = world.getResource(IdCounter).peek();
   world.getResource(SimClock).tick++;
   await world.step();
-  const removals = world.getResource(RemovalLedger);
-  if (world.getResource(IdCounter).peek() !== idsBefore || removals.dirty) {
-    removals.dirty = false;
+  const removed = applyRemovals(world);
+  if (world.getResource(IdCounter).peek() !== idsBefore || removed > 0) {
     refreshEntitySections(world);
   }
 }

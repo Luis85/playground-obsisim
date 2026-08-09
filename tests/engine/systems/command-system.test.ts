@@ -1,18 +1,27 @@
 import { describe, expect, it } from 'vitest';
 import type { IRuntimeWorld } from 'sim-ecs';
-import { CommandQueue, IdCounter, MAX_PENDING_COMMANDS, SimClock, SnapshotStore, Stockpile } from '../../../src/engine/resources';
+import {
+  CommandQueue, IdCounter, MAX_PENDING_COMMANDS, NoticeBoard, PendingChanges, RemovalLedger, SimClock, SnapshotStore, Stockpile,
+  WorldMap,
+} from '../../../src/engine/resources';
 import { BALANCE } from '../../../src/engine/content/balance';
-import { Building, HaulTrip, Home, OutputBuffer, Relocation, Colonist } from '../../../src/engine/components';
+import { Building, HaulTrip, Home, JobAssignment, OutputBuffer, Position, Relocation, WorkerSlots, Colonist } from '../../../src/engine/components';
 import { CommandSystem } from '../../../src/engine/systems/command-system';
+import { handleMoveBuilding } from '../../../src/engine/systems/command-handlers';
+import type { BuildingRow, CommandContext, WorkerRow } from '../../../src/engine/systems/command-handlers';
+import { BUILDINGS } from '../../../src/engine/content/buildings';
 import { HaulSystem, haulerCapacity } from '../../../src/engine/systems/haul-system';
 import { HungerSystem } from '../../../src/engine/systems/hunger-system';
 import { ProductionSystem } from '../../../src/engine/systems/production-system';
 import { SnapshotSystem } from '../../../src/engine/systems/snapshot-system';
 import { enqueue } from '../fixtures';
 import { buildSaveFromWorld } from '../../../src/engine/game-engine';
-import { buildColonyPrepWorld, COMPONENT_TYPES, getPrepResource, initialSave, spawnBuilding, spawnColonist } from '../../../src/engine/world';
+import {
+  applyRemovals, buildColonyPrepWorld, COMPONENT_TYPES, getPrepResource, initialSave, spawnBuilding, spawnColonist,
+} from '../../../src/engine/world';
 import type { Command } from '../../../src/shared/commands';
 import type { SaveGameV5 } from '../../../src/shared/save';
+import { DEFAULT_MAP, type TileRef } from '../../../src/shared/placement';
 
 /**
  * What a hauler in this file's fixtures carries per trip.
@@ -50,15 +59,36 @@ function houselessSave(): SaveGameV5 {
   return { ...base, buildings: [], colonists: base.colonists.map((c) => ({ ...c, homeId: null })) };
 }
 
+/**
+ * A tick as this file needs it: the clock nudged (the recruit cooldown reads
+ * `SimClock.tick`, so without it the cooldown can never elapse), the world
+ * stepped, and the tick's removals APPLIED.
+ *
+ * `applyRemovals` is not optional decoration. Since OBS-6-02 a demolition no
+ * longer goes through sim-ecs's deferred command queue — `handleDemolishBuilding`
+ * puts the entity on `RemovalLedger` and the post-step drain is the only thing
+ * that takes it off — so a step without this leaves every demolished building
+ * standing for the rest of the run.
+ *
+ * Deliberately NOT `stepTick`, which is the full production sequence: it also
+ * refreshes the snapshot's entity-derived sections, and a dozen cases in this
+ * file assert on the DEFERRAL that gate exists to close ("entity appears next
+ * tick", the notices a freed tile does or does not produce). This harness runs
+ * a partial system set and publishes what SnapshotSystem itself wrote; the
+ * removal drain is the one post-step step it cannot do without.
+ */
+function ticker(world: IRuntimeWorld) {
+  return async () => {
+    world.getResource(SimClock).tick++;
+    await world.step();
+    applyRemovals(world);
+  };
+}
+
 async function setup(save: SaveGameV5 = houselessSave()) {
   const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, HaulSystem, SnapshotSystem] });
   const world = await prep.prepareRun();
-  // mirror GameEngine.stepOnce: the engine owns time, bumping the clock before each step.
-  // Without this the recruit cooldown (which compares SimClock.tick) can never elapse.
-  const tick = async () => {
-    world.getResource(SimClock).tick++;
-    await world.step();
-  };
+  const tick = ticker(world);
   const dispatch = async (...commands: Command[]) => {
     enqueue(world, ...commands);
     await tick();
@@ -94,10 +124,7 @@ function saveThatCanHouseArrivals(): SaveGameV5 {
 async function setupWithProduction(save: SaveGameV5 = houselessSave()) {
   const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, ProductionSystem, HaulSystem, SnapshotSystem] });
   const world = await prep.prepareRun();
-  const tick = async () => {
-    world.getResource(SimClock).tick++;
-    await world.step();
-  };
+  const tick = ticker(world);
   const dispatch = async (...commands: Command[]) => {
     enqueue(world, ...commands);
     await tick();
@@ -221,6 +248,113 @@ describe('CommandSystem', () => {
     // 91, never 90: the re-seat runs after the demolition is on the pending
     // ledger, so `shelterWithRoom` cannot hand back the house being removed.
     expect(nomad!.getComponent(Home)!.buildingId).toBe(91);
+  });
+
+  /**
+   * OBS-6-07 path 1. `reseatArrivalsOf` loops, and its doc comment claims the
+   * loop is safe for SEVERAL displaced arrivals at once because
+   * `shelterWithRoom` reads `ctx.pending.arrivals` live — so each arrival it
+   * re-seats is already counted against its new house by the time the next one
+   * asks. The two scenario tests above only ever put ONE arrival through it.
+   *
+   * The branch cannot be reached through the command path at all:
+   * `recruitCooldownTicks` refuses a second nomad in the same drain (the
+   * handler writes `lastRecruitTick` before the next command is read), and
+   * `tryBirth` — the only other pusher — runs in `PopulationSystem`, after
+   * `CommandSystem` has finished draining. So the handler is driven directly,
+   * with a context built from real components. That is the honest shape of the
+   * claim: this is live code with no live caller, kept because a bulk-arrival
+   * command or a retuned cooldown would make it one overnight.
+   */
+  describe('handleMoveBuilding with more than one arrival to re-seat', () => {
+    /** Real entities, so the rows carry the components production reads. */
+    async function houseRows(tiles: readonly TileRef[]) {
+      const prep = buildColonyPrepWorld({ save: houselessSave(), systems: [] });
+      const ids = getPrepResource(prep, IdCounter);
+      return tiles.map((at, index) => {
+        const entity = spawnBuilding(prep, ids, {
+          id: 90 + index, defId: 'house', progress: 0, batchActive: false, col: at.col, row: at.row, relocatingTicks: 0,
+        });
+        return {
+          entity,
+          building: entity.getComponent(Building)!,
+          slots: entity.getComponent(WorkerSlots)!,
+          position: entity.getComponent(Position)!,
+          buffer: entity.getComponent(OutputBuffer)!,
+          relocation: entity.getComponent(Relocation)!,
+        };
+      });
+    }
+
+    /** One resident of `homeId`, as `ctx.workers` sees them. */
+    function resident(homeId: number): WorkerRow {
+      return { job: new JobAssignment(), trip: new HaulTrip(), home: new Home(homeId), stage: 'adult' };
+    }
+
+    /**
+     * What `CommandSystem` builds, minus what this handler cannot reach.
+     * `shelters` and `occupancy` are derived from the same rows and in the same
+     * shape it uses; `pending.constructed` is left out of `shelters` because
+     * nothing is constructed in this drain, so the fold would be a no-op.
+     * `spawn` and `nomadGate` THROW rather than returning a stub, so a handler
+     * that started using either would fail here rather than read a fiction.
+     */
+    function contextOf(buildings: BuildingRow[], workers: WorkerRow[], pending: PendingChanges): CommandContext {
+      return {
+        clock: new SimClock(),
+        stockpile: new Stockpile({}),
+        ids: new IdCounter(1000),
+        notices: new NoticeBoard(),
+        map: new WorldMap(DEFAULT_MAP.cols, DEFAULT_MAP.rows),
+        buildings,
+        workers,
+        spawn: () => { throw new Error('handleMoveBuilding must not spawn'); },
+        claimedTiles: [],
+        removals: new RemovalLedger(),
+        pending,
+        demolishedIds: new Set<number>(),
+        shelters: () => buildings
+          .filter(({ building }) => BUILDINGS[building.defId].beds > 0)
+          .map(({ building, position, relocation }) => ({
+            id: building.id,
+            beds: BUILDINGS[building.defId].beds,
+            col: position.col,
+            row: position.row,
+            relocating: relocation.ticksLeft > 0,
+          })),
+        occupancy: () => {
+          const byHouse = new Map<number, number>();
+          for (const { home } of workers) {
+            if (home.buildingId !== null) byHouse.set(home.buildingId, (byHouse.get(home.buildingId) ?? 0) + 1);
+          }
+          return byHouse;
+        },
+        nomadGate: () => { throw new Error('handleMoveBuilding must not ask the nomad gate'); },
+      };
+    }
+
+    it('spreads them across the houses that have room, one bed each', async () => {
+      // Houses 91 and 92 hold three residents each, so each has exactly ONE bed
+      // free. That is the whole fixture: with the ledger read live, the first
+      // arrival takes 91's last bed and the second is offered 92; with the
+      // destination resolved once for the whole loop, both are handed 91 and it
+      // ends the drain holding five colonists in four beds.
+      const buildings = await houseRows([{ col: 5, row: 3 }, { col: 7, row: 3 }, { col: 9, row: 3 }]);
+      const workers = [91, 91, 91, 92, 92, 92].map(resident);
+      const pending = new PendingChanges();
+      const first = new Home(90);
+      const second = new Home(90);
+      for (const home of [first, second]) pending.arrivals.push({ home, ageTicks: BALANCE.nomadArrivalTicks });
+
+      handleMoveBuilding(contextOf(buildings, workers, pending), {
+        type: 'moveBuilding', buildingId: 90, to: { col: 15, row: 11 },
+      });
+
+      // Precondition, not the point: house 90 really did lift off, so both
+      // arrivals genuinely had to move.
+      expect(buildings[0].relocation.ticksLeft).toBeGreaterThan(0);
+      expect([first.buildingId, second.buildingId]).toEqual([91, 92]);
+    });
   });
 
   it('assigns and unassigns workers within slot limits', async () => {
@@ -439,8 +573,7 @@ describe('CommandSystem', () => {
     spawnColonist(prep, ids, { id: 1, homeId: houseId });
     const world = await prep.prepareRun();
     enqueue(world, { type: 'demolishBuilding', buildingId: houseId });
-    world.getResource(SimClock).tick++;
-    await world.step();
+    await ticker(world)();
     expect(world.getResource(SnapshotStore).latest!.notices).toEqual([
       { kind: 'success', message: 'Demolished the House — cost refunded. — 1 colonist(s) displaced.' },
     ]);
@@ -457,8 +590,7 @@ describe('CommandSystem', () => {
     for (const id of [1, 2, 3]) spawnColonist(prep, ids, { id, homeId: houseId });
     const world = await prep.prepareRun();
     enqueue(world, { type: 'demolishBuilding', buildingId: houseId });
-    world.getResource(SimClock).tick++;
-    await world.step();
+    await ticker(world)();
     expect(world.getResource(SnapshotStore).latest!.notices).toEqual([
       { kind: 'success', message: 'Demolished the House — cost refunded. — 3 colonist(s) displaced.' },
     ]);
@@ -477,8 +609,7 @@ describe('CommandSystem', () => {
     const houseId = house.getComponent(Building)!.id;
     const world = await prep.prepareRun();
     enqueue(world, { type: 'demolishBuilding', buildingId: houseId });
-    world.getResource(SimClock).tick++;
-    await world.step();
+    await ticker(world)();
     expect(world.getResource(SnapshotStore).latest!.notices).toEqual([
       { kind: 'success', message: 'Demolished the House — cost refunded.' },
     ]);
@@ -509,7 +640,16 @@ describe('CommandSystem', () => {
     ]);
   });
 
-  it('a tile freed by demolition is buildable again on the NEXT tick', async () => {
+  // OBS-6-01. `occupiedTiles` used to build the drain's occupancy from every
+  // LIVE building row with no `ctx.demolishedIds` filter, unlike `findBuilding`
+  // immediately below it. sim-ecs defers entity removal to the post-step sync,
+  // so a building demolished earlier in this drain was still in `ctx.buildings`
+  // and its tile still read as occupied — the construction below used to be
+  // refused with 'Cannot build there.' in the SAME drain as the demolition,
+  // only succeeding a tick later. Per-command tests cannot catch this: the
+  // defect only exists in the interaction between the two handlers in one
+  // drain, which is why both commands are queued together here.
+  it('a tile freed by demolition is buildable again in the SAME drain', async () => {
     const { tick, dispatch, snapshot } = await setup();
     await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 5, row: 5 } });
     await tick();
@@ -518,9 +658,39 @@ describe('CommandSystem', () => {
       { type: 'demolishBuilding', buildingId },
       { type: 'constructBuilding', buildingDefId: 'gatherersHut', at: { col: 5, row: 5 } },
     );
-    expect(snapshot().notices[1]).toEqual({ kind: 'rejection', message: 'Cannot build there.' });
-    await dispatch({ type: 'constructBuilding', buildingDefId: 'gatherersHut', at: { col: 5, row: 5 } });
-    expect(snapshot().notices).toEqual([{ kind: 'success', message: "Built a Gatherer's Hut." }]);
+    // Both succeed: no rejection anywhere on the board, not merely "the second
+    // notice happens to be a success" — a stray rejection elsewhere would slip
+    // past an index-1-only assertion.
+    expect(snapshot().notices).toEqual([
+      { kind: 'success', message: 'Demolished the Forester — cost refunded.' },
+      { kind: 'success', message: "Built a Gatherer's Hut." },
+    ]);
+    await tick();
+    expect(snapshot().buildings).toHaveLength(1);
+    expect(snapshot().buildings[0]).toMatchObject({ defId: 'gatherersHut', col: 5, row: 5 });
+  });
+
+  // The `moveBuilding` twin of the same bug: `handleMoveBuilding` calls the
+  // same unfiltered `occupiedTiles`, so a tile freed by a same-drain demolition
+  // was equally unreachable by a relocation, not just a fresh construction.
+  it('a tile freed by demolition is a valid MOVE target in the same drain', async () => {
+    const { tick, dispatch, snapshot } = await setup();
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 5, row: 5 } });
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'gatherersHut', at: { col: 9, row: 5 } });
+    await tick();
+    const demolishedId = snapshot().buildings.find((b) => b.defId === 'forester')!.id;
+    const moverId = snapshot().buildings.find((b) => b.defId === 'gatherersHut')!.id;
+    await dispatch(
+      { type: 'demolishBuilding', buildingId: demolishedId },
+      { type: 'moveBuilding', buildingId: moverId, to: { col: 5, row: 5 } },
+    );
+    expect(snapshot().notices).toEqual([
+      { kind: 'success', message: 'Demolished the Forester — cost refunded.' },
+      { kind: 'success', message: "Moved the Gatherer's Hut." },
+    ]);
+    // Position is a component mutation, not a deferred entity command — the
+    // same tick's snapshot already shows it landed on the freed tile.
+    expect(snapshot().buildings.find((b) => b.id === moverId)).toMatchObject({ col: 5, row: 5 });
   });
 
   it('moves a building in place — same id, workers and batch intact, visible same tick', async () => {

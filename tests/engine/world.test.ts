@@ -3,12 +3,12 @@ import { BALANCE, MAX_AGE_TICKS } from '../../src/engine/content/balance';
 import { lifespanFor } from '../../src/shared/population';
 import { RESOURCE_IDS } from '../../src/engine/content/resources';
 import { Building, Hunger, JobAssignment, Relocation, ToolCoverage, Colonist } from '../../src/engine/components';
-import { IdCounter, SimClock, SnapshotStore, Stockpile } from '../../src/engine/resources';
+import { IdCounter, RemovalLedger, SimClock, SnapshotStore, Stockpile } from '../../src/engine/resources';
 import type { IRuntimeWorld } from 'sim-ecs';
 import { GameEngine } from '../../src/engine/game-engine';
 import {
-  ALL_SYSTEMS, buildColonyPrepWorld, createColonyWorld, decideLoad, getPrepResource, initialSave, isLoadableSave, prepareLoadedSave,
-  refreshEntitySections,
+  ALL_SYSTEMS, applyRemovals, buildColonyPrepWorld, createColonyWorld, decideLoad, getPrepResource, initialSave, isLoadableSave,
+  prepareLoadedSave, refreshEntitySections,
 } from '../../src/engine/world';
 import { buildSaveFromWorld } from '../../src/engine/game-engine';
 import { CommandSystem } from '../../src/engine/systems/command-system';
@@ -822,6 +822,64 @@ describe('balance-coupled states a save is repaired into, not rejected for', () 
     expect(seeded.colonists[0].hauling).toBe(false);
   });
 
+  it('never announces a band a colonist crossed OUTSIDE this session', async () => {
+    // What the OBS-6-03 equality trigger rests on. `announceBandChanges` fires
+    // on `age.ticks === matureTicks` / `=== retireTicks`, so a colonist
+    // restored PAST a boundary — only a retune can write one — never meets it.
+    // That is the intended reading, not a gap: the crossing happened while
+    // nobody was playing, so it is a repair like the two cases above rather
+    // than an event in the colony's life, and announcing it on load would
+    // report something that never happened.
+    const bands = BALANCE.lifeBands;
+    const save = saveWith([
+      { ageTicks: bands.retireTicks + 137 },  // a lowered retireTicks
+      { ageTicks: bands.matureTicks + 40 },   // a lowered matureTicks
+      { ageTicks: bands.retireTicks },        // sitting exactly ON a boundary at load
+      { ageTicks: bands.matureTicks },
+      // The last two crossed INSIDE this session: restored one tick SHORT of a
+      // boundary, `ageEveryone` lands them exactly on it and the equality
+      // fires. They are here rather than in a test of their own because they
+      // are what makes the four above mean anything — every assertion on those
+      // four is a silence, and a silence passes just as happily against an
+      // `announceBandChanges` deleted outright. Announced and silent colonists
+      // in ONE world on ONE tick is the only arrangement that tells the two
+      // apart.
+      //
+      // They are also what rules out a save/load DOUBLE announcement. The pair
+      // sitting exactly ON a boundary is silent because `ageEveryone` carries
+      // it to `boundary + 1` before the phase runs — not because the phase is
+      // dead, which these two now prove — so a colonist announced on the tick
+      // it crossed, saved, and reloaded is not announced a second time.
+      //
+      // Homeless (`homeId: null`) so the four above keep the house's four beds
+      // and no over-capacity eviction runs: this fixture is about bands.
+      { ageTicks: bands.retireTicks - 1, homeId: null },
+      { ageTicks: bands.matureTicks - 1, homeId: null },
+    ]);
+    expect(isLoadableSave(save)).toBe(true); // accepted, then repaired — see above
+    const world = await createColonyWorld(save);
+    const seeded = world.getResource(SnapshotStore).latest!;
+    // fixture precondition: the two crossers have NOT crossed yet at load
+    expect(seeded.colonists.map((c) => c.stage)).toEqual(['elder', 'adult', 'elder', 'adult', 'adult', 'child']);
+    expect(seeded.notices).toEqual([]); // and nothing is announced AT load, crossers included
+
+    // Several ticks, not one: an inequality in place of the equality would
+    // re-announce all four on EVERY tick, which a single step could not tell
+    // apart from a one-off announcement at load — and would re-announce the
+    // two crossers every tick after their own, which is the same defect seen
+    // from the other side.
+    const perTick: string[][] = [];
+    for (let i = 0; i < 3; i++) {
+      await stepTick(world);
+      perTick.push(world.getResource(SnapshotStore).latest!.notices.map((n) => n.message));
+    }
+    expect(perTick).toEqual([
+      ['Colonist #6 retired.', 'Colonist #7 came of age.'], // ids 6 and 7 — the crossers, and ONLY them
+      [],
+      [],
+    ]);
+  });
+
   it('does not restore a colonist whose saved age has passed their OWN lifespan', async () => {
     // The third instance of the same rule, and the one clampedAge cannot
     // reach: it bounds a restored age to MAX_AGE_TICKS, the LONGEST lifespan
@@ -1334,9 +1392,13 @@ describe('live-world projections agree', () => {
   // `commuteTiles` and `commuteFactor` stay, for the FIRST reason: they are
   // recomputed every tick from two entities' live positions, exactly like
   // `efficiency` and `stage`, so there is nothing to persist.
+  // `deliveredWorkPower` (OBS-6-06) joined them for the same reason, one step
+  // removed: it IS `workerWorkPower(efficiency, toolTicks, commuteFactor)`, so
+  // anything that makes `efficiency` or `commuteFactor` unpersistable makes
+  // this one too — there is no independent state in it to save.
   const DERIVED = [
     'efficiency', 'stage', 'haulTargetId', 'haulPhase', 'haulTicksLeft', 'haulLegTicks', 'haulPickupCol', 'haulPickupRow',
-    'carrying', 'commuteTiles', 'commuteFactor',
+    'carrying', 'commuteTiles', 'commuteFactor', 'deliveredWorkPower',
   ] as const;
 
   function persisted(workers: readonly object[]): Record<string, unknown>[] {
@@ -1446,6 +1508,93 @@ describe('live-world projections agree', () => {
     const factKeys = Object.keys(foresterOf(engine)).filter((k) => !derivedBuilding.includes(k));
     const savedKeys = Object.keys(engine.serialize().buildings[0]);
     expect(factKeys.filter((key) => !savedKeys.includes(key))).toEqual([]);
+  });
+});
+
+describe('applyRemovals', () => {
+  // The seam OBS-6-02 moved entity removal onto. End-to-end cases prove a
+  // die-off costs no ticks; these prove the two properties that make that
+  // true, at the one function that has them.
+
+  it('removes EVERY entity on the ledger in a single call, and says how many', async () => {
+    // Three at once, deliberately: batching more than one removal through
+    // sim-ecs's command queue is precisely what froze the simulation, because
+    // its runtime removal throws (harmlessly, after the fact) for any entity
+    // spawned at prep time and the sync point abandoned the rest of the batch.
+    const world = await createColonyWorld();
+    const ledger = world.getResource(RemovalLedger);
+    const colonists = [...world.getEntities()].filter((e) => e.hasComponent(Colonist));
+    expect(colonists).toHaveLength(3); // fixture precondition
+    for (const entity of colonists) ledger.remove(entity);
+
+    expect(applyRemovals(world)).toBe(3);
+    expect([...world.getEntities()].filter((e) => e.hasComponent(Colonist))).toHaveLength(0);
+    // Drained, not merely read: a second call must find nothing left to do,
+    // or a later tick would try to remove the same entities again.
+    expect(applyRemovals(world)).toBe(0);
+  });
+
+  it('re-throws when the entity is still in the world, rather than swallowing it', async () => {
+    // The tolerated throw is sim-ecs unhooking listeners that were never
+    // registered — which happens AFTER the entity is gone. A throw that
+    // leaves the entity present is something else entirely, and the silent
+    // catch at sim-ecs's own sync point is what made this defect invisible
+    // for a whole increment. This guard is the difference.
+    const ledger = new RemovalLedger();
+    ledger.remove({} as never);
+    const boom = new Error('removal genuinely failed');
+    const stubWorld = {
+      getResource: () => ledger,
+      removeEntity: () => { throw boom; },
+      hasEntity: () => true,
+    } as unknown as IRuntimeWorld;
+
+    expect(() => applyRemovals(stubWorld)).toThrow(boom);
+    // The throw took the requeue arm, so the entry is back on the ledger — the
+    // one place in the suite where a loaded ledger at teardown is correct
+    // rather than a dropped removal. Drained here so it stays a statement this
+    // test makes, checked, instead of an exemption the teardown guard
+    // (tests/support/removal-guard.ts) would have to carry. The full retention
+    // property, including the entries the throw never reached, is the next case.
+    expect(ledger.drain()).toHaveLength(1);
+  });
+
+  it('keeps the failed removal and the ones after it on the ledger when a detachment throws', async () => {
+    // The re-throw arm above is the ONLY way out of applyRemovals other than
+    // returning, and `drain()` empties the ledger before the first detach — so
+    // a throw on entry two used to discard entry two AND entry three with it.
+    // GameEngine.runStep catches and pauses; start() clears the error and
+    // resumes; so those removals were gone permanently and nothing would ever
+    // try them again. The case is defensive — sim-ecs 0.6.4 deletes before it
+    // throws, so `hasEntity` is false and detach swallows it — which is why
+    // the failure has to be staged rather than provoked.
+    const world = await createColonyWorld();
+    const colonists = [...world.getEntities()].filter((e) => e.hasComponent(Colonist));
+    expect(colonists).toHaveLength(3); // fixture precondition: enough for a middle entry
+    for (const entity of colonists) world.getResource(RemovalLedger).remove(entity);
+
+    // The shape detach re-throws on, staged on the real world: removeEntity
+    // throws for ONE entity and leaves it in place. Every other entity goes
+    // through sim-ecs's own removeEntity, including its harmless post-delete
+    // throw, so the entries either side are removed for real.
+    const mutable = world as IRuntimeWorld & { removeEntity(entity: unknown): void };
+    const real = mutable.removeEntity.bind(world);
+    const boom = new Error('removal genuinely failed');
+    mutable.removeEntity = (entity: unknown) => {
+      if (entity === colonists[1]) throw boom;
+      real(entity);
+    };
+
+    expect(() => applyRemovals(world)).toThrow(boom);
+    expect(world.hasEntity(colonists[0])).toBe(false); // the one that got through, gone
+    expect(world.hasEntity(colonists[1])).toBe(true);  // the one that threw, still here
+    expect(world.hasEntity(colonists[2])).toBe(true);  // never even visited
+
+    // The assertion this test exists for: BOTH survivors are still queued, so
+    // the next tick finishes the job instead of leaving them alive forever.
+    mutable.removeEntity = real;
+    expect(applyRemovals(world)).toBe(2);
+    expect([...world.getEntities()].filter((e) => e.hasComponent(Colonist))).toHaveLength(0);
   });
 });
 

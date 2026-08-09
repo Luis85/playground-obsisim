@@ -1,15 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import type { IEntity, IPreptimeWorld, IRuntimeWorld } from 'sim-ecs';
 import type { TileRef } from '../../../src/shared/placement';
-import { Building, HaulTrip, JobAssignment, OutputBuffer, Colonist } from '../../../src/engine/components';
+import { Building, HaulTrip, Home, JobAssignment, OutputBuffer, Colonist } from '../../../src/engine/components';
 import { IdCounter, Stockpile } from '../../../src/engine/resources';
 import { BALANCE } from '../../../src/engine/content/balance';
 import { BUILDINGS } from '../../../src/engine/content/buildings';
 import { HaulSystem, haulerCapacity } from '../../../src/engine/systems/haul-system';
 import { CommandSystem } from '../../../src/engine/systems/command-system';
+import { PopulationSystem } from '../../../src/engine/systems/population-system';
 import { campAdjacentFreeTile, enqueue } from '../fixtures';
 import {
-  buildColonyPrepWorld, createColonyWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist, type TColonySystemFactory,
+  applyRemovals, buildColonyPrepWorld, createColonyWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist,
+  type TColonySystemFactory,
 } from '../../../src/engine/world';
 import { buildSaveFromWorld } from '../../../src/engine/game-engine';
 
@@ -55,7 +57,20 @@ async function setup(
   const homeId = houseHaulers ? spawnHaulerHouse(prep, ids, specs) : null;
   const haulers: IEntity[] = Array.from({ length: haulerCount }, () => spawnColonist(prep, ids, { hauling: true, homeId }));
   const world = await prep.prepareRun();
-  const step = async (times: number) => { for (let i = 0; i < times; i++) await world.step(); };
+  // The drain is not optional here, for the same reason it is not optional in
+  // command-system.test.ts's `ticker`: three cases below hand this helper a
+  // `CommandSystem` and demolish the building a hauler is walking to, and since
+  // OBS-6-02 a demolition only goes onto `RemovalLedger` — `applyRemovals` is
+  // the one thing that takes it off. Without it the "demolished" forester stood
+  // in the world for the whole run with its buffer emptied, and all three cases
+  // passed against that ghost.
+  //
+  // The drain ALONE, not `stepTick`: stepTick also refreshes the snapshot's
+  // entity sections, and this file asserts on live components rather than on a
+  // published snapshot, so the refresh would be work with nothing reading it.
+  const step = async (times: number) => {
+    for (let i = 0; i < times; i++) { await world.step(); applyRemovals(world); }
+  };
   return { world, buildings, haulers, step, stockpile: world.getResource(Stockpile) };
 }
 
@@ -296,6 +311,54 @@ describe('HaulSystem', () => {
     expect(stockpile.get('wood')).toBe(2 * reduced);
   });
 
+  // OBS-6-07 path 2. `homeTileOf` falls back to `PendingChanges.tileOf` for a
+  // home the `buildings` query cannot see yet, and this is the only test that
+  // reaches it. ProductionSystem's twin of the same lookup is pinned by
+  // population-system.test.ts's 'charges a colonist housed by a same-tick
+  // construction as housed, not homeless'; this is the haulage half, and it has
+  // to assert on the LOAD, for the same reason that one asserts on the batch:
+  // the published `carrying`/commute figures are built after the post-step sync
+  // and could always see the new house, so they were never the broken reader.
+  it('a hauler housed by a construction earlier in the same tick carries a full load, not a homeless one', async () => {
+    const save = initialSave();
+    save.colonists = [];
+    save.buildings = [];
+    // 15 wood + 5 planks is one house; the wood the hauler fetches is the
+    // forester's buffer below, not this.
+    save.stockpile = { wood: 100, planks: 100 };
+    const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, PopulationSystem, HaulSystem] });
+    const ids = getPrepResource(prep, IdCounter);
+    // (3,0) is 1 tile from the camp: dispatched on tick 1, arrives on tick 2.
+    // Exactly one FULL carry in the buffer, so the two capacities are
+    // distinguishable in both directions — a reduced hauler leaves 3 behind.
+    const forester = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 3, row: 0, relocatingTicks: 0 });
+    forester.getComponent(OutputBuffer)!.add('wood', BALANCE.haulCarryCapacity);
+    // Homeless, and an ADULT: PopulationSystem is in this system list and
+    // stands down any hauler who is not one, which would end the trip instead.
+    const hauler = spawnColonist(prep, ids, {
+      hauling: true, homeId: null, ageTicks: BALANCE.lifeBands.matureTicks,
+    });
+    const world = await prep.prepareRun();
+
+    await world.step();                                       // dispatched, one tick out
+    expect(tripOf(hauler)).toMatchObject({ phase: 'outbound', ticksLeft: 1 });
+
+    // The construction lands on the ARRIVAL tick, so the same tick houses this
+    // hauler (rehome reads pending.constructed) and loads them. The tile is
+    // commute-neutral, so a correctly-resolved home scores capacity exactly
+    // haulCarryCapacity against haulerCapacity(null)'s halved figure.
+    const at = campAdjacentFreeTile([{ col: 3, row: 0 }]);
+    enqueue(world, { type: 'constructBuilding', buildingDefId: 'house', at });
+    await world.step();
+
+    // Precondition, not the point: the house went up and homing seated them.
+    expect(hauler.getComponent(Home)!.buildingId).not.toBeNull();
+    // The point. Resolved through the pending ledger, this hauler carries a
+    // full load; resolved to no tile, they would carry haulerCapacity(null).
+    expect(tripOf(hauler).amount).toBe(BALANCE.haulCarryCapacity);
+    expect(bufferOf(forester).total()).toBe(0); // and the buffer really is cleared
+  });
+
   it('a hauler housed beside the camp carries a full load, one housed far away carries less', async () => {
     // The mechanic itself, at the level a player experiences it: where you put
     // a hauler's bed changes how much they move per trip. Both ends measured,
@@ -331,7 +394,14 @@ describe('HaulSystem lifecycle', () => {
     await step(1);
     expect(tripOf(haulers[0]).phase).toBe('outbound');
     enqueue(world, { type: 'demolishBuilding', buildingId: buildings[0].getComponent(Building)!.id });
-    await step(12); // long past the arrival tick
+    await step(1);
+    // The premise the comment above claims, now checked rather than assumed:
+    // the target really did leave the world, on the tick the command landed.
+    // Until this file drained the RemovalLedger the building stood there for
+    // the whole run with only its buffer emptied, and every assertion below
+    // held against that ghost just as well — see the report for OBS-6-08.
+    expect(world.hasEntity(buildings[0])).toBe(false);
+    await step(11); // long past the arrival tick
     expect(tripOf(haulers[0]).phase).toBe('idle');
     // Demolition refunds the forester's own cost (wood: 10) same as any
     // demolition — orthogonal to the trip. None of the 9 buffered units the
@@ -354,8 +424,16 @@ describe('HaulSystem lifecycle', () => {
     await step(1);
     expect(tripOf(haulers[0])).toMatchObject({ phase: 'idle', targetId: null, ticksLeft: 0 });
     // ...and it is not re-dispatched at the ghost in that same tick: sim-ecs
-    // defers the entity removal to the post-step sync, so HaulSystem still sees
-    // the demolished building (and its 9 units) when it runs after CommandSystem.
+    // defers the entity removal past every system, so HaulSystem still sees the
+    // demolished building (and its 9 units) when it runs after CommandSystem —
+    // which is precisely why `targetId: null` above is a real assertion.
+    //
+    // The other half of that sentence, which nothing used to check: the
+    // deferral ends WITH THE TICK. `applyRemovals` takes the building out once
+    // the step resolves, so the ghost is a within-tick phenomenon rather than a
+    // permanent resident, and the idle below is measured against a target that
+    // genuinely no longer exists.
+    expect(world.hasEntity(buildings[0])).toBe(false);
     await step(1);
     expect(tripOf(haulers[0]).phase).toBe('idle');
   });
@@ -367,6 +445,13 @@ describe('HaulSystem lifecycle', () => {
     const before = stockpile.get('wood');
     enqueue(world, { type: 'demolishBuilding', buildingId: buildings[0].getComponent(Building)!.id });
     await step(1);
+    // "its source is gone" is this case's whole premise, and it was fiction:
+    // without the drain the forester stayed in the world for the rest of the
+    // run, so what the assertion below really measured was a return leg whose
+    // source was still standing with an emptied buffer. Checked first, so a
+    // regression that stops removing the building fails HERE rather than
+    // leaving the delivery assertion quietly testing something easier.
+    expect(world.hasEntity(buildings[0])).toBe(false);
     // The return leg is deliberately NOT cancelled: those units already left
     // the building, and resetting the trip would delete them.
     expect(tripOf(haulers[0])).toMatchObject({ phase: 'returning', amount: BALANCE.haulCarryCapacity });

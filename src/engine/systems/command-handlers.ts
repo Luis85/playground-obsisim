@@ -56,9 +56,8 @@ export interface CommandContext {
   claimedTiles: TileRef[];
   removals: RemovalLedger;
   pending: PendingChanges;
-  remove: (entity: Readonly<IEntity>) => void;
   /** Buildings demolished earlier in this same drain: removal is deferred to
-   * the post-step sync, so queries still see them — every lookup must not. */
+   * the post-step drain, so queries still see them — every lookup must not. */
   demolishedIds: Set<number>;
   /** Shelters as the homing phase sees them, so the bed a nomad is given and
    * the bed the gate counted come from one description. A function, not a
@@ -74,10 +73,19 @@ export interface CommandContext {
   nomadGate: () => NomadGate;
 }
 
-/** Occupancy truth for this drain: live rows plus this drain's own claims. */
+/**
+ * Occupancy truth for this drain: live rows plus this drain's own claims.
+ *
+ * Filters `ctx.demolishedIds`, the same exclusion `findBuilding` below already
+ * applies: sim-ecs defers entity removal to the post-step sync, so a building
+ * demolished earlier in this drain is still in `ctx.buildings` and its tile
+ * would otherwise still read as occupied for the rest of the drain (OBS-6-01).
+ */
 function occupiedTiles(ctx: CommandContext): TileRef[] {
   return [
-    ...ctx.buildings.map((row) => ({ col: row.position.col, row: row.position.row })),
+    ...ctx.buildings
+      .filter((row) => !ctx.demolishedIds.has(row.building.id))
+      .map((row) => ({ col: row.position.col, row: row.position.row })),
     ...ctx.claimedTiles,
   ];
 }
@@ -281,10 +289,9 @@ export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Com
     // destroy the load (mirrors handleMoveBuilding's guard below).
     if (trip.phase === 'outbound' && trip.targetId === command.buildingId) trip.reset();
   }
-  ctx.remove(found.entity);
+  ctx.removals.remove(found.entity);
   ctx.demolishedIds.add(command.buildingId);
   ctx.pending.demolished.add(command.buildingId);
-  ctx.removals.dirty = true;
   // Colonists spawned EARLIER THIS TICK are not in ctx.workers — the query
   // cannot see them until the post-step sync — so a nomad welcomed before this
   // demolition keeps a homeId pointing at the building being removed unless

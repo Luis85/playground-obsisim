@@ -11,7 +11,9 @@ vi.mock('../../src/engine/world', async (importOriginal) => {
 import { buildSaveFromWorld, GameEngine } from '../../src/engine/game-engine';
 import * as worldModule from '../../src/engine/world';
 import { createColonyWorld, initialSave, isLoadableSave } from '../../src/engine/world';
-import { HaulTrip } from '../../src/engine/components';
+import type { IEntity, IRuntimeWorld } from 'sim-ecs';
+import { Building, HaulTrip } from '../../src/engine/components';
+import { BALANCE } from '../../src/engine/content/balance';
 import { Stockpile } from '../../src/engine/resources';
 
 const refreshMock = vi.mocked(worldModule.refreshEntitySections);
@@ -24,6 +26,39 @@ const FORESTER_ID = 5;
 
 async function steps(engine: GameEngine, n: number) {
   for (let i = 0; i < n; i++) await engine.stepOnce();
+}
+
+const DETACH_FAILURE = 'detach failed with the entity still present';
+
+/**
+ * Stage the ONE shape `applyRemovals` can throw on, on a live engine's own
+ * world: `removeEntity` throws for a building AND leaves it in the world, so
+ * `detach`'s postcondition check re-throws instead of swallowing. Returns the
+ * switch that clears the failure, standing in for whatever transient condition
+ * caused it — a permanent one never leaves the paused state at all.
+ *
+ * Staged rather than provoked because the arm is UNREACHABLE against sim-ecs
+ * 0.6.4: its runtime `removeEntity` skips its whole body for an entity it does
+ * not hold, and otherwise deletes from `data.entities` as the first statement
+ * of that body — so everything that can throw runs after the delete, leaving
+ * `hasEntity` false and the throw swallowed. These two cases are therefore
+ * ordering proofs for the day a sim-ecs upgrade changes that, not live bugs.
+ *
+ * Reaches the private world the same way 'a thrown step captures the error and
+ * pauses' does, further down this file; there is no other seam, because
+ * sim-ecs assigns `removeEntity` as an OWN property per world instance
+ * (`__publicField`), so patching the prototype does nothing — verified, the
+ * prototype patch never fires.
+ */
+function stageDetachFailure(engine: GameEngine): () => void {
+  const world = (engine as unknown as { world: IRuntimeWorld & { removeEntity(entity: Readonly<IEntity>): void } }).world;
+  const real = world.removeEntity.bind(world);
+  let failing = true;
+  world.removeEntity = (entity: Readonly<IEntity>): void => {
+    if (failing && entity.hasComponent(Building)) throw new Error(DETACH_FAILURE);
+    real(entity);
+  };
+  return () => { failing = false; };
 }
 
 /** Deterministic scripted session used by both determinism tests. */
@@ -98,6 +133,49 @@ describe('GameEngine', () => {
     expect(save.buildings.find((b) => b.id === FORESTER_ID))
       .toEqual({ id: FORESTER_ID, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0 });
     expect(save.stockpile.wood).toBe(20); // cost paid AND building present
+  });
+
+  it('a save written on the tick after a die-off holds nobody the colony has already killed', async () => {
+    // OBS-6-02's third consequence, and the one a player loses data to. The
+    // autosave fires on `clock.tick % autosaveEveryTicks` INSIDE runStep, and
+    // the clock advanced across the frozen steps a multi-entity removal used
+    // to cost — so a save could land mid-freeze while colonists the snapshot
+    // had already announced dead were still live entities. serialize() walks
+    // live entities, so they went into the file: structurally valid, accepted
+    // by isLoadableSave, and killed again by the first tick after the reload
+    // (a starvation victim reloads at the threshold and dies on tick 1; an
+    // old-age victim is dropped by restore's past-own-lifespan guard and never
+    // appears at all). Nothing rejects such a save — that IS the problem, so
+    // asserting it loads would pass either way. The roster is the assertion.
+    //
+    // tick 98 so the die-off lands on 99 and the autosave boundary on 100:
+    // the first step of the freeze, back when there was one.
+    const dying = [2, 3, 4].map((id) => ({
+      id, hunger: BALANCE.hungerMax, buildingId: null, toolTicks: 0, hauling: false,
+      ageTicks: BALANCE.lifeBands.matureTicks, homeId: 1, starvingTicks: BALANCE.starvationDeathTicks - 1,
+    }));
+    const survivor = {
+      id: 5, hunger: 0, buildingId: null, toolTicks: 0, hauling: false,
+      ageTicks: 1000, homeId: 1, starvingTicks: 0,
+    };
+    const engine = await GameEngine.create({
+      ...initialSave(), tick: 98, stockpile: {}, colonists: [...dying, survivor], nextEntityId: 6,
+    });
+    const autosave = vi.fn();
+    engine.onAutosave(autosave);
+
+    await engine.stepOnce(); // tick 99
+    // Precondition, not the finding: the colony really did announce all three
+    // deaths on one tick. Without this the roster check below could pass on a
+    // tick that only ever killed one.
+    expect(engine.snapshot!.notices.map((n) => n.message))
+      .toEqual(['Colonist #2 starved.', 'Colonist #3 starved.', 'Colonist #4 starved.']);
+
+    await engine.stepOnce(); // tick 100 -> autosave fires
+    expect(autosave).toHaveBeenCalledTimes(1);
+    const written: SaveGameV5 = autosave.mock.calls[0][0];
+    expect(written.tick).toBe(100);
+    expect(written.colonists.map((c) => c.id)).toEqual([survivor.id]);
   });
 
   it('serialize before any step reflects the initial colony', async () => {
@@ -278,6 +356,63 @@ describe('GameEngine', () => {
     // linger in the published snapshot until the next id-consuming tick.
     await engine.stepOnce();
     expect(engine.snapshot!.buildings.map((b) => b.defId)).toEqual(['house']);
+  });
+
+  it('a resumed tick retries a failed removal before any system can rehome into the doomed house', async () => {
+    const engine = await GameEngine.create();
+    const clearFailure = stageDetachFailure(engine);
+    const houseId = engine.snapshot!.buildings[0].id;
+    expect(engine.snapshot!.colonists.map((c) => c.homeId)).toEqual([houseId, houseId, houseId]); // fixture precondition
+
+    engine.dispatch({ type: 'demolishBuilding', buildingId: houseId });
+    await engine.stepOnce();
+    // The demolition itself RAN — refunded, buffer emptied, residents evicted,
+    // removal queued. Only the detach failed, so the house is still standing
+    // and the entry is back on the ledger.
+    expect(engine.status.error).toBe(DETACH_FAILURE);
+    expect(engine.status.paused).toBe(true);
+    expect(engine.serialize().buildings.map((b) => b.id)).toEqual([houseId]);
+
+    clearFailure();
+    engine.start(); // the player resumes, which clears the error banner
+    engine.pause(); // ...and this kills the interval, so the step below is the only tick
+    await engine.stepOnce();
+
+    // WHAT THIS PROTECTS. Retrying only AFTER the resumed tick's systems had
+    // run put the house back into service for exactly one tick on the way out:
+    // CommandSystem clears PendingChanges.demolished at the top, so
+    // PopulationSystem read a house that was still in every query as a usable
+    // shelter and rehomed all three colonists into it — and the post-step
+    // retry then removed it out from under them. Assert on both readers that
+    // were wrong: the homeIds themselves, and the save guard that turns them
+    // into a corrupt-save backup instead of a colony.
+    const save = engine.serialize();
+    expect(save.buildings).toHaveLength(0); // the retry landed either way — precondition, not the point
+    expect(save.colonists.map((c) => c.homeId)).toEqual([null, null, null]);
+    expect(isLoadableSave(save)).toBe(true);
+  });
+
+  it('a close-save flushes a failed removal instead of writing the demolished building back to disk', async () => {
+    const engine = await GameEngine.create();
+    const clearFailure = stageDetachFailure(engine);
+    const houseId = engine.snapshot!.buildings[0].id;
+
+    engine.dispatch({ type: 'demolishBuilding', buildingId: houseId });
+    await engine.stepOnce();
+    expect(engine.status.paused).toBe(true);
+
+    // GameView.onClose, in order: pause, flush, serialize. The demolish
+    // command was CONSUMED by the failed tick, so CommandQueue is empty and a
+    // flush() that only asks about the queue finds nothing to do — the
+    // refunded, emptied house goes back to disk as though the demolition never
+    // happened, and the ledger dies with the process, so nothing ever retries.
+    clearFailure();
+    engine.pause();
+    await engine.flush();
+    const save = engine.serialize();
+
+    expect(save.buildings).toHaveLength(0);
+    expect(isLoadableSave(save)).toBe(true);
   });
 
   it('banks a hauler mid-trip load into the saved stockpile without touching the live world', async () => {

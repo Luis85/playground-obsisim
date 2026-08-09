@@ -29,7 +29,14 @@ export interface BuildingSnapshot {
   progressPct: number;
   /** Assigned workers whose tool coverage is currently active. */
   tooledWorkers: number;
-  /** Effective work per tick: sum of assigned worker efficiencies x per-worker tool multiplier. */
+  /**
+   * Effective work per tick: the sum of this building's assigned workers'
+   * `deliveredWorkPower` — efficiency x tool multiplier x commute factor,
+   * each. Zero while `relocatingTicks > 0`: ProductionSystem skips a
+   * relocating building before it ever reads work power, so a crew mid-move
+   * banks nothing, and this column sits beside State in the same table row —
+   * a non-zero rate there would contradict the state next to it.
+   */
   workPower: number;
   /** Units waiting in this building's output buffer for a hauler. */
   buffered: number;
@@ -107,6 +114,31 @@ export interface ColonistSnapshot {
    * source of truth for a number the simulation has already spent.
    */
   commuteFactor: number;
+  /**
+   * This colonist's own share of `workerWorkPower(efficiency, toolTicks,
+   * commuteFactor)` — the exact expression `buildEntitySections` already sums
+   * into `BuildingSnapshot.workPower` for the building they're assigned to.
+   * Published per colonist rather than left for a view to recompute (that
+   * would be a third copy of an expression two engine call sites already
+   * share — see workerWorkPower's own doc comment), so the Population view
+   * can show the number that actually reflects hunger, a lapsed tool AND a
+   * bad commute together, not `efficiency` alone: a colonist can read 100%
+   * there while a commute cuts what they actually deliver in half (OBS-6-06).
+   *
+   * Null, not 0, when this colonist is not assigned to a building: an idle
+   * colonist and a hauler both have `buildingId === null`, and a hauler's
+   * throughput is carried capacity, not work power (`haulerCapacity`,
+   * HaulSystem charges their commute separately) — 0 would claim they
+   * deliver nothing, which is true for the idle case but wrong for the
+   * hauling one. Null reads the same as it does for `commuteTiles`: this
+   * number does not apply here, rather than having been measured at zero.
+   *
+   * 0, not null, when the building they are assigned to is relocating: they
+   * are assigned, work power is their unit, and ProductionSystem spends
+   * exactly none of it while the move runs. See `deliveredWorkPowerOf` for
+   * the one-tick overstatement that boundary keeps on the landing tick.
+   */
+  deliveredWorkPower: number | null;
 }
 
 export interface ResourceStats {

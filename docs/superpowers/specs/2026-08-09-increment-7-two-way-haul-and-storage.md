@@ -649,7 +649,12 @@ than re-litigates:
   camp-to-target walk it is not walking. That is precisely the OBS-5-01 failure — a leg length
   disagreeing with the leg the sim is actually running — and it desyncs the
   drawn dot the same way, since the renderer derives its position from
-  `legTicks`. Use `haulTicksBetween(the leg's frozen origin, new tile, …)`.
+  `legTicks`. Measure from **where the hauler actually is**, not from the leg's
+  frozen origin: derive its current position from the leg's endpoints and
+  `legProgress`, freeze *that* as the new origin, and price only the remaining
+  walk. Measuring from the original origin re-charges the distance already
+  covered and jumps the drawn dot backwards — the same defect, in the opposite
+  direction, as the one this bullet exists to fix.
 - **A hauler `fetching` from a store that stops being one** simply cancels,
   the same way an outbound trip cancels when its building is demolished:
   nothing has been picked up yet, so there is nothing to dispose of and the
@@ -724,10 +729,19 @@ would put haulage before production and cost a tick on the output side instead
   for `buffer` today.
 - **`HaulTrip` still never enters the save.** A hauler caught mid-trip banks
   its load into the camp, whichever kind of trip it was and whichever leg it
-  was on, and stands at the camp on load. This
-  is increment 4's deliberate simplification, unchanged: conservation is exact,
-  the trip needs no guard or migration, and job selection is deterministic from
-  persisted state, so a reloaded colony resumes identically.
+  was on, and stands at the camp on load. This is increment 4's deliberate
+  simplification, unchanged: conservation is exact and the trip needs no guard
+  or migration.
+
+  **It does not mean the colony resumes identically**, and an earlier draft of
+  this paragraph claimed it did. Increment 4 could promise that because the
+  camp was the only site, so "everyone at the camp" *was* the state; with
+  several sites a colony saved with an idle hauler beside a depot, or with
+  cargo in flight, comes back with different claims and different travel times.
+  §2.5 states the three guarantees that do survive — exact conservation, every
+  site's stock still reachable, and work resuming within a bounded number of
+  ticks — and acceptance criterion 5 is scoped to identical *live* world state
+  for the same reason.
 
 ### 2.10 Snapshot and surfaces
 

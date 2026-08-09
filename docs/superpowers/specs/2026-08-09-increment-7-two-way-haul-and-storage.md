@@ -553,9 +553,21 @@ here and the four claims below all follow from it:
   wheat.
 - **destination room**, against a bounded site's capacity, held in
   `destSiteId`: this is what makes a load fit on arrival rather than needing a
-  rule for when it does not. It binds *every* bank at that site, including a
-  cancellation's `refundAt` — which has no hauler behind it and so takes the
-  last-resort route to the camp when it does not fit.
+  rule for when it does not. It binds *every* bank at that site, a
+  cancellation's `refundAt` included — a refund landing in space another hauler
+  is already walking toward leaves that hauler arriving with a load that no
+  longer fits, which is the split-and-forward reservation exists to remove.
+
+  **Honouring it is the caller's job, not the banking call's.** `addAt` and
+  `refundAt` see a site's *physical* contents and know nothing of what has been
+  promised, and giving them reservation awareness would mean teaching the
+  ledger about haul trips — which the rest of this design keeps out of it. So
+  every caller resolves its destination through `nearestSiteWithRoom(…,
+  heldAt, amount)` with the **same reservation-aware `heldAt`** dispatch uses,
+  and banks only into what that returns. The camp's unbounded capacity is what
+  makes that resolution always succeed, and a refund that still cannot fit
+  takes the last-resort route there — correct precisely because no hauler is
+  left to walk it anywhere.
 
 ### 2.7 Goods, and the buildings that hold them
 

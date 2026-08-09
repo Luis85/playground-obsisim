@@ -371,8 +371,10 @@ homing → births**. Homing precedes births so §2.6's free-bed test is
 meaningful, and deaths precede homing so a bed freed this tick is reusable this
 tick. Band notices (§2.2) follow the deaths for the same kind of reason — a
 colonist who starves on the very tick they cross a band is not also announced
-as retiring — and follow the retirements so "retired" is published once the job
-slot it names is already free.
+as retiring. They also follow the retirements, but that half is only
+legibility: the notice then reads as a report on a settled fact, and its one
+observable effect is the order of two messages within a tick, which nothing
+depends on.
 
 ### 2.10 Save v5
 

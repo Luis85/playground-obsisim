@@ -81,9 +81,12 @@ export const PopulationSystem = () => createSystem({
     resolveOldAge(ctx);
     resolveStarvation(ctx);
     standDownNonAdults(ctx);
-    // After the stand-down, not before: the notice reports a settled fact, so
-    // "retired" is published once the job slot it freed is already free. After
-    // the deaths for a load-bearing reason — see announceBandChanges.
+    // AFTER THE DEATHS is the load-bearing half, and it is pinned by a test:
+    // a colonist who starves on the very tick they cross a band must not also
+    // be announced as retiring. Sitting after the stand-down rather than
+    // before it is only legibility — the notice then reads as a report on a
+    // settled fact — and its one observable effect is the order of two
+    // messages within a tick, which nothing depends on.
     announceBandChanges(ctx);
     rehome(ctx);
     // Births LAST, after homing, so "a free bed exists" and "nobody is

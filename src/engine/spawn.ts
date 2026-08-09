@@ -103,14 +103,14 @@ export function clampedBuffer(saved: Partial<Record<ResourceId, number>>, cap: n
  * goes through, the same way `OutputBuffer` goes through `clampedBuffer`
  * directly with `BALANCE.outputBufferCap`.
  *
- * Its only caller today is `buildingComponents` below, in this same file —
+ * Its only caller is `buildingComponents` below, in this same file —
  * `InputBuffer` isn't part of the save format yet (Task 3 doesn't persist
  * it), so unlike `clampedBuffer` there is no `initial-snapshot.ts` restore
- * path to share it with. Exported anyway, per this task's own interface
- * list, for the save-format task that eventually gives it one.
+ * path to share it with. Not exported: nothing outside this file uses it
+ * today, and a save-format task that gives it a second caller can export it
+ * then.
  */
-// fallow-ignore-next-line unused-export
-export function clampedInputBuffer(saved: Partial<Record<ResourceId, number>>): Map<ResourceId, number> {
+function clampedInputBuffer(saved: Partial<Record<ResourceId, number>>): Map<ResourceId, number> {
   return clampedBuffer(saved, BALANCE.inputBufferCap);
 }
 

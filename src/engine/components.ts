@@ -166,13 +166,15 @@ export class InputBuffer extends ResourceBuffer {
    * no inputs, where every ratio is undefined) break by catalog order, so a
    * hauler's choice and any UI preview can only ever derive it one way.
    *
-   * `room`, `add` and this method have no caller yet — a hauler that fills an
-   * `InputBuffer` is Task 6's supply leg — the same forward-declared-interface
-   * situation as `RemovalLedger.requeue`/`size` (src/engine/resources.ts):
-   * kept here now so `HaulSystem` and any UI preview cannot derive the choice
-   * differently once they exist, rather than added piecemeal later.
+   * `room` and `add` have no caller yet — a hauler that fills an `InputBuffer`
+   * is Task 6's supply leg — but this method does not wait for that caller to
+   * exist: it is unit-tested directly (tests/engine/components.test.ts), the
+   * same way `fullestResource` is exercised by HaulSystem's tests, so the
+   * ratio-vs-absolute choice and its catalog-order tie-break both ship with
+   * real coverage rather than a dead-code suppression. Kept here now so
+   * `HaulSystem` and any UI preview cannot derive the choice differently once
+   * they exist, rather than added piecemeal later.
    */
-  // fallow-ignore-next-line unused-class-member
   shortestOf(recipe: RecipeDef, order: readonly ResourceId[]): ResourceId | null {
     let best: ResourceId | null = null;
     let bestRatio = Infinity;

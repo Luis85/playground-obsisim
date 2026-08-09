@@ -42,6 +42,7 @@
 - **Commit by pathspec** (`git commit <path> -m …`), never `git add` + bare `git commit`. A new file needs one `git add` immediately before its commit.
 - **Systems must be listed in `ALL_SYSTEMS` order** — `buildColonyPrepWorld` throws otherwise. This increment does not add or reorder a system.
 - **Balance constants live only in `src/engine/content/balance.ts`.** Shared law takes them as parameters — `src/shared/**` may import nothing outside itself. This is why `haulTicks` takes `tilesPerTick` and why `nearestSiteWithRoom` takes an occupancy lookup rather than reaching for `Stockpile`.
+- **Goods are carried, never teleported.** That is the sentence increment 4 shipped half of and this one finishes, so it applies to the increment's own machinery too: Task 2's forward-to-camp guarantee exists for paths where **no hauler remains to do the walking** (a cancellation, a stand-down, a load-time spill), not as the ordinary overflow route. A hauler that finds its destination full carries on to the next one. Free depot-to-camp transport would flatter §4 q2, which is measuring whether a depot pays for itself.
 - **Conservation is the invariant this increment can most easily break.** Goods now exist in four places (camp, storehouse, input buffer, output buffer) plus a hauler's hands. Every cancellation path — demolition, relocation, unassignment, a target that vanished — must put a carried load *somewhere*. Prefer `refundAt` over `addAt` for anything a hauler did not actually complete a delivery of, or the Economy view's `Delivered/t` inflates for goods nobody hauled. Task 2's two banking invariants exist so that "somewhere" cannot be nowhere: a bank never partially fails, and no ledger site can outlive the building behind it. **Assert on a colony-wide total, not on the field you just wrote** — the total is what a player would notice being violated, and it is what a future refactor cannot accidentally satisfy.
 - `npm run check:all` must be green at the end of every task. Run `rm -rf coverage` first: `check:quality` hard-fails if `coverage/` exists.
 - **A raw `await world.step()` does NOT refresh the snapshot's entity sections.** Use `stepTick` from `tests/engine/fixtures.ts` in any test that asserts on entities appearing or disappearing.
@@ -620,7 +621,18 @@ const arrive = (trip: HaulTrip, row: BuildingRow, capacity: number): void => {
 
 The `trip.amount === 0` guard is load-bearing and not an optimisation: a hauler still holding an undelivered remainder must carry *that* home rather than mixing two resources in one pair of hands, which `HaulTrip` has no room to represent.
 
-The deposit handler resolves `destSiteId` **on arrival**, not at dispatch: a storehouse can be demolished or sent into transit mid-leg, and the load then goes to the camp (§2.7). It banks with `addAt` when `trip.pickedUp` and `refundAt` when not.
+The deposit handler re-resolves the destination **on arrival**, not at dispatch — a depot can fill, be demolished, or go into transit while a hauler walks to it. If the resolved site is where the hauler is standing, bank there (`addAt` when `trip.pickedUp`, `refundAt` when not). **If it is somewhere else, start a fresh `returning` leg to it** rather than banking remotely:
+
+```ts
+// The load must be CARRIED to wherever it ends up. Task 2's forward-to-camp
+// guarantee is the last resort for paths with no hauler left to walk (a
+// cancellation, a stand-down, a load-time spill) — using it here would
+// teleport goods from a full depot to the camp while the hauler stands at the
+// depot, and §4 q2 is measuring exactly whether a depot pays for itself.
+if (dest.id !== siteUnderfoot.id) { startReturnLeg(trip, from, dest); return; }
+```
+
+The camp is unbounded, so the walk terminates. The test asserts the *ticks*, not only that the goods reached the camp — an arrival-count assertion passes for a teleport, which is the whole thing this rule prevents.
 
 - [ ] **Step 3b: Rebasing — the rule without which §2.5 deadlocks**
 
@@ -863,6 +875,15 @@ it('every ledger site other than the camp names a building in the save', () => {
   // savedBuildingOf walks buildings — so its goods would vanish silently. Four
   // lines, and it catches the whole class rather than the one path that
   // produced it. Run it over a colony that has been through a demolition.
+});
+
+it('save and load conserves everything and the colony resumes work', () => {
+  // NOT tick-identical resumption — that was an overclaim and is now false.
+  // A colony saved with a hauler based at a depot comes back with everyone at
+  // the camp, so claims, travel times and site distribution all differ. What
+  // IS guaranteed, and what this asserts: total goods unchanged across the
+  // cycle, every site's stock still reachable, and delivery resuming within a
+  // bounded number of ticks.
 });
 
 it('a hauler mid-supply-trip banks its load at the camp and stands there on load', () => {

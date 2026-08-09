@@ -207,6 +207,17 @@ every way of getting them wrong loses goods silently:
    and the ones most likely to forget are the cancellation paths (§2.7), which
    run once in a rare branch and are exactly where a dropped remainder would go
    unnoticed.
+
+   **This is a last resort, not the normal overflow path**, and the difference
+   matters for measurement rather than for conservation. Goods forwarded this
+   way move without anyone walking them — so a hauler arriving at a depot that
+   filled while it walked must *carry on to the camp* (§2.5 step 3), not have
+   its load teleported there while it stands at the depot. §1.1 promises
+   overflow "walks on to the camp" and it should be literally true: §4 q2 asks
+   whether a depot pays for itself, and free depot-to-camp transport would
+   flatter exactly the number being measured. The forward-to-camp guarantee is
+   what catches the cases where **no hauler remains to do the walking** — a
+   cancelled trip, a stand-down, a load-time spill.
 2. **No site entry may exist without a live building behind it.** This is why
    both take a resolved `StoreSite` rather than a bare id: a `StoreSite` can
    only come from `storeSitesOf` (§2.3), which returns only live, non-relocating
@@ -300,11 +311,29 @@ split of hauler-ticks across all three outcomes.
 This is **not** storehouse-to-storehouse transfer (§2.13): no goods move, a
 hauler does.
 
-Given this, `atSiteId` still stays out of the save. A reloaded colony
-re-derives its haulers' bases from world state within a few ticks instead of
-persisting a field, which is exactly the property increment 4 claimed for haul
-state and now actually holds: *job selection is deterministic from persisted
-state, so a reloaded colony resumes identically.*
+Given this, `atSiteId` still stays out of the save — but **not** because a
+reloaded colony resumes identically, which is a claim this spec made in an
+earlier draft and which is false. It cannot: §2.9 puts every hauler at the camp
+with its cargo banked there, so a colony saved with a hauler based at a depot,
+or mid-trip, comes back with different claims, different travel times and a
+different distribution across sites, and rebasing reconstructs *a* sensible
+base a few ticks later rather than the one it had.
+
+Increment 4 could promise identical resumption because there was one site, so
+"everyone at the camp" *was* the state. With several sites that promise is
+gone, and what remains is worth stating precisely because it is what the tests
+should check:
+
+- **conservation is exact** — not one unit is created or destroyed across a
+  save and load, wherever it was standing or being carried;
+- **the colony converges** — every site's stock stays reachable, and work
+  resumes within a bounded number of ticks rather than stalling;
+- **determinism still holds within a run** — identical world state yields
+  identical claims, which is the property job selection actually guarantees.
+
+That is a weaker guarantee than increment 4's, honestly stated, and it is
+bought in exchange for keeping `HaulTrip` out of the save format and its guards
+entirely — increment 4's own trade, still worth making.
 
 A trip is still exactly two legs, and the **return leg is identical for both
 kinds**, which is what keeps this a small change to `HaulSystem` rather than a
@@ -328,11 +357,15 @@ second system:
      moved mid-trip charges the walk actually walked — the existing rule), and
      `legTicks` / `pickupCol` / `pickupRow` frozen here exactly as today
      (OBS-5-01).
-3. **Returning** → decrement. On arrival, bank the load at the destination —
-   `addAt` when `pickedUp`, `refundAt` when not (§2.4). A destination that
-   filled, or stopped being a site, while the hauler walked does not drop the
-   load: §2.4's first invariant forwards it to the camp. Set `atSiteId` to the
-   destination actually used, reset the trip to `idle`.
+3. **Returning** → decrement. On arrival, **re-resolve the destination** — a
+   depot can fill, be demolished, or go into transit while a hauler walks to
+   it. If the resolved destination is the tile the hauler is standing on, bank
+   the load there (`addAt` when `pickedUp`, `refundAt` when not — §2.4), set
+   `atSiteId`, and go `idle`. **If it is somewhere else, the hauler walks on**:
+   a fresh `returning` leg to the newly resolved site, with `legTicks` and the
+   pickup tile re-frozen from where it now stands. It carries its load the
+   whole way, so nothing arrives anywhere it was not carried, and the camp
+   being unbounded means the walk terminates.
 
 A hauler therefore migrates naturally to wherever the work is: deposit at a
 remote storehouse and you are standing at it next tick, ready to supply the
@@ -372,7 +405,16 @@ claimant (below): buildings with unclaimed buffered output, ordered by
 - the resource it is shortest of (ties by catalog order, mirroring
   `OutputBuffer.fullestResource`) is held at **this hauler's** site;
 - `movable = min(capacity, inputBufferCap − inputBuffered, held at this site)`
-  is at least `BALANCE.minSupplyUnits`.
+  is at least `BALANCE.minSupplyUnits`, **or is everything that site holds of
+  that resource**. Without the second clause the threshold strands the tail:
+  every recipe today consumes one unit per batch, so a depot holding exactly
+  one flour can feed a bakery but can never produce a candidate, and with no
+  store-to-store transfer that unit sits there for the rest of the game while
+  the ledger and the UI keep counting it. The threshold exists to stop a
+  thirteen-tile walk for a *top-up*, not to make the last of something
+  unusable. (It is only unusable to production — `pay` still spends it on
+  construction and meals, since that draws across all sites — which is why this
+  is a wart rather than a hole, and why one clause is the right size of fix.)
 
 Ordered by `movable` descending, then nearest to the hauler's site, then lowest
 building id.
@@ -636,6 +678,16 @@ tables, the promise made in increment 3 §1.1 and kept ever since:
   - **an unstaffed processor is never supplied**, while an identical staffed
     one beside it is — two buildings, one fixture, and the difference is the
     assertion;
+  - **a depot holding one unit still supplies it**, while a depot holding one
+    unit *and* being topped up past the threshold behaves as before;
+  - **a hauler arriving at a depot that filled while it walked carries on to
+    the camp**, and the ticks it takes are the depot-to-camp walk — asserting
+    only that the goods reached the camp would pass for a teleport, which is
+    the thing this rule exists to prevent;
+  - **save and load guarantees exactly what §2.5 now claims**: conservation
+    across the cycle, every site's stock still reachable, and work resuming
+    within a bounded number of ticks. Not tick-identical resumption — that is
+    no longer true and the test must not assert it;
   - a storehouse demolished with goods inside — `colonyWealth` is unchanged
     across the tick, which is the assertion that actually tests §2.7;
   - the deadlock §2.6 argues away: a colony whose ledger is empty and whose

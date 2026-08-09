@@ -29,7 +29,14 @@ export interface BuildingSnapshot {
   progressPct: number;
   /** Assigned workers whose tool coverage is currently active. */
   tooledWorkers: number;
-  /** Effective work per tick: sum of assigned worker efficiencies x per-worker tool multiplier. */
+  /**
+   * Effective work per tick: the sum of this building's assigned workers'
+   * `deliveredWorkPower` — efficiency x tool multiplier x commute factor,
+   * each. Zero while `relocatingTicks > 0`: ProductionSystem skips a
+   * relocating building before it ever reads work power, so a crew mid-move
+   * banks nothing, and this column sits beside State in the same table row —
+   * a non-zero rate there would contradict the state next to it.
+   */
   workPower: number;
   /** Units waiting in this building's output buffer for a hauler. */
   buffered: number;
@@ -125,6 +132,11 @@ export interface ColonistSnapshot {
    * deliver nothing, which is true for the idle case but wrong for the
    * hauling one. Null reads the same as it does for `commuteTiles`: this
    * number does not apply here, rather than having been measured at zero.
+   *
+   * 0, not null, when the building they are assigned to is relocating: they
+   * are assigned, work power is their unit, and ProductionSystem spends
+   * exactly none of it while the move runs. See `deliveredWorkPowerOf` for
+   * the one-tick overstatement that boundary keeps on the landing tick.
    */
   deliveredWorkPower: number | null;
 }

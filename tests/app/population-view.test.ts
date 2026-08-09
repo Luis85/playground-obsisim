@@ -165,6 +165,10 @@ describe('PopulationView', () => {
         }),
         makeWorker(3, { buildingId: null, hauling: false, deliveredWorkPower: null }),
         makeWorker(4, { buildingId: null, hauling: true, deliveredWorkPower: null }),
+        // Assigned to a building that is mid-relocation: ProductionSystem
+        // skips it, so this is a MEASURED zero, not the "does not apply" the
+        // two rows above carry. The two must not render the same.
+        makeWorker(5, { buildingId: 10, efficiency: 1, homeId: 9, commuteTiles: 0, commuteFactor: 1, deliveredWorkPower: 0 }),
       ],
     });
     await wrapper.vm.$nextTick();
@@ -184,6 +188,15 @@ describe('PopulationView', () => {
     // — "—" states that plainly rather than a misleading "0.00".
     expect(wrapper.get('[data-test="delivered-3"]').text()).toBe('—');
     expect(wrapper.get('[data-test="delivered-4"]').text()).toBe('—');
+
+    // A relocating workplace is the other side of that distinction, and the
+    // reason the snapshot publishes 0 there rather than null: this colonist IS
+    // waiting on a building, and what they deliver to it is nothing. Printing
+    // the same em dash as rows 3 and 4 would say "not applicable" about the
+    // single worst per-colonist figure the column can carry — the exact
+    // failure OBS-6-06 was raised for on the homeless row.
+    expect(wrapper.get('[data-test="delivered-5"]').text()).toBe('0.00');
+    expect(wrapper.get('[data-test="efficiency-5"]').text()).toBe('100%');
   });
 
   it('flags a starving colonist with a countdown, and leaves the others alone', async () => {

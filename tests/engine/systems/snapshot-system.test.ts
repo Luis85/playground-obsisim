@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { Building, OutputBuffer } from '../../../src/engine/components';
+import { Building, OutputBuffer, Production } from '../../../src/engine/components';
 import { IdCounter, NoticeBoard, SnapshotStore } from '../../../src/engine/resources';
 import { HaulSystem } from '../../../src/engine/systems/haul-system';
+import { ProductionSystem } from '../../../src/engine/systems/production-system';
 import { SnapshotSystem } from '../../../src/engine/systems/snapshot-system';
 import { BALANCE } from '../../../src/engine/content/balance';
 import { buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist } from '../../../src/engine/world';
-import { campAdjacentFreeTile } from '../fixtures';
+import { campAdjacentFreeTile, stepTick } from '../fixtures';
 
 describe('SnapshotSystem', () => {
   it('projects a complete snapshot', async () => {
@@ -272,6 +273,105 @@ describe('SnapshotSystem', () => {
     const world = await prep.prepareRun();
     await world.step();
     expect(world.getResource(SnapshotStore).latest!.buildings[0].state).toBe('relocating');
+  });
+
+  /**
+   * A relocating workplace and an identical unmoved one, side by side, both
+   * staffed and both housed on their own tile so the commute factor is 1.0 for
+   * everybody. The unmoved twin is the control that makes these tests
+   * discriminating rather than merely red: same def, same crew, same zero-tile
+   * commute, so a gate that zeroed every colonist fails on its row.
+   *
+   * ProductionSystem runs alongside SnapshotSystem deliberately. The relocation
+   * countdown lives in THAT system and is decremented in the same arm that
+   * skips the work, so only a world running it publishes the real
+   * post-decrement `relocatingTicks` the snapshot has to be read against.
+   */
+  async function relocationFixture(movingTicks: number) {
+    const save = initialSave();
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
+    save.stockpile = {};
+    const prep = buildColonyPrepWorld({ save, systems: [ProductionSystem, SnapshotSystem] });
+    const ids = getPrepResource(prep, IdCounter);
+    const moving = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: movingTicks });
+    const still = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 8, row: 1, relocatingTicks: 0 });
+    const movingId = moving.getComponent(Building)!.id;
+    const stillId = still.getComponent(Building)!.id;
+    // Housed AT their workplace: 0 tiles, factor 1.0 exactly, so every number
+    // below is a whole worker-tick and a commute could not be mistaken for the
+    // relocation gate.
+    spawnColonist(prep, ids, { id: 1, buildingId: movingId, homeId: movingId });
+    spawnColonist(prep, ids, { id: 2, buildingId: stillId, homeId: stillId });
+    const world = await prep.prepareRun();
+    return {
+      world, movingId, stillId,
+      progressOf: (entity: typeof moving) => entity.getComponent(Production)!.progress,
+      moving, still,
+      snap: () => world.getResource(SnapshotStore).latest!,
+    };
+  }
+
+  it('publishes zero delivered work power for a crew whose building is mid-move', async () => {
+    // The defect: ProductionSystem `continue`s past a relocating building
+    // before it ever looks work power up, so its crew bank nothing — while the
+    // snapshot gated only on `buildingId === null` and printed them a full
+    // 1.00, and summed that same 1.00 into the building's own workPower. That
+    // is the mechanism/display disagreement OBS-6-06 exists to expose, in the
+    // column added to expose it, plus its pre-existing building-level twin.
+    const { world, movingId, stillId, progressOf, moving, still, snap } = await relocationFixture(3);
+    await stepTick(world);
+
+    // The mechanism first: nothing was banked at the moving building, a whole
+    // worker-tick was banked at its twin.
+    expect(progressOf(moving)).toBe(0);
+    expect(progressOf(still)).toBeCloseTo(1, 5);
+
+    const byId = (id: number) => snap().colonists.find((c) => c.id === id)!;
+    const building = (id: number) => snap().buildings.find((b) => b.id === id)!;
+    expect(byId(1).deliveredWorkPower).toBe(0);
+    expect(building(movingId).workPower).toBe(0);
+    // The control: identical in every respect except the move.
+    expect(byId(2).deliveredWorkPower).toBeCloseTo(1, 5);
+    expect(building(stillId).workPower).toBeCloseTo(1, 5);
+
+    // 0, NOT null: they are assigned and work power is their unit, so this is
+    // a measured zero, not the hauler's "does not apply". Null would render as
+    // the same em dash an idle colonist gets and re-hide the stall.
+    expect(byId(1).deliveredWorkPower).not.toBeNull();
+    // And the crew is still counted as staffing it — they are assigned, just
+    // not working. Zeroing the head count would be a different, wrong claim.
+    expect(building(movingId).workers).toBe(1);
+    expect(building(movingId).relocatingTicks).toBe(2); // 3, decremented once by the skip
+  });
+
+  it('overstates by exactly one tick on the landing tick, and is exact read forwards', async () => {
+    // The known limit of gating on a POST-decrement `relocatingTicks`, pinned
+    // rather than left to a comment. ProductionSystem skips and decrements in
+    // the same arm and the snapshot is published after, so on the tick that
+    // counts 1 down to 0 the work is genuinely skipped while nothing in the
+    // snapshot says the building was ever in flight.
+    const { world, movingId, progressOf, moving, snap } = await relocationFixture(1);
+    await stepTick(world);
+
+    expect(progressOf(moving)).toBe(0); // the work WAS skipped
+    const landed = () => snap().buildings.find((b) => b.id === movingId)!;
+    // ...but every relocation-derived field in the snapshot already reads as
+    // settled, deliveredWorkPower included. It is not alone in this: `state`
+    // and the Buildings view's Downtime column ('—' at 0 ticks) overstate the
+    // same tick in the same direction, which is why moving this one field to
+    // some other boundary would only make it disagree with its neighbours.
+    expect(landed().relocatingTicks).toBe(0);
+    expect(landed().state).not.toBe('relocating');
+    expect(snap().colonists.find((c) => c.id === 1)!.deliveredWorkPower).toBeCloseTo(1, 5);
+    expect(landed().workPower).toBeCloseTo(1, 5);
+
+    // Read FORWARDS — the sense `BuildingSnapshot.relocatingTicks` is
+    // documented in, "ticks until a moved building can work again" — the same
+    // figure is exact: the next tick does work, and it spends exactly the 1.0
+    // the snapshot above promised.
+    await stepTick(world);
+    expect(progressOf(moving)).toBeCloseTo(1, 5);
   });
 
   it('clears notices after snapshotting them', async () => {

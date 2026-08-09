@@ -32,10 +32,11 @@ import {
  * `commuteTiles`/`commuteFactor`/`deliveredWorkPower` are the exception, and
  * the reason this is an Omit rather than a bare extends: the first two need
  * the HOME's tile and the WORKPLACE's, which no single entity can supply, and
- * the third needs the second — it IS `workerWorkPower` applied to
- * `commuteFactor` (OBS-6-06) — so buildEntitySections computes all three
- * below, where home, workplace and the factor between them are already in
- * hand.
+ * the third needs the second — it is `workerWorkPower` applied to
+ * `commuteFactor` (OBS-6-06) — plus a third entity's state again, since a
+ * workplace mid-relocation banks nothing (see deliveredWorkPowerOf). So
+ * buildEntitySections computes all three below, where home, workplace, the
+ * factor between them and the workplace's downtime are already in hand.
  */
 export interface ColonistFacts extends Omit<ColonistSnapshot, 'commuteTiles' | 'commuteFactor' | 'deliveredWorkPower'> {
   carryingResource: ResourceId | null;
@@ -131,17 +132,60 @@ function workTileOf(c: ColonistFacts, tileById: ReadonlyMap<number, TileRef>): T
 }
 
 /**
- * The published ColonistSnapshot.deliveredWorkPower: null for anyone with no
- * buildingId, `workerWorkPower` otherwise. `buildingId === null` is the exact
- * guard the aggregation loop below already uses to decide who feeds
- * `powerByBuilding`, and the one `sumWorkPower` (ProductionSystem) uses too —
- * a hauler's `buildingId` is null by construction (JobAssignment never sets
- * both), and their throughput is carried capacity, not work power (see
- * `sumWorkPower`'s own doc comment), so null is correct for them, not merely
- * unset.
+ * The published ColonistSnapshot.deliveredWorkPower — and, because the
+ * aggregation below sums exactly this, every term of BuildingSnapshot.workPower
+ * too. One function for both, so the per-colonist column in the Population view
+ * and the per-building column in the Buildings view cannot report different
+ * answers to the same question.
+ *
+ * Null for anyone with no buildingId. `buildingId === null` is the exact guard
+ * the aggregation loop below already uses to decide who feeds `powerByBuilding`,
+ * and the one `sumWorkPower` (ProductionSystem) uses too — a hauler's
+ * `buildingId` is null by construction (JobAssignment never sets both), and
+ * their throughput is carried capacity, not work power (see `sumWorkPower`'s own
+ * doc comment), so null is correct for them, not merely unset.
+ *
+ * ZERO — not null — when the workplace is relocating. ProductionSystem
+ * `continue`s past a relocating building before it ever looks work power up, so
+ * that crew banks nothing at all while the move runs. They ARE assigned and work
+ * power IS the right unit for them; the number is measured, and it is zero. Null
+ * would say "does not apply here" (the hauler reading), hiding the very stall
+ * this column exists to explain — the same shape of mistake OBS-6-06 was raised
+ * for, where the homeless row printed a word while every other row printed a
+ * number, and so read as "not applicable" rather than "worst possible".
  */
-function deliveredWorkPowerOf(w: ColonistFacts, factor: number): number | null {
-  return w.buildingId === null ? null : workerWorkPower(w.efficiency, w.toolTicks, factor);
+function deliveredWorkPowerOf(w: ColonistFacts, factor: number, relocatingIds: ReadonlySet<number>): number | null {
+  if (w.buildingId === null) return null;
+  if (relocatingIds.has(w.buildingId)) return 0;
+  return workerWorkPower(w.efficiency, w.toolTicks, factor);
+}
+
+/**
+ * Buildings whose next production pass banks nothing.
+ *
+ * THE BOUNDARY, and this project has already spent two rounds on this exact
+ * one (task 6's `> 0` vs `> 1`): the `relocatingTicks` reaching this module is
+ * the POST-decrement value. ProductionSystem skips the building and decrements
+ * in the same arm, and the snapshot is published afterwards. So a published
+ * `> 0` means "the next production pass will skip this building" — which is
+ * precisely the forward-looking quantity `BuildingSnapshot.relocatingTicks` is
+ * already documented as ("ticks until a moved building can work again"), and
+ * precisely the boundary `buildingState` and `beds.total` in this same file
+ * already draw.
+ *
+ * Read BACKWARDS it overstates by exactly one tick: on the landing tick this
+ * returns full power for a tick whose work was genuinely skipped — the tick
+ * production-system.ts's own comment names as "the one genuinely-charged tick
+ * nothing ever displays as in-flight", where `state` reads 'producing' and the
+ * Buildings view's Downtime column reads '—' for the same reason. That is
+ * accepted rather than special-cased: the pre-decrement value is not in the
+ * snapshot at all, and `buildEntitySections` also serves the save seed and the
+ * post-step refresh, neither of which has a "this tick" to ask about. Putting
+ * work power alone on some other boundary would leave it the only figure on
+ * screen disagreeing with the other three about whether the building is moving.
+ */
+function relocatingBuildingIds(buildings: readonly BuildingFacts[]): ReadonlySet<number> {
+  return new Set(buildings.filter((b) => b.relocatingTicks > 0).map((b) => b.id));
 }
 
 /** Pure aggregation shared by SnapshotSystem, the initial-snapshot seed, and the post-step refresh. */
@@ -162,26 +206,29 @@ export function buildEntitySections(
     w.id, commuteTiles(w.homeId === null ? null : tileById.get(w.homeId) ?? null, workTileOf(w, tileById)),
   ]));
   const factorOf = (id: number) => commuteFactor(tilesById.get(id) ?? null, BALANCE.commute, BALANCE.homelessFactor);
+  // Measured ONCE per colonist for the same reason tilesById is, and one step
+  // stronger: the building total below is literally the sum of these published
+  // per-colonist figures, not a parallel computation that happens to agree, so
+  // the two columns cannot drift apart even in principle. (The two used to be
+  // separate `workerWorkPower` calls with identical inputs — correct, but only
+  // by inspection.) Mirrors ProductionSystem's own commute read, both going
+  // through commuteTiles above, so neither disagrees with the power the
+  // simulation actually spent.
+  const relocatingIds = relocatingBuildingIds(buildings);
+  const deliveredById = new Map(workers.map((w): [number, number | null] => [
+    w.id, deliveredWorkPowerOf(w, factorOf(w.id), relocatingIds),
+  ]));
 
   for (const w of workers) {
     if (w.buildingId === null) continue;
     const tooled = w.toolTicks > 0;
     staffCount.set(w.buildingId, (staffCount.get(w.buildingId) ?? 0) + 1);
-    // Mirrors ProductionSystem's own commute read (both go through
-    // commuteTiles above), so the displayed workPower never disagrees with
-    // the power the simulation actually used.
-    powerByBuilding.set(
-      w.buildingId,
-      (powerByBuilding.get(w.buildingId) ?? 0) + workerWorkPower(w.efficiency, w.toolTicks, factorOf(w.id)),
-    );
+    powerByBuilding.set(w.buildingId, (powerByBuilding.get(w.buildingId) ?? 0) + (deliveredById.get(w.id) ?? 0));
     if (tooled) tooledByBuilding.set(w.buildingId, (tooledByBuilding.get(w.buildingId) ?? 0) + 1);
   }
 
   const workerSnaps: ColonistSnapshot[] = workers
     .map((w) => {
-      // Measured once per colonist, same principle as tilesById above: this
-      // one factor feeds both commuteFactor and deliveredWorkPower below, so
-      // the two published numbers can never independently drift apart.
       const factor = factorOf(w.id);
       return {
         id: w.id, hunger: w.hunger, starvingTicks: w.starvingTicks, efficiency: w.efficiency, buildingId: w.buildingId,
@@ -191,7 +238,7 @@ export function buildEntitySections(
         // Null tiles are the homeless case: there is no distance to report, and
         // the whole charge lands in the factor instead.
         commuteTiles: tilesById.get(w.id) ?? 0, commuteFactor: factor,
-        deliveredWorkPower: deliveredWorkPowerOf(w, factor),
+        deliveredWorkPower: deliveredById.get(w.id) ?? null,
       };
     })
     .sort((a, b) => a.id - b.id);

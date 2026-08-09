@@ -691,7 +691,7 @@ Conservation (§2.7) plus OBS-5-03 and OBS-6-08 (§2.12). `command-handlers.ts` 
 
 **Files:**
 - Create: `src/engine/systems/placement-handlers.ts` (construct / move / demolish, moved verbatim first)
-- Modify: `src/engine/systems/command-handlers.ts`, `src/engine/snapshot-builder.ts`
+- Modify: `src/engine/systems/command-handlers.ts`, `src/engine/snapshot-builder.ts`, `src/engine/systems/population-handlers.ts` (`standDown` — the fourth cancellation path)
 - Modify: `docs/issues/2026-08-09-demolish-and-rebuild-bypasses-the-priced-relocation.md`, `docs/issues/2026-08-09-a-relocating-crews-work-power-is-computed-then-discarded.md`
 - Test: `tests/engine/systems/command-system.test.ts`
 
@@ -723,9 +723,20 @@ it('demolishing a producer loses both its buffers, and says so', async () => {
 });
 
 it('cancelling a supply trip refunds the load to the site it came from', async () => {
-  // Every cancellation path: demolition of the TARGET, unassignHauler, and the
-  // "building gone" branch in the load handler. refundAt, not addAt — the
-  // delivery never happened and must not inflate Delivered/t.
+  // FOUR cancellation paths, not three: demolition of the TARGET,
+  // unassignHauler, the "building gone" branch in the load handler, and
+  // standDown in population-handlers.ts — which lives in another system,
+  // runs BEFORE HaulSystem in the tick, and banks with stockpile.add() today.
+  // That was right while every carried load was collected output. refundAt for
+  // a supply load, addAt for a pickup, decided by `pickedUp`.
+});
+
+it('a hauler who dies mid-supply-trip refunds rather than delivers', async () => {
+  // standDown's own test, because it is reached through retirement, starvation
+  // and death rather than through any command — nothing in this task's other
+  // fixtures goes near it. Assert deliveredRate does not move, and that it DOES
+  // move for a hauler dying with a collected load, or the test passes with the
+  // banking deleted entirely.
 });
 
 it('cancelling a supply trip whose source filled meanwhile loses nothing', async () => {
@@ -861,17 +872,38 @@ Then the one that matters most here: make `savedBuildingOf` write `stored: {}` u
 
 **Files:**
 - Create: `src/engine/snapshot-buildings.ts`
-- Modify: `src/engine/snapshot-builder.ts`, `src/shared/snapshot.ts`, `src/engine/initial-snapshot.ts`, `src/app/stores/game-store.ts`
+- Modify: `src/engine/snapshot-builder.ts`, `src/shared/snapshot.ts`, `src/app/stores/game-store.ts`
+- Modify: `src/engine/initial-snapshot.ts` — Step 4, and it is the reading-side twin of Task 9's Step 0 trap
 - Test: `tests/engine/snapshot-builder.test.ts`, `tests/app/stores/game-store.test.ts`
 
 **Interfaces:**
 - `BuildingSnapshot` gains `inputBuffered: number`, `stored: number`, `storage: number`.
-- `ColonistSnapshot` gains `haulKind: HaulKind | null`.
+- `ColonistSnapshot` gains `haulKind: HaulKind | null` and `haulSiteCol` / `haulSiteRow`.
 - Store getters (derived once, not per view): `unitsShort`, `buildingsWaitingForInput`.
 
 - [ ] **Step 1: Move first, green suite, commit.**
 - [ ] **Step 2: New fields, with tests whose fixtures discriminate** — give `inputBuffered`, `stored` and `buffered` three *different* values in the fixture, or a field pointed at the wrong source passes (increment 5's `Delivered/t` test survived exactly that mutation until its three fields were given distinct values).
-- [ ] **Step 3: Store getters, mutation-checked, gates, commit.**
+
+- [ ] **Step 3: Publish the site endpoint, or Task 12 cannot be written**
+
+`haulSpot` in `src/app/world/layout.ts` reads:
+
+```ts
+const from = w.haulPhase === 'outbound' ? CAMP_ANCHOR : pickup;
+const to = w.haulPhase === 'outbound' ? door : CAMP_ANCHOR;
+```
+
+Both endpoints are the camp, hardcoded, and `atSiteId`/`destSiteId` are runtime-only. So a depot trip would be drawn walking to and from the camp tent, and Task 12's promised "a dot leaves a site, reaches a building, and returns" is unwritable. `haulSiteCol`/`haulSiteRow` publish the **site end** of the hauler's current situation — where they stand while idle, the frozen origin while outbound, the destination while returning. One pair covers all three states, and it is the same fix for the same reason as `haulPickupCol/Row` in OBS-5-01: the app cannot re-derive an endpoint the sim froze.
+
+Cover all three states in the layout test, including **idle at a depot** — an idle hauler currently falls through to camp placement, so a fix that only handles the two moving legs leaves a dot standing in the wrong place.
+
+- [ ] **Step 4: The seeded snapshot must aggregate every site**
+
+`buildInitialSnapshot` derives stock, wealth, meals per head and therefore affordability from `save.stockpile` — camp-only from Task 9 on. Its own doc comment says why that is not a transient: *"a restored engine starts PAUSED — so this is not a placeholder that a tick will shortly correct, it is what the player looks at for as long as they leave the game paused."* A colony reopened with its planks in a depot shows a short wealth figure, a meals-per-head the birth gate disagrees with, and a build palette refusing buildings it can afford.
+
+Aggregate the camp with every building's restored `stored`, and clamp input buffers the way `buildingFactsOfSaved` already clamps output buffers. The test reads the snapshot **before the first tick**, from a save with distinct camp and depot balances — equal balances, or a total that happens to match, would pass with one side ignored.
+
+- [ ] **Step 5: Store getters, mutation-checked, gates, commit.**
 
 ---
 
@@ -902,7 +934,7 @@ No-WebGL parity — the promise made in increment 3 §1.1 and kept ever since (�
 - [ ] **Step 1: Extract the glyph drawing first.** `renderer.ts` is at 445 of 500 with nothing baselined and this task adds a storehouse glyph, a fill ring and a carrying-in marker. Extract, confirm `npm run smoke:world` is unchanged, commit that alone.
 - [ ] **Step 2:** Storehouse glyph with a fill ring; `storing` and `waitingForInput` state colours; a hauler carrying **in** drawn distinguishably from one carrying **out**, so flow direction reads at a glance.
 - [ ] **Step 3:** A legend entry for each of the three. The legend explains every encoding — true since increment 2, and this increment is not the exception.
-- [ ] **Step 4: Smoke checks, one change per fixture phase.** A supply leg: a dot leaves a site **carrying**, reaches a building, returns. Nearly every smoke check has the shape `!after.equals(before)`, so a phase that moves five things at once stays true for reasons unrelated to its name (OBS-4-04). Mutation-test by disabling the feature in `renderer.ts` or `layout.ts` and confirming that named check — and only it — goes red.
+- [ ] **Step 4: Smoke checks, one change per fixture phase.** A supply leg: a dot leaves a site **carrying**, reaches a building, returns. This depends on Task 10 Step 3 having published `haulSiteCol`/`haulSiteRow` — without them `haulSpot` draws every leg to and from the camp anchor, and a depot phase would look identical to a camp one, which is the kind of check that stays green with the feature absent. Nearly every smoke check has the shape `!after.equals(before)`, so a phase that moves five things at once stays true for reasons unrelated to its name (OBS-4-04). Mutation-test by disabling the feature in `renderer.ts` or `layout.ts` and confirming that named check — and only it — goes red.
 - [ ] **Step 5:** `grep -cve '^\s*$' src/app/world/renderer.ts src/app/world/glyphs.ts` — both under 500. Gates, commit.
 
 ---

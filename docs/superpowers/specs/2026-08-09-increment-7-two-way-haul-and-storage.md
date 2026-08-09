@@ -368,11 +368,17 @@ than re-litigates:
   rather than at dispatch, so a storehouse that went into transit mid-leg sends
   the load on to the camp instead of into a hole.
 - **A cancelled supply trip is carrying goods**, unlike every cancellation
-  increment 4 had to handle. Demolishing the target, unassigning the hauler,
-  or arriving at a building that is already gone all end a trip that may hold
-  an undelivered load, and `HaulTrip.reset()` clears it. Every such path banks
-  the load first, with `refundAt` — the colony already owned it, so it is not a
-  delivery. **Which site** it goes back to is where this gets sharp: the source
+  increment 4 had to handle. Four paths end a trip that may hold an undelivered
+  load, and `HaulTrip.reset()` clears it: demolishing the target, unassigning
+  the hauler, arriving at a building that is already gone, and — the one that
+  is easiest to miss because it lives in another system entirely —
+  **`standDown` in `PopulationSystem`**, when a hauler retires, starves or
+  dies mid-trip. That last one runs *before* `HaulSystem` in the tick and banks
+  with `stockpile.add` today, which records a delivery. Correct while every
+  carried load was collected output; wrong the moment a hauler can be carrying
+  goods the colony already owned. All four route through `pickedUp` (§2.4):
+  `addAt` for collected output, `refundAt` for a supply load. **Which site**
+  a refund goes back to is where this gets sharp: the source
   storehouse may have filled while the hauler was walking, or may itself have
   been demolished earlier in the same drain. Neither loses a unit, because
   §2.4's invariants make the load either land at the resolved site or fall
@@ -429,6 +435,20 @@ would put haulage before production and cost a tick on the output side instead
   save**. The producer must write `siteJSON(building id)` and the input buffer,
   and the round-trip test must use a colony with goods in *both* the camp and a
   storehouse — a fixture whose camp is empty proves nothing here.
+- **And the same trap on the reading side.** `buildInitialSnapshot`
+  (`src/engine/initial-snapshot.ts`) derives stock, wealth, meals per head and
+  therefore affordability from `save.stockpile` alone — which this increment
+  redefines as camp-only. Its own doc comment says why that matters: *"a
+  restored engine starts PAUSED — so this is not a placeholder that a tick will
+  shortly correct, it is what the player looks at for as long as they leave the
+  game paused."* A colony reopened with its planks in a depot would show a
+  wealth figure short of the truth, a meals-per-head the birth gate does not
+  agree with, and a build palette refusing buildings it can afford, until the
+  player unpauses. The initial snapshot must aggregate the camp with every
+  building's restored `stored` map, and clamp input buffers the way
+  `buildingFactsOfSaved` already clamps output buffers — the seeded snapshot
+  must equal what the spawned world holds, which is the invariant
+  `clampedProgress`, `clampedBuffer` and `clampedRelocation` all exist to keep.
 - `LATEST_SAVE_VERSION` becomes 6, with the same self-policing literal type:
   `SaveGameV6.version` being the literal `6` is what makes the bump fail
   typecheck at both producers until the type moves with it.
@@ -465,6 +485,17 @@ would put haulage before production and cost a tick on the output side instead
 - `ColonistSnapshot` gains `haulKind: HaulKind | null` — null when not on a
   trip. `carrying` keeps its meaning (units in hand) and now moves on the
   outbound leg of a supply trip, which it never did before.
+- `ColonistSnapshot` gains **`haulSiteCol` / `haulSiteRow`** — the tile of the
+  *site end* of this hauler's current situation: where they stand while idle,
+  the frozen origin while outbound, the destination while returning. Without
+  it the canvas cannot draw this increment at all: `haulSpot`
+  (`src/app/world/layout.ts`) hardcodes `CAMP_ANCHOR` as both the outbound
+  origin and the return destination, and `atSiteId`/`destSiteId` are
+  runtime-only, so every depot trip would be drawn walking to and from the camp
+  tent. This is the same fix, for the same reason, as `haulPickupCol/Row` in
+  OBS-5-01 — the app cannot re-derive an endpoint the sim froze — and one pair
+  of fields covers all three states because in each of them the question is the
+  same: where is the site end of this walk?
 - Aggregates the app would otherwise recompute in two places derive in the
   store, not the snapshot: units short across the colony, and how many
   buildings are idle for want of inputs.
@@ -520,6 +551,11 @@ tables, the promise made in increment 3 §1.1 and kept ever since:
     it: the recomputed leg matches `haulTicksBetween(depot, new tile)`, not the
     camp-relative figure, and a fixture where those two differ is the only kind
     that proves anything;
+  - a hauler who **retires, starves or dies** mid-supply-trip: the load is
+    refunded, not delivered, and `Delivered/t` does not move;
+  - a **v6 colony reopened paused** with goods in a depot: stock, wealth and
+    meals per head read the same before the first tick as after it. Distinct
+    camp and depot balances, or an aggregation that ignores one of them passes;
   - a storehouse demolished with goods inside — `colonyWealth` is unchanged
     across the tick, which is the assertion that actually tests §2.7;
   - the deadlock §2.6 argues away: a colony whose ledger is empty and whose

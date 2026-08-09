@@ -1,5 +1,6 @@
 import type { BuildingDefId, RecipeDef, ResourceId } from '../shared/content-types';
-import { CAMP_SITE_ID, CAMP_TILE, legProgress, type HaulKind, type HaulPhase } from '../shared/haul';
+import { CAMP_SITE_ID, CAMP_TILE, haulTicksBetween, legPositionOf, type HaulKind, type HaulPhase } from '../shared/haul';
+import type { TileRef } from '../shared/placement';
 
 export class Building {
   constructor(public id: number, public defId: BuildingDefId) {}
@@ -305,6 +306,30 @@ export class HaulTrip {
   ) {}
 
   /**
+   * Begin a leg, freezing everything about it that must survive the walk: its
+   * length, and BOTH endpoints. Setting one and leaving the rest at their
+   * defaults is the failure the four-field model exists to prevent, so every
+   * leg in the engine starts here rather than by assigning the fields by hand.
+   *
+   * `cancel`'s mirror image, and beside it deliberately: the one way a leg
+   * begins next to the one way a trip ends, both writing the same six fields
+   * one of them freezes and the other interpolates. `tilesPerTick` is a
+   * parameter for the reason `fullestResource` takes its catalog order — the
+   * component stays free of content dependencies, and BALANCE belongs to the
+   * engine's content layer, not to the shape of a trip.
+   */
+  startLeg(phase: HaulPhase, from: TileRef, to: TileRef, tilesPerTick: number): void {
+    const ticks = haulTicksBetween(from, to, tilesPerTick);
+    this.phase = phase;
+    this.ticksLeft = ticks;
+    this.legTicks = ticks;
+    this.legFromCol = from.col;
+    this.legFromRow = from.row;
+    this.legToCol = to.col;
+    this.legToRow = to.row;
+  }
+
+  /**
    * End this trip where the hauler is actually standing.
    *
    * THE way a trip ends — `reset` is private precisely so every branch comes
@@ -313,18 +338,18 @@ export class HaulTrip {
    * `legFrom`/`legTo` name its endpoints and `atCol`/`atRow` still hold its
    * ORIGIN, so resetting without this would snap the hauler back over every
    * tile it had walked — and the arrival-time cancellations are the sharp
-   * case, since they fire with the leg fully walked. `legProgress` decides
-   * how far it got, which is the same interpolation the renderer uses to
-   * place the dot, so the hauler stops exactly where the player last saw it.
-   * A fractional position is fine: it is only ever a distance origin.
+   * case, since they fire with the leg fully walked. `legPositionOf` decides
+   * how far it got — the shared law `handleMoveBuilding` re-prices a retargeted
+   * leg from, so a cancellation and a move can never disagree about where the
+   * same hauler is standing.
    */
   cancel(): void {
     // An idle trip has no leg to interpolate — its endpoints are cleared, and
     // reading them would teleport a standing hauler to the map's corner.
     if (this.phase !== 'idle') {
-      const travelled = legProgress(this.ticksLeft, this.legTicks);
-      this.atCol = this.legFromCol + (this.legToCol - this.legFromCol) * travelled;
-      this.atRow = this.legFromRow + (this.legToRow - this.legFromRow) * travelled;
+      const at = legPositionOf(this);
+      this.atCol = at.col;
+      this.atRow = at.row;
     }
     clearTrip(this);
   }

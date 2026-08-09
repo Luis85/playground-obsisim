@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { IEntity, IPreptimeWorld, IRuntimeWorld } from 'sim-ecs';
+import { SystemError, type IEntity, type IPreptimeWorld, type IRuntimeWorld } from 'sim-ecs';
 import type { BuildingDefId, ResourceId } from '../../../src/shared/content-types';
 import { CAMP_SITE_ID, CAMP_TILE, haulTicksBetween, type StoreSite } from '../../../src/shared/haul';
 import type { TileRef } from '../../../src/shared/placement';
@@ -661,5 +661,98 @@ describe('reservations', () => {
     await step(1);
     const targets = haulers.map((h) => tripOf(h).targetId);
     expect(new Set(targets).size).toBe(3);
+  });
+});
+
+/**
+ * Where the supply leg and `moveBuilding` meet. The tiles are named here rather
+ * than reusing MILL/DEPOT above because every distance in the case has to be a
+ * different number, which the shared pair cannot give.
+ */
+const MOVER_DEPOT = { col: 14, row: 0 };
+const MOVER_MILL = { col: 11, row: 15 };
+const MOVER_MILL_MOVED = { col: 3, row: 5 };
+
+describe('a target that moves under an outbound hauler', () => {
+  it('re-prices the leg from where the hauler has actually walked to, not from the camp', async () => {
+    // The defect this case exists for lived in `handleMoveBuilding`
+    // (src/engine/systems/command-handlers.ts): it recharged a retargeted leg
+    // with `haulTicks(to, …)`, which measures from the CAMP, and left all four
+    // frozen endpoints pointing at the building's old tile.
+    //
+    // Both halves need a hauler that (a) began its outbound leg somewhere other
+    // than the camp and (b) is PART-WAY along it, so this is a supply trip: the
+    // hauler fetches wheat at a depot in the top-right and sets off from there.
+    // Every leg length in the fixture is a different number, checked below
+    // rather than asserted by comment, so no two candidate implementations can
+    // produce the same answer:
+    //   fetch, camp -> depot                              6
+    //   the outbound leg, depot -> mill                   8   (walked half)
+    //   what remains of it when the move lands            4   ("do nothing")
+    //   depot -> the new tile                             7   ("snap to the leg's origin")
+    //   camp -> the new tile                              3   (the old, camp-relative charge)
+    //   (12.5, 7.5) -> the new tile                       5   (the answer)
+    const FETCH = legTicks(CAMP_TILE, MOVER_DEPOT);
+    const OUTBOUND = legTicks(MOVER_DEPOT, MOVER_MILL);
+    const WALKED = OUTBOUND / 2;
+    // Half-way along, so the hauler stands at the leg's midpoint — a tile
+    // boundary on neither axis, and equal to neither endpoint.
+    const HALFWAY = { col: (MOVER_DEPOT.col + MOVER_MILL.col) / 2, row: (MOVER_DEPOT.row + MOVER_MILL.row) / 2 };
+    const RETARGETED = legTicks(HALFWAY, MOVER_MILL_MOVED);
+    const FROM_CAMP = legTicks(CAMP_TILE, MOVER_MILL_MOVED);
+    const FROM_ORIGIN = legTicks(MOVER_DEPOT, MOVER_MILL_MOVED);
+    expect(new Set([FETCH, OUTBOUND, WALKED, RETARGETED, FROM_CAMP, FROM_ORIGIN]).size).toBe(6);
+
+    const { world, buildings, haulers, step } = await setup([
+      { defId: 'storehouse', ...MOVER_DEPOT, stored: { wheat: 20 } },
+      { defId: 'mill', ...MOVER_MILL, crew: 1 },
+    ], 1, { systems: [CommandSystem, HaulSystem] });
+    const [, mill] = buildings;
+    // sim-ecs swallows a system's exception and republishes it as an event, so
+    // a handler that threw would leave every assertion below reading pre-crash
+    // state and passing.
+    let systemErrors = 0;
+    world.eventBus.subscribe(SystemError, () => { systemErrors++; });
+    expect(colonyTotal(world, 'wheat')).toBe(20);
+
+    await step(1 + FETCH); // dispatched, fetched: outbound FROM THE DEPOT, not from the camp
+    expect(tripOf(haulers[0])).toMatchObject({
+      phase: 'outbound', amount: 6, ticksLeft: OUTBOUND, legTicks: OUTBOUND,
+      legFromCol: MOVER_DEPOT.col, legFromRow: MOVER_DEPOT.row,
+    });
+
+    await step(WALKED); // half the walk done, half still to go
+    expect(tripOf(haulers[0]).ticksLeft).toBe(WALKED);
+
+    enqueue(world, { type: 'moveBuilding', buildingId: idOf(mill), to: MOVER_MILL_MOVED });
+    await step(1); // CommandSystem retargets, then HaulSystem's decrement takes one tick off
+    expect(tripOf(haulers[0])).toMatchObject({
+      phase: 'outbound', legTicks: RETARGETED, ticksLeft: RETARGETED - 1,
+      legToCol: MOVER_MILL_MOVED.col, legToRow: MOVER_MILL_MOVED.row,
+    });
+    // The new leg begins at the hauler's real position: strictly between the
+    // depot it left and the tile the mill has vacated, on BOTH axes, so neither
+    // "snap to the origin" nor "snap to the old target" can satisfy it.
+    expect(tripOf(haulers[0]).legFromCol).toBeCloseTo(HALFWAY.col, 10);
+    expect(tripOf(haulers[0]).legFromRow).toBeCloseTo(HALFWAY.row, 10);
+    expect(tripOf(haulers[0]).legFromCol).toBeLessThan(MOVER_DEPOT.col);
+    expect(tripOf(haulers[0]).legFromCol).toBeGreaterThan(MOVER_MILL.col);
+    expect(tripOf(haulers[0]).legFromRow).toBeGreaterThan(MOVER_DEPOT.row);
+    expect(tripOf(haulers[0]).legFromRow).toBeLessThan(MOVER_MILL.row);
+    expect(colonyTotal(world, 'wheat')).toBe(20);
+
+    // On schedule, both ways round: still walking one tick short of the charge,
+    // and arrived on it. A leg priced from the camp arrives two ticks early, one
+    // priced from the depot two ticks late.
+    await step(RETARGETED - 2);
+    expect(tripOf(haulers[0]).phase).toBe('outbound');
+
+    await step(1); // arrival AT THE NEW TILE: the load goes in, and the return leg starts there
+    expect(tripOf(haulers[0])).toMatchObject({
+      phase: 'returning', legFromCol: MOVER_MILL_MOVED.col, legFromRow: MOVER_MILL_MOVED.row,
+    });
+    expect(inputOf(mill).amounts.get('wheat')).toBe(6);
+    expect(colonyTotal(world, 'wheat')).toBe(20);
+    expect(systemErrors).toBe(0);
   });
 });

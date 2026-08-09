@@ -1,11 +1,11 @@
 import type { ResourceId } from '../../shared/content-types';
 import type { HaulCandidate, StoreSite, SupplyCandidate } from '../../shared/haul';
-import { CAMP_SITE_ID, haulTicksBetween, nextHaulTarget, nextSupplyTarget, sitesHolding } from '../../shared/haul';
+import { CAMP_SITE_ID, nextHaulTarget, nextSupplyTarget, sitesHolding } from '../../shared/haul';
 import type { TileRef } from '../../shared/placement';
 import { BALANCE } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
 import { RESOURCE_IDS } from '../content/resources';
-import type { HaulKind, HaulPhase } from '../components';
+import type { HaulKind } from '../components';
 import { Building, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Relocation } from '../components';
 import type { Stockpile } from '../resources';
 
@@ -174,23 +174,6 @@ function supplyCandidates(
   return candidates;
 }
 
-/**
- * Begin a leg, freezing everything about it that must survive the walk: its
- * length, and BOTH endpoints. Setting one and leaving the rest at their
- * defaults is the failure the four-field model exists to prevent, so every leg
- * in the engine starts here rather than by assigning the fields by hand.
- */
-export function startLeg(trip: HaulTrip, phase: HaulPhase, from: TileRef, to: TileRef): void {
-  const ticks = haulTicksBetween(from, to, BALANCE.haulTilesPerTick);
-  trip.phase = phase;
-  trip.ticksLeft = ticks;
-  trip.legTicks = ticks;
-  trip.legFromCol = from.col;
-  trip.legFromRow = from.row;
-  trip.legToCol = to.col;
-  trip.legToRow = to.row;
-}
-
 /** What every dispatch agrees on, whichever kind of job it is. */
 function beginTrip(trip: HaulTrip, kind: HaulKind, buildingId: number): void {
   trip.kind = kind;
@@ -205,14 +188,14 @@ function beginSupply(trip: HaulTrip, at: TileRef, target: SupplyCandidate): void
   trip.resource = target.resource;
   trip.sourceSiteId = target.siteId;
   trip.plannedAmount = target.movable;
-  startLeg(trip, 'fetching', at, { col: target.siteCol, row: target.siteRow });
+  trip.startLeg('fetching', at, { col: target.siteCol, row: target.siteRow }, BALANCE.haulTilesPerTick);
 }
 
 function beginCollect(trip: HaulTrip, at: TileRef, target: HaulCandidate): void {
   beginTrip(trip, 'collect', target.buildingId);
   trip.resource = null;
   trip.plannedAmount = 0;
-  startLeg(trip, 'outbound', at, { col: target.col, row: target.row });
+  trip.startLeg('outbound', at, { col: target.col, row: target.row }, BALANCE.haulTilesPerTick);
 }
 
 /** Everything a dispatch decision reads, gathered once per tick. */

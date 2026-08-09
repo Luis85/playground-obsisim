@@ -102,6 +102,45 @@ export function legProgress(ticksLeft: number, totalTicks: number): number {
   return Math.min(1, Math.max(0, (totalTicks - ticksLeft) / totalTicks));
 }
 
+/**
+ * The frozen facts about the leg a hauler is currently walking, plus the ticks
+ * it has left of it. Named for the fields `HaulTrip` already carries so a live
+ * component satisfies it structurally — this module may not import the engine,
+ * and a parallel shape the engine had to convert into would be a second place
+ * for the endpoint pairing to go wrong.
+ */
+export interface RunningLeg {
+  ticksLeft: number;
+  legTicks: number;
+  legFromCol: number;
+  legFromRow: number;
+  legToCol: number;
+  legToRow: number;
+}
+
+/**
+ * Where a hauler physically stands right now, in tiles: `legProgress` of the
+ * way along the leg it is walking.
+ *
+ * Here rather than on `HaulTrip` because it is the same law `legProgress`
+ * is, and separating the ratio from the two multiplications that consume it is
+ * what let a SECOND copy of those multiplications appear beside the first.
+ * Every caller that has to answer "where is this hauler" — a cancellation
+ * choosing its resting tile, a move re-pricing an outbound leg from where the
+ * walk actually got to — must answer it identically, or the ticks charged and
+ * the line the player watches describe different journeys.
+ *
+ * A fractional tile is the correct answer and not a rounding bug: the result is
+ * only ever a distance origin or a drawing anchor, never a tile lookup.
+ */
+export function legPositionOf(leg: RunningLeg): TileRef {
+  const travelled = legProgress(leg.ticksLeft, leg.legTicks);
+  return {
+    col: leg.legFromCol + (leg.legToCol - leg.legFromCol) * travelled,
+    row: leg.legFromRow + (leg.legToRow - leg.legFromRow) * travelled,
+  };
+}
+
 /** What one building offers a hauler right now. */
 export interface HaulCandidate {
   buildingId: number;

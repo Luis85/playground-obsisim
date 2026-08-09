@@ -936,20 +936,26 @@ describe('CommandSystem', () => {
     await tick(); await tick(); // well into the walk, nowhere near arrival
     expect(trip()).toMatchObject({ phase: 'outbound', ticksLeft: 11, legTicks: 13 }); // legTicks never decrements
 
-    await dispatch({ type: 'moveBuilding', buildingId, to: { col: 5, row: 1 } }); // just past camp: 2 ticks away
-    // Recomputed against the new tile (2), then HaulSystem's same-tick decrement
-    // (CommandSystem runs first) takes it to 1 -- not the stale 11 the old,
-    // far-away tile would have left behind. Exact value, still true under the
-    // real order because 2 ticks leaves room for CommandSystem's write to be
-    // decremented once without hitting zero in this same tick. legTicks is
+    // (5,5), not the (5,1) this case used to name. The leg is re-priced from
+    // where the hauler HAS GOT TO — 2/13 of the way from the camp to (23,15),
+    // i.e. (5.23, 2.31) — and not from the camp, so the two tiles disagree:
+    // (5,5) is 2 ticks from there and 3 from the camp, while doing nothing at
+    // all leaves 11. Three different numbers, so this assertion now tells the
+    // three apart instead of only catching the third.
+    await dispatch({ type: 'moveBuilding', buildingId, to: { col: 5, row: 5 } });
+    // Re-priced against the new tile (2), then HaulSystem's same-tick decrement
+    // (CommandSystem runs first) takes it to 1. Exact value, still true under
+    // the real order because 2 ticks leaves room for CommandSystem's write to
+    // be decremented once without hitting zero in this same tick. legTicks is
     // refreshed to the SAME new total (2) but, unlike ticksLeft, is never
     // touched by that same-tick decrement — it is OBS-5-01's frozen figure.
     expect(trip()).toMatchObject({ phase: 'outbound', ticksLeft: 1, legTicks: 2 });
 
     // Behavioral proof, not another frame of the counter: within a handful of
     // ticks (not the dozen the original far-corner distance demanded) the
-    // hauler must actually arrive, load, walk home and deposit.
-    await tick(); await tick(); await tick();
+    // hauler must actually arrive, load, walk home and deposit. Four, not the
+    // three (5,1) needed: the walk home from (5,5) is a tick longer.
+    await tick(); await tick(); await tick(); await tick();
     expect(trip().phase).toBe('idle'); // arrived, loaded, walked home, delivered
     expect(world.getResource(Stockpile).get('wood')).toBe(before + ONE_LOAD); // the goods actually reached the stockpile
   });

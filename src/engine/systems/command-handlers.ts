@@ -1,7 +1,7 @@
 import type { IEntity } from 'sim-ecs';
 import type { Command } from '../../shared/commands';
 import type { ResourceId } from '../../shared/content-types';
-import { haulTicks } from '../../shared/haul';
+import { legPositionOf } from '../../shared/haul';
 // NOMAD_REJECTIONS is imported, not declared here: the Population view shows
 // the same sentence beside its disabled button before the click, and one list
 // beside the union it explains is what keeps the two from drifting apart.
@@ -378,18 +378,31 @@ export function handleMoveBuilding(ctx: CommandContext, command: Extract<Command
   // player trap a building by accident.
   found.relocation.ticksLeft = relocationTicks(moved, BALANCE.relocationTilesPerTick);
   reseatArrivalsOf(ctx, command.buildingId);
-  // Haulers already walking to this building now have a different journey:
-  // recompute from the new tile so the ticks charged match the line the dot
-  // visibly travels. legTicks is refreshed the same way, from the same call —
-  // this outbound trip is effectively restarting its leg, so the snapshot's
-  // published total must match the new ticksLeft it is now counting down from.
-  // A returning hauler is unaffected — it walks to the camp, which did not
-  // move, and its legTicks/pickup tile stay exactly as frozen at pickup.
+  // Haulers already walking to this building now have a different journey, so
+  // each one starts a fresh leg from WHERE IT HAS GOT TO — `legPositionOf`, the
+  // same interpolation a cancellation resting place uses — to the new tile.
+  // Not `haulTicks(to, …)`: that prices a walk from the CAMP, which was only
+  // ever right while the camp was the one place a trip could begin, and since
+  // increment 7 an outbound hauler routinely sets off from a storehouse it
+  // fetched a supply load at. And through `HaulTrip.startLeg`, the one way a leg
+  // may begin, so both endpoints and legTicks are refreshed together with the
+  // charge: leaving them frozen on the OLD tile would
+  // draw the dot along a line nobody is walking, hand a later `cancel()` a
+  // legTicks that no longer spans its own endpoints, and give
+  // `buildingArrival`'s demolition branch a standing tile the hauler never
+  // reached.
+  //
+  // A returning or fetching hauler is deliberately left alone. Its leg is a
+  // walk between two tiles frozen when the leg began, and it is honestly priced
+  // whatever the building does afterwards — including when the building being
+  // moved IS the depot it is walking to, since a relocating storehouse stops
+  // being a store site and `depositArrival` turns the load for a site that
+  // still exists on arrival. That costs it the rest of the walk, which is the
+  // same price demolition already charges, and changing it is a
+  // gameplay-visible decision rather than this fix's business.
   for (const { trip } of ctx.workers) {
     if (trip.phase === 'outbound' && trip.targetId === command.buildingId) {
-      const ticks = haulTicks(to.col, to.row, BALANCE.haulTilesPerTick);
-      trip.ticksLeft = ticks;
-      trip.legTicks = ticks;
+      trip.startLeg('outbound', legPositionOf(trip), to, BALANCE.haulTilesPerTick);
     }
   }
   ctx.notices.succeed(`Moved the ${BUILDINGS[found.building.defId].name}.`);

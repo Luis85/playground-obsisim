@@ -9,7 +9,7 @@ import { RESOURCE_IDS } from '../content/resources';
 import { Building, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Relocation } from '../components';
 import { PendingChanges, Stockpile } from '../resources';
 import type { BuildingRow, Claims, DispatchInputs, StaffedSet, WorkerRow } from './haul-dispatch';
-import { chooseJob, claimsOf, startLeg } from './haul-dispatch';
+import { chooseJob, claimsOf } from './haul-dispatch';
 import { storeSitesOf, type StoreSiteRow } from './haul-sites';
 
 /**
@@ -129,7 +129,7 @@ function destinationFor(ctx: TickContext, trip: HaulTrip, from: TileRef): StoreS
 /** Turn for home from wherever this hauler is standing, carrying whatever it
  * holds. The one exit from a leg that both arrival handlers share. */
 function turnForHome(ctx: TickContext, trip: HaulTrip, at: TileRef): void {
-  startLeg(trip, 'returning', at, destinationFor(ctx, trip, at));
+  trip.startLeg('returning', at, destinationFor(ctx, trip, at), BALANCE.haulTilesPerTick);
 }
 
 /**
@@ -166,7 +166,7 @@ function fetchArrival(ctx: TickContext, trip: HaulTrip): void {
   // Nothing left to deliver: the trip carries on to the building and finishes
   // as an ordinary collect run.
   if (trip.amount === 0) trip.resource = null;
-  startLeg(trip, 'outbound', source, row.position);
+  trip.startLeg('outbound', source, row.position, BALANCE.haulTilesPerTick);
 }
 
 /**

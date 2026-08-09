@@ -9,7 +9,8 @@ import { BUILDINGS } from '../../src/engine/content/buildings';
 import { Building } from '../../src/engine/components';
 import { IdCounter, SimClock, SnapshotStore, Stockpile } from '../../src/engine/resources';
 import {
-  ALL_SYSTEMS, buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist, type TColonySystemFactory,
+  ALL_SYSTEMS, applyRemovals, buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist,
+  type TColonySystemFactory,
 } from '../../src/engine/world';
 import { StatsSystem } from '../../src/engine/systems/stats-system';
 import { campAdjacentFreeTile, enqueue } from '../engine/fixtures';
@@ -354,6 +355,25 @@ export async function runScenario(scenario: Scenario): Promise<BalanceResult> {
       enqueue(world, { type: 'moveBuilding', buildingId, to: { col: moveTo!.col, row: moveTo!.row } });
     }
     await world.step();
+    // Deaths and demolitions go onto RemovalLedger and come off it here and
+    // nowhere else (OBS-6-02). No scenario this harness runs today queues one —
+    // measured, not assumed: a drain-and-count probe over all 15 balance cases
+    // and all 4 harness cases reported zero, the longest run being 600 ticks
+    // against a ~5,300-tick lifespan with hunger held neutral by the FED stock.
+    // The drain is here so that stays a fact about the FIXTURES rather than a
+    // silent property of the loop: a scenario that outlives a founder, or one
+    // that ever issues `demolishBuilding`, would otherwise measure a colony in
+    // which nobody can die and nothing can be torn down.
+    //
+    // Deliberately the drain ALONE, not `stepTick`. stepTick also calls
+    // `refreshEntitySections`, which rebuilds the snapshot's `colonists` and
+    // `buildings` from post-step entity state — and this loop reads exactly
+    // those sections (`state`, `relocatingTicks`, `haulPhase`) as its
+    // measurements. Refreshing would re-time every reading in the increment-5
+    // sweep against a mid-tick baseline it was calibrated on. Same reasoning as
+    // command-system.test.ts's `ticker`: the drain is the one post-step step an
+    // instrumented driver cannot do without.
+    applyRemovals(world);
     const snapshot = world.getResource(SnapshotStore).latest!;
     const building = snapshot.buildings.find((b) => b.id === buildingId);
     if (building?.state === 'outputFull') stalledTicks++;

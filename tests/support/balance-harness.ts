@@ -349,6 +349,16 @@ export async function runScenario(scenario: Scenario): Promise<BalanceResult> {
   let wasRelocating = false;
 
   for (let t = 0; t < ticks; t++) {
+    // Mirrors the PRE-step retry both sanctioned drivers now perform
+    // (GameEngine.runStep, stepTick): anything a previous tick's detach threw
+    // on and re-queued must be gone before this tick's systems read the world,
+    // or PopulationSystem can rehome someone into a shelter that is already
+    // doomed. A bare `applyRemovals` touches no snapshot — unlike `stepTick`,
+    // which also refreshes entity sections and would re-time every reading
+    // this loop takes — so this is a measured no-op today (see the drain
+    // below: nothing this harness runs ever queues a removal) kept for
+    // symmetry with the post-step drain, not a fix for an observed defect.
+    applyRemovals(world);
     world.getResource(SimClock).tick++;
     const issuingMove = moveTo !== undefined && t === moveTo.atTick;
     if (issuingMove) {

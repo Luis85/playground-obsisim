@@ -198,16 +198,50 @@ and becomes a map per site.
   - `siteJSON(siteId)` — one site's contents, for serialization.
 - `toJSON()` returns the **camp's** contents, which is what makes the save
   migration in §2.9 a no-op for a v5 colony: a v5 stockpile *was* the camp.
+  **`toJSON()` is therefore no longer sufficient to serialize the ledger** —
+  §2.9 says what the live producer must write instead.
+
+**Flow accounting, which this increment can quietly get wrong.** `Delivered/t`
+is `producedThisTick` and `consumptionRate` is `consumedThisTick`; increment 4
+already had to rename one column because it reported the wrong quantity
+(OBS-4-06), and goods now move through four places. The rule, stated once:
+
+| moment | records |
+| --- | --- |
+| a supply trip loads at a site (`takeAt`) | **nothing** — the goods are in transit, not gone. The store's total dips by what haulers carry, which is the same fiction a collect trip already runs in reverse: goods in hand are not in the store yet. |
+| a supply load enters a building's `InputBuffer` | **consumption** — this is the moment they leave the colony's store for good, and it is the honest successor to the consumption `ProductionSystem` used to record when it paid a recipe from the stockpile. |
+| a collect load is banked at a site (`addAt`) | **a delivery** — goods that were never in the ledger have arrived in it. Unchanged from increment 4. |
+| an **undelivered supply remainder** is banked on the return (§2.5) | **nothing** (`refundAt`). The colony already owned these goods; recording a delivery would report banked inputs as newly delivered output and inflate `Delivered/t` for a round trip that produced nothing. |
+
+The last row needs a discriminator the trip must carry, because by the time the
+load reaches a site the two cases look identical: see `pickedUp` in §2.5.
 - Saturation at `MAX_SAVED_COUNTER` stays, per site, for the reason it exists
   today: the engine must never write a save its own guard would reject.
 
 ### 2.5 Haul trips gain a kind, and a return leg that always earns
 
-`HaulTrip` gains `kind: HaulKind` where `HaulKind = 'collect' | 'supply'`, and
-`atSiteId: number` — the site the hauler is currently standing at (`CAMP_SITE_ID`
-when idle at the camp, which is where every hauler starts and where every
-reloaded hauler stands, per §2.9). Both are runtime-only, like the rest of
-`HaulTrip`.
+`HaulTrip` gains, all runtime-only like the rest of it:
+
+- `kind: HaulKind`, where `HaulKind = 'collect' | 'supply'`;
+- `atSiteId: number` — the site the hauler is currently standing at
+  (`CAMP_SITE_ID` when idle at the camp, which is where every hauler starts and
+  where every reloaded hauler stands, per §2.9);
+- `pickedUp: boolean` — whether the load in hand came out of a building's
+  output buffer. It is the discriminator §2.4's flow table needs: a hauler
+  walking home holding six flour is either delivering goods the ledger has
+  never counted (`pickedUp`, bank with `addAt`) or carrying back a supply
+  remainder the colony already owned (bank with `refundAt`), and nothing about
+  the load itself distinguishes them.
+
+**A hauler's `atSiteId` may name a site that no longer exists.** A storehouse
+can be demolished, or sent into transit by a move, while haulers are based at
+it — and §2.3 removes a relocating store from the site list, so this is not
+only a demolition case. `HaulSystem` therefore **re-resolves every hauler's
+base against the live site list at the top of each tick**, falling back to
+`CAMP_SITE_ID`, rather than each command handler repairing haulers it happens
+to think of. One place, covering demolition, relocation and load together; the
+alternative is a hauler stranded at a site that cannot be resolved to a tile,
+which is either a null dereference or a hauler who never dispatches again.
 
 A trip is still exactly two legs, and the **return leg is identical for both
 kinds**, which is what keeps this a small change to `HaulSystem` rather than a
@@ -218,22 +252,24 @@ second system:
    `atSiteId` *now*, before walking. For a `collect` job, walk empty.
    Phase `outbound`, `ticksLeft = haulTicksBetween(site tile, building tile)`.
 2. **Outbound** → decrement. On arrival:
-   - a `supply` load is put into the building's `InputBuffer` (whatever fits;
-     the remainder stays in hand and rides home, so no unit is ever destroyed);
-   - **then, for both kinds**, the hauler loads from that building's
-     `OutputBuffer` — `fullestResource`, up to its capacity. A supply trip that
-     finds nothing waiting returns empty, which is the honest cost of a
-     one-directional errand.
+   - a `supply` load is put into the building's `InputBuffer` (whatever fits,
+     recording consumption for what lands; the remainder stays in hand and
+     rides home with `pickedUp` still false, so no unit is ever destroyed and
+     none is later miscounted as a delivery);
+   - **then, for both kinds**, a hauler with empty hands loads from that
+     building's `OutputBuffer` — `fullestResource`, up to its capacity — and
+     sets `pickedUp`. A supply trip that finds nothing waiting returns empty,
+     which is the honest cost of a one-directional errand.
    - Phase `returning`, destination `nearestSiteWithRoom(building tile, …)`,
      `ticksLeft` computed from the building's **current** tile (a building
      moved mid-trip charges the walk actually walked — the existing rule), and
      `legTicks` / `pickupCol` / `pickupRow` frozen here exactly as today
      (OBS-5-01).
-3. **Returning** → decrement. On arrival, `addAt(destination site, …)` the
-   load; overflow beyond the destination's capacity goes to the camp rather
-   than being dropped, because these goods are already in the ledger and
-   deleting them would delete banked colony wealth. Set `atSiteId` to the
-   destination, reset the trip to `idle`.
+3. **Returning** → decrement. On arrival, bank the load at the destination —
+   `addAt` when `pickedUp`, `refundAt` when not (§2.4). Overflow beyond the
+   destination's capacity goes to the camp rather than being dropped, because
+   these goods are already in the ledger and deleting them would delete banked
+   colony wealth. Set `atSiteId` to the destination, reset the trip to `idle`.
 
 A hauler therefore migrates naturally to wherever the work is: deposit at a
 remote storehouse and you are standing at it next tick, ready to supply the
@@ -310,6 +346,14 @@ than re-litigates:
   any hauler `returning` **to** it re-resolves its destination on arrival
   rather than at dispatch, so a storehouse that went into transit mid-leg sends
   the load on to the camp instead of into a hole.
+- **Haulers based at a store that stops being one.** Both cases above strand
+  every hauler whose `atSiteId` names that store — and so does a load, where
+  `atSiteId` is not persisted at all. This is handled once, in `HaulSystem`,
+  by re-resolving a hauler's base against the live site list each tick (§2.5),
+  rather than in the two command handlers that happen to cause it. A handler-
+  side repair would have to be written twice, would still miss the relocation
+  case (nothing is demolished there), and would leave the invariant depending
+  on every future caller remembering it.
 
 ### 2.8 System order
 
@@ -334,6 +378,16 @@ would put haulage before production and cost a tick on the output side instead
 - `SaveGameV6.stockpile` is **the camp's contents**. For a v5 colony that is
   precisely what its stockpile already was, which is what makes the migration
   trivial.
+- **The live producer must be changed with the format, and this is the trap of
+  the whole task.** `buildSaveFromWorld` (`src/engine/game-engine.ts`) writes
+  `Stockpile.toJSON()` — now camp-only — and maps buildings through
+  `savedBuildingOf`, which knows nothing about either new field. Adding two
+  required fields to `SavedBuilding` is satisfied by writing `{}` for both,
+  which typechecks, migrates, round-trips and passes every guard test while
+  **silently deleting every storehouse's contents and every input buffer on
+  save**. The producer must write `siteJSON(building id)` and the input buffer,
+  and the round-trip test must use a colony with goods in *both* the camp and a
+  storehouse — a fixture whose camp is empty proves nothing here.
 - `LATEST_SAVE_VERSION` becomes 6, with the same self-policing literal type:
   `SaveGameV6.version` being the literal `6` is what makes the bump fail
   typecheck at both producers until the type moves with it.
@@ -411,6 +465,12 @@ tables, the promise made in increment 3 §1.1 and kept ever since:
     — the remainder rides home rather than vanishing;
   - a storehouse demolished while a hauler is `returning` to it;
   - a storehouse relocated mid-leg (the destination re-resolves on arrival);
+  - a storehouse demolished, and separately relocated, while a hauler is
+    **idle at it** — that hauler must dispatch normally the following tick
+    rather than being stranded (§2.5);
+  - a supply remainder banked on the return leg, asserting that
+    `Delivered/t` does **not** move for it while a collect load of the same
+    size does — one fixture, two runs, and the difference is the assertion;
   - a storehouse demolished with goods inside — `colonyWealth` is unchanged
     across the tick, which is the assertion that actually tests §2.7;
   - the deadlock §2.6 argues away: a colony whose ledger is empty and whose
@@ -444,8 +504,27 @@ increment rewrites — which is the only reason they are in scope:
 - **OBS-5-03** — demolish-and-rebuild bypasses the priced relocation entirely,
   for an empty building. Increment 5 priced moving a building; demolishing it
   and building it elsewhere costs only the (fully refunded) construction and
-  arrives instantly. A storehouse makes this materially worse: a store is
-  precisely the building a player wants to reposition as their colony spreads.
+  arrives instantly.
+
+  This increment does not merely *touch* that issue, it **changes its
+  severity**, and the change is the reason it is in scope. The note argues the
+  bypass is minor because it only pays off for a building with nothing to lose:
+  demolition destroys the output buffer, drops batch progress, and unstaffs the
+  crew, so a building in real use pays for the trick in friction. **A
+  storehouse has none of that friction.** It has no crew (`workerSlots: 0`), no
+  batch, and — by §2.7's own spill-to-camp rule, which exists for good reasons
+  — no goods to lose either. So for the one building a player most wants to
+  reposition as the colony spreads, the bypass becomes free and frictionless,
+  and the note's "why it is minor" reasoning no longer applies.
+
+  **What this increment owes is the decision, not a particular fix.** The note
+  offers three resolutions and explicitly declines to choose; the new fact
+  above is what the choice should now be made against. One candidate is ruled
+  out in advance because it does not work: charging downtime only when a
+  construct lands on the *same tick* as a matching demolish is bypassed by
+  waiting one tick, and adds a one-tick tax to an exploit instead of closing
+  it. "Accept it, and record why" remains a legitimate outcome — but it has to
+  be reached with the storehouse case in view, and the note updated to say so.
 - **OBS-6-08** — a relocating crew's work power is computed then discarded on
   the engine side and reaches zero a different way on the snapshot side. The
   duplication becomes a third path the moment a relocating *store* has to be

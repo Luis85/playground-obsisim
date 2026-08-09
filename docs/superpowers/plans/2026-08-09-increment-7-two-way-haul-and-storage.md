@@ -193,6 +193,7 @@ The reinterpretation the rest of the increment stands on (§2.4). The aggregate 
   - `takeAt(siteId, id, amount): number` — takes up to `amount`, returns what was taken
   - `spillTo(toSiteId: number, fromSiteId: number): void`
   - `siteIds(): number[]`, `siteJSON(siteId): Partial<Record<ResourceId, number>>`
+  - `recordConsumed(id: ResourceId, amount: number): void` — record consumption without removing anything. Needed because §2.4 moves the moment of consumption away from the moment goods leave a site: a supply load leaves the camp on one tick and enters a building's input buffer several ticks later, and only the second is the colony actually spending it.
 - **Unchanged, and pinned by tests:** `get`, `total`, `canAfford`, `pay`, `take`, `add`, `refund`, `resetTickFlows`, `producedThisTick`, `consumedThisTick`, `toJSON`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -514,8 +515,10 @@ The heart of it (§2.5, §2.6). `haul-system.ts` is 157 lines and roughly double
   - `kind: HaulKind = 'collect'`
   - `atSiteId: number = CAMP_SITE_ID` — where this hauler currently stands
   - `destSiteId: number = CAMP_SITE_ID` — where the return leg is headed
+  - `pickedUp = false` — whether the load in hand came out of an output buffer. The flow-accounting discriminator (§2.4): by the time a load reaches a site, a genuine delivery and an undelivered supply remainder are indistinguishable without it.
 - `haulerCapacity(homeTile, siteTile)` — the commute is charged bed → base, not bed → camp (§2.5).
-- `reset()` clears `kind`, `destSiteId` and the rest but **leaves `atSiteId` alone**: a cancelled trip leaves the hauler standing where they were, not teleported to the camp.
+- `reset()` clears `kind`, `pickedUp`, `destSiteId` and the rest but **leaves `atSiteId` alone**: a cancelled trip leaves the hauler standing where they were, not teleported to the camp.
+- `rebaseHaulers(rows, sites)` — every hauler whose `atSiteId` is not in the live site list falls back to `CAMP_SITE_ID`, run at the top of the tick.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -537,6 +540,22 @@ it('a supply trip that finds nothing waiting returns empty', async () => { /* �
 it('the remainder rides home when the input buffer filled meanwhile', async () => {
   // Another hauler got there first. The leftover must NOT be silently dropped:
   // assert the colony total, not just the hauler.
+});
+
+it('a returning supply remainder is not counted as a delivery', async () => {
+  // §2.4's flow table, and the one row an implementation reaches for addAt on
+  // by reflex. DISCRIMINATING: run the same fixture twice — once where the
+  // hauler brings back 4 units it could not deliver, once where it brings back
+  // 4 units it picked up from the output buffer. Same amount, same tick, same
+  // destination; deliveredRate must move in the second run and NOT in the
+  // first. Asserting only the first run passes with addAt deleted entirely.
+});
+
+it('a hauler idle at a demolished storehouse dispatches from the camp next tick', async () => {
+  // And the same test again for a storehouse sent into RELOCATION rather than
+  // demolished — nothing is removed in that case, so a demolition-side repair
+  // would pass the first and fail the second. That is why the fallback lives
+  // in HaulSystem (§2.7).
 });
 ```
 
@@ -565,6 +584,11 @@ The outbound arrival handler is the only genuinely new code, and it does three t
 const arrive = (trip: HaulTrip, row: BuildingRow, capacity: number): void => {
   if (trip.kind === 'supply' && trip.resource !== null) {
     const placed = row.input.add(trip.resource, Math.min(trip.amount, row.input.room(BALANCE.inputBufferCap)));
+    // Consumption is recorded HERE, not when the load left its site: this is
+    // the moment the goods leave the colony's store for good, and it is the
+    // honest successor to the consumption ProductionSystem used to record when
+    // it paid a recipe out of the stockpile (§2.4).
+    stockpile.recordConsumed(trip.resource, placed);
     trip.amount -= placed;          // the remainder rides home; nothing is destroyed
   }
   // BOTH kinds load on the way back — this is the round trip the increment is named for.
@@ -573,6 +597,7 @@ const arrive = (trip: HaulTrip, row: BuildingRow, capacity: number): void => {
     const taken = resource === null ? 0 : row.buffer.take(resource, capacity);
     trip.resource = taken > 0 ? resource : null;
     trip.amount = taken;
+    trip.pickedUp = taken > 0;      // decides addAt vs refundAt on arrival (§2.4)
   }
   const dest = nearestSiteWithRoom(row.position.col, row.position.row, sites, heldAt) ?? campSite;
   trip.destSiteId = dest.id;
@@ -587,13 +612,30 @@ const arrive = (trip: HaulTrip, row: BuildingRow, capacity: number): void => {
 
 The `trip.amount === 0` guard is load-bearing and not an optimisation: a hauler still holding an undelivered remainder must carry *that* home rather than mixing two resources in one pair of hands, which `HaulTrip` has no room to represent.
 
-The deposit handler resolves `destSiteId` **on arrival**, not at dispatch: a storehouse can be demolished or sent into transit mid-leg, and the load then goes to the camp (§2.7).
+The deposit handler resolves `destSiteId` **on arrival**, not at dispatch: a storehouse can be demolished or sent into transit mid-leg, and the load then goes to the camp (§2.7). It banks with `addAt` when `trip.pickedUp` and `refundAt` when not.
 
-- [ ] **Step 4: Mutation-check**
+- [ ] **Step 4: Rebase haulers whose site went away**
 
-Three separate mutations, each of which must redden exactly one test: drop the unload (`row.input.add`), drop the return-leg load, and drop the `trip.amount -= placed` remainder accounting.
+At the top of the run function, before any dispatch:
 
-- [ ] **Step 5: Gates and commit**
+```ts
+// A storehouse can be demolished or sent into transit while haulers are based
+// at it, and atSiteId is not persisted at all — so a reloaded hauler's base is
+// only valid because load happens to put everyone at the camp. Resolving here
+// covers demolition, relocation and load in one place; repairing it in the
+// command handlers would need writing twice, would still miss relocation
+// (nothing is removed there), and would leave the invariant depending on every
+// future caller remembering it (§2.7).
+for (const { job, trip } of workerRows) {
+  if (job.hauling && !siteIds.has(trip.atSiteId)) trip.atSiteId = CAMP_SITE_ID;
+}
+```
+
+- [ ] **Step 5: Mutation-check**
+
+Five separate mutations, each of which must redden exactly one test: drop the unload (`row.input.add`), drop the return-leg load, drop the `trip.amount -= placed` remainder accounting, force `pickedUp = true` unconditionally (the delivery-inflation test), and delete the rebase loop (both stranded-hauler tests, and *only* those).
+
+- [ ] **Step 6: Gates and commit**
 
 ```bash
 rm -rf coverage && npm run check:all
@@ -670,17 +712,23 @@ it('cancelling a supply trip refunds the load to the site it came from', async (
 });
 ```
 
-- [ ] **Step 3: OBS-5-03 — demolish-and-rebuild bypasses the priced relocation**
+- [ ] **Step 3: OBS-5-03 — take the decision the note declined to take**
 
-A storehouse is precisely the building a player wants to reposition as the colony spreads, which is why this issue is in scope now and was not before. The fix is the smallest one that closes the loophole: a building constructed on the tick a building of the same def was demolished pays the relocation downtime it would have paid for the move. Read the issue note for the reasoning already recorded there before choosing an implementation, and **push back if the note disagrees with the code** — the code wins.
+**This step's deliverable is a decision, recorded, not necessarily a code change.** Read `docs/issues/2026-08-09-demolish-and-rebuild-bypasses-the-priced-relocation.md` in full first: it offers three resolutions and explicitly declines to choose between them, because pricing the bypass means defining "this construct is really a relocation" and that definition is the hard part.
+
+What this increment adds to the decision is a fact, not an implementation: **a storehouse has none of the friction the note's "why it is minor" argument rests on.** No crew (`workerSlots: 0`), no batch progress, and — by §2.7's spill-to-camp rule — no goods lost either. For the one building a player most wants to reposition as the colony spreads, the bypass is free and frictionless. Make the choice with that in view.
+
+**One candidate is ruled out in advance, because it does not work.** Charging downtime when a construct lands on the *same tick* as a matching demolish is bypassed by waiting a tick: the same-tick ledger is gone by then, and all it has bought is a one-tick tax on an unchanged exploit. Anything in that family needs persisted demolition history — a new save field, in an increment that already has one — so weigh that cost honestly against "accept it, and record why", which remains a legitimate outcome.
+
+Whatever is chosen, the note is updated to say so and to record the storehouse fact, so a future reader sees the reasoning rather than an unexplained status change. **If the choice is to accept, the issue does not get `status: Done`** — it gets the decision written into it and stays open or is closed as accepted, per whatever convention `docs/issues/` already uses for a finding that was judged and not fixed. Do not manufacture a resolution to clear a checkbox.
 
 - [ ] **Step 4: OBS-6-08 — one path to a relocating crew's work power**
 
 Engine-side and snapshot-side reach zero two different ways today. A relocating *store* now needs excluding from site lists as well, which would make it three. Collapse to one derivation. Read the issue note first.
 
-- [ ] **Step 5: Resolve both notes**
+- [ ] **Step 5: Update both notes**
 
-Set `status: Done`, `resolved: 2026-08-09`, and name the commit that did it — the convention every resolved note in `docs/issues/` follows. **Do not** write the resolution before the commit exists; a note naming a commit that does not exist is worse than no note.
+For OBS-6-08, and for OBS-5-03 only if it was actually fixed: set `status: Done`, `resolved: 2026-08-09`, and name the commit that did it — the convention every resolved note in `docs/issues/` follows. **Do not** write the resolution before the commit exists; a note naming a commit that does not exist is worse than no note. For OBS-5-03 if the decision was to accept, record the decision and the storehouse fact, and leave the status honest.
 
 - [ ] **Step 6: Gates and commit.**
 
@@ -690,7 +738,14 @@ Set `status: Done`, `resolved: 2026-08-09`, and name the commit that did it — 
 
 **Files:**
 - Modify: `src/shared/save.ts`, `src/shared/save-migration.ts`, `src/engine/save-guard.ts`, `src/engine/spawn.ts`, `src/engine/world.ts`, `src/engine/restore.ts`
-- Test: `tests/shared/save-migration.test.ts`, `tests/engine/save-guard.test.ts`, `tests/engine/world.test.ts`
+- **Modify: `src/engine/game-engine.ts` (`buildSaveFromWorld`) and `src/engine/snapshot-builder.ts` (`savedBuildingOf`, `gatherEntityFacts`, `BuildingFacts`)** — the live producer. See Step 0; omitting these is the failure mode of this task.
+- Test: `tests/shared/save-migration.test.ts`, `tests/engine/save-guard.test.ts`, `tests/engine/world.test.ts`, `tests/engine/game-engine.test.ts`
+
+- [ ] **Step 0: Read this before writing anything else**
+
+`buildSaveFromWorld` writes `world.getResource(Stockpile).toJSON()` — which Task 2 made **camp-only** — and maps buildings through `savedBuildingOf`, which knows nothing about either new field. Adding two required fields to `SavedBuilding` is satisfied by writing `{}` for both. That typechecks, migrates, round-trips, and passes every guard test in Step 1, while **silently deleting every storehouse's contents and every input buffer on save**.
+
+So the producer changes with the format, in this task: `savedBuildingOf` writes the input buffer and `siteJSON(building id)`, and `BuildingFacts` carries what it needs to. And the round-trip test uses a colony with goods in **both** the camp and a storehouse — a fixture whose camp is empty would pass with the site half deleted, which is the same class of non-discriminating fixture increment 5's `Delivered/t` test was fixed for.
 
 **Interfaces:**
 - `SavedBuilding` gains `inputBuffer` and `stored`, both required, both `{}` when empty (the uniform shape `buffer` established in v3 — a single unconditional guard check).
@@ -709,6 +764,12 @@ it('stored goods a building cannot legally hold spill to the camp', () => {
   // storehouse whose capacity was retuned DOWN. The assertion is that the
   // AGGREGATE is conserved, not that the field survived: the camp is unbounded,
   // so conservation is exact and nothing is refused.
+});
+
+it('a colony with goods in the camp AND a storehouse round-trips both', () => {
+  // The producer test. Distinct amounts at each site — 30 wood at the camp,
+  // 17 planks in the depot — so a save that writes only one of them fails on
+  // the value, not merely on a total that happens to differ.
 });
 
 it('a hauler mid-supply-trip banks its load at the camp and stands there on load', () => {
@@ -746,6 +807,8 @@ The spill-at-load rule lives in the restore path, not the guard: the guard says 
 - [ ] **Step 4: Mutation-check**
 
 Drop `inputBuffer: {}` from the migration and confirm the v5→v6 test goes red rather than the guard test — if the guard reddens instead, the guard is doing the migration's job.
+
+Then the one that matters most here: make `savedBuildingOf` write `stored: {}` unconditionally. **Only** the both-sites round-trip test may go red. If nothing does, that test's fixture is not discriminating and the save format is free to lose goods.
 
 - [ ] **Step 5: Gates and commit.**
 
@@ -876,7 +939,7 @@ The last line is the important one: if a baseline moved, find out why before shi
 - **Task 2's promise is testable and load-bearing: no existing caller changes.** If making the ledger multi-site requires editing `HungerSystem`, `handleConstructBuilding`, `colonyWealth`, `StatsSystem` or their tests, the aggregate API has leaked and the design has gone wrong. Stop and say so rather than editing the callers.
 - **Task 3 has the widest blast radius.** Every fixture that seeded a stockpile to make a processing building run now seeds an input buffer. Let `npm test` enumerate them. Read each as you go: a test that was *about* the stockpile draining is telling you something, and its assertion may need to move rather than its fixture.
 - **Conservation is the invariant most at risk.** Goods now live in four places plus a hauler's hands. Every cancellation path must put a carried load somewhere: demolition of the target, `unassignHauler`, the "building gone" branch, and save-time. Prefer asserting on a colony-wide total over asserting on the field you just wrote — the total is the property a player would notice being violated, and it is the one a future refactor cannot accidentally satisfy.
-- **`refundAt` vs `addAt` is not a style choice.** `producedThisTick` is what `StatsSystem` publishes as `Delivered/t`; anything banked that a hauler did not actually deliver must not inflate it. That distinction already caught one bug (OBS-4-06) and this increment triples the number of sites that bank goods.
+- **`refundAt` vs `addAt` is not a style choice.** `producedThisTick` is what `StatsSystem` publishes as `Delivered/t`; anything banked that a hauler did not actually deliver must not inflate it. That distinction already caught one bug (OBS-4-06) and this increment triples the number of sites that bank goods. The hard case is the one the trip has to carry a flag for: a hauler walking home with six flour is either delivering goods the ledger never counted or carrying back a supply remainder the colony already owned, and **the load itself cannot tell you which** — hence `pickedUp`. Read spec §2.4's table before writing any banking call; every row of it is a bug someone would otherwise ship.
 - **Do not reorder the systems to close the one-tick input delay** (§2.8). Putting haulage before production moves the tick from the input side to the output side; it does not remove it.
 - **`OutputBuffer.fullestResource` and `InputBuffer.shortestOf` are opposites and must stay opposite.** Both take catalog order as an argument for the same reason — determinism that does not depend on `Map` insertion order — and both are read by the engine's authoritative choice *and* by anything that previews it.
 - **Timeouts:** balance and population scenarios run thousands of ticks through the full system set. Explicit `120000` / `180000` timeouts are required; vitest's 5s default will fail them.

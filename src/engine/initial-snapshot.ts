@@ -84,7 +84,7 @@ function colonistFactsOfSaved(saved: SavedColonist): ColonistFacts {
  * here too, not just in the world).
  */
 function buildingFactsOfSaved(saved: SavedBuilding): BuildingFacts {
-  const buffer = new OutputBuffer(clampedBuffer(saved.buffer));
+  const buffer = new OutputBuffer(clampedBuffer(saved.buffer, BALANCE.outputBufferCap));
   return {
     id: saved.id,
     defId: saved.defId,

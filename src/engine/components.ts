@@ -1,4 +1,4 @@
-import type { BuildingDefId, ResourceId } from '../shared/content-types';
+import type { BuildingDefId, RecipeDef, ResourceId } from '../shared/content-types';
 import type { HaulPhase } from '../shared/haul';
 
 export class Building {
@@ -79,12 +79,20 @@ export class Position {
 }
 
 /**
- * Finished goods waiting at the building that made them until a hauler carries
- * them to the camp store. The cap is counted across ALL resources: buildings
- * produce one resource today, and a total keeps the cap meaningful if a recipe
- * ever yields two.
+ * The arithmetic `OutputBuffer` and `InputBuffer` share: both are just a
+ * capped pile of resources, one filled by a building's own production, the
+ * other filled (later, by a hauler) for it to consume. A real base class
+ * rather than the "two small classes" the design otherwise prefers, because
+ * the alternative — each class redeclaring `total`/`room`/`add`/`take` as
+ * one-line delegations to shared free functions — still puts the SAME four
+ * method signatures in two places, which is exactly the duplication the
+ * quality gate (pinned at zero) catches. Inheriting them once is the only
+ * way to have the identical arithmetic exist in the file exactly once.
+ * `OutputBuffer` and `InputBuffer` stay the two real, independently
+ * documented, independently registered component types — this only factors
+ * out what they always agreed on anyway.
  */
-export class OutputBuffer {
+abstract class ResourceBuffer {
   constructor(public readonly amounts = new Map<ResourceId, number>()) {}
 
   total(): number {
@@ -110,7 +118,15 @@ export class OutputBuffer {
     else this.amounts.set(id, held - taken);
     return taken;
   }
+}
 
+/**
+ * Finished goods waiting at the building that made them until a hauler carries
+ * them to the camp store. The cap is counted across ALL resources: buildings
+ * produce one resource today, and a total keeps the cap meaningful if a recipe
+ * ever yields two.
+ */
+export class OutputBuffer extends ResourceBuffer {
   /**
    * The resource a hauler would load: whichever this building holds most of.
    * Ties break by catalog order — passed in rather than imported, so the
@@ -125,6 +141,48 @@ export class OutputBuffer {
       if (amount > bestAmount) {
         best = id;
         bestAmount = amount;
+      }
+    }
+    return best;
+  }
+}
+
+/**
+ * Raw goods a building has pulled in for its OWN recipe, waiting to be
+ * consumed — the input-side mirror of `OutputBuffer`. Since Task 3, a
+ * building's batches are paid out of this, never out of the colony
+ * `Stockpile`: goods must physically arrive here (a hauler's job, in later
+ * tasks) before a recipe can spend them. Same shape as `OutputBuffer`
+ * (`amounts`, `total`, `room`, `add`, `take`, inherited from `ResourceBuffer`
+ * above) — the two differ only in their one extra method (`shortestOf` vs
+ * `fullestResource`).
+ */
+export class InputBuffer extends ResourceBuffer {
+  /**
+   * The resource a hauler should refill next: whichever input this building
+   * is proportionally shortest of, relative to what one batch of its recipe
+   * wants — `fullestResource`'s opposite, and `OutputBuffer`'s reason for
+   * ties, applied to intake instead of pickup. Ties (including a recipe with
+   * no inputs, where every ratio is undefined) break by catalog order, so a
+   * hauler's choice and any UI preview can only ever derive it one way.
+   *
+   * `room`, `add` and this method have no caller yet — a hauler that fills an
+   * `InputBuffer` is Task 6's supply leg — the same forward-declared-interface
+   * situation as `RemovalLedger.requeue`/`size` (src/engine/resources.ts):
+   * kept here now so `HaulSystem` and any UI preview cannot derive the choice
+   * differently once they exist, rather than added piecemeal later.
+   */
+  // fallow-ignore-next-line unused-class-member
+  shortestOf(recipe: RecipeDef, order: readonly ResourceId[]): ResourceId | null {
+    let best: ResourceId | null = null;
+    let bestRatio = Infinity;
+    for (const id of order) {
+      const wanted = recipe.inputs[id];
+      if (wanted === undefined) continue;
+      const ratio = (this.amounts.get(id) ?? 0) / wanted;
+      if (ratio < bestRatio) {
+        best = id;
+        bestRatio = ratio;
       }
     }
     return best;

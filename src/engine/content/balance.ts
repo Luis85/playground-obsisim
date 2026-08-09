@@ -51,6 +51,12 @@ export const BALANCE = {
   statsWindowTicks: 100,
   /** Units a building may hold before it stalls (total across resources). */
   outputBufferCap: 12,
+  /** Units a building may hold of its own recipe's inputs (total across
+   * resources, like outputBufferCap). Mirrors the output cap so a building's
+   * in-tray and out-tray are the same size and a hauler's round trip is
+   * symmetric. At one input per batch this is 12 batches of runway — ~36 ticks
+   * for a mill, comfortably longer than the 13-tick worst-case one-way walk. */
+  inputBufferCap: 12,
   /** Units one hauler carries per trip: two trips clear a full buffer. */
   haulCarryCapacity: 6,
   /** Hauler walking speed. A building beside the camp is a 1-tick walk; the far

@@ -3,8 +3,8 @@ import { BALANCE, MAX_AGE_TICKS } from './content/balance';
 import { BUILDINGS } from './content/buildings';
 import { RESOURCE_IDS } from './content/resources';
 import {
-  Age, Building, Efficiency, HaulTrip, Home, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Colonist,
-  WorkerSlots,
+  Age, Building, Efficiency, HaulTrip, Home, Hunger, InputBuffer, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage,
+  Colonist, WorkerSlots,
 } from './components';
 
 /**
@@ -73,22 +73,45 @@ export function clampedAge(ticks: number): number {
 }
 
 /**
- * A saved buffer trimmed to the CURRENT cap, counted across all resources in
- * catalog order. An over-cap buffer loads and trims rather than being refused.
+ * A saved buffer trimmed to `cap`, counted across all resources in catalog
+ * order. An over-cap buffer loads and trims rather than being refused.
+ *
+ * Takes the cap as an argument rather than reading one off the caller (e.g. a
+ * component-typed parameter): `OutputBuffer` and `InputBuffer` have separate
+ * caps that can retune independently, and a second copy of this trim loop is
+ * how the input side would end up silently trimming to the output cap after
+ * one of them moves.
  */
-export function clampedBuffer(saved: Partial<Record<ResourceId, number>>): Map<ResourceId, number> {
+export function clampedBuffer(saved: Partial<Record<ResourceId, number>>, cap: number): Map<ResourceId, number> {
   const buffer = new Map<ResourceId, number>();
   let total = 0;
   for (const id of RESOURCE_IDS) {
     const amount = saved[id] ?? 0;
     if (amount <= 0) continue;
-    const room = BALANCE.outputBufferCap - total;
+    const room = cap - total;
     if (room <= 0) break;
     const kept = Math.min(amount, room);
     buffer.set(id, kept);
     total += kept;
   }
   return buffer;
+}
+
+/**
+ * `clampedBuffer` against `BALANCE.inputBufferCap` — the input-side counterpart
+ * every `InputBuffer` seed (save restore, live construct, or a test fixture)
+ * goes through, the same way `OutputBuffer` goes through `clampedBuffer`
+ * directly with `BALANCE.outputBufferCap`.
+ *
+ * Its only caller today is `buildingComponents` below, in this same file —
+ * `InputBuffer` isn't part of the save format yet (Task 3 doesn't persist
+ * it), so unlike `clampedBuffer` there is no `initial-snapshot.ts` restore
+ * path to share it with. Exported anyway, per this task's own interface
+ * list, for the save-format task that eventually gives it one.
+ */
+// fallow-ignore-next-line unused-export
+export function clampedInputBuffer(saved: Partial<Record<ResourceId, number>>): Map<ResourceId, number> {
+  return clampedBuffer(saved, BALANCE.inputBufferCap);
 }
 
 /** Initial values for a building, from a save record or from a build command. */
@@ -100,6 +123,11 @@ export interface BuildingSpec {
   progress?: number;
   batchActive?: boolean;
   buffer?: Partial<Record<ResourceId, number>>;
+  // Not part of SaveGameV5 (Task 3 does not persist it): a building's input
+  // buffer is runtime-only for now, same as HaulTrip, so a reload always
+  // starts a building's in-tray empty. Present here so a test fixture — or a
+  // future save-format task — can seed one without a second spec shape.
+  inputBuffer?: Partial<Record<ResourceId, number>>;
   relocatingTicks?: number;
 }
 
@@ -110,7 +138,8 @@ export function buildingComponents(spec: BuildingSpec): object[] {
     new WorkerSlots(BUILDINGS[spec.defId].workerSlots),
     new Production(clampedProgress(spec.defId, spec.progress ?? 0), spec.batchActive ?? false),
     new Position(spec.col, spec.row),
-    new OutputBuffer(clampedBuffer(spec.buffer ?? {})),
+    new OutputBuffer(clampedBuffer(spec.buffer ?? {}, BALANCE.outputBufferCap)),
+    new InputBuffer(clampedInputBuffer(spec.inputBuffer ?? {})),
     new Relocation(clampedRelocation(spec.relocatingTicks ?? 0)),
   ];
 }

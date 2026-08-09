@@ -369,12 +369,25 @@ second system:
    worse still: the load would split, part banked and part forwarded to the
    camp without anyone walking it.
 
+   **The leg's destination tile is frozen when the leg begins**, in
+   `destCol`/`destRow`, exactly as `pickupCol`/`pickupRow` freeze its origin
+   and for exactly the reason OBS-5-01 established: a leg must be measured
+   against the journey the simulation is actually running, not against a tile
+   re-read from a building that has since moved. `destSiteId` alone cannot say
+   where the hauler physically arrives — if the destination storehouse
+   relocates mid-leg, the same id resolves to a *new* tile and the hauler would
+   deposit at a place it never walked to; if it is demolished, the id resolves
+   to nothing and there is no origin left to price the onward leg from. The
+   frozen tile answers both, and it is also what `haulSiteCol`/`haulSiteRow`
+   (§2.10) should publish for a returning hauler, so the drawn walk and the
+   simulated one stay the same walk.
+
    **The one case reservation cannot cover is a destination that stops
    existing** — demolished, or sent into transit by a move. Then the hauler
-   re-resolves and **walks on**: a fresh `returning` leg to the newly resolved
-   site, `legTicks` and the pickup tile re-frozen from where it now stands,
-   carrying its whole load the entire way. The camp is unbounded and cannot
-   vanish, so the walk terminates.
+   re-resolves and **walks on**: a fresh `returning` leg from the frozen tile
+   it has arrived at to the newly resolved site, carrying its whole load the
+   entire way. The camp is unbounded and cannot vanish, so the walk
+   terminates.
 
 A hauler therefore migrates naturally to wherever the work is: deposit at a
 remote storehouse and you are standing at it next tick, ready to supply the
@@ -462,6 +475,14 @@ rule:
   reservations against a site's capacity exactly as `claimableAt` counts
   claims against a building's buffer. This is what makes the load *fit* on
   arrival rather than needing a rule for what to do when it does not (§2.5).
+
+  **Reserved room is reserved against everyone, not only against the next
+  dispatch.** Every bank at a bounded site — including a cancellation's
+  `refundAt`, which has no hauler behind it — must respect outstanding
+  reservations, or a refund lands in space someone else is walking towards and
+  the promise above quietly stops holding. A refund that cannot fit takes the
+  last-resort route to the camp (§2.4), which is correct precisely because
+  there is no hauler left to walk it anywhere.
 
 **Claims count both kinds.** `buildClaimMap` today counts outbound haulers
 against the output they will take. A supply hauler now also loads output on
@@ -679,6 +700,11 @@ tables, the promise made in increment 3 §1.1 and kept ever since:
   - a supply remainder banked on the return leg, asserting that
     `Delivered/t` does **not** move for it while a collect load of the same
     size does — one fixture, two runs, and the difference is the assertion;
+  - a supply trip **cancelled while another hauler has reserved** the remaining
+    room at its source depot: the refund must not consume that reservation, and
+    the returning hauler must still find its load fits;
+  - a destination storehouse **relocated mid-return**: the hauler arrives where
+    it was walking to, not at the depot's new tile;
   - two haulers loading for a depot with room for **one** load, and a third for
     one with room for **part** of a load: each ends up somewhere its whole load
     fits, and no unit is banked anywhere a hauler did not walk it. The

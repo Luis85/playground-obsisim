@@ -524,6 +524,7 @@ The heart of it (§2.5, §2.6). `haul-system.ts` is 157 lines and roughly double
   - `kind: HaulKind = 'collect'`
   - `atSiteId: number = CAMP_SITE_ID` — where this hauler currently stands
   - `destSiteId: number = CAMP_SITE_ID` — where the return leg is headed
+  - `destCol` / `destRow` — the destination tile, frozen when the return leg begins, exactly as `pickupCol`/`pickupRow` freeze its origin (OBS-5-01's rule applied to the other end of the leg). `destSiteId` alone cannot say where the hauler physically arrives: a depot relocated mid-leg resolves the same id to a *new* tile, and a demolished one resolves to nothing, leaving no origin to price the onward leg from.
   - `pickedUp = false` — whether the load in hand came out of an output buffer. The flow-accounting discriminator (§2.4): by the time a load reaches a site, a genuine delivery and an undelivered supply remainder are indistinguishable without it.
 - `haulerCapacity(homeTile, siteTile)` — the commute is charged bed → base, not bed → camp (§2.5).
 - `reset()` clears `kind`, `pickedUp`, `destSiteId` and the rest but **leaves `atSiteId` alone**: a cancelled trip leaves the hauler standing where they were, not teleported to the camp.
@@ -644,7 +645,7 @@ The camp is unbounded and cannot vanish, so the walk terminates. **The test asse
 
 Claims are recomputed every tick from live components, which is what makes dispatch a pure function of world state. It follows that **any intent a hauler holds must be reconstructible from its own components next tick** — an intent recorded nowhere is not a claim, however firmly a brief says it is. Both of the following were real defects in earlier drafts of this plan before they were rules:
 
-- `destSiteId` **reserves** room at the destination from the moment it is chosen, and `nearestSiteWithRoom` counts reservations against capacity exactly as `claimableAt` counts claims against a building's buffer.
+- `destSiteId` **reserves** room at the destination from the moment it is chosen, and `nearestSiteWithRoom` counts reservations against capacity exactly as `claimableAt` counts claims against a building's buffer. **Every bank at a bounded site respects those reservations, including a cancellation's `refundAt`** — which has no hauler behind it and so takes the last-resort route to the camp when it does not fit. A refund that eats reserved room puts the returning hauler straight back into the split-load case reservation exists to remove.
 - A **rebasing** hauler keeps in `targetId` the building it is travelling to serve. An earlier draft set it to `null` — defensible-looking, since a rebase has no building destination — which made the supply claim unreconstructible, so every idle hauler would rebase toward the same depot on the same tick. That is exactly the fleet-wide thrash the claim was introduced to prevent, asserted in prose and absent from the state.
 
 Two fixtures, both of which fail loudly on the drafts above: two haulers loading for a depot with room for one (and a third for a depot with room for *part* of a load); three idle haulers and one remote supply job, of which exactly one rebases.
@@ -708,7 +709,7 @@ for (const { job, trip } of workerRows) {
 
 - [ ] **Step 5: Mutation-check**
 
-Nine separate mutations, each of which must redden exactly one test: drop the destination reservation (the two-haulers-one-depot and partial-room fixtures), null a rebasing hauler's `targetId` (the three-haulers-one-job fixture), demote `rebasing` below collect (the busy-forester fixture, and *only* it — if the other three rebase tests also redden, they are not distinguishing the rule from its priority), drop the unload (`row.input.add`), drop the return-leg load, drop the `trip.amount -= placed` remainder accounting, force `pickedUp = true` unconditionally (the delivery-inflation test), delete the `rebasing` fallthrough (the three deadlock tests, and *only* those), and delete the site-validity loop in Step 4 (both stranded-hauler tests).
+Eleven separate mutations, each of which must redden exactly one test: let `refundAt` ignore reservations (the cancellation-plus-return fixture), read the destination from `destSiteId`'s live tile rather than the frozen one (the relocated-mid-return fixture), drop the destination reservation (the two-haulers-one-depot and partial-room fixtures), null a rebasing hauler's `targetId` (the three-haulers-one-job fixture), demote `rebasing` below collect (the busy-forester fixture, and *only* it — if the other three rebase tests also redden, they are not distinguishing the rule from its priority), drop the unload (`row.input.add`), drop the return-leg load, drop the `trip.amount -= placed` remainder accounting, force `pickedUp = true` unconditionally (the delivery-inflation test), delete the `rebasing` fallthrough (the three deadlock tests, and *only* those), and delete the site-validity loop in Step 4 (both stranded-hauler tests).
 
 - [ ] **Step 6: Gates and commit**
 

@@ -635,7 +635,16 @@ const arrive = (trip: HaulTrip, row: BuildingRow, capacity: number): void => {
     trip.amount = taken;
     trip.pickedUp = taken > 0;      // decides addAt vs refundAt on arrival (§2.4)
   }
-  const dest = nearestSiteWithRoom(row.position.col, row.position.row, sites, heldAt) ?? campSite;
+  // An undelivered supply remainder goes back where it CAME from, not to
+  // whatever site is nearest: routing it onward would turn camp wheat into
+  // depot stock without it ever being consumed — the store-to-store transfer
+  // §2.13 excludes — and contradict the source-refund rule Task 8 applies when
+  // the same trip is cancelled instead. `!pickedUp && amount > 0` is exactly
+  // this case, because a hauler only loads output with empty hands.
+  const remainder = !trip.pickedUp && trip.amount > 0;
+  const dest = (remainder ? sourceIfItFits(trip, sites, heldAt) : null)
+    ?? nearestSiteWithRoom(row.position.col, row.position.row, sites, heldAt, trip.amount)
+    ?? campSite;
   trip.destSiteId = dest.id;
   trip.phase = 'returning';
   const ticks = haulTicksBetween(row.position, dest, BALANCE.haulTilesPerTick);
@@ -990,7 +999,7 @@ Then the one that matters most here: make `savedBuildingOf` write `stored: {}` u
 
 **Interfaces:**
 - `BuildingSnapshot` gains `inputBuffered: number`, `stored: number`, `storage: number`.
-- `ColonistSnapshot` gains `haulKind: HaulKind | null`, `haulPickedUp: boolean`, and `haulSiteCol` / `haulSiteRow`.
+- `ColonistSnapshot` gains `haulKind: HaulKind | null`, `haulPickedUp: boolean`, `haulLegFromCol`/`haulLegFromRow`, `haulLegToCol`/`haulLegToRow`, and `haulAtCol`/`haulAtRow`.
 - Store getters (derived once, not per view): `unitsShort`, `buildingsWaitingForInput`.
 
 - [ ] **Step 1: Move first, green suite, commit.**
@@ -1005,7 +1014,7 @@ const from = w.haulPhase === 'outbound' ? CAMP_ANCHOR : pickup;
 const to = w.haulPhase === 'outbound' ? door : CAMP_ANCHOR;
 ```
 
-Both endpoints are the camp, hardcoded, and the trip's own endpoints are runtime-only. So a depot trip would be drawn walking to and from the camp tent, and Task 12's promised "a dot leaves a site, reaches a building, and returns" is unwritable. `haulSiteCol`/`haulSiteRow` publish the **site end** of the hauler's current leg — the source it walks to while `fetching`, the source it left while `outbound` on a supply trip, and the frozen destination while `returning`. One pair covers every state, and it is the same fix for the same reason as `haulPickupCol/Row` in OBS-5-01: the app cannot re-derive an endpoint the sim froze.
+Both endpoints are the camp, hardcoded, and the trip's own endpoints are runtime-only. So a depot trip would be drawn walking to and from the camp tent, and Task 12's promised "a dot leaves a site, reaches a building, and returns" is unwritable. Publish the leg's **two** frozen endpoints — `haulLegFrom*` and `haulLegTo*` — plus `haulAt*` for a hauler with no leg running. A single "site end" pair, which an earlier draft of this step specified, cannot describe a leg beginning from an arbitrary position (the fractional tile a cancellation leaves behind) and gives an idle hauler no coordinates at all, so both of those states stay unrenderable and Step 3's own idle-at-a-depot coverage is unwritable. Same reason as `haulPickupCol/Row` in OBS-5-01 — the app cannot re-derive an endpoint the sim froze — applied to both ends.
 
 Cover all three states in the layout test, including **idle at a depot** — an idle hauler currently falls through to camp placement, so a fix that only handles the two moving legs leaves a dot standing in the wrong place.
 
@@ -1046,7 +1055,7 @@ No-WebGL parity — the promise made in increment 3 §1.1 and kept ever since (�
 - [ ] **Step 1: Extract the glyph drawing first.** `renderer.ts` is at 445 of 500 with nothing baselined and this task adds a storehouse glyph, a fill ring and a carrying-in marker. Extract, confirm `npm run smoke:world` is unchanged, commit that alone.
 - [ ] **Step 2:** Storehouse glyph with a fill ring; `storing` and `waitingForInput` state colours; a hauler carrying **in** drawn distinguishably from one carrying **out**, so flow direction reads at a glance. **Read `haulPickedUp`, not `haulKind`** — the job kind is frozen at dispatch and stops describing the cargo exactly when §2.5's round trip works: a `supply` trip carrying collected output home would be drawn backwards, and that is the headline case in acceptance criterion 2. Also draw the `fetching` phase — and note it needs no per-phase geometry at all: every leg freezes `legFrom` and `legTo` (Task 6), so one interpolation over `legProgress` places a dot in any phase. That is strictly less code than the `CAMP_ANCHOR` special-casing it replaces.
 - [ ] **Step 3:** A legend entry for each of the three. The legend explains every encoding — true since increment 2, and this increment is not the exception.
-- [ ] **Step 4: Smoke checks, one change per fixture phase.** A supply leg: a dot leaves a site **carrying**, reaches a building, returns. This depends on Task 10 Step 3 having published `haulSiteCol`/`haulSiteRow` — without them `haulSpot` draws every leg to and from the camp anchor, and a depot phase would look identical to a camp one, which is the kind of check that stays green with the feature absent. Nearly every smoke check has the shape `!after.equals(before)`, so a phase that moves five things at once stays true for reasons unrelated to its name (OBS-4-04). Mutation-test by disabling the feature in `renderer.ts` or `layout.ts` and confirming that named check — and only it — goes red.
+- [ ] **Step 4: Smoke checks, one change per fixture phase.** A supply leg: a dot leaves a site **carrying**, reaches a building, returns. This depends on Task 10 Step 3 having published both leg endpoints — without them `haulSpot` draws every leg to and from the camp anchor, and a depot phase would look identical to a camp one, which is the kind of check that stays green with the feature absent. Nearly every smoke check has the shape `!after.equals(before)`, so a phase that moves five things at once stays true for reasons unrelated to its name (OBS-4-04). Mutation-test by disabling the feature in `renderer.ts` or `layout.ts` and confirming that named check — and only it — goes red.
 - [ ] **Step 5:** `grep -cve '^\s*$' src/app/world/renderer.ts src/app/world/glyphs.ts` — both under 500. Gates, commit.
 
 ---

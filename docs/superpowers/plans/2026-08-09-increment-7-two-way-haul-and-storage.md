@@ -536,13 +536,20 @@ The heart of it (§2.5, §2.6). `haul-system.ts` is 157 lines and roughly double
 Tick-by-tick, because a trip is a state machine and a test that only reads the end state passes for the wrong reasons:
 
 ```ts
-it('a supply hauler leaves carrying, unloads, and comes back with what was waiting', async () => {
+it('a supply hauler fetches, unloads, and comes back with what was waiting', async () => {
   // camp: 20 wheat. A mill at (12,8) with an empty input buffer and 4 flour
   // already in its output buffer — so the return leg has something to carry
   // and the round trip in §2.5 is actually exercised.
-  // tick 1: dispatch — carrying > 0 while OUTBOUND, which never happened before
-  // tick n: arrival — mill inputBuffer gains wheat, hauler now carries flour
-  // tick 2n: deposit — stockpile gains flour at the destination site
+  //
+  // THREE legs, and the first assertion is the one a two-leg habit gets wrong:
+  // tick 1: dispatch — phase FETCHING and carrying NOTHING. Even a camp-sourced
+  //   job pays haulTicksBetween's never-free one-tick minimum, so a hauler
+  //   cannot be outbound-and-loaded on the dispatch tick. Asserting otherwise
+  //   rejects a correct implementation, or invites skipping the fetch leg when
+  //   the source happens to be the camp.
+  // tick n:   source arrival — carrying > 0, phase OUTBOUND
+  // tick n+m: building arrival — mill inputBuffer gains wheat, hauler now flour
+  // tick n+2m: deposit — the destination site gains flour
   // and across the whole trip: total wheat + flour in the world is unchanged.
 });
 
@@ -562,11 +569,15 @@ it('a returning supply remainder is not counted as a delivery', async () => {
   // first. Asserting only the first run passes with addAt deleted entirely.
 });
 
-it('a hauler idle at a demolished storehouse dispatches from the camp next tick', async () => {
-  // And the same test again for a storehouse sent into RELOCATION rather than
-  // demolished — nothing is removed in that case, so a demolition-side repair
-  // would pass the first and fail the second. That is why the fallback lives
-  // in HaulSystem (§2.7).
+it('a hauler idle where a storehouse stood keeps its tile and dispatches from there', async () => {
+  // NOT "dispatches from the camp" — that was the base model, where a hauler
+  // belonged to a site and had to be re-homed when the site vanished. Here
+  // atCol/atRow is a physical position, reset() preserves it deliberately, and
+  // there is no membership to repair. Teleporting the hauler to the camp would
+  // mis-price its next leg and draw it in the wrong place.
+  //
+  // Same test again for a storehouse sent into RELOCATION rather than
+  // demolished: both must leave the hauler exactly where it is standing.
 });
 ```
 
@@ -677,6 +688,25 @@ The leg itself:
 // phase 'fetching': atCol/atRow -> the source site's tile, empty-handed.
 // On arrival, takeAt the load (recording NOTHING — goods in transit are not
 // gone, §2.4) and switch to 'outbound' from the source tile to the building.
+//
+// trip.amount MUST become what takeAt ACTUALLY RETURNED, never the amount
+// claimed at dispatch. A source claim reserves stock against other HAULERS;
+// it does not bind Stockpile.pay, which spends camp-first across every site
+// for construction costs and meals. So a build ordered while this hauler was
+// walking can legitimately have spent the wheat it set out to fetch. Carrying
+// the claimed figure regardless would CREATE goods out of nothing.
+trip.amount = stockpile.takeAt(trip.sourceSiteId, trip.resource, claimed);
+if (trip.amount === 0) { /* nothing to deliver: continue as a collect trip */ }
+```
+
+The alternative — making source claims bind aggregate spends — was rejected: it would push knowledge of haul trips down into the ledger, which every other part of this design keeps out of it, to prevent a case a single line of reconciliation handles.
+
+```ts
+it('a construction ordered mid-fetch cannot make the hauler create goods', async () => {
+  // Order a build that spends the exact wheat a fetching hauler claimed, while
+  // it is still walking. Assert the COLONY TOTAL across the whole trip — the
+  // hauler must arrive with what was actually there, or with nothing.
+});
 ```
 
 A source that is demolished or sent into transit under a `fetching` hauler simply cancels the trip: nothing has been picked up, so there is nothing to dispose of. No rule needed, which is the point of the model.
@@ -687,7 +717,7 @@ The base model needed a pass at the top of every tick to re-resolve haulers whos
 
 - [ ] **Step 5: Mutation-check**
 
-Nine separate mutations, each of which must redden exactly one test: drop the `amount` argument from `nearestSiteWithRoom` so it only skips full sites (the partial-room fixture); let `refundAt` ignore reservations (the cancellation-plus-return fixture); read the destination from `destSiteId`'s live tile rather than the frozen one (the relocated-mid-return fixture); drop the destination reservation (the two-haulers-one-depot fixture); drop the `sourceSiteId` claim (the three-haulers-one-job fixture); restrict supply sources to the site the hauler stands on (**all five** reachability fixtures — this is the base model creeping back, and it should be loud); drop the unload (`row.input.add`); drop the return-leg load; and force `pickedUp = true` unconditionally (the delivery-inflation test).
+Ten separate mutations, each of which must redden exactly one test: carry the *claimed* fetch amount instead of `takeAt`'s return value (the construction-during-fetch conservation fixture); drop the `amount` argument from `nearestSiteWithRoom` so it only skips full sites (the partial-room fixture); let `refundAt` ignore reservations (the cancellation-plus-return fixture); read the destination from `destSiteId`'s live tile rather than the frozen one (the relocated-mid-return fixture); drop the destination reservation (the two-haulers-one-depot fixture); drop the `sourceSiteId` claim (the three-haulers-one-job fixture); restrict supply sources to the site the hauler stands on (**all five** reachability fixtures — this is the base model creeping back, and it should be loud); drop the unload (`row.input.add`); drop the return-leg load; and force `pickedUp = true` unconditionally (the delivery-inflation test).
 
 - [ ] **Step 6: Gates and commit**
 
@@ -718,11 +748,17 @@ Two claim maps, and missing either produces a specific, nameable failure:
 
 Test the second by dispatching three haulers in one tick at one starved bakery and asserting they choose three different jobs (or that two find none) — with a fixture where three targets exist, so the assertion discriminates.
 
-- [ ] **Step 2: The commute is charged bed → base**
+- [ ] **Step 2: The commute stays camp-relative — do not touch it**
 
-`haulerCapacity(homeTile, siteTile)`. Every reservation and every load must call it with the same two arguments — the mismatch its doc comment warns about is now two arguments wide, and a reservation computed against the camp while the load is computed against a depot claims capacity a hauler does not have.
+This step used to add a `siteTile` argument to `haulerCapacity` and test two colonists "based" at a depot. **That was the discarded base model and the instruction is deleted.** Following it would reintroduce base-dependent capacity, demand state `HaulTrip` no longer carries, and move the raw-producer control §4 q1 requires to stay unchanged.
 
-Pin it: a colonist housed beside a remote depot and based there carries **more** than one housed at the camp and based at the same depot. Two fixtures differing in one field.
+`haulerCapacity(homeTile)` keeps increment 6's signature and its camp-relative measurement, untouched by this increment. The only thing to verify here is that nothing in Tasks 1–6 changed it:
+
+```bash
+git diff main -- src/engine/systems/haul-system.ts | grep -n "haulerCapacity"   # expect no signature change
+```
+
+If that shows a second argument, a base has crept back in — stop and re-read spec §2.5.
 
 - [ ] **Step 3: Determinism**
 
@@ -870,8 +906,8 @@ it('every ledger site other than the camp names a building in the save', () => {
 
 it('save and load conserves everything and the colony resumes work', () => {
   // NOT tick-identical resumption — that was an overclaim and is now false.
-  // A colony saved with a hauler based at a depot comes back with everyone at
-  // the camp, so claims, travel times and site distribution all differ. What
+  // A colony saved with a hauler standing beside a depot comes back with
+  // everyone at the camp, so claims, travel times and distribution all differ. What
   // IS guaranteed, and what this asserts: total goods unchanged across the
   // cycle, every site's stock still reachable, and delivery resuming within a
   // bounded number of ticks.

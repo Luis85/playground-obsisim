@@ -10,6 +10,27 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-09-increment-7-two-way-haul-and-storage.md`. Section references below (§2.4, §2.6, …) are to that document.
 
+## The branch is not playable between Tasks 3 and 6, deliberately
+
+Task 3 stops `ProductionSystem` paying inputs from the colony store. Task 6 is
+what starts delivering them. **In between, every input-consuming building — mill,
+bakery, sawmill, workshop — sits at `waitingForInput` with ample stock and idle
+haulers, and the multi-building integration test is skipped because of it.**
+
+That window is real, and it is stated here so nobody discovers it by bisecting
+into it or by merging the branch half-finished. Two things about it:
+
+- **It cannot be avoided by reordering.** Task 6's supply leg needs the
+  `InputBuffer` that Task 3 creates, so 3 must precede 6. Closing the window
+  means either merging the two into one very large task, or writing a
+  dual-payment `ProductionSystem` in Task 3 that Task 6 immediately deletes —
+  more code and more risk than the window costs.
+- **The branch merges as a whole.** It is one PR of fifteen tasks; no
+  intermediate commit is a release candidate. What matters is that the window
+  closes before merge, which Task 6 Step 5b enforces by un-skipping the
+  integration test and requiring it to pass on its own merits, and which the
+  final whole-branch review re-checks by confirming no skip survives.
+
 ## Global Constraints
 
 - **Every component must be attached in `buildingComponents`/`colonistComponents` in `src/engine/spawn.ts`** — the single shared list — *and* its type appended to `COMPONENT_TYPES` in `src/engine/world.ts` for save round-tripping. Forgetting either is silent and has bitten twice (OBS-4-02). This increment adds exactly one component, in Task 3.

@@ -133,8 +133,11 @@ grows the concept the rest of this increment is built on:
 - `nearestSite(col, row, sites)` — fewest tiles, ties by site id, so the choice
   never depends on iteration order.
 - `nearestSiteWithRoom(col, row, sites, heldAt)` — where a loaded hauler should
-  unload. `heldAt(siteId)` supplies current occupancy; a site with `capacity:
-  null` always has room, so the camp is the guaranteed fallback and this
+  unload. `heldAt(siteId)` supplies current occupancy **plus what haulers
+  already headed there have reserved** (§2.6), which is what makes a load fit
+  on arrival rather than needing a rule for when it does not; a site with
+  `capacity: null` always has room, so the camp is the guaranteed fallback and
+  this
   function can never return null while the camp exists.
 - `nearestSiteHolding(col, row, sites, amountAt, resource)` — reserved for a
   future increment that lets a hauler walk to a source; **not used this
@@ -357,15 +360,21 @@ second system:
      moved mid-trip charges the walk actually walked — the existing rule), and
      `legTicks` / `pickupCol` / `pickupRow` frozen here exactly as today
      (OBS-5-01).
-3. **Returning** → decrement. On arrival, **re-resolve the destination** — a
-   depot can fill, be demolished, or go into transit while a hauler walks to
-   it. If the resolved destination is the tile the hauler is standing on, bank
-   the load there (`addAt` when `pickedUp`, `refundAt` when not — §2.4), set
-   `atSiteId`, and go `idle`. **If it is somewhere else, the hauler walks on**:
-   a fresh `returning` leg to the newly resolved site, with `legTicks` and the
-   pickup tile re-frozen from where it now stands. It carries its load the
-   whole way, so nothing arrives anywhere it was not carried, and the camp
-   being unbounded means the walk terminates.
+3. **Returning** → decrement. **The load fits on arrival by construction**:
+   choosing `destSiteId` reserved room for it (§2.6's claim invariant), and no
+   other hauler can take reserved space, so the ordinary case is simply bank,
+   set `atSiteId`, go `idle`. Reservation is what makes this the ordinary case
+   — an earlier draft checked for room only at pickup, so two haulers could
+   both aim at a depot with room for one, and a *partially* full depot was
+   worse still: the load would split, part banked and part forwarded to the
+   camp without anyone walking it.
+
+   **The one case reservation cannot cover is a destination that stops
+   existing** — demolished, or sent into transit by a move. Then the hauler
+   re-resolves and **walks on**: a fresh `returning` leg to the newly resolved
+   site, `legTicks` and the pickup tile re-frozen from where it now stands,
+   carrying its whole load the entire way. The camp is unbounded and cannot
+   vanish, so the walk terminates.
 
 A hauler therefore migrates naturally to wherever the work is: deposit at a
 remote storehouse and you are standing at it next tick, ready to supply the
@@ -432,6 +441,27 @@ reason worth stating rather than hoping for: a supply job requires stock *at
 the hauler's own site*, and only collection puts it there. As the ledger
 empties, supply candidates disappear and collection resumes on its own. §4
 question 3 measures that rather than trusting this paragraph.
+
+**The claim invariant, which two earlier drafts of this section broke in the
+same way.** Claims are recomputed every tick from live components — that is
+what makes dispatch a pure function of world state and keeps it independent of
+entity order. It follows that **any intent a hauler holds must be
+reconstructible from that hauler's own components at the start of the next
+tick.** An intent recorded nowhere is not a claim, however firmly the prose
+says it is. Two consequences, each of which was a real defect before it was a
+rule:
+
+- **A rebasing hauler keeps the building id it is travelling to serve** in
+  `targetId`. An earlier draft set it to `null` — reasonable-looking, since a
+  rebase has no building destination — and thereby made the supply claim
+  unreconstructible, so every idle hauler in the colony would rebase toward the
+  same depot on the same tick. That is precisely the fleet-wide thrash the
+  claim was introduced to prevent, asserted in prose and absent from the state.
+- **A loaded hauler's destination reserves room there** from the moment it is
+  chosen. `destSiteId` is that reservation, and `nearestSiteWithRoom` counts
+  reservations against a site's capacity exactly as `claimableAt` counts
+  claims against a building's buffer. This is what makes the load *fit* on
+  arrival rather than needing a rule for what to do when it does not (§2.5).
 
 **Claims count both kinds.** `buildClaimMap` today counts outbound haulers
 against the output they will take. A supply hauler now also loads output on
@@ -649,6 +679,13 @@ tables, the promise made in increment 3 §1.1 and kept ever since:
   - a supply remainder banked on the return leg, asserting that
     `Delivered/t` does **not** move for it while a collect load of the same
     size does — one fixture, two runs, and the difference is the assertion;
+  - two haulers loading for a depot with room for **one** load, and a third for
+    one with room for **part** of a load: each ends up somewhere its whole load
+    fits, and no unit is banked anywhere a hauler did not walk it. The
+    partial-room case is the one a room-check-at-pickup design gets wrong most
+    often, because it looks handled;
+  - three idle haulers and **one** remote supply job: exactly one rebases. A
+    rebasing hauler that forgot its target would send all three;
   - a supply trip cancelled while its source storehouse is **full**, and again
     while that storehouse has been **demolished in the same drain** — the
     colony's total is unchanged in both, and no ledger site survives without a

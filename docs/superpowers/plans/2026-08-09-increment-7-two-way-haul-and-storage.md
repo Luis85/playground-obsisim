@@ -621,18 +621,33 @@ const arrive = (trip: HaulTrip, row: BuildingRow, capacity: number): void => {
 
 The `trip.amount === 0` guard is load-bearing and not an optimisation: a hauler still holding an undelivered remainder must carry *that* home rather than mixing two resources in one pair of hands, which `HaulTrip` has no room to represent.
 
-The deposit handler re-resolves the destination **on arrival**, not at dispatch — a depot can fill, be demolished, or go into transit while a hauler walks to it. If the resolved site is where the hauler is standing, bank there (`addAt` when `trip.pickedUp`, `refundAt` when not). **If it is somewhere else, start a fresh `returning` leg to it** rather than banking remotely:
+**The load fits on arrival by construction**, because choosing `destSiteId` reserved room for it (Step 3c). So the deposit handler's ordinary path is: bank (`addAt` when `trip.pickedUp`, `refundAt` when not), set `atSiteId`, go idle.
+
+Two earlier drafts of this brief tried to solve it at arrival instead, and both leaked. Checking for room only at pickup lets two haulers aim at a depot with room for one. Re-resolving on arrival and comparing site ids fixes the *full* depot and misses the **partially** full one — `nearestSiteWithRoom` still resolves to the site underfoot when it has any room at all, so the load splits, part banked and part forwarded to the camp with nobody walking it. Reservation removes both, which is why the fix belongs at the moment the destination is chosen rather than the moment it is reached.
+
+The one case reservation cannot cover is a destination that **stops existing** — demolished, or in transit:
 
 ```ts
-// The load must be CARRIED to wherever it ends up. Task 2's forward-to-camp
-// guarantee is the last resort for paths with no hauler left to walk (a
-// cancellation, a stand-down, a load-time spill) — using it here would
-// teleport goods from a full depot to the camp while the hauler stands at the
-// depot, and §4 q2 is measuring exactly whether a depot pays for itself.
-if (dest.id !== siteUnderfoot.id) { startReturnLeg(trip, from, dest); return; }
+// Not "the depot filled" — that cannot happen now — but "the depot is gone".
+// The load must be CARRIED wherever it ends up, so this starts a new leg
+// rather than banking remotely. Task 2's forward-to-camp guarantee is the last
+// resort for paths with NO HAULER LEFT to walk (a cancellation, a stand-down,
+// a load-time spill); using it here would teleport goods to the camp while the
+// hauler stands at the depot, and §4 q2 measures exactly whether a depot pays
+// for itself.
+if (dest === null || dest.id !== siteUnderfoot.id) { startReturnLeg(trip, from, dest ?? camp); return; }
 ```
 
-The camp is unbounded, so the walk terminates. The test asserts the *ticks*, not only that the goods reached the camp — an arrival-count assertion passes for a teleport, which is the whole thing this rule prevents.
+The camp is unbounded and cannot vanish, so the walk terminates. **The test asserts the ticks**, not only that the goods reached the camp — an arrival-count assertion passes for a teleport, which is the whole thing this rule prevents.
+
+- [ ] **Step 3c: Reservations, and the claim invariant behind them**
+
+Claims are recomputed every tick from live components, which is what makes dispatch a pure function of world state. It follows that **any intent a hauler holds must be reconstructible from its own components next tick** — an intent recorded nowhere is not a claim, however firmly a brief says it is. Both of the following were real defects in earlier drafts of this plan before they were rules:
+
+- `destSiteId` **reserves** room at the destination from the moment it is chosen, and `nearestSiteWithRoom` counts reservations against capacity exactly as `claimableAt` counts claims against a building's buffer.
+- A **rebasing** hauler keeps in `targetId` the building it is travelling to serve. An earlier draft set it to `null` — defensible-looking, since a rebase has no building destination — which made the supply claim unreconstructible, so every idle hauler would rebase toward the same depot on the same tick. That is exactly the fleet-wide thrash the claim was introduced to prevent, asserted in prose and absent from the state.
+
+Two fixtures, both of which fail loudly on the drafts above: two haulers loading for a depot with room for one (and a third for a depot with room for *part* of a load); three idle haulers and one remote supply job, of which exactly one rebases.
 
 - [ ] **Step 3b: Rebasing — the rule without which §2.5 deadlocks**
 
@@ -659,7 +674,7 @@ Then the same fixture reached two other ways, because all three are ordinary eve
 - **after the depot's last based hauler dies or retires** — `standDown` clears `hauling`, and a newly assigned hauler starts at the camp;
 - **for a depot no hauler has ever stood at**, which is every depot on the tick it is built.
 
-The rule: an idle hauler with no supply job **at its own site** walks empty-handed to the site holding the best supply job it could take from somewhere else. `phase: 'rebasing'`, `targetId: null`, the origin frozen into `pickupCol/pickupRow` and the destination published as the site end — the same shape a `returning` leg already has, so the layout needs no new case. On arrival `atSiteId` becomes that site and the phase returns to `idle`; it dispatches from there next tick. The walk is priced with `haulTicksBetween` like everything else.
+The rule: an idle hauler with no supply job **at its own site** walks empty-handed to the site holding the best supply job it could take from somewhere else. `phase: 'rebasing'`, `targetId` **retained** as the building this rebase exists to serve (Step 3c — nulling it breaks the claim), the origin frozen into `pickupCol/pickupRow` and the destination published as the site end — the same shape a `returning` leg already has, so the layout needs no new case. On arrival `atSiteId` becomes that site and the phase returns to `idle`; it dispatches from there next tick. The walk is priced with `haulTicksBetween` like everything else.
 
 **It outranks collect, and that is the part to get right.** The conservative-looking choice — rebasing last, below both real jobs — is worse than useless here: a colony almost always has *something* to collect, so the branch would never fire in any colony that was actually running, and the deadlock would survive while all three fixtures above passed. Hence a fourth:
 
@@ -693,7 +708,7 @@ for (const { job, trip } of workerRows) {
 
 - [ ] **Step 5: Mutation-check**
 
-Seven separate mutations, each of which must redden exactly one test: demote `rebasing` below collect (the busy-forester fixture, and *only* it — if the other three rebase tests also redden, they are not distinguishing the rule from its priority), drop the unload (`row.input.add`), drop the return-leg load, drop the `trip.amount -= placed` remainder accounting, force `pickedUp = true` unconditionally (the delivery-inflation test), delete the `rebasing` fallthrough (the three deadlock tests, and *only* those), and delete the site-validity loop in Step 4 (both stranded-hauler tests).
+Nine separate mutations, each of which must redden exactly one test: drop the destination reservation (the two-haulers-one-depot and partial-room fixtures), null a rebasing hauler's `targetId` (the three-haulers-one-job fixture), demote `rebasing` below collect (the busy-forester fixture, and *only* it — if the other three rebase tests also redden, they are not distinguishing the rule from its priority), drop the unload (`row.input.add`), drop the return-leg load, drop the `trip.amount -= placed` remainder accounting, force `pickedUp = true` unconditionally (the delivery-inflation test), delete the `rebasing` fallthrough (the three deadlock tests, and *only* those), and delete the site-validity loop in Step 4 (both stranded-hauler tests).
 
 - [ ] **Step 6: Gates and commit**
 

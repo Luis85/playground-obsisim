@@ -651,6 +651,11 @@ this with `npm run balance:population`. **Two constants in the table above
 moved: `birthFoodPerHead` 6 → 12 and `nomadFoodPerHead` 10 → 20.** Questions 2
 and 3 came back clean and changed nothing.
 
+Every figure below was **re-measured after `OBS-6-02` was fixed** (§4.2) and
+came back byte-identical, curve rows included — the freeze had never fired in
+these runs, and the diff proves it rather than the `frozen steps 0` label
+merely asserting it.
+
 **What the instrument does NOT do, and it matters for reading q1.** The
 harness's `autoStaffSystem` stands in for the player, but only as a *foreman*:
 every tick it puts idle adults into free work slots and tops the hauling pool
@@ -859,39 +864,48 @@ is a real decision with a real cost, not a dominant strategy.
 ### 4.2 Not a balance value, but found while measuring
 
 `OBS-6-02`: two colonists dying on the same tick freeze the simulation for one
-tick each — sim-ecs 0.6.4 throws inside `removeEntity` on the second removal of
-a batch, swallows the error, and drains the rest one per step with no system
-running. It distorts any per-tick tally taken from `SnapshotStore.latest`, which
-is how it was found. See `docs/issues/`.
+tick each — sim-ecs 0.6.4 throws inside `removeEntity` on a removal of any
+entity spawned at prep time, swallows the error, and leaves every command
+queued behind it to drain one per step with no system running. It distorts any
+per-tick tally taken from `SnapshotStore.latest`, which is how it was found.
 
-A third consequence, verified at close-out and added to the note: the autosave
-fires on `clock.tick % autosaveEveryTicks` **inside `runStep`**, and the clock
-increments on frozen steps like any other, so a save can land mid-freeze holding
-colonists who are logically dead. That save is structurally valid and loads
-cleanly; those colonists then die on the first tick after the reload. It is the
-same principle this increment enforced twice already — **the seed must not
-advertise a state tick 1 revokes** — arriving from a third direction, after the
-homing phase and the past-own-lifespan restore guard.
+A third consequence, verified at close-out: the autosave fires on `clock.tick %
+autosaveEveryTicks` **inside `runStep`**, and the clock increments on frozen
+steps like any other, so a save could land mid-freeze holding colonists who are
+logically dead. That save is structurally valid and loads cleanly; those
+colonists then die on the first tick after the reload. It is the same principle
+this increment enforced twice already — **the seed must not advertise a state
+tick 1 revokes** — arriving from a third direction, after the homing phase and
+the past-own-lifespan restore guard.
 
-**How much it distorted §4.1: nothing that is quoted here.** All three long
-curves report `frozen steps 0`, so their tick labels are exact. Deaths in those
-runs never coincided, because §2.12's id-derived lifespan spread desynchronises
-them — the primitive introduced to widen the demographic wave also happens to
-keep this defect from firing. That is luck, not protection: a narrower spread,
-a synchronised famine, or a retune of `lifespanSpreadYears` would collide
-deaths and inflate every tick label by the total frozen ticks.
+**Resolved 2026-08-09 (`6916cb3`).** `RemovalLedger` carries the entities
+rather than a dirty flag, and `applyRemovals` drains it after `world.step()`
+resolves — one `removeEntity` per call, which is the case sim-ecs handles.
+`frozenSteps` can no longer be non-zero and is now a regression sentinel,
+asserted on q2's scenario. See `docs/issues/` for the full resolution,
+including two facts the note originally got wrong: the throw is not conditional
+on a *second* removal (every prep-time entity throws, so a lone death could
+also cost a tick if a birth landed with it), and `stepTick` was not the only
+harness that had to change.
 
-The one scenario that *does* freeze is q2's, and it is the reason `frozenSteps`
-is now printed for it by hand rather than only through the curve printer. Three
-colonists with no food at all starve within two ticks of each other, so the run
-loses **2 steps**. Both of them fall in the single gap tick 199 → 202, which is
-*after* the first death — so the 99-tick window q2 quotes spans no frozen step
-and is exact. That was checked, not assumed. Until this fix pass, `frozenSteps`
-was published on the `PopulationResult` type and printed only by `curveLines`,
-which this scenario does not go through — so the field was visible in the code
-and absent from every report the code produced, and the claim that it was
-"published rather than hidden" was not true of the output. **Any
-re-measurement must still read the figure before quoting a tick.**
+**How much it distorted §4.1: nothing, and this was re-measured rather than
+argued.** All three long curves already reported `frozen steps 0` — deaths in
+those runs never coincided, because §2.12's id-derived lifespan spread
+desynchronises them. The whole report was re-run before and after the fix and
+diffed: **the 16-row haul sweep and every population curve row are
+byte-identical**, as are births, deaths, peak, final and dependency for all
+three curves. One line moved, and only one:
+
+| figure | before | after |
+| --- | ---: | ---: |
+| q2 starvation scenario, `frozen steps` | 2 | **0** |
+
+q2's own numbers are unchanged (`first starvingTicks at 100, first death at
+199, window 99`), which is what the old note predicted: both lost steps fell in
+the single gap tick 199 → 202, *after* the first death, so the window never
+spanned one. **Any future re-measurement must still read `frozenSteps` before
+quoting a tick** — it is zero now, and a non-zero figure would mean the run
+simulated fewer ticks than its labels claim.
 
 ### 4.3 Two fixtures that hold their conclusions by margin, not by assertion
 

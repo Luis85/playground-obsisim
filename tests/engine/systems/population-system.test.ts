@@ -111,6 +111,31 @@ describe('PopulationSystem — aging', () => {
     expect(comingsOfAge(world.getResource(SnapshotStore).latest!)).toEqual([]); // once each, not every tick
   });
 
+  it('does not announce a retirement for a colonist who starves on the very tick they cross', async () => {
+    // Why the notices phase runs AFTER the two death phases. Both are
+    // reachable together — starvation is age-independent — and a colonist
+    // announced as retiring in the same breath as their own death notice is
+    // the kind of nonsense a phase order silently produces.
+    const save = { ...initialSave(), colonists: [], buildings: [], stockpile: {}, nextEntityId: 100 };
+    const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
+    const ids = getPrepResource(prep, IdCounter);
+    // Id 1 crosses the band on the tick the starvation clock runs out; id 2 is
+    // the CONTROL — same age, well fed — without which this test would pass
+    // just as happily against a build that announced nobody at all.
+    spawnColonist(prep, ids, {
+      id: 1, ageTicks: BALANCE.lifeBands.retireTicks - 1,
+      hunger: BALANCE.hungerMax, starvingTicks: BALANCE.starvationDeathTicks - 1,
+    });
+    spawnColonist(prep, ids, { id: 2, ageTicks: BALANCE.lifeBands.retireTicks - 1 });
+    const world = await prep.prepareRun();
+
+    await stepTick(world);
+    const snapshot = world.getResource(SnapshotStore).latest!;
+    expect(snapshot.colonists.map((c) => c.id)).toEqual([2]); // 1 died this tick
+    expect(messages(snapshot)).toContain('Colonist #1 starved.');
+    expect(retirements(snapshot)).toEqual(['Colonist #2 retired.']);
+  });
+
   it('still calls a staffed child a repair, not a coming-of-age event', async () => {
     // The "is too young to work" branch deliberately did NOT move to a band
     // trigger. It fires only for a save loaded after matureTicks was raised —

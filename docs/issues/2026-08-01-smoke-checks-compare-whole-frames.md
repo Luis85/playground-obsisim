@@ -15,7 +15,7 @@ tags:
   - test-validity
   - rendering
 type: Issue
-parent: "[[Increment 4 - Logistics]]"
+parent: "[[Logistics]]"
 order: 90
 started: ""
 finished: ""

@@ -2,15 +2,15 @@
 type: Epic
 parent:
 order: 50
-status: Done
+status: Open
 tags:
   - game-design
   - engineering
 started: ""
-finished: ""
 horizon: ""
 start: ""
 due: ""
+finished: ""
 ---
 
 # Engineering Quality and Balance Tooling

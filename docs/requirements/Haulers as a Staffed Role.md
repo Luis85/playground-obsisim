@@ -1,6 +1,6 @@
 ---
 type: PBI
-parent: "[[Increment 4 - Logistics]]"
+parent: "[[Logistics]]"
 order: 20
 status: Done
 tags:

@@ -2,14 +2,14 @@
 type: Epic
 parent:
 order: 20
-status: Done
+status: Open
 tags:
   - game-design
 started: ""
-finished: ""
 horizon: ""
 start: ""
 due: ""
+finished: ""
 ---
 
 # World and Spatial Play

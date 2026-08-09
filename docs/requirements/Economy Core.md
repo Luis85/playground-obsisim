@@ -2,12 +2,11 @@
 type: Feature
 parent: "[[Economy Simulation Core]]"
 order: 10
-status: Done
+status: Open
 increment: 1
 tags:
   - game-design
 started: ""
-finished: ""
 horizon: ""
 start: ""
 due: ""

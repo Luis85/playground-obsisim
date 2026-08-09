@@ -1,6 +1,6 @@
 ---
 type: PBI
-parent: "[[Increment 6 - Survival and Population]]"
+parent: "[[Survival and Population]]"
 order: 20
 status: Done
 tags:

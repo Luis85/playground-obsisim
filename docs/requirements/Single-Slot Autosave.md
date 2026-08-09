@@ -1,6 +1,6 @@
 ---
 type: PBI
-parent: "[[Increment 1 - Economy Core]]"
+parent: "[[Economy Core]]"
 order: 50
 status: Done
 tags:

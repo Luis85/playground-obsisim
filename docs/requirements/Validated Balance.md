@@ -2,13 +2,12 @@
 type: Feature
 parent: "[[Engineering Quality and Balance Tooling]]"
 order: 20
-status: Done
+status: Open
 increment: 5
 tags:
   - game-design
   - engineering
 started: ""
-finished: ""
 horizon: ""
 start: ""
 due: ""
@@ -22,4 +21,4 @@ A headless balance harness runs a scenario through the real engine and reports w
 
 - Spec: `docs/superpowers/specs/2026-08-01-increment-5-validated-balance.md`
 - Plan: `docs/superpowers/plans/2026-08-01-increment-5-validated-balance.md`
-- See also: [[Increment 5 - Relocation Pricing]], [[Increment 5 - Delivery Visibility]]
+- See also: [[Relocation Pricing]], [[Delivery Visibility]]

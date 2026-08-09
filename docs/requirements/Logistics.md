@@ -2,12 +2,11 @@
 type: Feature
 parent: "[[Logistics and Haulers]]"
 order: 10
-status: Done
+status: Open
 increment: 4
 tags:
   - game-design
 started: ""
-finished: ""
 horizon: ""
 start: ""
 due: ""

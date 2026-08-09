@@ -6,14 +6,14 @@ severity: minor
 area: engine
 increment: 5
 created: 2026-08-09
-source: Codex review on PR #11 — caught while structuring the shipped work into the product backlog, not during increment 5 or 6
+source: Codex review on PR
 affects:
   - src/engine/systems/command-handlers.ts
 tags:
   - game-design
   - balance
 type: Issue
-parent: "[[Increment 5 - Relocation Pricing]]"
+parent: "[[Relocation Pricing]]"
 order: 40
 started: ""
 finished: ""

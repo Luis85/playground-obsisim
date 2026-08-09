@@ -1,6 +1,6 @@
 ---
 type: PBI
-parent: "[[Increment 2 - Excalibur World View]]"
+parent: "[[Excalibur World View]]"
 order: 30
 status: Done
 tags:

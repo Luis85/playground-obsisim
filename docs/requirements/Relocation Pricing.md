@@ -2,12 +2,11 @@
 type: Feature
 parent: "[[World and Spatial Play]]"
 order: 30
-status: Done
+status: Open
 increment: 5
 tags:
   - game-design
 started: ""
-finished: ""
 horizon: ""
 start: ""
 due: ""
@@ -21,4 +20,4 @@ Moving a building stops being free and instant: Increment 5's balance harness me
 
 - Spec: `docs/superpowers/specs/2026-08-01-increment-5-validated-balance.md` §2.3-2.4, §2.6
 - Plan: `docs/superpowers/plans/2026-08-01-increment-5-validated-balance.md`
-- Parent increment: [[Increment 5 - Validated Balance]]
+- Parent increment: [[Validated Balance]]

@@ -1,6 +1,6 @@
 ---
 type: PBI
-parent: "[[Increment 5 - Delivery Visibility]]"
+parent: "[[Delivery Visibility]]"
 order: 10
 status: Done
 tags:

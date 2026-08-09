@@ -2,14 +2,14 @@
 type: Epic
 parent:
 order: 40
-status: Done
+status: Open
 tags:
   - game-design
 started: ""
-finished: ""
 horizon: ""
 start: ""
 due: ""
+finished: ""
 ---
 
 # Population and Survival

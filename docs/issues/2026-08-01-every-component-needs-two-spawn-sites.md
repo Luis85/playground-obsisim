@@ -17,7 +17,7 @@ tags:
   - tech-debt
   - footgun
 type: Issue
-parent: "[[Increment 4 - Logistics]]"
+parent: "[[Logistics]]"
 order: 20
 started: ""
 finished: ""

@@ -2,12 +2,11 @@
 type: Feature
 parent: "[[Logistics and Haulers]]"
 order: 30
-status: Done
+status: Open
 increment: 5
 tags:
   - game-design
 started: ""
-finished: ""
 horizon: ""
 start: ""
 due: ""
@@ -21,4 +20,4 @@ The Economy view's `Prod/t` column actually reported deliveries, not production 
 
 - Spec: `docs/superpowers/specs/2026-08-01-increment-5-validated-balance.md` §2.5
 - Plan: `docs/superpowers/plans/2026-08-01-increment-5-validated-balance.md`
-- Parent increment: [[Increment 5 - Validated Balance]]
+- Parent increment: [[Validated Balance]]

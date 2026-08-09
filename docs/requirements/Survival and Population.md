@@ -2,12 +2,11 @@
 type: Feature
 parent: "[[Population and Survival]]"
 order: 10
-status: Done
+status: Open
 increment: 6
 tags:
   - game-design
 started: ""
-finished: ""
 horizon: ""
 start: ""
 due: ""

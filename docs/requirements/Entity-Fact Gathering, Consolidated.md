@@ -1,6 +1,6 @@
 ---
 type: PBI
-parent: "[[Increment 1.5 - Hardening and Polish]]"
+parent: "[[Hardening and Polish]]"
 order: 30
 status: Done
 tags:

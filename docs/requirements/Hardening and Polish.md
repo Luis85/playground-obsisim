@@ -2,13 +2,12 @@
 type: Feature
 parent: "[[Engineering Quality and Balance Tooling]]"
 order: 10
-status: Done
+status: Open
 increment: 1.5
 tags:
   - game-design
   - engineering
 started: ""
-finished: ""
 horizon: ""
 start: ""
 due: ""

@@ -1,6 +1,6 @@
 ---
 type: PBI
-parent: "[[Increment 5 - Relocation Pricing]]"
+parent: "[[Relocation Pricing]]"
 order: 30
 status: Done
 tags:

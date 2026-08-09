@@ -2,12 +2,11 @@
 type: Feature
 parent: "[[World and Spatial Play]]"
 order: 20
-status: Done
+status: Open
 increment: 3
 tags:
   - game-design
 started: ""
-finished: ""
 horizon: ""
 start: ""
 due: ""

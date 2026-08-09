@@ -1,6 +1,6 @@
 ---
 type: PBI
-parent: "[[Increment 3 - Building Placement]]"
+parent: "[[Building Placement]]"
 order: 20
 status: Done
 tags:

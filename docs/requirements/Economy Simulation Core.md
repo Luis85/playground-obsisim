@@ -2,14 +2,14 @@
 type: Epic
 parent:
 order: 10
-status: Done
+status: Open
 tags:
   - game-design
 started: ""
-finished: ""
 horizon: ""
 start: ""
 due: ""
+finished: ""
 ---
 
 # Economy Simulation Core

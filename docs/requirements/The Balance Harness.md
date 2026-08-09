@@ -1,6 +1,6 @@
 ---
 type: PBI
-parent: "[[Increment 5 - Validated Balance]]"
+parent: "[[Validated Balance]]"
 order: 10
 status: Done
 tags:

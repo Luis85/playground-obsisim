@@ -365,7 +365,19 @@ trip with one leading leg to pick the goods up. That is the whole difference:
      untouched.
    - Phase `returning`, destination resolved and its room reserved, both
      endpoints frozen.
-4. **Returning** → on arrival the load **fits by construction**, because
+4. **Returning** → the destination was chosen when this leg began, and for an
+   **undelivered supply remainder** it is that load's own source site, whenever
+   the source is still live and has room for all of it. Sending a remainder to
+   whatever site happens to be nearest the building would let camp wheat become
+   depot stock without ever being consumed — the storehouse-to-storehouse
+   transfer §2.13 excludes, arrived at sideways, and the opposite of what §2.7
+   does when the same trip is cancelled rather than merely rebuffed. The
+   discriminator already exists: a hauler only loads output with empty hands
+   (step 3), so `!pickedUp && amount > 0` is exactly "carrying an undelivered
+   remainder". The walk back may be long; that is the honest price of a
+   delivery that failed, and it should be rare.
+
+   On arrival the load **fits by construction**, because
    choosing the destination reserved room for it (§2.6) and reserved room is
    reserved against every bank, including refunds. So the ordinary path is
    simply: bank (`addAt` when `pickedUp`, `refundAt` when not), set
@@ -637,10 +649,16 @@ would put haulage before production and cost a tick on the output side instead
   acceptance criterion 2 — the round trip this increment is named for — is
   precisely the one a `haulKind`-driven marker would draw backwards. Publish
   the cargo's origin, which `pickedUp` already is (§2.4).
-- `ColonistSnapshot` gains **`haulSiteCol` / `haulSiteRow`** — the tile of the
-  *site end* of this hauler's current leg: the source it is walking to while
-  `fetching`, the source it left while `outbound` on a supply trip, and the
-  frozen destination while `returning`. Without
+- `ColonistSnapshot` publishes **`haulLegFromCol` / `haulLegFromRow`,
+  `haulLegToCol` / `haulLegToRow`, and `haulAtCol` / `haulAtRow`** — the running
+  leg's two frozen endpoints, plus where an idle hauler stands. A single
+  "site end" pair, which an earlier draft published, cannot describe this: a
+  leg can begin from an *arbitrary* position (the fractional tile a
+  cancellation leaves behind), and an idle hauler has no site end at all, so
+  both the after-cancellation and the idle-at-a-depot states would be
+  unrenderable. Publishing both ends also removes the last per-phase case from
+  the layout — `legFrom`, `legTo` and `legProgress` place a dot in any phase,
+  and `at` places it when no leg is running. Without
   it the canvas cannot draw this increment at all: `haulSpot`
   (`src/app/world/layout.ts`) hardcodes `CAMP_ANCHOR` as both the outbound
   origin and the return destination, and the trip's own endpoints are

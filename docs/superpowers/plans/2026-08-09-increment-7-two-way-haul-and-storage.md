@@ -330,9 +330,21 @@ it('a staffed mill with an empty input buffer produces nothing, however full the
 it('the same mill produces once wheat is in its own input buffer', async () => {
   // The other half: without this, "produces nothing" would also pass with
   // ProductionSystem deleted entirely.
-  // …same fixture, but inputBuffer: { wheat: 6 } …
-  expect(snap.state).toBe('producing');
-  expect(inputBuffer.total()).toBeLessThan(6);
+  //
+  // …same fixture, but inputBuffer: { wheat: inputBufferCap } …
+  //
+  // SIX wheat would not survive the 20-tick horizon: a mill is one wheat per
+  // three-tick batch, so six run out around tick 18 and the mill correctly
+  // returns to `waitingForInput` — the assertion below would then reject the
+  // implementation it is meant to accept. Seed the cap.
+  //
+  // And assert what the feature DOES, not the state it happens to be in at a
+  // chosen tick: a momentary `producing` is hostage to `ticksPerBatch` and the
+  // crew's work power, both of which are tunable. Output banked and local
+  // input drawn down is the claim.
+  expect(snap.buffered).toBeGreaterThan(0);
+  expect(inputBuffer.total()).toBeLessThan(BALANCE.inputBufferCap);
+  expect(stockpile.get('wheat')).toBe(10_000);   // still not touched
 });
 ```
 
@@ -1157,7 +1169,7 @@ The instruments §4 needs. A task, not an afterthought — increment 6 shipped a
 
 - [ ] **Step 1: `Scenario` grows a second stage.** Today it measures one building. §4 q1 and q2 both need a *chain* — a forester feeding a sawmill at a distance — so the descriptor needs a second building and the result needs per-stage figures. Keep the existing single-building path working unchanged: increment 5's sweep is the control in q1, and a control that had to be rewritten is not one.
 - [ ] **Step 2: `storehouses`,** placed at a scenario-specified tile. In the population harness this closes a gap increment 6 flagged and this increment widens: the harness *cannot build*, which was a conservative control there and is a distortion here, because a colony that cannot build a depot cannot play this increment.
-- [ ] **Step 3: Sentinels.** `frozenSteps` must stay 0 (OBS-6-02's regression sentinel). Add a conservation sentinel while the instrument is open: total goods in the world at the end of a run equals what was made, minus what was eaten, minus what demolition destroyed. This increment moves goods through four places plus a hauler's hands, and a silent leak would show up in §4's numbers as a balance problem rather than as the bug it is.
+- [ ] **Step 3: Sentinels.** `frozenSteps` must stay 0 (OBS-6-02's regression sentinel). Add a conservation sentinel while the instrument is open: **opening holdings** plus what was made, minus the true sinks (eaten, and destroyed by demolition), equals total goods at the end — counting every site, every input and output buffer, and every load in a hauler's hands. The opening term is not optional bookkeeping: the balance harness seeds each scenario's resources before the run, so an equation that starts from zero fails every scenario by its own starting inventory and detects nothing. This increment moves goods through four places plus a hauler's hands, and a silent leak would show up in §4's numbers as a balance problem rather than as the bug it is.
 - [ ] **Step 4:** `npm run test:balance` green; timeouts explicit (these run thousands of ticks — vitest's 5s default will fail them). Gates, commit.
 
 ---

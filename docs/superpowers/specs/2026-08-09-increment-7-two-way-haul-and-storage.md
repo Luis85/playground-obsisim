@@ -274,14 +274,31 @@ exactly that state: **a reload** (§2.9 puts every hauler at the camp), **the
 death or retirement of a depot's last based hauler**, and **the first hauler a
 new depot ever needs**, since a freshly assigned hauler starts at the camp.
 
-So `HaulPhase` gains `'rebasing'`: an idle hauler with no supply job at its
-site and no collect job anywhere walks, empty-handed, to the nearest site whose
-stock some building actually wants (ties by site id, as everywhere else),
-arriving with `atSiteId` set to it and dispatching from there next tick. The
-walk is priced like any other — nothing here is free — and it is the *lowest*
-priority outcome, below both real jobs, because a hauler that can do work now
-should. This is **not** storehouse-to-storehouse transfer (§2.13): no goods
-move, a hauler does.
+So `HaulPhase` gains `'rebasing'`: an idle hauler with no supply job **at its
+own site** walks, empty-handed, to the site holding the best supply job it
+could take from somewhere else — arriving with `atSiteId` set to it and
+dispatching from there next tick. The walk is priced like any other; nothing
+here is free.
+
+**Rebasing outranks collect, and gating it on "no collect job anywhere" would
+have been useless.** A colony almost always has *something* to collect — one
+forester beside the camp produces forever — so a lowest-priority rebase would
+never fire in any colony that was actually running, and the deadlock above
+would survive in exactly the ordinary case while passing a test fixture built
+without a producer. The reason it outranks collect is the same reason supply
+does: a building with no inputs produces nothing at all, and if the only way to
+feed it is to walk to where its inputs are, that walk is worth more than
+another collect trip.
+
+**What stops every hauler walking off at once is the claim, not the priority.**
+A rebasing hauler claims the supply job it is travelling toward, exactly as an
+outbound hauler claims the output it is going to fetch (§2.6), so a depot with
+one job's worth of wheat attracts one hauler and the rest keep collecting. Any
+tendency to thrash is a measurement, not an argument: §4 question 3 reports the
+split of hauler-ticks across all three outcomes.
+
+This is **not** storehouse-to-storehouse transfer (§2.13): no goods move, a
+hauler does.
 
 Given this, `atSiteId` still stays out of the save. A reloaded colony
 re-derives its haulers' bases from world state within a few ticks instead of
@@ -343,7 +360,15 @@ claimant (below): buildings with unclaimed buffered output, ordered by
 
 **Supply candidates** — a building qualifies when all of these hold:
 
-- its recipe has inputs and it is not relocating;
+- its recipe has inputs, it is not relocating, and **at least one colonist is
+  assigned to it**. The staffing condition is not an optimisation: goods in an
+  `InputBuffer` are out of the spendable ledger, and §2.7 destroys an input
+  buffer on demolition — so without it, supply-first dispatch would truck
+  scarce wheat and planks into buildings that cannot use them and cannot give
+  them back. A colony short of adults would watch its stock drain into an
+  unstaffed mill with no way to recover it but staffing the mill. Deliveries
+  are gated, not the goods already inside: a building whose crew died keeps
+  what it holds and consumes it if it is ever staffed again;
 - the resource it is shortest of (ties by catalog order, mirroring
   `OutputBuffer.fullestResource`) is held at **this hauler's** site;
 - `movable = min(capacity, inputBufferCap − inputBuffered, held at this site)`
@@ -352,12 +377,12 @@ claimant (below): buildings with unclaimed buffered output, ordered by
 Ordered by `movable` descending, then nearest to the hauler's site, then lowest
 building id.
 
-**The dispatch order is supply, then collect, then rebase.** A building waiting
-on inputs produces nothing at all, while a building with a full output buffer
-has already produced and its goods are standing safe where they were made — so
-supply first. Rebasing (§2.5) is last precisely because it is not work: a
-hauler that can move goods now should, and walking to a better site is what is
-left when it cannot.
+**The dispatch order is supply from here, then rebase toward supply elsewhere,
+then collect.** A building waiting on inputs produces nothing at all, while a
+building with a full output buffer has already produced and its goods are
+standing safe where they were made — so supply outranks collect, and the walk
+that makes a supply job possible inherits that ranking rather than sitting
+below the work it enables (§2.5).
 
 The obvious objection to supply-first is deadlock — every hauler supplying,
 nobody collecting, the ledger drained — and it cannot happen, for a structural
@@ -602,6 +627,15 @@ tables, the promise made in increment 3 §1.1 and kept ever since:
     three are one rule and one test fixture with three entry points — and each
     one deadlocks forever without `rebasing`, so the assertion is that the mill
     eventually produces, not that a hauler moved;
+  - **the same, with a busy forester beside the camp.** This is the fixture
+    that discriminates, and the one whose absence would have let a
+    lowest-priority rebase rule ship: a colony with permanent collect work
+    available must *still* reach the remote depot. Without §2.5's priority the
+    three cases above pass and this one deadlocks, which is a test suite
+    agreeing with a rule rather than checking it;
+  - **an unstaffed processor is never supplied**, while an identical staffed
+    one beside it is — two buildings, one fixture, and the difference is the
+    assertion;
   - a storehouse demolished with goods inside — `colonyWealth` is unchanged
     across the tick, which is the assertion that actually tests §2.7;
   - the deadlock §2.6 argues away: a colony whose ledger is empty and whose
@@ -763,15 +797,19 @@ hauler does. If there is no such distance — if the depot never wins, or wins
 everywhere — the storehouse is mistuned and `storehouseCapacity` or the cost is
 where to look first.
 
-**3. Does supply-before-collect thrash, and is the deadlock self-resolving in
+**3. Does the dispatch order thrash, and is the deadlock self-resolving in
 practice?**
 
 §2.6 argues the deadlock away structurally. Measure it: run a colony with a
 deliberately drained ledger and every building wanting inputs, and confirm that
 collection resumes rather than the colony sitting still. Report the split of
-hauler-ticks between the two kinds over a long run, and how often a supply trip
-returns loaded — the round-trip mechanic in §2.5 is only worth its complexity
-if that number is not near zero.
+hauler-ticks across **all three** outcomes — supply, rebase and collect — over a
+long run, and how often a supply trip returns loaded; the round-trip mechanic in
+§2.5 is only worth its complexity if that number is not near zero. **Rebase
+ticks are the ones to watch for thrash.** They are pure overhead, justified
+only by the supply work they unlock, so a run where they are a large share of
+the total means the claim in §2.5 is not holding haulers in place the way it is
+supposed to.
 
 **A fourth reading, taken for free and worth having:** the population harness
 staffs but **cannot build** (increment 6 §4.1). Increment 6 flagged that as a

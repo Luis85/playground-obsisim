@@ -569,7 +569,7 @@ it('a hauler idle at a demolished storehouse dispatches from the camp next tick'
 
 - [ ] **Step 2: Implement dispatch**
 
-`haul-dispatch.ts` owns: the claim map (counting **both** kinds — a supply hauler also loads output on arrival, §2.6), the collect candidates (unchanged), the supply candidates, and `chooseJob(trip, sites, …)`, which offers supply first, falls through to collect, and falls through again to **rebasing** (Step 3b).
+`haul-dispatch.ts` owns: the claim map (counting **both** kinds — a supply hauler also loads output on arrival, §2.6), the collect candidates (unchanged), the supply candidates, and `chooseJob(trip, sites, …)`, whose order is **supply from this site, then rebase toward supply elsewhere (Step 3b), then collect**.
 
 The supply-first rule and its non-deadlock belong in a comment where the fallthrough is, not only in the spec:
 
@@ -647,9 +647,20 @@ Then the same fixture reached two other ways, because all three are ordinary eve
 - **after the depot's last based hauler dies or retires** — `standDown` clears `hauling`, and a newly assigned hauler starts at the camp;
 - **for a depot no hauler has ever stood at**, which is every depot on the tick it is built.
 
-The rule: an idle hauler with no supply job at its site and no collect job anywhere walks empty-handed to the nearest site whose stock some building actually wants, ties by site id. `phase: 'rebasing'`, `targetId: null`, the origin frozen into `pickupCol/pickupRow` and the destination published as the site end — the same shape a `returning` leg already has, so the layout needs no new case. On arrival `atSiteId` becomes that site and the phase returns to `idle`; it dispatches from there next tick. The walk is priced with `haulTicksBetween` like everything else.
+The rule: an idle hauler with no supply job **at its own site** walks empty-handed to the site holding the best supply job it could take from somewhere else. `phase: 'rebasing'`, `targetId: null`, the origin frozen into `pickupCol/pickupRow` and the destination published as the site end — the same shape a `returning` leg already has, so the layout needs no new case. On arrival `atSiteId` becomes that site and the phase returns to `idle`; it dispatches from there next tick. The walk is priced with `haulTicksBetween` like everything else.
 
-**Lowest priority, below both real jobs.** A hauler that can move goods now should; walking to a better site is what is left when it cannot.
+**It outranks collect, and that is the part to get right.** The conservative-looking choice — rebasing last, below both real jobs — is worse than useless here: a colony almost always has *something* to collect, so the branch would never fire in any colony that was actually running, and the deadlock would survive while all three fixtures above passed. Hence a fourth:
+
+```ts
+it('reaches the depot even while a forester beside the camp keeps producing', async () => {
+  // THE discriminating case for the PRIORITY, as distinct from the rule.
+  // Permanent collect work at the camp; the remote mill must still get its
+  // wheat. A lowest-priority rebase passes the other three and deadlocks here
+  // — a test suite agreeing with a rule rather than checking it.
+});
+```
+
+**What stops every hauler walking off at once is the claim, not the priority.** A rebasing hauler claims the supply job it is travelling toward, exactly as an outbound hauler claims the output it is going to fetch, so a depot holding one job's worth of wheat attracts one hauler and the rest keep collecting. Pin it with three idle haulers and one job available.
 
 - [ ] **Step 4: Rebase haulers whose site went away**
 
@@ -670,7 +681,7 @@ for (const { job, trip } of workerRows) {
 
 - [ ] **Step 5: Mutation-check**
 
-Six separate mutations, each of which must redden exactly one test: drop the unload (`row.input.add`), drop the return-leg load, drop the `trip.amount -= placed` remainder accounting, force `pickedUp = true` unconditionally (the delivery-inflation test), delete the `rebasing` fallthrough (the three deadlock tests, and *only* those), and delete the site-validity loop in Step 4 (both stranded-hauler tests).
+Seven separate mutations, each of which must redden exactly one test: demote `rebasing` below collect (the busy-forester fixture, and *only* it — if the other three rebase tests also redden, they are not distinguishing the rule from its priority), drop the unload (`row.input.add`), drop the return-leg load, drop the `trip.amount -= placed` remainder accounting, force `pickedUp = true` unconditionally (the delivery-inflation test), delete the `rebasing` fallthrough (the three deadlock tests, and *only* those), and delete the site-validity loop in Step 4 (both stranded-hauler tests).
 
 - [ ] **Step 6: Gates and commit**
 

@@ -62,6 +62,14 @@ export const BALANCE = {
   /** Hauler walking speed. A building beside the camp is a 1-tick walk; the far
    * corner of the default map is 13, so distance is a real investment. */
   haulTilesPerTick: 2,
+  /** Units a storehouse can hold. Five full output buffers, so one depot
+   * serves a cluster of four or five producers for several trips before it
+   * backs up. */
+  storehouseCapacity: 60,
+  /** The smallest supply delivery worth a trip — don't walk thirteen tiles to
+   * deliver one unit. Low enough that a small colony is never locked out of
+   * supply entirely, which a higher floor would do. */
+  minSupplyUnits: 2,
   relocationTilesPerTick: RELOCATION_TILES_PER_TICK,
   yearTicks: YEAR_TICKS,
   /** Age bands in ticks (spec 2.2): child 0-9, adult 10-54, elder 55+,

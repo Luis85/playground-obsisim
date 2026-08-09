@@ -8,7 +8,8 @@ export type BuildingDefId =
   | 'forester'
   | 'sawmill'
   | 'workshop'
-  | 'house';
+  | 'house'
+  | 'storehouse';
 
 export type ResourceTier = 'raw' | 'processed' | 'finished';
 
@@ -34,11 +35,16 @@ export interface BuildingDef {
   name: string;
   cost: CostMap;
   workerSlots: number;
-  /** Null for a building that shelters instead of producing. Exactly one of
-   * `recipe` and `beds` is set — pinned by a content test. */
+  /** Null for a building that shelters or stores instead of producing.
+   * Exactly one of `recipe`, `beds`, and `storage` is set — pinned by a
+   * content test (increment 6's recipe-or-beds pair, generalised to a third
+   * role in increment 7). */
   recipe: RecipeDef | null;
-  /** Sleeping places this building provides. 0 for a producer. */
+  /** Sleeping places this building provides. 0 for a producer or a store. */
   beds: number;
+  /** Units of goods this building can hold for haulers to drop off and
+   * collect. 0 for everything that is not a store. */
+  storage: number;
 }
 
 export interface ChainStep {

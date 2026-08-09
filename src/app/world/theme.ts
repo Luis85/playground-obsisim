@@ -57,11 +57,13 @@ function pick(read: VarReader, name: string, fallback: string): string {
 const BUILDING_FILL: Record<BuildingDefId, string> = {
   gatherersHut: '#7d9464', farm: '#b0913f', mill: '#a2793d', bakery: '#b06a4e',
   forester: '#4e7a52', sawmill: '#8a6a49', workshop: '#6f6f85', house: '#c9a66b',
+  storehouse: '#6e5b3e',
 };
 
 export const BUILDING_GLYPHS: Record<BuildingDefId, string> = {
   gatherersHut: '🧺', farm: '🌾', mill: '⚙️', bakery: '🍞',
   forester: '🌲', sawmill: '🪚', workshop: '🔨', house: '🏠',
+  storehouse: '📦',
 };
 
 function mixHex(from: string, to: string, t: number): string {
@@ -111,6 +113,13 @@ export function resolveWorldTheme(read: VarReader): WorldTheme {
       // BuildingState union gained 'housing' this task, so a ring color is
       // needed now, not deferred to the task that draws the house on canvas.
       housing: pick(read, '--color-blue', '#4c8bf5'),
+      // A storehouse is neither a stall nor a home, so it gets its own hue
+      // too — but every named vault colour is already spoken for above
+      // (green/orange/purple/cyan/blue for the other states, and yellow/pink
+      // are claimed below by the child mark and homelessMark), so this is
+      // hardcoded like unstaffed's grey and elder's silver: a warm brown, the
+      // register a depot's sacks and crates actually read as.
+      storing: '#a9835a',
     },
     colonistColors: Array.from({ length: COLONIST_BUCKETS }, (_, i) => mixHex(red, green, i / (COLONIST_BUCKETS - 1))),
     workerToolRing: '#f2ecdd',

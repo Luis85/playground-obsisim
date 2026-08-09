@@ -79,8 +79,14 @@ function isOutputBlocked(recipe: RecipeDef | null, buffered: number): boolean {
 /**
  * The state ladder for one building. Relocating dominates everything: it is
  * the reason nothing is happening, and it is also why a relocating house
- * shelters nobody. A shelter has no other state to be in — it is never
- * unstaffed (no slots) and never producing.
+ * shelters nobody and a relocating storehouse stores nothing. A shelter or a
+ * store has no other state to be in — neither is ever unstaffed (no slots)
+ * or producing.
+ *
+ * Storage is checked BEFORE housing, and both are derived from the def
+ * (`storage`/`recipe`) rather than from `recipe === null` alone: a storehouse
+ * has `recipe: null` exactly like a house does, so testing recipe first would
+ * report every storehouse as 'housing'.
  *
  * Extracted (rather than one inline nested ternary in buildEntitySections)
  * purely to keep that function's own branch count — and CRAP score — down as
@@ -89,9 +95,10 @@ function isOutputBlocked(recipe: RecipeDef | null, buffered: number): boolean {
  * isColonistRecordValid.
  */
 function buildingState(
-  recipe: RecipeDef | null, relocatingTicks: number, staffed: number, outputBlocked: boolean, batchActive: boolean,
+  recipe: RecipeDef | null, storage: number, relocatingTicks: number, staffed: number, outputBlocked: boolean, batchActive: boolean,
 ): BuildingState {
   if (relocatingTicks > 0) return 'relocating';
+  if (storage > 0) return 'storing';
   if (recipe === null) return 'housing';
   if (staffed === 0) return 'unstaffed';
   if (outputBlocked) return 'outputFull';
@@ -255,7 +262,7 @@ export function buildEntitySections(
       const def = BUILDINGS[b.defId];
       const staffed = staffCount.get(b.id) ?? 0;
       const outputBlocked = isOutputBlocked(def.recipe, b.buffered);
-      const state = buildingState(def.recipe, b.relocatingTicks, staffed, outputBlocked, b.batchActive);
+      const state = buildingState(def.recipe, def.storage, b.relocatingTicks, staffed, outputBlocked, b.batchActive);
       return {
         id: b.id,
         defId: b.defId,

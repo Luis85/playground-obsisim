@@ -9,6 +9,7 @@ export const BUILDING_STATE_LABELS: Record<BuildingState, string> = {
   outputFull: 'Output full',
   relocating: 'Relocating',
   housing: 'Housing',
+  storing: 'Storing',
 };
 
 /** "10 Wood, 5 Planks" — shared by the construct table and the build palette. */

@@ -3,7 +3,7 @@ import type { HaulPhase } from './haul';
 import type { LifeStage } from './population';
 import type { WorldMapSize } from './placement';
 
-export type BuildingState = 'producing' | 'waitingForInput' | 'unstaffed' | 'outputFull' | 'relocating' | 'housing';
+export type BuildingState = 'producing' | 'waitingForInput' | 'unstaffed' | 'outputFull' | 'relocating' | 'housing' | 'storing';
 
 export type NoticeKind = 'success' | 'rejection';
 

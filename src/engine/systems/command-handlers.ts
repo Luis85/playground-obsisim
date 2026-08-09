@@ -73,10 +73,19 @@ export interface CommandContext {
   nomadGate: () => NomadGate;
 }
 
-/** Occupancy truth for this drain: live rows plus this drain's own claims. */
+/**
+ * Occupancy truth for this drain: live rows plus this drain's own claims.
+ *
+ * Filters `ctx.demolishedIds`, the same exclusion `findBuilding` below already
+ * applies: sim-ecs defers entity removal to the post-step sync, so a building
+ * demolished earlier in this drain is still in `ctx.buildings` and its tile
+ * would otherwise still read as occupied for the rest of the drain (OBS-6-01).
+ */
 function occupiedTiles(ctx: CommandContext): TileRef[] {
   return [
-    ...ctx.buildings.map((row) => ({ col: row.position.col, row: row.position.row })),
+    ...ctx.buildings
+      .filter((row) => !ctx.demolishedIds.has(row.building.id))
+      .map((row) => ({ col: row.position.col, row: row.position.row })),
     ...ctx.claimedTiles,
   ];
 }

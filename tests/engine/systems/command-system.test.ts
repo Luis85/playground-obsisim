@@ -640,7 +640,16 @@ describe('CommandSystem', () => {
     ]);
   });
 
-  it('a tile freed by demolition is buildable again on the NEXT tick', async () => {
+  // OBS-6-01. `occupiedTiles` used to build the drain's occupancy from every
+  // LIVE building row with no `ctx.demolishedIds` filter, unlike `findBuilding`
+  // immediately below it. sim-ecs defers entity removal to the post-step sync,
+  // so a building demolished earlier in this drain was still in `ctx.buildings`
+  // and its tile still read as occupied — the construction below used to be
+  // refused with 'Cannot build there.' in the SAME drain as the demolition,
+  // only succeeding a tick later. Per-command tests cannot catch this: the
+  // defect only exists in the interaction between the two handlers in one
+  // drain, which is why both commands are queued together here.
+  it('a tile freed by demolition is buildable again in the SAME drain', async () => {
     const { tick, dispatch, snapshot } = await setup();
     await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 5, row: 5 } });
     await tick();
@@ -649,9 +658,39 @@ describe('CommandSystem', () => {
       { type: 'demolishBuilding', buildingId },
       { type: 'constructBuilding', buildingDefId: 'gatherersHut', at: { col: 5, row: 5 } },
     );
-    expect(snapshot().notices[1]).toEqual({ kind: 'rejection', message: 'Cannot build there.' });
-    await dispatch({ type: 'constructBuilding', buildingDefId: 'gatherersHut', at: { col: 5, row: 5 } });
-    expect(snapshot().notices).toEqual([{ kind: 'success', message: "Built a Gatherer's Hut." }]);
+    // Both succeed: no rejection anywhere on the board, not merely "the second
+    // notice happens to be a success" — a stray rejection elsewhere would slip
+    // past an index-1-only assertion.
+    expect(snapshot().notices).toEqual([
+      { kind: 'success', message: 'Demolished the Forester — cost refunded.' },
+      { kind: 'success', message: "Built a Gatherer's Hut." },
+    ]);
+    await tick();
+    expect(snapshot().buildings).toHaveLength(1);
+    expect(snapshot().buildings[0]).toMatchObject({ defId: 'gatherersHut', col: 5, row: 5 });
+  });
+
+  // The `moveBuilding` twin of the same bug: `handleMoveBuilding` calls the
+  // same unfiltered `occupiedTiles`, so a tile freed by a same-drain demolition
+  // was equally unreachable by a relocation, not just a fresh construction.
+  it('a tile freed by demolition is a valid MOVE target in the same drain', async () => {
+    const { tick, dispatch, snapshot } = await setup();
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 5, row: 5 } });
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'gatherersHut', at: { col: 9, row: 5 } });
+    await tick();
+    const demolishedId = snapshot().buildings.find((b) => b.defId === 'forester')!.id;
+    const moverId = snapshot().buildings.find((b) => b.defId === 'gatherersHut')!.id;
+    await dispatch(
+      { type: 'demolishBuilding', buildingId: demolishedId },
+      { type: 'moveBuilding', buildingId: moverId, to: { col: 5, row: 5 } },
+    );
+    expect(snapshot().notices).toEqual([
+      { kind: 'success', message: 'Demolished the Forester — cost refunded.' },
+      { kind: 'success', message: "Moved the Gatherer's Hut." },
+    ]);
+    // Position is a component mutation, not a deferred entity command — the
+    // same tick's snapshot already shows it landed on the freed tile.
+    expect(snapshot().buildings.find((b) => b.id === moverId)).toMatchObject({ col: 5, row: 5 });
   });
 
   it('moves a building in place — same id, workers and batch intact, visible same tick', async () => {

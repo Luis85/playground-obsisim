@@ -301,14 +301,29 @@ increment at all.
     and `legProgress(ticksLeft, legTicks)` — the same interpolation the renderer
     already uses to place the dot, so the hauler stops exactly where the player
     last saw it. It may land between tiles; nothing requires this to be integral,
-    since it is only ever a distance origin.
+    since it is only ever a distance origin. This works for all three leg kinds
+    **only because every leg freezes both its endpoints** (above); the first
+    version of this rule read endpoints that only the return leg ever set.
 - `sourceSiteId` — the site a supply trip is fetching from, and the claim on
   its stock (§2.6);
-- `destSiteId`, with `destCol` / `destRow` — where the load is going, and the
-  reservation of room there. The tile is frozen when the leg begins, exactly as
-  `pickupCol` / `pickupRow` freeze its origin and for OBS-5-01's reason: a leg
-  must be measured against the journey the simulation is running, not against a
-  tile re-read from a building that has since moved;
+- `destSiteId` — where the load is going, and the reservation of room there;
+- `legFromCol` / `legFromRow` and `legToCol` / `legToRow` — **both endpoints of
+  whichever leg is running, frozen when that leg begins.** Every leg, not only
+  the return: a `fetching` or `outbound` trip can be cancelled part-way and
+  needs the same interpolation to say where its hauler stopped, so endpoints
+  populated for one leg kind only would leave the other two reading a default
+  or a stale tile.
+
+  These replace `pickupCol` / `pickupRow`, which existed for the return leg
+  alone (OBS-5-01) and whose name stops being true the moment a `fetching` leg
+  uses them — nothing is picked up at its origin. `legTo` is a **tile**, not a
+  site id, for OBS-5-01's own reason: a leg must be measured against the
+  journey the simulation is running, not against a tile re-read from a building
+  that has since moved.
+
+  Together with `legProgress`, these two pairs describe *any* leg completely,
+  which is what lets both the cancellation rule below and the renderer drop
+  their per-phase special cases;
 - `pickedUp: boolean` — whether the load in hand came out of a building's
   output buffer. It is the discriminator §2.4's flow table needs: a hauler
   walking home holding six flour is either delivering goods the ledger has
@@ -396,8 +411,15 @@ dependence, tie-breaks ending at an id.
 claimant (below): buildings with unclaimed buffered output, ordered by
 `compareHaulCandidates` (most claimable first, then nearest, then lowest id).
 
-**Supply candidates** — a building and a source site, paired. A building
-qualifies when:
+**Supply candidates** — a building and a source site, **paired**, and the pair
+is the candidate: a building suppliable from both the camp and a depot produces
+two of them. That is not a modelling nicety — the ordering below ranks on the
+hauler→source→building route and tie-breaks on the site id, and neither is
+expressible if a candidate names only its building. A candidate that dropped
+its source would let dispatch pick a remote depot with a nearer stocked site
+standing available, which is precisely the behaviour §4 q2 is measuring.
+
+A pair qualifies when:
 
 - its recipe has inputs, it is not relocating, and **at least one colonist is
   assigned to it**. The staffing condition is not an optimisation: goods in an

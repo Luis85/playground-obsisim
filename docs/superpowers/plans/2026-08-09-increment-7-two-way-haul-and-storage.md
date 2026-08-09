@@ -68,8 +68,8 @@ Pure shared law, no engine changes, landed first so every later task has a vocab
   - `export function sitesHolding(sites, unclaimedAt: (siteId: number) => number): StoreSite[]` — every site with unclaimed stock of a resource, for §2.6's supply pairing.
   - `export type HaulKind = 'collect' | 'supply'`
   - `HaulPhase` gains `'fetching'` — a hauler walking empty to the site it will load a supply trip from. Published, so it belongs here in shared law beside the other three.
-  - `export interface SupplyCandidate { buildingId: number; col: number; row: number; resource: string; movable: number }` — `resource` is typed `ResourceId` (already imported by consumers; `haul.ts` may import from `./content-types`, which is inside `src/shared`).
-  - `export function compareSupplyCandidates(a, b, from: TileRef): number`
+  - `export interface SupplyCandidate { buildingId: number; buildingCol: number; buildingRow: number; siteId: number; siteCol: number; siteRow: number; resource: ResourceId; movable: number }` — a candidate is a **building–source pair**, not a building. A building suppliable from both the camp and a depot is two candidates, and without the source in the shape `compareSupplyCandidates` can only rank hauler-to-building distance: it could not implement §2.6's hauler→source→building ordering or its site-id tie-break, and dispatch would happily pick a remote source with a nearer stocked site available — distorting §4 q2, which is measuring exactly whether a depot shortens trips. The tile fields are named for what they are, because a bare `col`/`row` on a two-ended thing reads as the building's to everyone including the tests.
+  - `export function compareSupplyCandidates(a, b, from: TileRef): number` — `movable` descending, then the **whole route** `haulDistance(from → site) + haulDistance(site → building)` ascending, then `buildingId`, then `siteId`.
   - `export function nextSupplyTarget(candidates, from: TileRef): SupplyCandidate | null`
 - **Unchanged on purpose:** `CAMP_TILE`, `haulDistance`, `haulTicks`, `legProgress`, `HaulCandidate`, `claimableAt`, `compareHaulCandidates`, `nextHaulTarget`. `haulTicks` is re-expressed in terms of `haulTicksBetween` but keeps its signature — `haulerCapacity` and the commute charge still measure from the camp.
 
@@ -526,7 +526,11 @@ The heart of it (§2.5, §2.6). `haul-system.ts` is 157 lines and roughly double
   - `atCol` / `atRow` — **where this hauler physically is** when not on a leg. A position, not a site id: no membership to dangle when a storehouse is demolished, nothing to repair at the top of a tick. This one edit deletes the whole reachability class (spec §2.5). **Defaults to `CAMP_TILE`, not `(0, 0)`** — every other numeric field on `HaulTrip` defaults to zero, so a fresh or restored hauler would otherwise start in the map's corner and price its first leg from a tile it has never stood on. Set in `colonistComponents` (the single shared spawn list), and covered for both a recruited and a restored hauler.
   - `sourceSiteId` — the site a supply trip fetches from, and the claim on its stock
   - `destSiteId: number = CAMP_SITE_ID` — where the return leg is headed
-  - `destCol` / `destRow` — the destination tile, frozen when the return leg begins, exactly as `pickupCol`/`pickupRow` freeze its origin (OBS-5-01's rule applied to the other end of the leg). `destSiteId` alone cannot say where the hauler physically arrives: a depot relocated mid-leg resolves the same id to a *new* tile, and a demolished one resolves to nothing, leaving no origin to price the onward leg from.
+  - `legFromCol` / `legFromRow` and `legToCol` / `legToRow` — **both endpoints of whichever leg is running, frozen when that leg begins.** Every leg, not just the return: a `fetching` or `outbound` trip cancelled part-way needs the same interpolation, and reading endpoints that were only ever populated for the return leg puts the hauler at a default or a stale tile — which is the cancellation bug of the previous round, surviving its own fix.
+
+    This replaces `pickupCol`/`pickupRow`, which were introduced for the return leg alone (OBS-5-01) and whose name stops being true the moment a `fetching` leg uses them: nothing is picked up at its origin. The published snapshot fields rename with them (`haulLegFromCol` and so on), and the layout gets simpler rather than more complex — `legFrom`, `legTo` and `legProgress` describe *any* leg with no per-phase cases at all.
+
+    `legTo` is a tile, not a site id, for the reason OBS-5-01 established: a depot relocated mid-leg resolves the same id to a **new** tile, and a demolished one resolves to nothing, leaving no origin to price the onward leg from.
   - `pickedUp = false` — whether the load in hand came out of an output buffer. The flow-accounting discriminator (§2.4): by the time a load reaches a site, a genuine delivery and an undelivered supply remainder are indistinguishable without it.
 - `haulerCapacity(homeTile)` — **unchanged from increment 6**, camp-relative. The bed-to-base version was collateral from the discarded base model; reverting it means increment 6's measured commute figures, and §4 q1's control, are not disturbed by this increment at all.
 - `reset()` clears `kind`, `pickedUp`, `sourceSiteId`, `destSiteId` and the rest. **`atCol`/`atRow` must be brought up to date first, not merely preserved.** While a leg runs they name its *origin*, so a trip cancelled several ticks in would otherwise snap the hauler back over every tile it had walked. Derive the position from the leg's frozen endpoints and `legProgress(ticksLeft, legTicks)` — the interpolation the renderer already uses to place the dot — so the hauler stops where the player last saw it:
@@ -534,7 +538,7 @@ The heart of it (§2.5, §2.6). `haul-system.ts` is 157 lines and roughly double
   ```ts
   cancel(trip) {
     const t = legProgress(trip.ticksLeft, trip.legTicks);
-    trip.atCol = trip.pickupCol + (trip.destCol - trip.pickupCol) * t;   // and atRow
+    trip.atCol = trip.legFromCol + (trip.legToCol - trip.legFromCol) * t;   // and atRow
     trip.reset();
   }
   ```
@@ -637,7 +641,7 @@ const arrive = (trip: HaulTrip, row: BuildingRow, capacity: number): void => {
   const ticks = haulTicksBetween(row.position, dest, BALANCE.haulTilesPerTick);
   trip.ticksLeft = ticks;
   trip.legTicks = ticks;
-  trip.pickupCol = row.position.col;
+  trip.legFromCol = row.position.col;
   trip.pickupRow = row.position.row;
 };
 ```
@@ -1031,7 +1035,7 @@ No-WebGL parity — the promise made in increment 3 §1.1 and kept ever since (�
 - Modify: `scripts/world-smoke-harness/main.ts`, `scripts/world-smoke.mjs`
 
 - [ ] **Step 1: Extract the glyph drawing first.** `renderer.ts` is at 445 of 500 with nothing baselined and this task adds a storehouse glyph, a fill ring and a carrying-in marker. Extract, confirm `npm run smoke:world` is unchanged, commit that alone.
-- [ ] **Step 2:** Storehouse glyph with a fill ring; `storing` and `waitingForInput` state colours; a hauler carrying **in** drawn distinguishably from one carrying **out**, so flow direction reads at a glance. **Read `haulPickedUp`, not `haulKind`** — the job kind is frozen at dispatch and stops describing the cargo exactly when §2.5's round trip works: a `supply` trip carrying collected output home would be drawn backwards, and that is the headline case in acceptance criterion 2. Also draw the `fetching` phase: a hauler walking empty toward a site, which needs no new geometry (its origin is frozen in `pickupCol/pickupRow` like a returning leg's).
+- [ ] **Step 2:** Storehouse glyph with a fill ring; `storing` and `waitingForInput` state colours; a hauler carrying **in** drawn distinguishably from one carrying **out**, so flow direction reads at a glance. **Read `haulPickedUp`, not `haulKind`** — the job kind is frozen at dispatch and stops describing the cargo exactly when §2.5's round trip works: a `supply` trip carrying collected output home would be drawn backwards, and that is the headline case in acceptance criterion 2. Also draw the `fetching` phase — and note it needs no per-phase geometry at all: every leg freezes `legFrom` and `legTo` (Task 6), so one interpolation over `legProgress` places a dot in any phase. That is strictly less code than the `CAMP_ANCHOR` special-casing it replaces.
 - [ ] **Step 3:** A legend entry for each of the three. The legend explains every encoding — true since increment 2, and this increment is not the exception.
 - [ ] **Step 4: Smoke checks, one change per fixture phase.** A supply leg: a dot leaves a site **carrying**, reaches a building, returns. This depends on Task 10 Step 3 having published `haulSiteCol`/`haulSiteRow` — without them `haulSpot` draws every leg to and from the camp anchor, and a depot phase would look identical to a camp one, which is the kind of check that stays green with the feature absent. Nearly every smoke check has the shape `!after.equals(before)`, so a phase that moves five things at once stays true for reasons unrelated to its name (OBS-4-04). Mutation-test by disabling the feature in `renderer.ts` or `layout.ts` and confirming that named check — and only it — goes red.
 - [ ] **Step 5:** `grep -cve '^\s*$' src/app/world/renderer.ts src/app/world/glyphs.ts` — both under 500. Gates, commit.

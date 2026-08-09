@@ -4,7 +4,7 @@
 
 **Goal:** Finish increment 4's sentence. A recipe's inputs stop being paid out of a global store and start being carried to the building that needs them; a `storehouse` gives the player a second place to drop and collect, so a distant cluster becomes an investment rather than a mistake.
 
-**Architecture:** One new component (`InputBuffer`), one new building role (`storage` beside `recipe` and `beds`), and one reinterpretation: `Stockpile` stops being a single map and becomes a map per **store site** while keeping every aggregate method it exposes today. `src/shared/haul.ts` grows the site law — `StoreSite`, `CAMP_SITE_ID`, two-point distances, nearest-with-room — exactly as it already owns the camp-relative law. `HaulSystem` gains a trip `kind`; the return leg is identical for both kinds, which is what keeps this a change to one system rather than a second one.
+**Architecture:** One new component (`InputBuffer`), one new building role (`storage` beside `recipe` and `beds`), and one reinterpretation: `Stockpile` stops being a single map and becomes a map per **store site** while keeping every aggregate method it exposes today. `src/shared/haul.ts` grows the site law — `StoreSite`, `CAMP_SITE_ID`, two-point distances, nearest-with-room — exactly as it already owns the camp-relative law. `HaulSystem` gains a trip `kind` and one leading `fetching` leg for supply trips; the rest of the trip is identical for both kinds, which is what keeps this a change to one system rather than a second one. **Haulers deliberately have no base site** — spec §2.5 records the model that was tried and discarded, and Task 6 is what that buys.
 
 **Tech Stack:** TypeScript, sim-ecs 0.6.4, Vue 3 + Pinia, Vitest, Excalibur (canvas only), fallow (quality gates).
 
@@ -64,9 +64,10 @@ Pure shared law, no engine changes, landed first so every later task has a vocab
   - `export interface StoreSite { id: number; col: number; row: number; capacity: number | null }`
   - `export function haulTicksBetween(from: TileRef, to: TileRef, tilesPerTick: number): number`
   - `export function nearestSite(col: number, row: number, sites: readonly StoreSite[]): StoreSite | null`
-  - `export function nearestSiteWithRoom(col, row, sites, heldAt: (siteId: number) => number): StoreSite | null`
+  - `export function nearestSiteWithRoom(col, row, sites, heldAt: (siteId: number) => number, amount: number): StoreSite | null` — **takes the load size**: a predicate that only skips already-full sites sends 12 units at a depot holding 55 of 60 and splits the load on arrival. The test is `heldAt(id) + amount <= capacity`.
+  - `export function sitesHolding(sites, unclaimedAt: (siteId: number) => number): StoreSite[]` — every site with unclaimed stock of a resource, for §2.6's supply pairing.
   - `export type HaulKind = 'collect' | 'supply'`
-  - `HaulPhase` gains `'rebasing'` — an idle hauler walking empty to a site with work. Published, so it belongs here in shared law beside the other three.
+  - `HaulPhase` gains `'fetching'` — a hauler walking empty to the site it will load a supply trip from. Published, so it belongs here in shared law beside the other three.
   - `export interface SupplyCandidate { buildingId: number; col: number; row: number; resource: string; movable: number }` — `resource` is typed `ResourceId` (already imported by consumers; `haul.ts` may import from `./content-types`, which is inside `src/shared`).
   - `export function compareSupplyCandidates(a, b, from: TileRef): number`
   - `export function nextSupplyTarget(candidates, from: TileRef): SupplyCandidate | null`
@@ -522,13 +523,13 @@ The heart of it (§2.5, §2.6). `haul-system.ts` is 157 lines and roughly double
 **Interfaces:**
 - `HaulTrip` gains, all runtime-only:
   - `kind: HaulKind = 'collect'`
-  - `atSiteId: number = CAMP_SITE_ID` — where this hauler currently stands
+  - `atCol` / `atRow` — the **tile** this hauler stands on while idle. A tile, not a site id: there is no membership to dangle when a storehouse is demolished, and nothing to repair at the top of a tick. This one edit deletes the whole reachability class (spec §2.5).
+  - `sourceSiteId` — the site a supply trip fetches from, and the claim on its stock
   - `destSiteId: number = CAMP_SITE_ID` — where the return leg is headed
   - `destCol` / `destRow` — the destination tile, frozen when the return leg begins, exactly as `pickupCol`/`pickupRow` freeze its origin (OBS-5-01's rule applied to the other end of the leg). `destSiteId` alone cannot say where the hauler physically arrives: a depot relocated mid-leg resolves the same id to a *new* tile, and a demolished one resolves to nothing, leaving no origin to price the onward leg from.
   - `pickedUp = false` — whether the load in hand came out of an output buffer. The flow-accounting discriminator (§2.4): by the time a load reaches a site, a genuine delivery and an undelivered supply remainder are indistinguishable without it.
-- `haulerCapacity(homeTile, siteTile)` — the commute is charged bed → base, not bed → camp (§2.5).
-- `reset()` clears `kind`, `pickedUp`, `destSiteId` and the rest but **leaves `atSiteId` alone**: a cancelled trip leaves the hauler standing where they were, not teleported to the camp.
-- `rebaseHaulers(rows, sites)` — every hauler whose `atSiteId` is not in the live site list falls back to `CAMP_SITE_ID`, run at the top of the tick.
+- `haulerCapacity(homeTile)` — **unchanged from increment 6**, camp-relative. The bed-to-base version was collateral from the discarded base model; reverting it means increment 6's measured commute figures, and §4 q1's control, are not disturbed by this increment at all.
+- `reset()` clears `kind`, `pickedUp`, `sourceSiteId`, `destSiteId` and the rest but **leaves `atCol`/`atRow` alone**: a cancelled trip leaves the hauler standing where it was, not teleported to the camp.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -571,7 +572,7 @@ it('a hauler idle at a demolished storehouse dispatches from the camp next tick'
 
 - [ ] **Step 2: Implement dispatch**
 
-`haul-dispatch.ts` owns: the claim map (counting **both** kinds — a supply hauler also loads output on arrival, §2.6), the collect candidates (unchanged), the supply candidates, and `chooseJob(trip, sites, …)`, whose order is **supply from this site, then rebase toward supply elsewhere (Step 3b), then collect**.
+`haul-dispatch.ts` owns: the claim map (counting **both** kinds — a supply hauler also loads output on arrival, §2.6), the collect candidates (unchanged), the supply candidates, and `chooseJob(trip, sites, …)`, whose order is **supply, then collect** — supply candidates are paired with a source site across *every* site (§2.6), so there is no third tier and no base to be stuck at.
 
 The supply-first rule and its non-deadlock belong in a comment where the fallthrough is, not only in the spec:
 
@@ -622,7 +623,7 @@ const arrive = (trip: HaulTrip, row: BuildingRow, capacity: number): void => {
 
 The `trip.amount === 0` guard is load-bearing and not an optimisation: a hauler still holding an undelivered remainder must carry *that* home rather than mixing two resources in one pair of hands, which `HaulTrip` has no room to represent.
 
-**The load fits on arrival by construction**, because choosing `destSiteId` reserved room for it (Step 3c). So the deposit handler's ordinary path is: bank (`addAt` when `trip.pickedUp`, `refundAt` when not), set `atSiteId`, go idle.
+**The load fits on arrival by construction**, because choosing `destSiteId` reserved room for it (Step 3c). So the deposit handler's ordinary path is: bank (`addAt` when `trip.pickedUp`, `refundAt` when not), set `atCol`/`atRow` to where it now stands, go idle.
 
 Two earlier drafts of this brief tried to solve it at arrival instead, and both leaked. Checking for room only at pickup lets two haulers aim at a depot with room for one. Re-resolving on arrival and comparing site ids fixes the *full* depot and misses the **partially** full one — `nearestSiteWithRoom` still resolves to the site underfoot when it has any room at all, so the load splits, part banked and part forwarded to the camp with nobody walking it. Reservation removes both, which is why the fix belongs at the moment the destination is chosen rather than the moment it is reached.
 
@@ -646,70 +647,47 @@ The camp is unbounded and cannot vanish, so the walk terminates. **The test asse
 Claims are recomputed every tick from live components, which is what makes dispatch a pure function of world state. It follows that **any intent a hauler holds must be reconstructible from its own components next tick** — an intent recorded nowhere is not a claim, however firmly a brief says it is. Both of the following were real defects in earlier drafts of this plan before they were rules:
 
 - `destSiteId` **reserves** room at the destination from the moment it is chosen, and `nearestSiteWithRoom` counts reservations against capacity exactly as `claimableAt` counts claims against a building's buffer. **Every bank at a bounded site respects those reservations, including a cancellation's `refundAt`** — which has no hauler behind it and so takes the last-resort route to the camp when it does not fit. A refund that eats reserved room puts the returning hauler straight back into the split-load case reservation exists to remove.
-- A **rebasing** hauler keeps in `targetId` the building it is travelling to serve. An earlier draft set it to `null` — defensible-looking, since a rebase has no building destination — which made the supply claim unreconstructible, so every idle hauler would rebase toward the same depot on the same tick. That is exactly the fleet-wide thrash the claim was introduced to prevent, asserted in prose and absent from the state.
+- A **fetching** hauler records `sourceSiteId`, which is its claim on that site's stock. Without it two haulers both plan to take the same last six wheat and one arrives to nothing. (The discarded base model had the same defect in a different costume: its rebase leg carried no target, so the claim it promised was unreconstructible and the whole fleet would have rebased at once.)
 
-Two fixtures, both of which fail loudly on the drafts above: two haulers loading for a depot with room for one (and a third for a depot with room for *part* of a load); three idle haulers and one remote supply job, of which exactly one rebases.
+Two fixtures, both of which fail loudly without the reservations above: two haulers destined for a depot with room for one (and a third for a depot with room for *part* of a load); three idle haulers and one remote supply job, of which exactly one fetches it.
 
-- [ ] **Step 3b: Rebasing — the rule without which §2.5 deadlocks**
+- [ ] **Step 3b: The fetching leg**
 
-Write the failing test first, because this one is easy to read as a nicety and it is not:
+A supply trip begins with a walk to wherever the goods are. Write the failing test first, because the cases it covers are the ones the discarded base model needed four separate rules for:
 
 ```ts
-it('a hauler at the camp reaches a depot holding the inputs a mill needs', async () => {
-  // THE deadlock fixture. A depot in the far corner holding wheat, a mill
-  // beside it with an EMPTY output buffer, every hauler standing at the camp,
-  // and the camp holding no wheat. Without rebasing nothing ever sends a
-  // hauler to that depot: supply loads only at your own site, and you only
-  // change site by depositing at one.
+it('a hauler at the camp fetches from a remote depot to feed a mill beside it', async () => {
+  // Under the base model this deadlocked: a supply job loaded only at the
+  // hauler's own site, and a hauler only changed site by depositing at one, so
+  // nothing ever sent one to a depot holding wheat next to a mill with no
+  // output to collect. It needed a `rebasing` phase, a priority rule to make
+  // that phase fire, and a claim to stop the whole fleet firing it at once.
   //
-  // Assert that the MILL EVENTUALLY PRODUCES, not that a hauler moved — the
-  // symptom the player would report is a cluster that never starts, and an
-  // assertion on hauler position would pass for a rebase that goes nowhere
-  // useful.
+  // With no base it is an ordinary supply job whose first leg is long.
+  // Assert the MILL EVENTUALLY PRODUCES — the symptom a player reports is a
+  // cluster that never starts.
 });
 ```
 
-Then the same fixture reached two other ways, because all three are ordinary events and all three deadlock identically:
+Then the same fixture reached three more ways, all of which also deadlocked before and are now expected to be dull: after a reload; after that depot's haulers have all died; for a depot built this tick. And a fourth with a **busy forester beside the camp**, which is the one that caught the base model's priority rule being unreachable. Keep all five. Each is a regression sentinel against reintroducing a base by accident.
 
-- **after a reload** — §2.9 puts every hauler at the camp, so a saved colony in exactly this shape reopens stalled;
-- **after the depot's last based hauler dies or retires** — `standDown` clears `hauling`, and a newly assigned hauler starts at the camp;
-- **for a depot no hauler has ever stood at**, which is every depot on the tick it is built.
-
-The rule: an idle hauler with no supply job **at its own site** walks empty-handed to the site holding the best supply job it could take from somewhere else. `phase: 'rebasing'`, `targetId` **retained** as the building this rebase exists to serve (Step 3c — nulling it breaks the claim), the origin frozen into `pickupCol/pickupRow` and the destination published as the site end — the same shape a `returning` leg already has, so the layout needs no new case. On arrival `atSiteId` becomes that site and the phase returns to `idle`; it dispatches from there next tick. The walk is priced with `haulTicksBetween` like everything else.
-
-**It outranks collect, and that is the part to get right.** The conservative-looking choice — rebasing last, below both real jobs — is worse than useless here: a colony almost always has *something* to collect, so the branch would never fire in any colony that was actually running, and the deadlock would survive while all three fixtures above passed. Hence a fourth:
+The leg itself:
 
 ```ts
-it('reaches the depot even while a forester beside the camp keeps producing', async () => {
-  // THE discriminating case for the PRIORITY, as distinct from the rule.
-  // Permanent collect work at the camp; the remote mill must still get its
-  // wheat. A lowest-priority rebase passes the other three and deadlocks here
-  // — a test suite agreeing with a rule rather than checking it.
-});
+// phase 'fetching': atCol/atRow -> the source site's tile, empty-handed.
+// On arrival, takeAt the load (recording NOTHING — goods in transit are not
+// gone, §2.4) and switch to 'outbound' from the source tile to the building.
 ```
 
-**What stops every hauler walking off at once is the claim, not the priority.** A rebasing hauler claims the supply job it is travelling toward, exactly as an outbound hauler claims the output it is going to fetch, so a depot holding one job's worth of wheat attracts one hauler and the rest keep collecting. Pin it with three idle haulers and one job available.
+A source that is demolished or sent into transit under a `fetching` hauler simply cancels the trip: nothing has been picked up, so there is nothing to dispose of. No rule needed, which is the point of the model.
 
-- [ ] **Step 4: Rebase haulers whose site went away**
+- [ ] **Step 4: (deleted)**
 
-At the top of the run function, before any dispatch:
-
-```ts
-// A storehouse can be demolished or sent into transit while haulers are based
-// at it, and atSiteId is not persisted at all — so a reloaded hauler's base is
-// only valid because load happens to put everyone at the camp. Resolving here
-// covers demolition, relocation and load in one place; repairing it in the
-// command handlers would need writing twice, would still miss relocation
-// (nothing is removed there), and would leave the invariant depending on every
-// future caller remembering it (§2.7).
-for (const { job, trip } of workerRows) {
-  if (job.hauling && !siteIds.has(trip.atSiteId)) trip.atSiteId = CAMP_SITE_ID;
-}
-```
+The base model needed a pass at the top of every tick to re-resolve haulers whose site had been demolished or sent into transit. With no base there is no membership to dangle. **If you find yourself needing this step, a base has crept back in** — stop and re-read spec §2.5.
 
 - [ ] **Step 5: Mutation-check**
 
-Eleven separate mutations, each of which must redden exactly one test: let `refundAt` ignore reservations (the cancellation-plus-return fixture), read the destination from `destSiteId`'s live tile rather than the frozen one (the relocated-mid-return fixture), drop the destination reservation (the two-haulers-one-depot and partial-room fixtures), null a rebasing hauler's `targetId` (the three-haulers-one-job fixture), demote `rebasing` below collect (the busy-forester fixture, and *only* it — if the other three rebase tests also redden, they are not distinguishing the rule from its priority), drop the unload (`row.input.add`), drop the return-leg load, drop the `trip.amount -= placed` remainder accounting, force `pickedUp = true` unconditionally (the delivery-inflation test), delete the `rebasing` fallthrough (the three deadlock tests, and *only* those), and delete the site-validity loop in Step 4 (both stranded-hauler tests).
+Nine separate mutations, each of which must redden exactly one test: drop the `amount` argument from `nearestSiteWithRoom` so it only skips full sites (the partial-room fixture); let `refundAt` ignore reservations (the cancellation-plus-return fixture); read the destination from `destSiteId`'s live tile rather than the frozen one (the relocated-mid-return fixture); drop the destination reservation (the two-haulers-one-depot fixture); drop the `sourceSiteId` claim (the three-haulers-one-job fixture); restrict supply sources to the site the hauler stands on (**all five** reachability fixtures — this is the base model creeping back, and it should be loud); drop the unload (`row.input.add`); drop the return-leg load; and force `pickedUp = true` unconditionally (the delivery-inflation test).
 
 - [ ] **Step 6: Gates and commit**
 
@@ -756,7 +734,7 @@ Extend the existing determinism test to cover both kinds: build one world state,
 
 ### Task 8: Goods, demolition, relocation — and two carried-forward issues
 
-Conservation (§2.7) plus OBS-5-03 and OBS-6-08 (§2.12). `command-handlers.ts` is 426 lines and the placement handlers move out here.
+Conservation (§2.7) plus OBS-6-08 (§2.12); OBS-5-03 is settled without code (Step 3). `command-handlers.ts` is 426 lines and the placement handlers move out here.
 
 **Files:**
 - Create: `src/engine/systems/placement-handlers.ts` (construct / move / demolish, moved verbatim first)
@@ -766,12 +744,11 @@ Conservation (§2.7) plus OBS-5-03 and OBS-6-08 (§2.12). `command-handlers.ts` 
 
 - [ ] **Step 1: Move the handlers, green suite, commit that alone.** A move and a behaviour change in one commit is two mistakes waiting to be attributed to each other.
 
-  **Then read what you moved, rather than assuming a verbatim move is finished.** `handleMoveBuilding` retargets an outbound hauler with `haulTicks(to.col, to.row, BALANCE.haulTilesPerTick)` — camp-relative, and correct only while the camp was the only origin a trip could start from. Task 6 dispatches from `atSiteId`, so a hauler based at a remote depot now gets charged a camp-to-target walk it is not walking, and the renderer derives the dot's position from that same `legTicks`. That is OBS-5-01 exactly — a leg length disagreeing with the leg the sim is running — reintroduced by a task that only moved code:
+  **Then read what you moved, rather than assuming a verbatim move is finished.** `handleMoveBuilding` retargets an outbound hauler with `haulTicks(to.col, to.row, BALANCE.haulTilesPerTick)` — camp-relative, and correct only while the camp was the only origin a trip could start from. Task 6 dispatches from wherever the hauler is standing, so one that started its leg at a remote depot now gets charged a camp-to-target walk it is not walking, and the renderer derives the dot's position from that same `legTicks`. That is OBS-5-01 exactly — a leg length disagreeing with the leg the sim is running — reintroduced by a task that only moved code:
 
 ```ts
 // Resolve the hauler's live base and measure from it, not from the camp.
-const base = siteById.get(trip.atSiteId) ?? campSite;
-const ticks = haulTicksBetween(base, to, BALANCE.haulTilesPerTick);
+const ticks = haulTicksBetween(legOrigin(trip), to, BALANCE.haulTilesPerTick);
 ```
 
   The test needs a fixture where the two figures **differ** — a depot in the far corner and a target moved near the camp — or it passes against the camp-relative version it exists to rule out.
@@ -825,23 +802,21 @@ it('cancelling a supply trip whose source was demolished in the same drain loses
 });
 ```
 
-- [ ] **Step 3: OBS-5-03 — take the decision the note declined to take**
+- [ ] **Step 3: OBS-5-03 — nothing to implement, and that is the decision**
 
-**This step's deliverable is a decision, recorded, not necessarily a code change.** Read `docs/issues/2026-08-09-demolish-and-rebuild-bypasses-the-priced-relocation.md` in full first: it offers three resolutions and explicitly declines to choose between them, because pricing the bypass means defining "this construct is really a relocation" and that definition is the hard part.
+**Already decided, before implementation: accepted, not fixed.** The issue note carries the reasoning and is already marked `status: Accepted`; spec §2.12 and §2.13 record it. Nothing in this task changes code for it.
 
-What this increment adds to the decision is a fact, not an implementation: **a storehouse has none of the friction the note's "why it is minor" argument rests on.** No crew (`workerSlots: 0`), no batch progress, and — by §2.7's spill-to-camp rule — no goods lost either. For the one building a player most wants to reposition as the colony spreads, the bypass is free and frictionless. Make the choice with that in view.
+The short version, so nobody reopens it mid-task: pricing the bypass needs *persisted demolition history*, because the cheap version does not work — charging downtime only when a construct lands on the same tick as a matching demolish is defeated by waiting a tick. A save field, its guard, its migration and its clamp is a real cost for a gap worth a few ticks to a player willing to demolish, wait and rebuild. `[[Construction as Work]]` closes it for free as a side effect, which is where it should be closed.
 
-**One candidate is ruled out in advance, because it does not work.** Charging downtime when a construct lands on the *same tick* as a matching demolish is bypassed by waiting a tick: the same-tick ledger is gone by then, and all it has bought is a one-tick tax on an unchanged exploit. Anything in that family needs persisted demolition history — a new save field, in an increment that already has one — so weigh that cost honestly against "accept it, and record why", which remains a legitimate outcome.
-
-Whatever is chosen, the note is updated to say so and to record the storehouse fact, so a future reader sees the reasoning rather than an unexplained status change. **If the choice is to accept, the issue does not get `status: Done`** — it gets the decision written into it and stays open or is closed as accepted, per whatever convention `docs/issues/` already uses for a finding that was judged and not fixed. Do not manufacture a resolution to clear a checkbox.
+**If you disagree after reading the note, say so rather than implementing something** — that is a scope change, not a task detail.
 
 - [ ] **Step 4: OBS-6-08 — one path to a relocating crew's work power**
 
 Engine-side and snapshot-side reach zero two different ways today. A relocating *store* now needs excluding from site lists as well, which would make it three. Collapse to one derivation. Read the issue note first.
 
-- [ ] **Step 5: Update both notes**
+- [ ] **Step 5: Update the OBS-6-08 note**
 
-For OBS-6-08, and for OBS-5-03 only if it was actually fixed: set `status: Done`, `resolved: 2026-08-09`, and name the commit that did it — the convention every resolved note in `docs/issues/` follows. **Do not** write the resolution before the commit exists; a note naming a commit that does not exist is worse than no note. For OBS-5-03 if the decision was to accept, record the decision and the storehouse fact, and leave the status honest.
+Set `status: Done`, `resolved: 2026-08-09`, and name the commit that did it — the convention every resolved note in `docs/issues/` follows. **Do not** write the resolution before the commit exists; a note naming a commit that does not exist is worse than no note. OBS-5-03's note is already final (Step 3) and needs no edit.
 
 - [ ] **Step 6: Gates and commit.**
 
@@ -971,7 +946,7 @@ const from = w.haulPhase === 'outbound' ? CAMP_ANCHOR : pickup;
 const to = w.haulPhase === 'outbound' ? door : CAMP_ANCHOR;
 ```
 
-Both endpoints are the camp, hardcoded, and `atSiteId`/`destSiteId` are runtime-only. So a depot trip would be drawn walking to and from the camp tent, and Task 12's promised "a dot leaves a site, reaches a building, and returns" is unwritable. `haulSiteCol`/`haulSiteRow` publish the **site end** of the hauler's current situation — where they stand while idle, the frozen origin while outbound, the destination while returning. One pair covers all three states, and it is the same fix for the same reason as `haulPickupCol/Row` in OBS-5-01: the app cannot re-derive an endpoint the sim froze.
+Both endpoints are the camp, hardcoded, and the trip's own endpoints are runtime-only. So a depot trip would be drawn walking to and from the camp tent, and Task 12's promised "a dot leaves a site, reaches a building, and returns" is unwritable. `haulSiteCol`/`haulSiteRow` publish the **site end** of the hauler's current leg — the source it walks to while `fetching`, the source it left while `outbound` on a supply trip, and the frozen destination while `returning`. One pair covers every state, and it is the same fix for the same reason as `haulPickupCol/Row` in OBS-5-01: the app cannot re-derive an endpoint the sim froze.
 
 Cover all three states in the layout test, including **idle at a depot** — an idle hauler currently falls through to camp placement, so a fix that only handles the two moving legs leaves a dot standing in the wrong place.
 
@@ -1010,7 +985,7 @@ No-WebGL parity — the promise made in increment 3 §1.1 and kept ever since (�
 - Modify: `scripts/world-smoke-harness/main.ts`, `scripts/world-smoke.mjs`
 
 - [ ] **Step 1: Extract the glyph drawing first.** `renderer.ts` is at 445 of 500 with nothing baselined and this task adds a storehouse glyph, a fill ring and a carrying-in marker. Extract, confirm `npm run smoke:world` is unchanged, commit that alone.
-- [ ] **Step 2:** Storehouse glyph with a fill ring; `storing` and `waitingForInput` state colours; a hauler carrying **in** drawn distinguishably from one carrying **out**, so flow direction reads at a glance. **Read `haulPickedUp`, not `haulKind`** — the job kind is frozen at dispatch and stops describing the cargo exactly when §2.5's round trip works: a `supply` trip carrying collected output home would be drawn backwards, and that is the headline case in acceptance criterion 2. Also draw the `rebasing` phase: a hauler walking empty between two sites, which needs no new geometry (its origin is frozen in `pickupCol/pickupRow` like a returning leg's).
+- [ ] **Step 2:** Storehouse glyph with a fill ring; `storing` and `waitingForInput` state colours; a hauler carrying **in** drawn distinguishably from one carrying **out**, so flow direction reads at a glance. **Read `haulPickedUp`, not `haulKind`** — the job kind is frozen at dispatch and stops describing the cargo exactly when §2.5's round trip works: a `supply` trip carrying collected output home would be drawn backwards, and that is the headline case in acceptance criterion 2. Also draw the `fetching` phase: a hauler walking empty toward a site, which needs no new geometry (its origin is frozen in `pickupCol/pickupRow` like a returning leg's).
 - [ ] **Step 3:** A legend entry for each of the three. The legend explains every encoding — true since increment 2, and this increment is not the exception.
 - [ ] **Step 4: Smoke checks, one change per fixture phase.** A supply leg: a dot leaves a site **carrying**, reaches a building, returns. This depends on Task 10 Step 3 having published `haulSiteCol`/`haulSiteRow` — without them `haulSpot` draws every leg to and from the camp anchor, and a depot phase would look identical to a camp one, which is the kind of check that stays green with the feature absent. Nearly every smoke check has the shape `!after.equals(before)`, so a phase that moves five things at once stays true for reasons unrelated to its name (OBS-4-04). Mutation-test by disabling the feature in `renderer.ts` or `layout.ts` and confirming that named check — and only it — goes red.
 - [ ] **Step 5:** `grep -cve '^\s*$' src/app/world/renderer.ts src/app/world/glyphs.ts` — both under 500. Gates, commit.
@@ -1065,7 +1040,7 @@ npm run balance:population 2>&1 | tee -a /tmp/increment-7-report.txt
 
 - [ ] **Step 1: Rewrite §4** with what the harness measured, replacing "reasoning to be checked" with a measured column. A constant that moves must move because of a number in `/tmp/increment-7-report.txt`, and that number goes in the table. **"Validated, unchanged" is a legitimate answer** to any row.
 - [ ] **Step 2: README.** An Increment 7 section in the voice of the existing six — what a *player* can now do, not what was implemented. Update the Documentation list with the new spec and plan paths.
-- [ ] **Step 3: Backlog.** Set the Two-Way Haul feature to its shipped state and add PBI notes under it for what actually shipped, filed and parented the way every other requirement note is (`docs/README_PRODUCT_BACKLOG.md` is the contract). Anything deliberately not built — construction as work, roads, storehouse-to-storehouse transfer — stays a `New` item rather than disappearing.
+- [ ] **Step 3: Backlog.** Set the Two-Way Haul feature to its shipped state and add PBI notes under it for what actually shipped, filed and parented the way every other requirement note is (`docs/README_PRODUCT_BACKLOG.md` is the contract). Anything deliberately not built stays a `New` item rather than disappearing. `docs/requirements/Construction as Work.md` already exists (written when it was descoped); roads and storehouse-to-storehouse transfer still need notes.
 - [ ] **Step 4: Issues.** Anything found and judged real but not fixed gets a note, parented into the backlog. Increments 4, 5 and 6 each found several; finding none would be the surprising outcome, not the good one.
 - [ ] **Step 5: Final gates**
 

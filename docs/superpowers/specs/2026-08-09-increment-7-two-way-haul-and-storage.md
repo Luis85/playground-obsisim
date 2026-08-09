@@ -132,18 +132,24 @@ grows the concept the rest of this increment is built on:
   still what `haulerCapacity` and the commute charge measure from.
 - `nearestSite(col, row, sites)` — fewest tiles, ties by site id, so the choice
   never depends on iteration order.
-- `nearestSiteWithRoom(col, row, sites, heldAt)` — where a loaded hauler should
-  unload. `heldAt(siteId)` supplies current occupancy **plus what haulers
+- `nearestSiteWithRoom(col, row, sites, heldAt, amount)` — where a hauler
+  carrying `amount` should unload. **The load size is a parameter, and that is
+  load-bearing:** a predicate that only skips sites already *full* will happily
+  send twelve units to a depot holding 55 of 60, and the arrival then splits the
+  load — the partial-overflow defect this reservation design exists to remove,
+  reintroduced in the signature. The test is
+  `heldAt(site.id) + amount <= site.capacity`. `heldAt(siteId)` supplies current occupancy **plus what haulers
   already headed there have reserved** (§2.6), which is what makes a load fit
   on arrival rather than needing a rule for when it does not; a site with
   `capacity: null` always has room, so the camp is the guaranteed fallback and
   this
   function can never return null while the camp exists.
-- `nearestSiteHolding(col, row, sites, amountAt, resource)` — reserved for a
-  future increment that lets a hauler walk to a source; **not used this
-  increment** (§2.5's supply trips load where the hauler already stands) and
-  therefore **not added**. Named here only so a reader knows the omission is
-  deliberate.
+- `sitesHolding(sites, unclaimedAt, resource)` — every site with unclaimed
+  stock of a resource, for the supply pairing in §2.6. An earlier draft
+  deliberately omitted this, on the grounds that a supply trip loaded where the
+  hauler already stood; removing the hauler's base is exactly what makes it
+  necessary, and what makes every site's stock reachable by construction rather
+  than by a rule.
 
 The balance constants stay in `BALANCE` and arrive as arguments, preserving the
 rule that `src/shared/**` imports nothing outside itself.
@@ -253,14 +259,40 @@ load reaches a site the two cases look identical: see `pickedUp` in §2.5.
 - Saturation at `MAX_SAVED_COUNTER` stays, per site, for the reason it exists
   today: the engine must never write a save its own guard would reject.
 
-### 2.5 Haul trips gain a kind, and a return leg that always earns
+### 2.5 Haul trips gain a kind, and a leg that fetches
+
+**Haulers belong nowhere.** That is the decision this section rests on, and it
+is a reversal: an earlier draft of this spec gave every hauler a *base site*
+and let a supply trip load only from that base. It bought a tidy two-leg trip
+and cost four things in succession — a reachability deadlock (a depot's stock
+was unreachable by anyone not already standing at it, which included every
+hauler after a reload, after a depot's last hauler died, and on the day any
+depot was built), a `rebasing` phase to escape it, a priority rule to make the
+rebase actually fire, and a claim so a fleet of haulers would not all rebase at
+once. All four are deleted here along with the base. A supply job is chosen
+across **every** site, and the trip simply begins with a walk to wherever the
+goods are.
+
+One consequence worth naming immediately: **`haulerCapacity` goes back to
+measuring a hauler's commute from the camp**, exactly as increment 6 shipped
+it. The base-relative version was collateral from the base, and reverting it
+means increment 6's measured commute figures — and §4 q1's control, which
+requires a raw producer's gradient to be unchanged — are not disturbed by this
+increment at all.
 
 `HaulTrip` gains, all runtime-only like the rest of it:
 
 - `kind: HaulKind`, where `HaulKind = 'collect' | 'supply'`;
-- `atSiteId: number` — the site the hauler is currently standing at
-  (`CAMP_SITE_ID` when idle at the camp, which is where every hauler starts and
-  where every reloaded hauler stands, per §2.9);
+- `atCol` / `atRow` — the **tile** the hauler is standing on while idle. A
+  tile, not a site id: there is no membership to dangle when a storehouse is
+  demolished, and nothing to repair at the top of a tick;
+- `sourceSiteId` — the site a supply trip is fetching from, and the claim on
+  its stock (§2.6);
+- `destSiteId`, with `destCol` / `destRow` — where the load is going, and the
+  reservation of room there. The tile is frozen when the leg begins, exactly as
+  `pickupCol` / `pickupRow` freeze its origin and for OBS-5-01's reason: a leg
+  must be measured against the journey the simulation is running, not against a
+  tile re-read from a building that has since moved;
 - `pickedUp: boolean` — whether the load in hand came out of a building's
   output buffer. It is the discriminator §2.4's flow table needs: a hauler
   walking home holding six flour is either delivering goods the ledger has
@@ -268,152 +300,88 @@ load reaches a site the two cases look identical: see `pickedUp` in §2.5.
   remainder the colony already owned (bank with `refundAt`), and nothing about
   the load itself distinguishes them.
 
-**A hauler's `atSiteId` may name a site that no longer exists.** A storehouse
-can be demolished, or sent into transit by a move, while haulers are based at
-it — and §2.3 removes a relocating store from the site list, so this is not
-only a demolition case. `HaulSystem` therefore **re-resolves every hauler's
-base against the live site list at the top of each tick**, falling back to
-`CAMP_SITE_ID`, rather than each command handler repairing haulers it happens
-to think of. One place, covering demolition, relocation and load together; the
-alternative is a hauler stranded at a site that cannot be resolved to a tile,
-which is either a null dereference or a hauler who never dispatches again.
+`HaulPhase` becomes `'idle' | 'fetching' | 'outbound' | 'returning'`. A collect
+trip is two legs, exactly as increment 4 shipped it; a supply trip is the same
+trip with one leading leg to pick the goods up. That is the whole difference:
 
-**An idle hauler with nothing to do at its site walks to one where there is.**
-This rule is not a refinement; without it the rest of §2.5 deadlocks. A supply
-job loads at the hauler's own site, and a hauler only changes site by
-*depositing* at one — so a depot holding wheat, beside a mill with no output to
-collect, is unreachable by a hauler standing at the camp. Nothing ever sends
-one there. The colony stalls permanently, and three ordinary events produce
-exactly that state: **a reload** (§2.9 puts every hauler at the camp), **the
-death or retirement of a depot's last based hauler**, and **the first hauler a
-new depot ever needs**, since a freshly assigned hauler starts at the camp.
-
-So `HaulPhase` gains `'rebasing'`: an idle hauler with no supply job **at its
-own site** walks, empty-handed, to the site holding the best supply job it
-could take from somewhere else — arriving with `atSiteId` set to it and
-dispatching from there next tick. The walk is priced like any other; nothing
-here is free.
-
-**Rebasing outranks collect, and gating it on "no collect job anywhere" would
-have been useless.** A colony almost always has *something* to collect — one
-forester beside the camp produces forever — so a lowest-priority rebase would
-never fire in any colony that was actually running, and the deadlock above
-would survive in exactly the ordinary case while passing a test fixture built
-without a producer. The reason it outranks collect is the same reason supply
-does: a building with no inputs produces nothing at all, and if the only way to
-feed it is to walk to where its inputs are, that walk is worth more than
-another collect trip.
-
-**What stops every hauler walking off at once is the claim, not the priority.**
-A rebasing hauler claims the supply job it is travelling toward, exactly as an
-outbound hauler claims the output it is going to fetch (§2.6), so a depot with
-one job's worth of wheat attracts one hauler and the rest keep collecting. Any
-tendency to thrash is a measurement, not an argument: §4 question 3 reports the
-split of hauler-ticks across all three outcomes.
-
-This is **not** storehouse-to-storehouse transfer (§2.13): no goods move, a
-hauler does.
-
-Given this, `atSiteId` still stays out of the save — but **not** because a
-reloaded colony resumes identically, which is a claim this spec made in an
-earlier draft and which is false. It cannot: §2.9 puts every hauler at the camp
-with its cargo banked there, so a colony saved with a hauler based at a depot,
-or mid-trip, comes back with different claims, different travel times and a
-different distribution across sites, and rebasing reconstructs *a* sensible
-base a few ticks later rather than the one it had.
-
-Increment 4 could promise identical resumption because there was one site, so
-"everyone at the camp" *was* the state. With several sites that promise is
-gone, and what remains is worth stating precisely because it is what the tests
-should check:
-
-- **conservation is exact** — not one unit is created or destroyed across a
-  save and load, wherever it was standing or being carried;
-- **the colony converges** — every site's stock stays reachable, and work
-  resumes within a bounded number of ticks rather than stalling;
-- **determinism still holds within a run** — identical world state yields
-  identical claims, which is the property job selection actually guarantees.
-
-That is a weaker guarantee than increment 4's, honestly stated, and it is
-bought in exchange for keeping `HaulTrip` out of the save format and its guards
-entirely — increment 4's own trade, still worth making.
-
-A trip is still exactly two legs, and the **return leg is identical for both
-kinds**, which is what keeps this a small change to `HaulSystem` rather than a
-second system:
-
-1. **Idle at a site** → claim a job (§2.6). For a `supply` job, load
-   `min(capacity, deficit, held at this site)` of the chosen resource out of
-   `atSiteId` *now*, before walking. For a `collect` job, walk empty.
-   Phase `outbound`, `ticksLeft = haulTicksBetween(site tile, building tile)`.
-2. **Outbound** → decrement. On arrival:
-   - a `supply` load is put into the building's `InputBuffer` (whatever fits,
-     recording consumption for what lands; the remainder stays in hand and
-     rides home with `pickedUp` still false, so no unit is ever destroyed and
-     none is later miscounted as a delivery);
+1. **Idle** → claim a job (§2.6).
+   - `supply` → phase `fetching`, leg from `atCol`/`atRow` to the source site's
+     tile. The stock it intends to take is claimed now, so a second hauler is
+     not sent at the same last six wheat.
+   - `collect` → phase `outbound`, leg from `atCol`/`atRow` to the building.
+2. **Fetching** → on arrival, `takeAt` the load from the source site (recording
+   nothing — the goods are in transit, not gone: §2.4). Phase `outbound`, leg
+   from the source tile to the building.
+3. **Outbound** → on arrival:
+   - a `supply` load is put into the building's `InputBuffer` — whatever fits,
+     recording consumption for what lands, since that is the moment the goods
+     leave the colony's store for good. Any remainder stays in hand with
+     `pickedUp` still false and rides home, so no unit is destroyed and none is
+     later miscounted as a delivery;
    - **then, for both kinds**, a hauler with empty hands loads from that
      building's `OutputBuffer` — `fullestResource`, up to its capacity — and
      sets `pickedUp`. A supply trip that finds nothing waiting returns empty,
-     which is the honest cost of a one-directional errand.
-   - Phase `returning`, destination `nearestSiteWithRoom(building tile, …)`,
-     `ticksLeft` computed from the building's **current** tile (a building
-     moved mid-trip charges the walk actually walked — the existing rule), and
-     `legTicks` / `pickupCol` / `pickupRow` frozen here exactly as today
-     (OBS-5-01).
-3. **Returning** → decrement. **The load fits on arrival by construction**:
-   choosing `destSiteId` reserved room for it (§2.6's claim invariant), and no
-   other hauler can take reserved space, so the ordinary case is simply bank,
-   set `atSiteId`, go `idle`. Reservation is what makes this the ordinary case
-   — an earlier draft checked for room only at pickup, so two haulers could
-   both aim at a depot with room for one, and a *partially* full depot was
-   worse still: the load would split, part banked and part forwarded to the
-   camp without anyone walking it.
-
-   **The leg's destination tile is frozen when the leg begins**, in
-   `destCol`/`destRow`, exactly as `pickupCol`/`pickupRow` freeze its origin
-   and for exactly the reason OBS-5-01 established: a leg must be measured
-   against the journey the simulation is actually running, not against a tile
-   re-read from a building that has since moved. `destSiteId` alone cannot say
-   where the hauler physically arrives — if the destination storehouse
-   relocates mid-leg, the same id resolves to a *new* tile and the hauler would
-   deposit at a place it never walked to; if it is demolished, the id resolves
-   to nothing and there is no origin left to price the onward leg from. The
-   frozen tile answers both, and it is also what `haulSiteCol`/`haulSiteRow`
-   (§2.10) should publish for a returning hauler, so the drawn walk and the
-   simulated one stay the same walk.
+     which is the honest cost of a one-directional errand. **This is the round
+     trip the increment is named for**, and it survives the base's removal
+     untouched.
+   - Phase `returning`, destination resolved and its room reserved, both
+     endpoints frozen.
+4. **Returning** → on arrival the load **fits by construction**, because
+   choosing the destination reserved room for it (§2.6) and reserved room is
+   reserved against every bank, including refunds. So the ordinary path is
+   simply: bank (`addAt` when `pickedUp`, `refundAt` when not), set
+   `atCol`/`atRow` to where it now stands, go `idle`.
 
    **The one case reservation cannot cover is a destination that stops
    existing** — demolished, or sent into transit by a move. Then the hauler
-   re-resolves and **walks on**: a fresh `returning` leg from the frozen tile
-   it has arrived at to the newly resolved site, carrying its whole load the
-   entire way. The camp is unbounded and cannot vanish, so the walk
-   terminates.
+   re-resolves and **walks on**: a fresh `returning` leg from the frozen tile it
+   has arrived at to the newly resolved site, carrying its whole load the entire
+   way, because goods are carried and never forwarded while a hauler is standing
+   there to carry them (§2.4). The camp is unbounded and cannot vanish, so the
+   walk terminates.
 
-A hauler therefore migrates naturally to wherever the work is: deposit at a
-remote storehouse and you are standing at it next tick, ready to supply the
-buildings around it from what you just dropped off.
+**A site can stop existing under a `fetching` hauler too**, and it needs no new
+rule: the trip cancels, exactly as an outbound trip cancels when its building is
+demolished (§2.7). Nothing was taken yet, so nothing needs disposing of.
 
-**A hauler's commute is charged from home to `atSiteId`**, not to the camp.
-`haulerCapacity(homeTile)` becomes `haulerCapacity(homeTile, siteTile)`: the
-distance term is the walk from bed to base, which is what it always modelled —
-increment 6 measured it to `CAMP_TILE` because the camp was the only base there
-was. A colonist housed beside a remote depot and based there is a good hauler;
-one housed at the camp and based at the depot is not. Every site that reserves
-or takes capacity must keep calling the same function with the same arguments
-(the reservation/load mismatch `haulerCapacity`'s doc comment warns about is
-now two arguments wide instead of one).
+**What this costs.** A supply trip is now three legs where the base model made
+it two, and a hauler that fetches from the camp to a near mill walks a leg it
+would previously have skipped. That is the honest price of the goods being
+somewhere: the base model did not remove that walk, it hid it, by only ever
+letting haulers take jobs whose walk had already been paid. §4 q3 measures the
+fetch leg's share of hauler-ticks.
+
+**On the save.** Nothing here is persisted; a reloaded hauler stands at the
+camp with its cargo banked there, which is increment 4's simplification
+unchanged. That is not the same as resuming identically, and this spec said
+otherwise in an earlier draft. It cannot: a colony saved with an idle hauler
+beside a far depot comes back with that hauler at the camp, so its next trip's
+first leg differs. What holds, and what the tests should check:
+
+- **conservation is exact** — not one unit is created or destroyed across a
+  save and load, wherever it was standing or being carried;
+- **the colony converges** — every site's stock stays reachable (which, with no
+  base, is now true by construction rather than by a rule), and work resumes
+  within a bounded number of ticks;
+- **determinism still holds within a run** — identical world state yields
+  identical claims, which is the property job selection actually guarantees.
+
+That is weaker than increment 4's promise, honestly stated, and it buys keeping
+`HaulTrip` out of the save format and its guards entirely — increment 4's own
+trade, still worth making.
 
 ### 2.6 Which job, and in what order
 
 Two candidate sets are built each tick from live components, and both are pure
 functions of world state — no memory between ticks, no iteration-order
-dependence, tie-breaks ending at the building id.
+dependence, tie-breaks ending at an id.
 
 **Collect candidates** — unchanged from increment 4 except for who counts as a
 claimant (below): buildings with unclaimed buffered output, ordered by
 `compareHaulCandidates` (most claimable first, then nearest, then lowest id).
 
-**Supply candidates** — a building qualifies when all of these hold:
+**Supply candidates** — a building and a source site, paired. A building
+qualifies when:
 
 - its recipe has inputs, it is not relocating, and **at least one colonist is
   assigned to it**. The staffing condition is not an optimisation: goods in an
@@ -424,72 +392,55 @@ claimant (below): buildings with unclaimed buffered output, ordered by
   unstaffed mill with no way to recover it but staffing the mill. Deliveries
   are gated, not the goods already inside: a building whose crew died keeps
   what it holds and consumes it if it is ever staffed again;
-- the resource it is shortest of (ties by catalog order, mirroring
-  `OutputBuffer.fullestResource`) is held at **this hauler's** site;
-- `movable = min(capacity, inputBufferCap − inputBuffered, held at this site)`
-  is at least `BALANCE.minSupplyUnits`, **or is everything that site holds of
-  that resource**. Without the second clause the threshold strands the tail:
-  every recipe today consumes one unit per batch, so a depot holding exactly
-  one flour can feed a bakery but can never produce a candidate, and with no
-  store-to-store transfer that unit sits there for the rest of the game while
-  the ledger and the UI keep counting it. The threshold exists to stop a
-  thirteen-tile walk for a *top-up*, not to make the last of something
-  unusable. (It is only unusable to production — `pay` still spends it on
-  construction and meals, since that draws across all sites — which is why this
-  is a wart rather than a hole, and why one clause is the right size of fix.)
+- some site holds the resource it is shortest of (ties by catalog order,
+  mirroring `OutputBuffer.fullestResource`);
+- `movable = min(capacity, inputBufferCap − inputBuffered − claimed deliveries,
+  unclaimed stock at that site)` is at least `BALANCE.minSupplyUnits`, **or is
+  everything that site holds of that resource**. Without the second clause the
+  threshold strands the tail: every recipe today consumes one unit per batch, so
+  a depot holding exactly one flour can feed a bakery but can never produce a
+  candidate, and that unit would sit there for the rest of the game while the
+  ledger and the UI keep counting it. The threshold exists to stop a
+  thirteen-tile walk for a *top-up*, not to make the last of something unusable.
 
-Ordered by `movable` descending, then nearest to the hauler's site, then lowest
-building id.
+Ordered by `movable` descending, then by the **whole trip** — the hauler's tile
+to the source, plus the source to the building — ascending, then by building
+id, then by site id. Ranking on the whole trip rather than on either leg is
+what stops a hauler crossing the map to fetch from a depot when the camp behind
+it holds the same goods.
 
-**The dispatch order is supply from here, then rebase toward supply elsewhere,
-then collect.** A building waiting on inputs produces nothing at all, while a
-building with a full output buffer has already produced and its goods are
-standing safe where they were made — so supply outranks collect, and the walk
-that makes a supply job possible inherits that ranking rather than sitting
-below the work it enables (§2.5).
+**Supply is offered first.** A building waiting on inputs produces nothing at
+all, while a building with a full output buffer has already produced and its
+goods are standing safe where they were made. The obvious objection is
+deadlock — every hauler supplying, nobody collecting, the ledger drained — and
+it is self-limiting for a structural reason worth stating rather than hoping
+for: a supply job requires stock *somewhere*, and only collection puts it
+there. As the ledger empties, supply candidates disappear and collection
+resumes on its own. §4 question 3 measures that rather than trusting this
+paragraph.
 
-The obvious objection to supply-first is deadlock — every hauler supplying,
-nobody collecting, the ledger drained — and it cannot happen, for a structural
-reason worth stating rather than hoping for: a supply job requires stock *at
-the hauler's own site*, and only collection puts it there. As the ledger
-empties, supply candidates disappear and collection resumes on its own. §4
-question 3 measures that rather than trusting this paragraph.
+**The claim invariant.** Claims are recomputed every tick from live components —
+that is what makes dispatch a pure function of world state and keeps it
+independent of entity order. It follows that **any intent a hauler holds must
+be reconstructible from that hauler's own components at the start of the next
+tick.** An intent recorded nowhere is not a claim, however firmly the prose says
+it is. This spec broke that rule twice in earlier drafts, so it is stated once
+here and the four claims below all follow from it:
 
-**The claim invariant, which two earlier drafts of this section broke in the
-same way.** Claims are recomputed every tick from live components — that is
-what makes dispatch a pure function of world state and keeps it independent of
-entity order. It follows that **any intent a hauler holds must be
-reconstructible from that hauler's own components at the start of the next
-tick.** An intent recorded nowhere is not a claim, however firmly the prose
-says it is. Two consequences, each of which was a real defect before it was a
-rule:
-
-- **A rebasing hauler keeps the building id it is travelling to serve** in
-  `targetId`. An earlier draft set it to `null` — reasonable-looking, since a
-  rebase has no building destination — and thereby made the supply claim
-  unreconstructible, so every idle hauler in the colony would rebase toward the
-  same depot on the same tick. That is precisely the fleet-wide thrash the
-  claim was introduced to prevent, asserted in prose and absent from the state.
-- **A loaded hauler's destination reserves room there** from the moment it is
-  chosen. `destSiteId` is that reservation, and `nearestSiteWithRoom` counts
-  reservations against a site's capacity exactly as `claimableAt` counts
-  claims against a building's buffer. This is what makes the load *fit* on
-  arrival rather than needing a rule for what to do when it does not (§2.5).
-
-  **Reserved room is reserved against everyone, not only against the next
-  dispatch.** Every bank at a bounded site — including a cancellation's
-  `refundAt`, which has no hauler behind it — must respect outstanding
-  reservations, or a refund lands in space someone else is walking towards and
-  the promise above quietly stops holding. A refund that cannot fit takes the
-  last-resort route to the camp (§2.4), which is correct precisely because
-  there is no hauler left to walk it anywhere.
-
-**Claims count both kinds.** `buildClaimMap` today counts outbound haulers
-against the output they will take. A supply hauler now also loads output on
-arrival (§2.5 step 2), so it claims too — otherwise two haulers would be sent
-at the same six units. The mirror is also needed: a building already being
-supplied has its pending delivery subtracted from its deficit, or every idle
-hauler in the colony leaves for the same empty mill on the same tick.
+- **output**, against a building's `OutputBuffer`: counted for haulers of
+  *both* kinds heading there, since a supply hauler also loads output on
+  arrival. Without it two haulers are sent at the same six units.
+- **input**, against a building's remaining input room: a building already
+  being supplied has the pending delivery subtracted from its deficit, or every
+  idle hauler in the colony leaves for the same empty mill on the same tick.
+- **source stock**, against a site's holdings, held by a `fetching` hauler in
+  `sourceSiteId`: two haulers must not both plan to take the same last six
+  wheat.
+- **destination room**, against a bounded site's capacity, held in
+  `destSiteId`: this is what makes a load fit on arrival rather than needing a
+  rule for when it does not. It binds *every* bank at that site, including a
+  cancellation's `refundAt` — which has no hauler behind it and so takes the
+  last-resort route to the camp when it does not fit.
 
 ### 2.7 Goods, and the buildings that hold them
 
@@ -532,22 +483,20 @@ than re-litigates:
   through to the camp, and make "bank into a storehouse that no longer exists"
   inexpressible.
 - **Retargeting an outbound hauler when its building moves** must recompute the
-  leg from **the hauler's own base**, not from the camp. `handleMoveBuilding`
+  leg from **where that hauler actually started it**, not from the camp. `handleMoveBuilding`
   today calls `haulTicks(to.col, to.row, …)`, which is camp-relative and was
   correct while the camp was the only origin; once §2.5 dispatches from
-  `atSiteId`, a hauler based at a remote depot would be charged a camp-to-target
-  walk it is not walking. That is precisely the OBS-5-01 failure — a leg length
+  the hauler's own tile, a hauler standing at a remote depot would be charged a
+  camp-to-target walk it is not walking. That is precisely the OBS-5-01 failure — a leg length
   disagreeing with the leg the sim is actually running — and it desyncs the
   drawn dot the same way, since the renderer derives its position from
-  `legTicks`. Use `haulTicksBetween(base tile, new tile, …)`.
-- **Haulers based at a store that stops being one.** Both cases above strand
-  every hauler whose `atSiteId` names that store — and so does a load, where
-  `atSiteId` is not persisted at all. This is handled once, in `HaulSystem`,
-  by re-resolving a hauler's base against the live site list each tick (§2.5),
-  rather than in the two command handlers that happen to cause it. A handler-
-  side repair would have to be written twice, would still miss the relocation
-  case (nothing is demolished there), and would leave the invariant depending
-  on every future caller remembering it.
+  `legTicks`. Use `haulTicksBetween(the leg's frozen origin, new tile, …)`.
+- **A hauler `fetching` from a store that stops being one** simply cancels,
+  the same way an outbound trip cancels when its building is demolished:
+  nothing has been picked up yet, so there is nothing to dispose of and the
+  hauler is dispatched afresh next tick from wherever it stands. There is no
+  base to repair — haulers hold a tile, not a site membership (§2.5), which is
+  what removes this whole class rather than handling it.
 
 ### 2.8 System order
 
@@ -616,7 +565,7 @@ would put haulage before production and cost a tick on the output side instead
   for `buffer` today.
 - **`HaulTrip` still never enters the save.** A hauler caught mid-trip banks
   its load into the camp, whichever kind of trip it was and whichever leg it
-  was on, and stands at the camp on load with `atSiteId = CAMP_SITE_ID`. This
+  was on, and stands at the camp on load. This
   is increment 4's deliberate simplification, unchanged: conservation is exact,
   the trip needs no guard or migration, and job selection is deterministic from
   persisted state, so a reloaded colony resumes identically.
@@ -643,11 +592,12 @@ would put haulage before production and cost a tick on the output side instead
   precisely the one a `haulKind`-driven marker would draw backwards. Publish
   the cargo's origin, which `pickedUp` already is (§2.4).
 - `ColonistSnapshot` gains **`haulSiteCol` / `haulSiteRow`** — the tile of the
-  *site end* of this hauler's current situation: where they stand while idle,
-  the frozen origin while outbound, the destination while returning. Without
+  *site end* of this hauler's current leg: the source it is walking to while
+  `fetching`, the source it left while `outbound` on a supply trip, and the
+  frozen destination while `returning`. Without
   it the canvas cannot draw this increment at all: `haulSpot`
   (`src/app/world/layout.ts`) hardcodes `CAMP_ANCHOR` as both the outbound
-  origin and the return destination, and `atSiteId`/`destSiteId` are
+  origin and the return destination, and the trip's own endpoints are
   runtime-only, so every depot trip would be drawn walking to and from the camp
   tent. This is the same fix, for the same reason, as `haulPickupCol/Row` in
   OBS-5-01 — the app cannot re-derive an endpoint the sim froze — and one pair
@@ -688,15 +638,18 @@ tables, the promise made in increment 3 §1.1 and kept ever since:
   full stockpile, so a pass cannot come from there being no flour anywhere.
 - `HaulSystem` gets tick-by-tick trips of both kinds, the supply-then-collect
   round trip, and explicit determinism tests: identical world state yields
-  identical claims across runs and across a save/load cycle.
+  identical claims **across runs**. Not across a save/load cycle — §2.5 says
+  why that is no longer true, and a test asserting it would either fail or be
+  weakened until it asserted nothing. Save and load is covered by the
+  conservation-and-convergence contract instead.
 - These edge cases are pinned by tests, not discovered later:
   - a supply hauler arriving at a building whose input buffer filled meanwhile
     — the remainder rides home rather than vanishing;
   - a storehouse demolished while a hauler is `returning` to it;
   - a storehouse relocated mid-leg (the destination re-resolves on arrival);
   - a storehouse demolished, and separately relocated, while a hauler is
-    **idle at it** — that hauler must dispatch normally the following tick
-    rather than being stranded (§2.5);
+    **`fetching` from it** — the trip cancels with nothing to dispose of, and
+    the hauler dispatches normally next tick;
   - a supply remainder banked on the return leg, asserting that
     `Delivered/t` does **not** move for it while a collect load of the same
     size does — one fixture, two runs, and the difference is the assertion;
@@ -705,13 +658,14 @@ tables, the promise made in increment 3 §1.1 and kept ever since:
     the returning hauler must still find its load fits;
   - a destination storehouse **relocated mid-return**: the hauler arrives where
     it was walking to, not at the depot's new tile;
-  - two haulers loading for a depot with room for **one** load, and a third for
-    one with room for **part** of a load: each ends up somewhere its whole load
-    fits, and no unit is banked anywhere a hauler did not walk it. The
-    partial-room case is the one a room-check-at-pickup design gets wrong most
-    often, because it looks handled;
-  - three idle haulers and **one** remote supply job: exactly one rebases. A
-    rebasing hauler that forgot its target would send all three;
+  - two haulers destined for a depot with room for **one** load, and a third
+    for one with room for **part** of a load: each ends up somewhere its whole
+    load fits, and no unit is banked anywhere a hauler did not walk it. The
+    partial-room case is the one this design has got wrong most often, because
+    it looks handled — it survived two separate fixes before the load size
+    became a parameter of the site choice at all;
+  - three idle haulers and **one** remote supply job: exactly one fetches it,
+    because the source stock is claimed (§2.6);
   - a supply trip cancelled while its source storehouse is **full**, and again
     while that storehouse has been **demolished in the same drain** — the
     colony's total is unchanged in both, and no ledger site survives without a
@@ -725,19 +679,16 @@ tables, the promise made in increment 3 §1.1 and kept ever since:
   - a **v6 colony reopened paused** with goods in a depot: stock, wealth and
     meals per head read the same before the first tick as after it. Distinct
     camp and depot balances, or an aggregation that ignores one of them passes;
-  - **the reachability case, three ways** (§2.5): a colony reloaded with inputs
-    in a depot and no collectible output beside it delivers those inputs within
-    a bounded number of ticks; the same after the depot's last based hauler
-    dies; and the same for a newly built depot no hauler has ever stood at. All
-    three are one rule and one test fixture with three entry points — and each
-    one deadlocks forever without `rebasing`, so the assertion is that the mill
-    eventually produces, not that a hauler moved;
-  - **the same, with a busy forester beside the camp.** This is the fixture
-    that discriminates, and the one whose absence would have let a
-    lowest-priority rebase rule ship: a colony with permanent collect work
-    available must *still* reach the remote depot. Without §2.5's priority the
-    three cases above pass and this one deadlocks, which is a test suite
-    agreeing with a rule rather than checking it;
+  - **the reachability cases, which are now expected to be dull** (§2.5): a
+    colony reloaded with inputs in a depot and no collectible output beside it;
+    the same after that depot's haulers have all died; the same for a
+    newly-built depot; and the same again with a busy forester beside the camp
+    providing permanent collect work. Every one of these deadlocked under the
+    discarded base model and needed a rule of its own. With no base they are
+    ordinary supply jobs whose first leg happens to be long, and they are kept
+    **because** they are dull now — each is a regression sentinel against
+    reintroducing a base by accident. The assertion is that the mill eventually
+    produces;
   - **an unstaffed processor is never supplied**, while an identical staffed
     one beside it is — two buildings, one fixture, and the difference is the
     assertion;
@@ -776,10 +727,11 @@ tables, the promise made in increment 3 §1.1 and kept ever since:
   each rather than leaving it to whoever trips the gate first. No baseline is
   loosened to accommodate this increment.
 
-### 2.12 Two carried-forward issues, resolved here
+### 2.12 Two carried-forward issues, settled here
 
 Both are open, both are minor, and both live in exactly the code this
-increment rewrites — which is the only reason they are in scope:
+increment rewrites — which is the only reason they are in scope. One is fixed;
+the other is decided and deliberately not fixed.
 
 - **OBS-5-03** — demolish-and-rebuild bypasses the priced relocation entirely,
   for an empty building. Increment 5 priced moving a building; demolishing it
@@ -797,14 +749,18 @@ increment rewrites — which is the only reason they are in scope:
   reposition as the colony spreads, the bypass becomes free and frictionless,
   and the note's "why it is minor" reasoning no longer applies.
 
-  **What this increment owes is the decision, not a particular fix.** The note
-  offers three resolutions and explicitly declines to choose; the new fact
-  above is what the choice should now be made against. One candidate is ruled
-  out in advance because it does not work: charging downtime only when a
-  construct lands on the *same tick* as a matching demolish is bypassed by
-  waiting one tick, and adds a one-tick tax to an exploit instead of closing
-  it. "Accept it, and record why" remains a legitimate outcome — but it has to
-  be reached with the storehouse case in view, and the note updated to say so.
+  **Decided: accepted, not fixed.** The note offered three resolutions and
+  declined to choose; this increment chooses the third, with the storehouse
+  fact above on the table. Pricing the bypass needs *persisted demolition
+  history* — a new save field, in an increment that already adds one — because
+  the cheap version does not work: charging downtime only when a construct
+  lands on the *same tick* as a matching demolish is bypassed by waiting a
+  tick, and taxes the exploit rather than closing it. That is a real cost to
+  close a gap worth a few ticks and two extra clicks to the player who bothers.
+  So the section header above is slightly wrong for this one: it is *resolved*
+  here in the sense that the decision is taken and written down, not in the
+  sense that code changed. §2.13 records it as an accepted quirk, and the issue
+  note carries the reasoning.
 - **OBS-6-08** — a relocating crew's work power is computed then discarded on
   the engine side and reaches zero a different way on the snapshot side. The
   duplication becomes a third path the moment a relocating *store* has to be
@@ -813,10 +769,11 @@ increment rewrites — which is the only reason they are in scope:
 ### 2.13 Explicitly out of scope
 
 - **Construction as work.** Materials are still paid from the ledger and the
-  building appears finished. This is the named successor to this increment, for
-  the reason given in §1.1: it needs a construction-site entity, a builder
-  role, and delivered materials — all of which sit on top of the input
-  delivery built here.
+  building appears finished. Descoped deliberately and **written down rather
+  than dropped**: `docs/requirements/Construction as Work.md` is the backlog
+  Feature, and it is the named successor to this increment for the reason given
+  in §1.1 — it needs a construction-site entity, a builder role, and delivered
+  materials, all of which sit on top of the input delivery built here.
 - **Roads, terrain and pathfinding.** Straight-line distance only, still —
   increment 4's own out-of-scope item, deferred a third time and now clearly
   behind the storehouse in value: a depot shortens a trip more than a road
@@ -834,6 +791,10 @@ increment rewrites — which is the only reason they are in scope:
 - **The tick-interval sync seam** stays deferred (OBS-4-09's note, deferred by
   increments 5 and 6 as well).
 - **Multiple storehouse tiers.** One def.
+- **Closing the demolish-and-rebuild relocation bypass** (OBS-5-03). Decided
+  and accepted rather than deferred by omission — §2.12 has the reasoning, and
+  the issue note carries it forward so a later increment inherits a judgement
+  rather than a silence.
 
 ---
 
@@ -918,13 +879,15 @@ practice?**
 §2.6 argues the deadlock away structurally. Measure it: run a colony with a
 deliberately drained ledger and every building wanting inputs, and confirm that
 collection resumes rather than the colony sitting still. Report the split of
-hauler-ticks across **all three** outcomes — supply, rebase and collect — over a
-long run, and how often a supply trip returns loaded; the round-trip mechanic in
-§2.5 is only worth its complexity if that number is not near zero. **Rebase
-ticks are the ones to watch for thrash.** They are pure overhead, justified
-only by the supply work they unlock, so a run where they are a large share of
-the total means the claim in §2.5 is not holding haulers in place the way it is
-supposed to.
+hauler-ticks between the two kinds over a long run, and how often a supply trip
+returns loaded; the round-trip mechanic in §2.5 is only worth its complexity if
+that number is not near zero.
+
+**The fetch leg is the overhead to watch.** A supply trip is three legs where
+the discarded base model made it two, and the first leg buys nothing but
+position. Report its share of hauler-ticks. If it is large, the ranking in §2.6
+— which orders on the *whole* trip rather than on either leg — is not doing its
+job of keeping haulers fetching from the nearest stocked site.
 
 **A fourth reading, taken for free and worth having:** the population harness
 staffs but **cannot build** (increment 6 §4.1). Increment 6 flagged that as a

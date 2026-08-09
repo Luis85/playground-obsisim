@@ -326,6 +326,14 @@ increment at all.
     since it is only ever a distance origin. This works for all three leg kinds
     **only because every leg freezes both its endpoints** (above); the first
     version of this rule read endpoints that only the return leg ever set.
+
+    **Every path that ends a trip goes through this**, without exception — the
+    rule is worth stating that way because the paths that forget are the ones
+    written later, by someone following the surrounding code rather than this
+    paragraph. The fetch-arrival cancellations (§2.5 step 2) are the case in
+    point: they fire *after* the hauler has walked its whole leg, so the correct
+    position is `legTo` while the fields still hold `legFrom`, and skipping the
+    update teleports the hauler back across the leg it just finished.
 - `sourceSiteId` and `plannedAmount` — the site a supply trip is fetching from,
   and how much it intends to take. The quantity is its own field rather than a
   reuse of `amount`, for a reason that only shows up at save time: a fetching

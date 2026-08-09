@@ -584,6 +584,8 @@ The heart of it (§2.5, §2.6). `haul-system.ts` is 157 lines and roughly double
 
   A fractional position is fine; it is only ever a distance origin.
 
+  **`reset()` is private to `cancel()`. Nothing else may call it.** Every branch that ends a trip goes through `cancel()`, because every one of them needs the position brought up to date first — and the branches that forget are the ones added later, by someone reading the surrounding code rather than this rule. Both fetch-arrival cancellations are examples: they fire *after* the hauler has walked its whole leg, so `legProgress` is 1 and the correct position is `legTo`, while `atCol`/`atRow` still hold `legFrom`. A bare `reset()` there preserves the stale origin and teleports the hauler back across the leg it just finished, mis-pricing its next dispatch and jumping its marker. If a future branch genuinely must not move the hauler, it still calls `cancel()` — `legProgress` decides, not the caller.
+
 - [ ] **Step 1: Write the failing tests**
 
 Tick-by-tick, because a trip is a state machine and a test that only reads the end state passes for the wrong reasons:
@@ -777,7 +779,7 @@ The leg itself:
 // and carry it to a building already known to be gone, tying up both until the
 // arrival path refunds them. Nothing has been taken yet, so this is a clean
 // cancel: no disposal, no remainder.
-if (targetGone(trip)) { trip.reset(); return; }
+if (targetGone(trip)) { cancel(trip); return; }   // cancel(), never reset() — see below
 //
 // And the SOURCE, by tile rather than by id — round nineteen's lesson applied
 // to the other end of the trip. A storehouse that relocates keeps its
@@ -788,7 +790,7 @@ if (targetGone(trip)) { trip.reset(); return; }
 // was priced against, so it is the tile that has to still be there.
 const source = siteById.get(trip.sourceSiteId);
 if (source === undefined || source.col !== trip.legToCol || source.row !== trip.legToRow) {
-  trip.reset();   // clean: nothing has been taken yet
+  cancel(trip);   // clean: nothing has been taken yet — but still cancel(), not reset()
   return;
 }
 //

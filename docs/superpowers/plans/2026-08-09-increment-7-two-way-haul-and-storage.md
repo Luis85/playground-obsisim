@@ -17,6 +17,13 @@ what starts delivering them. **In between, every input-consuming building — mi
 bakery, sawmill, workshop — sits at `waitingForInput` with ample stock and idle
 haulers, and the multi-building integration test is skipped because of it.**
 
+The window has a second face, from Task 4 onward: **the `storehouse` is
+purchasable and inert.** `BUILDING_IDS` puts it in the build palette the moment
+the def exists, but `HaulSystem` still deposits every load at the camp and never
+reads `storage` — so 20 wood and 10 planks buys a shed that does nothing until
+Task 6 makes it a store site. Same window, same closing task; noted here because
+it is the more visible half to a player and the easier one to mistake for a bug.
+
 That window is real, and it is stated here so nobody discovers it by bisecting
 into it or by merging the branch half-finished. Two things about it:
 

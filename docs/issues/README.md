@@ -39,18 +39,19 @@ folder being tidy.
 
 | id | severity | title |
 | --- | --- | --- |
-| OBS-6-01 | minor | [A demolished tile is still occupied for the rest of the drain](2026-08-08-a-demolished-tile-is-still-occupied-for-the-rest-of-the-drain.md) |
-| OBS-6-03 | minor | [An idle adult crossing the elder band retires silently, while a working one is announced](2026-08-08-an-idle-adult-retires-without-a-notice.md) |
-| OBS-6-05 | minor | [The v4 migration conflates "has a shelter" with "has a usable one"](2026-08-09-migration-conflates-having-a-shelter-with-having-a-usable-one.md) |
-| OBS-6-06 | minor | [The homeless work-power penalty is invisible in the Population view](2026-08-09-the-commute-penalty-is-invisible-in-the-population-view.md) |
-| OBS-6-07 | minor | [Three correct-but-untested paths, and one net with a hole](2026-08-09-three-correct-paths-with-no-test-and-one-net-with-a-hole.md) |
+| OBS-6-08 | minor | [A relocating crew's work power is computed and discarded on the engine side, and reaches zero a different way on the snapshot side](2026-08-09-a-relocating-crews-work-power-is-computed-then-discarded.md) |
 
 ## Resolved — increment 6
 
 | id | severity | title |
 | --- | --- | --- |
+| OBS-6-01 | minor | [A demolished tile is still occupied for the rest of the drain](2026-08-08-a-demolished-tile-is-still-occupied-for-the-rest-of-the-drain.md) |
 | OBS-6-02 | important | [Two colonists dying on the same tick freeze the whole simulation for a tick each](2026-08-08-simultaneous-deaths-freeze-the-simulation.md) |
+| OBS-6-03 | minor | [An idle adult crossing the elder band retires silently, while a working one is announced](2026-08-08-an-idle-adult-retires-without-a-notice.md) |
 | OBS-6-04 | important | [Three long-horizon balance tests are nine tenths of the default dev loop](2026-08-09-three-tests-are-nine-tenths-of-the-default-dev-loop.md) |
+| OBS-6-05 | minor | [The v4 migration conflates "has a shelter" with "has a usable one"](2026-08-09-migration-conflates-having-a-shelter-with-having-a-usable-one.md) |
+| OBS-6-06 | minor | [The homeless work-power penalty is invisible in the Population view](2026-08-09-the-commute-penalty-is-invisible-in-the-population-view.md) |
+| OBS-6-07 | minor | [Three correct-but-untested paths, and one net with a hole](2026-08-09-three-correct-paths-with-no-test-and-one-net-with-a-hole.md) |
 
 ## Open — increment 5 (validated balance)
 

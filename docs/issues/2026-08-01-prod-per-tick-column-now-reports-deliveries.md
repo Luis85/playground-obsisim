@@ -12,7 +12,6 @@ affects:
   - src/app/views/EconomyView.vue
   - src/app/views/DashboardView.vue
 tags:
-  - issue
   - ux
   - labelling
 type: Issue

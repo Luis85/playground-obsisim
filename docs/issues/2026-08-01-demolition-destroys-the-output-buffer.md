@@ -11,7 +11,6 @@ source: increment-4 final whole-branch review (Important
 affects:
   - src/engine/systems/command-handlers.ts
 tags:
-  - issue
   - game-design
 type: Issue
 order: 10

@@ -11,7 +11,6 @@ source: increment-4, collision between the carried-load fix and Task 17
 affects:
   - .claude/skills/subagent-driven-development
 tags:
-  - issue
   - process
   - tooling
 type: Issue

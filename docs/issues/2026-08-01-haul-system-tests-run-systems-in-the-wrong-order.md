@@ -11,7 +11,6 @@ source: increment-4 Task 5 review (caught a real false positive from this patter
 affects:
   - tests/engine/systems/haul-system.test.ts
 tags:
-  - issue
   - test-validity
   - tech-debt
 type: Issue

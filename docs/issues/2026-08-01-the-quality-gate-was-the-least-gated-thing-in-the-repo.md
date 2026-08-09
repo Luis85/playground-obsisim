@@ -12,7 +12,6 @@ affects:
   - scripts/check-quality.mjs
   - tests/scripts/check-quality.test.ts
 tags:
-  - issue
   - build-ci
   - process
 type: Issue

@@ -3,7 +3,6 @@ title: Issues
 status: index
 created: 2026-08-01
 tags:
-  - issue
   - index
 ---
 

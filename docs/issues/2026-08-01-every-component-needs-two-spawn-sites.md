@@ -13,7 +13,6 @@ affects:
   - src/engine/world.ts
   - src/engine/systems/command-handlers.ts
 tags:
-  - issue
   - architecture
   - tech-debt
   - footgun

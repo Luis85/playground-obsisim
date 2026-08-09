@@ -15,7 +15,6 @@ affects:
   - src/engine/snapshot-builder.ts
   - src/app/world/layout.ts
 tags:
-  - issue
   - rendering
   - game-feel
 type: Issue

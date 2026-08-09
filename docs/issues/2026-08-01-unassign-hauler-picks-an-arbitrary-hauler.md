@@ -11,7 +11,6 @@ source: increment-4 final whole-branch review (Minor
 affects:
   - src/engine/systems/command-handlers.ts
 tags:
-  - issue
   - ux
   - game-design
 type: Issue

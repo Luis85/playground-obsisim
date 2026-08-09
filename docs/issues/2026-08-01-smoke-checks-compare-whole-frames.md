@@ -12,7 +12,6 @@ affects:
   - scripts/world-smoke.mjs
   - scripts/world-smoke-harness/main.ts
 tags:
-  - issue
   - test-validity
   - rendering
 type: Issue

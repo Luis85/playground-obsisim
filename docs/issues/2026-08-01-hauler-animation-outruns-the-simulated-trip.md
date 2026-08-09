@@ -15,7 +15,6 @@ affects:
   - src/app/world/layout.ts
   - src/app/world/renderer.ts
 tags:
-  - issue
   - rendering
   - game-feel
   - needs-design

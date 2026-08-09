@@ -12,6 +12,8 @@ views:
     horizonProperty: note.horizon
     startProperty: note.start
     targetProperty: note.due
+    stateValues: New, Active, Done
+    startedStates: Active
   - type: table
     name: Data Quality
     groupBy:
@@ -22,6 +24,7 @@ views:
       - status
       - severity
       - type
+      - tags
     columnSize:
       file.name: 489
       note.status: 125

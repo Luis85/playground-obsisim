@@ -13,7 +13,6 @@ affects:
   - scripts/quality-baseline.json
   - docs/build-ci/quality-gates.md
 tags:
-  - issue
   - quality-gates
   - metrics
   - tech-debt

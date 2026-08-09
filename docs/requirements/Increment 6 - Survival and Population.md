@@ -15,7 +15,7 @@ due: ""
 
 # Increment 6 - Survival and Population
 
-Colonists are people, not units: born, aged through child → adult → elder, and lost — to old age or starvation. Houses and beds throttle growth; commute costs up to half a colonist's output; food is counted in meals per head and gates both births and "Welcome a nomad" arrivals; starvation is slow and visible rather than sudden. The Population view becomes the new main screen. Save v5 carries age, home and the starvation clock. The birth threshold shipped too low to sustain a colony and was retuned once the balance harness measured it going extinct — recorded in full in the spec's §4.
+Colonists are people, not units: born, aged through child → adult → elder, and lost — to old age or starvation. Houses and beds throttle growth; commute costs up to half a colonist's output; food is counted in meals per head and gates both births and "Welcome a nomad" arrivals; starvation is slow and visible rather than sudden. The Population view becomes a new primary screen, at its own `/population` route (the app's default route stays the Dashboard). Save v5 carries age, home and the starvation clock. The birth threshold shipped too low to sustain a colony and was retuned once the balance harness measured it going extinct — recorded in full in the spec's §4.
 
 ## Documentation
 

@@ -414,6 +414,13 @@ function detach(world: IRuntimeWorld, entity: Readonly<IEntity>): void {
  * they MUST keep doing the same thing: a tick driven any other way removes
  * nobody at all.
  *
+ * Both also call it AGAIN before the step, which is a no-op on every tick that
+ * did not inherit a re-queued entry (below) and is the whole defence when one
+ * did. The post-step call cannot simply move to the top instead: OBS-6-02 put
+ * it after the step so that a death lands before the same tick's
+ * `refreshEntitySections` and autosave, and a tick that publishes or persists
+ * somebody it has already killed is the defect that motivated the ledger.
+ *
  * One removal per call, deliberately. Batching them through sim-ecs's command
  * queue is what froze the simulation for a tick per extra corpse — see
  * RemovalLedger.
@@ -445,6 +452,16 @@ export function applyRemovals(world: IRuntimeWorld): number {
       // tick, so "forever" costs one attempt per deliberate resume. That is a
       // load-bearing assumption about a DIFFERENT file: if runStep ever keeps
       // ticking through this, the retry becomes a per-tick throw.
+      //
+      // And because the ledger is FIFO and the re-queue goes to the front, a
+      // permanently stuck entry does not just retry forever — it blocks every
+      // entry behind it forever too, including ones queued long after it by
+      // something unrelated. That is deliberate: the entries are ordered, the
+      // loop this catch sits in is the only thing that applies them, and
+      // skipping past a failure to keep the queue moving would mean deciding
+      // an uncharacterised sim-ecs failure is safe to ignore for THIS entry —
+      // the guess the paragraph below rejects. Stated here because it is
+      // invisible from the code.
       //
       // Bounding it was considered and rejected. Every bound ends in either
       // dropping the entry — which is exactly the harm above, only silent — or

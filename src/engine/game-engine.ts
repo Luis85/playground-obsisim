@@ -4,7 +4,7 @@ import type { EngineStatus, Snapshot } from '../shared/snapshot';
 import type { SaveGameV5 } from '../shared/save';
 import { LATEST_SAVE_VERSION, MAX_SAVED_COUNTER } from '../shared/save';
 import { BALANCE } from './content/balance';
-import { CommandQueue, IdCounter, SimClock, SnapshotStore, Stockpile, WorldMap } from './resources';
+import { CommandQueue, IdCounter, RemovalLedger, SimClock, SnapshotStore, Stockpile, WorldMap } from './resources';
 import { gatherEntityFacts, savedBuildingOf, savedColonistOf } from './snapshot-builder';
 import { applyRemovals, createColonyWorld, initialSave, refreshEntitySections } from './world';
 
@@ -106,20 +106,53 @@ export class GameEngine {
   }
 
   /**
-   * Drain any in-flight tick, then — if the UI queued commands that no tick
-   * has processed yet (dispatch while paused, or a click racing the close) —
-   * run one final tick so a close-save cannot silently drop an accepted
-   * command. No-op when the queue is empty.
+   * Drain any in-flight tick, then — if there is unfinished business a
+   * close-save would otherwise drop — run one final tick. No-op when there is
+   * none, which is every ordinary close.
+   *
+   * Two kinds of unfinished business, one answer. A command the UI queued that
+   * no tick has processed (dispatch while paused, or a click racing the close)
+   * is the original case. A removal left on `RemovalLedger` by a detach that
+   * threw is the same case one step later: the command WAS processed — the
+   * demolition already refunded its cost, emptied its buffer and evicted its
+   * residents — and only its effect is still pending. Without the second
+   * check, `serialize()` writes that refunded, emptied building back to disk
+   * as though the demolition never happened, and the ledger dies with the
+   * process, so nothing ever retries it. The queue is empty by then, which is
+   * exactly why the original condition misses it.
+   *
+   * Routed through `stepOnce`, never a bare `applyRemovals` here, and that is
+   * the load-bearing part: `runStep` retries the ledger before it steps and
+   * owns the catch, so a retry that fails AGAIN pauses the engine instead of
+   * rejecting out of `GameView.onClose` — which wraps `serialize()` in a
+   * try/catch but does NOT wrap this call, and would be left with the Vue app
+   * still mounted and the single-view claim still held.
    */
   async flush(): Promise<void> {
     await this.settle();
-    if (this.world.getResource(CommandQueue).size > 0) {
+    if (this.world.getResource(CommandQueue).size > 0 || this.world.getResource(RemovalLedger).size > 0) {
       await this.stepOnce();
     }
   }
 
   private async runStep(): Promise<void> {
     try {
+      // Retry anything a previous tick's detach threw on and re-queued, BEFORE
+      // any system runs. Empty on every normal tick, because the only writers
+      // are systems inside step() and the post-step call below drains them.
+      //
+      // Ordering, not belt-and-braces. The re-queue alone retried the entry
+      // only after a whole further tick had run against a world that still
+      // contained the entity — and that tick rehomes into it: CommandSystem
+      // clears PendingChanges.demolished at the top, so PopulationSystem reads
+      // the doomed house as a usable shelter, moves colonists in, and the
+      // post-step retry then removes it out from under them. The save that
+      // follows carries a homeId naming a building that is gone, which the v5
+      // guard refuses — a corrupt-save backup instead of a colony. Retrying
+      // here means the entity is gone before anything can read it, and a retry
+      // that fails again throws before `step()`, so no tick ever runs against
+      // the inconsistent world. Better in both branches, worse in neither.
+      applyRemovals(this.world);
       const clock = this.world.getResource(SimClock);
       const idsBefore = this.world.getResource(IdCounter).peek();
       clock.tick++;
@@ -145,6 +178,12 @@ export class GameEngine {
       // still refreshes on its own tick. Nothing for a remover to remember:
       // the count comes from the removal itself, which is what the
       // RemovalLedger `dirty` flag this replaced could not promise.
+      //
+      // The PRE-step retry's count is deliberately absent from this gate, and
+      // adding it would only cost a redundant walk: SnapshotSystem rebuilds
+      // the entity sections from live queries on every tick, so an entity
+      // removed before step() is already missing from the snapshot this tick
+      // wrote. Only a POST-step removal can be newer than that snapshot.
       if (this.world.getResource(IdCounter).peek() !== idsBefore || removed > 0) {
         refreshEntitySections(this.world);
       }

@@ -324,6 +324,20 @@ export class RemovalLedger {
   requeue(entities: readonly Readonly<IEntity>[]): void {
     this.pending.unshift(...entities);
   }
+
+  /**
+   * Queue depth, for exactly the reason `CommandQueue.size` exists: `flush()`
+   * has to know whether there is unfinished business without being handed the
+   * array (handing it out is how a caller ends up draining it by accident).
+   *
+   * Non-zero only between a `requeue` and the retry that clears it — see
+   * `applyRemovals`. Same generic `world.getResource` lookup as `requeue`, so
+   * the same fallow blind spot.
+   */
+  // fallow-ignore-next-line unused-class-member
+  get size(): number {
+    return this.pending.length;
+  }
 }
 
 /**

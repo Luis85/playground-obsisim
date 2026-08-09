@@ -49,9 +49,14 @@ export function enqueue(world: IRuntimeWorld, ...commands: Command[]): void {
 
 /**
  * One tick of the actual production sequence, mirroring GameEngine.runStep
- * line for line: advance the clock, step the world, DRAIN THE REMOVAL LEDGER,
- * then refresh the snapshot's entity-derived sections only if the id counter
- * moved or something was removed.
+ * line for line: RETRY ANY LEFTOVER REMOVAL, advance the clock, step the
+ * world, DRAIN THE REMOVAL LEDGER, then refresh the snapshot's entity-derived
+ * sections only if the id counter moved or something was removed.
+ *
+ * The leading drain is a no-op on every tick that did not inherit a re-queued
+ * entry from a detach that threw, and it is mirrored here rather than left to
+ * production because a fixture that skips it would let a test observe the
+ * rehome-into-a-doomed-shelter sequence runStep now makes impossible.
  *
  * A bare `await world.step()` is NOT equivalent, and since OBS-6-02 it is
  * short of the truth in two ways rather than one. It never applied a tick's
@@ -69,6 +74,7 @@ export function enqueue(world: IRuntimeWorld, ...commands: Command[]): void {
  * it comes from the removal itself.
  */
 export async function stepTick(world: IRuntimeWorld): Promise<void> {
+  applyRemovals(world);
   const idsBefore = world.getResource(IdCounter).peek();
   world.getResource(SimClock).tick++;
   await world.step();

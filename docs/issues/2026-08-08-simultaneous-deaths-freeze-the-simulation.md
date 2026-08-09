@@ -22,8 +22,8 @@ first draft of `runPopulationScenario` reported `deathsByStarvation: 9` for a
 colony of three, which is how this surfaced.
 **Introduced:** not by any commit here — it is sim-ecs 0.6.4 behaviour that the
 engine has never had reason to trip until colonists could die.
-**Status:** resolved 2026-08-09 (`6916cb3`), by candidate 1 below. See
-[Resolution](#resolution-6916cb3).
+**Status:** resolved 2026-08-09 (`6ea3ee1`), by candidate 1 below. See
+[Resolution](#resolution-6ea3ee1).
 
 ## What happens
 
@@ -182,7 +182,7 @@ assert its colonist roster does not contain anyone the snapshot has already
 reported dead. Asserting only that the save *loads* passes today — the whole
 problem is that it does.
 
-## Resolution (6916cb3)
+## Resolution (6ea3ee1)
 
 Candidate 1, as written above and as an independent reviewer proposed
 separately. `RemovalLedger` carries the entities instead of a `dirty` flag,
@@ -224,6 +224,37 @@ uses `stepTick`, and `command-system.test.ts`'s two local tickers call
 the same-tick deferrals a dozen of that file's cases assert on. This is exactly
 the divergence the note warned about, and it is worth noting that `stepTick`
 alone was not the whole of it.
+
+**That count of three was never a closed set, and nothing at the time said it
+was.** The three above were found by hand, and so were two more sites fixed
+separately the same day — `tests/support/balance-harness.ts`'s `runScenario`
+and `tests/engine/systems/haul-system.test.ts`'s `setup()` step helper — for
+five known by inspection. Nothing then prevented a sixth: finding one still
+meant a person noticing that a test's assertions happened to depend on a
+removal actually landing.
+
+`tests/support/removal-guard.ts` (`5ff5346`, 2026-08-09) closed that gap
+instead of leaving it open. It patches `RemovalLedger.prototype.remove` to
+record which ledgers were queued on and fails any test, via a global
+`afterEach` wired through `vitest.config.ts`'s `setupFiles`, that still holds
+an entry at teardown — state, not syntax, so it reaches a site behind a helper
+nobody has written yet rather than only the call sites that existed when it was
+written. **On its first full run it found three more sites nobody knew about**,
+all in `command-system.test.ts`, all hand-rolling `clock++; await
+world.step()` instead of the file's own `ticker`: `names exactly one displaced
+resident, singular wording`, `names the exact count of several displaced
+residents`, and `demolishing a house with no residents gains no displaced
+clause`. Their notice assertions were sound — the notice is written during the
+tick, before any removal — so these were latent rather than live defects, each
+stranding one demolition on the ledger for the rest of its test. Fixed by
+calling the file's own `ticker(world)()` in all three, the same fix as the
+original three.
+
+The family was **eight sites, not the five known when the paragraph above was
+written**. Recorded here so the next reader does not inherit this as an open
+warning: the guard is what makes a ninth site a loud test failure rather than a
+silent one, and it is installed for every test file, not an allowlist of the
+eight found so far.
 
 **What did not change.** Removal is still invisible for the rest of the tick,
 so `standDown` and `PendingChanges.demolished` remain load-bearing; drain order

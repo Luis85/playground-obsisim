@@ -264,6 +264,31 @@ to think of. One place, covering demolition, relocation and load together; the
 alternative is a hauler stranded at a site that cannot be resolved to a tile,
 which is either a null dereference or a hauler who never dispatches again.
 
+**An idle hauler with nothing to do at its site walks to one where there is.**
+This rule is not a refinement; without it the rest of §2.5 deadlocks. A supply
+job loads at the hauler's own site, and a hauler only changes site by
+*depositing* at one — so a depot holding wheat, beside a mill with no output to
+collect, is unreachable by a hauler standing at the camp. Nothing ever sends
+one there. The colony stalls permanently, and three ordinary events produce
+exactly that state: **a reload** (§2.9 puts every hauler at the camp), **the
+death or retirement of a depot's last based hauler**, and **the first hauler a
+new depot ever needs**, since a freshly assigned hauler starts at the camp.
+
+So `HaulPhase` gains `'rebasing'`: an idle hauler with no supply job at its
+site and no collect job anywhere walks, empty-handed, to the nearest site whose
+stock some building actually wants (ties by site id, as everywhere else),
+arriving with `atSiteId` set to it and dispatching from there next tick. The
+walk is priced like any other — nothing here is free — and it is the *lowest*
+priority outcome, below both real jobs, because a hauler that can do work now
+should. This is **not** storehouse-to-storehouse transfer (§2.13): no goods
+move, a hauler does.
+
+Given this, `atSiteId` still stays out of the save. A reloaded colony
+re-derives its haulers' bases from world state within a few ticks instead of
+persisting a field, which is exactly the property increment 4 claimed for haul
+state and now actually holds: *job selection is deterministic from persisted
+state, so a reloaded colony resumes identically.*
+
 A trip is still exactly two legs, and the **return leg is identical for both
 kinds**, which is what keeps this a small change to `HaulSystem` rather than a
 second system:
@@ -327,15 +352,19 @@ claimant (below): buildings with unclaimed buffered output, ordered by
 Ordered by `movable` descending, then nearest to the hauler's site, then lowest
 building id.
 
-**Supply is offered first.** A building waiting on inputs produces nothing at
-all, while a building with a full output buffer has already produced and its
-goods are standing safe where they were made. The obvious objection is
-deadlock — every hauler supplying, nobody collecting, the ledger drained — and
-it cannot happen, for a structural reason worth stating rather than hoping for:
-a supply job requires stock *at the hauler's own site*, and only collection puts
-it there. As the ledger empties, supply candidates disappear and collection
-resumes on its own. §4 question 3 measures that rather than trusting this
-paragraph.
+**The dispatch order is supply, then collect, then rebase.** A building waiting
+on inputs produces nothing at all, while a building with a full output buffer
+has already produced and its goods are standing safe where they were made — so
+supply first. Rebasing (§2.5) is last precisely because it is not work: a
+hauler that can move goods now should, and walking to a better site is what is
+left when it cannot.
+
+The obvious objection to supply-first is deadlock — every hauler supplying,
+nobody collecting, the ledger drained — and it cannot happen, for a structural
+reason worth stating rather than hoping for: a supply job requires stock *at
+the hauler's own site*, and only collection puts it there. As the ledger
+empties, supply candidates disappear and collection resumes on its own. §4
+question 3 measures that rather than trusting this paragraph.
 
 **Claims count both kinds.** `buildClaimMap` today counts outbound haulers
 against the output they will take. A supply hauler now also loads output on
@@ -485,6 +514,16 @@ would put haulage before production and cost a tick on the output side instead
 - `ColonistSnapshot` gains `haulKind: HaulKind | null` — null when not on a
   trip. `carrying` keeps its meaning (units in hand) and now moves on the
   outbound leg of a supply trip, which it never did before.
+- `ColonistSnapshot` also gains **`haulPickedUp: boolean`**, and it — not
+  `haulKind` — is what drives the carrying-in/carrying-out marker below.
+  `haulKind` is the *job* the hauler was dispatched on, frozen at dispatch, and
+  it stops describing the cargo the moment §2.5's round trip works as intended:
+  a `supply` trip that unloads and then collects output is carrying goods
+  *out* while still labelled `supply`, and a `supply` trip returning with an
+  undelivered remainder is carrying goods *in*. So the headline case in
+  acceptance criterion 2 — the round trip this increment is named for — is
+  precisely the one a `haulKind`-driven marker would draw backwards. Publish
+  the cargo's origin, which `pickedUp` already is (§2.4).
 - `ColonistSnapshot` gains **`haulSiteCol` / `haulSiteRow`** — the tile of the
   *site end* of this hauler's current situation: where they stand while idle,
   the frozen origin while outbound, the destination while returning. Without
@@ -556,6 +595,13 @@ tables, the promise made in increment 3 §1.1 and kept ever since:
   - a **v6 colony reopened paused** with goods in a depot: stock, wealth and
     meals per head read the same before the first tick as after it. Distinct
     camp and depot balances, or an aggregation that ignores one of them passes;
+  - **the reachability case, three ways** (§2.5): a colony reloaded with inputs
+    in a depot and no collectible output beside it delivers those inputs within
+    a bounded number of ticks; the same after the depot's last based hauler
+    dies; and the same for a newly built depot no hauler has ever stood at. All
+    three are one rule and one test fixture with three entry points — and each
+    one deadlocks forever without `rebasing`, so the assertion is that the mill
+    eventually produces, not that a hauler moved;
   - a storehouse demolished with goods inside — `colonyWealth` is unchanged
     across the tick, which is the assertion that actually tests §2.7;
   - the deadlock §2.6 argues away: a colony whose ledger is empty and whose

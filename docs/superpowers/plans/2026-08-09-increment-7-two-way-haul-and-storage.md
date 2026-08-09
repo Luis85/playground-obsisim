@@ -65,6 +65,7 @@ Pure shared law, no engine changes, landed first so every later task has a vocab
   - `export function nearestSite(col: number, row: number, sites: readonly StoreSite[]): StoreSite | null`
   - `export function nearestSiteWithRoom(col, row, sites, heldAt: (siteId: number) => number): StoreSite | null`
   - `export type HaulKind = 'collect' | 'supply'`
+  - `HaulPhase` gains `'rebasing'` — an idle hauler walking empty to a site with work. Published, so it belongs here in shared law beside the other three.
   - `export interface SupplyCandidate { buildingId: number; col: number; row: number; resource: string; movable: number }` — `resource` is typed `ResourceId` (already imported by consumers; `haul.ts` may import from `./content-types`, which is inside `src/shared`).
   - `export function compareSupplyCandidates(a, b, from: TileRef): number`
   - `export function nextSupplyTarget(candidates, from: TileRef): SupplyCandidate | null`
@@ -568,7 +569,7 @@ it('a hauler idle at a demolished storehouse dispatches from the camp next tick'
 
 - [ ] **Step 2: Implement dispatch**
 
-`haul-dispatch.ts` owns: the claim map (counting **both** kinds — a supply hauler also loads output on arrival, §2.6), the collect candidates (unchanged), the supply candidates, and `chooseJob(trip, sites, …)`, which offers supply first and falls through to collect.
+`haul-dispatch.ts` owns: the claim map (counting **both** kinds — a supply hauler also loads output on arrival, §2.6), the collect candidates (unchanged), the supply candidates, and `chooseJob(trip, sites, …)`, which offers supply first, falls through to collect, and falls through again to **rebasing** (Step 3b).
 
 The supply-first rule and its non-deadlock belong in a comment where the fallthrough is, not only in the spec:
 
@@ -621,6 +622,35 @@ The `trip.amount === 0` guard is load-bearing and not an optimisation: a hauler 
 
 The deposit handler resolves `destSiteId` **on arrival**, not at dispatch: a storehouse can be demolished or sent into transit mid-leg, and the load then goes to the camp (§2.7). It banks with `addAt` when `trip.pickedUp` and `refundAt` when not.
 
+- [ ] **Step 3b: Rebasing — the rule without which §2.5 deadlocks**
+
+Write the failing test first, because this one is easy to read as a nicety and it is not:
+
+```ts
+it('a hauler at the camp reaches a depot holding the inputs a mill needs', async () => {
+  // THE deadlock fixture. A depot in the far corner holding wheat, a mill
+  // beside it with an EMPTY output buffer, every hauler standing at the camp,
+  // and the camp holding no wheat. Without rebasing nothing ever sends a
+  // hauler to that depot: supply loads only at your own site, and you only
+  // change site by depositing at one.
+  //
+  // Assert that the MILL EVENTUALLY PRODUCES, not that a hauler moved — the
+  // symptom the player would report is a cluster that never starts, and an
+  // assertion on hauler position would pass for a rebase that goes nowhere
+  // useful.
+});
+```
+
+Then the same fixture reached two other ways, because all three are ordinary events and all three deadlock identically:
+
+- **after a reload** — §2.9 puts every hauler at the camp, so a saved colony in exactly this shape reopens stalled;
+- **after the depot's last based hauler dies or retires** — `standDown` clears `hauling`, and a newly assigned hauler starts at the camp;
+- **for a depot no hauler has ever stood at**, which is every depot on the tick it is built.
+
+The rule: an idle hauler with no supply job at its site and no collect job anywhere walks empty-handed to the nearest site whose stock some building actually wants, ties by site id. `phase: 'rebasing'`, `targetId: null`, the origin frozen into `pickupCol/pickupRow` and the destination published as the site end — the same shape a `returning` leg already has, so the layout needs no new case. On arrival `atSiteId` becomes that site and the phase returns to `idle`; it dispatches from there next tick. The walk is priced with `haulTicksBetween` like everything else.
+
+**Lowest priority, below both real jobs.** A hauler that can move goods now should; walking to a better site is what is left when it cannot.
+
 - [ ] **Step 4: Rebase haulers whose site went away**
 
 At the top of the run function, before any dispatch:
@@ -640,7 +670,7 @@ for (const { job, trip } of workerRows) {
 
 - [ ] **Step 5: Mutation-check**
 
-Five separate mutations, each of which must redden exactly one test: drop the unload (`row.input.add`), drop the return-leg load, drop the `trip.amount -= placed` remainder accounting, force `pickedUp = true` unconditionally (the delivery-inflation test), and delete the rebase loop (both stranded-hauler tests, and *only* those).
+Six separate mutations, each of which must redden exactly one test: drop the unload (`row.input.add`), drop the return-leg load, drop the `trip.amount -= placed` remainder accounting, force `pickedUp = true` unconditionally (the delivery-inflation test), delete the `rebasing` fallthrough (the three deadlock tests, and *only* those), and delete the site-validity loop in Step 4 (both stranded-hauler tests).
 
 - [ ] **Step 6: Gates and commit**
 
@@ -878,7 +908,7 @@ Then the one that matters most here: make `savedBuildingOf` write `stored: {}` u
 
 **Interfaces:**
 - `BuildingSnapshot` gains `inputBuffered: number`, `stored: number`, `storage: number`.
-- `ColonistSnapshot` gains `haulKind: HaulKind | null` and `haulSiteCol` / `haulSiteRow`.
+- `ColonistSnapshot` gains `haulKind: HaulKind | null`, `haulPickedUp: boolean`, and `haulSiteCol` / `haulSiteRow`.
 - Store getters (derived once, not per view): `unitsShort`, `buildingsWaitingForInput`.
 
 - [ ] **Step 1: Move first, green suite, commit.**
@@ -932,7 +962,7 @@ No-WebGL parity — the promise made in increment 3 §1.1 and kept ever since (�
 - Modify: `scripts/world-smoke-harness/main.ts`, `scripts/world-smoke.mjs`
 
 - [ ] **Step 1: Extract the glyph drawing first.** `renderer.ts` is at 445 of 500 with nothing baselined and this task adds a storehouse glyph, a fill ring and a carrying-in marker. Extract, confirm `npm run smoke:world` is unchanged, commit that alone.
-- [ ] **Step 2:** Storehouse glyph with a fill ring; `storing` and `waitingForInput` state colours; a hauler carrying **in** drawn distinguishably from one carrying **out**, so flow direction reads at a glance.
+- [ ] **Step 2:** Storehouse glyph with a fill ring; `storing` and `waitingForInput` state colours; a hauler carrying **in** drawn distinguishably from one carrying **out**, so flow direction reads at a glance. **Read `haulPickedUp`, not `haulKind`** — the job kind is frozen at dispatch and stops describing the cargo exactly when §2.5's round trip works: a `supply` trip carrying collected output home would be drawn backwards, and that is the headline case in acceptance criterion 2. Also draw the `rebasing` phase: a hauler walking empty between two sites, which needs no new geometry (its origin is frozen in `pickupCol/pickupRow` like a returning leg's).
 - [ ] **Step 3:** A legend entry for each of the three. The legend explains every encoding — true since increment 2, and this increment is not the exception.
 - [ ] **Step 4: Smoke checks, one change per fixture phase.** A supply leg: a dot leaves a site **carrying**, reaches a building, returns. This depends on Task 10 Step 3 having published `haulSiteCol`/`haulSiteRow` — without them `haulSpot` draws every leg to and from the camp anchor, and a depot phase would look identical to a camp one, which is the kind of check that stays green with the feature absent. Nearly every smoke check has the shape `!after.equals(before)`, so a phase that moves five things at once stays true for reasons unrelated to its name (OBS-4-04). Mutation-test by disabling the feature in `renderer.ts` or `layout.ts` and confirming that named check — and only it — goes red.
 - [ ] **Step 5:** `grep -cve '^\s*$' src/app/world/renderer.ts src/app/world/glyphs.ts` — both under 500. Gates, commit.

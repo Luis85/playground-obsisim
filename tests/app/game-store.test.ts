@@ -3,6 +3,10 @@ import { createPinia, setActivePinia } from 'pinia';
 import { useGameStore } from '../../src/app/stores/game-store';
 import type { EngineStatus, Snapshot } from '../../src/shared/snapshot';
 import { makeSnapshot, stockedWith, makeBuilding, makeWorker } from './fixtures';
+// The engine's own bed reader, imported so the store's clamped answer and the
+// gate's signed one are asserted against each other rather than described.
+import { spareBeds } from '../../src/engine/systems/population-handlers';
+import { PendingChanges } from '../../src/engine/resources';
 
 // wheat is edible ONLY in this mock: the hardcoded getter ignores it (test
 // fails), the catalog-driven getter counts it (test passes). Without this the
@@ -214,6 +218,31 @@ describe('useGameStore', () => {
     expect(store.bedsFree).toBe(0);
     store.ingest(welcoming({ population: 4, beds: { total: 6, occupied: 2 } }), status);
     expect(store.bedsFree).toBe(2);
+  });
+
+  // OBS-6-07 path 3. The case above stops at a deficit of exactly zero (6 beds,
+  // 6 colonists), which `beds.total - population` reaches on its own — so the
+  // clamp `spareBedsIn` wraps it in was never exercised, and neither was the
+  // fact that the ENGINE's gate deliberately does not clamp.
+  //
+  // Both are right for their own caller and the divergence is not an accident:
+  // a view binds `bedsFree` directly and must never render "-1 spare", while
+  // `spareBeds` feeds `birthBlocker`/`nomadBlocker`, which test `<= 0` and need
+  // to be able to see a colony that is genuinely over its beds. Asserted side by
+  // side, on the same colony, because otherwise nothing fails if either one
+  // drifts toward the other.
+  it('bedsFree floors a bed deficit at zero, where the engine gate it mirrors reports the deficit', () => {
+    const store = useGameStore();
+    // A save can legitimately load this way — lowering `houseBeds` in a retune
+    // leaves every existing house a resident over — and a relocation reaches it
+    // in play, since `beds.total` drops by a whole house the tick it lifts off.
+    store.ingest(welcoming({ population: 7, beds: { total: 6, occupied: 6 } }), status);
+    expect(store.bedsFree).toBe(0);           // not -1: no view may render a negative
+    expect(store.nomadBlocker).toBe('noBed'); // and the gate still refuses on it
+
+    // The same colony through the engine's own reader: 6 beds, 7 colonists, no
+    // arrival pending. Signed, on purpose.
+    expect(spareBeds([{ id: 1, beds: 6, col: 5, row: 3, relocating: false }], 7, new PendingChanges())).toBe(-1);
   });
 
   it('nomadBlocker names each gate, in the order the player can act on it', () => {

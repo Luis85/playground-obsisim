@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import type { IRuntimeWorld } from 'sim-ecs';
-import { CommandQueue, IdCounter, MAX_PENDING_COMMANDS, SimClock, SnapshotStore, Stockpile } from '../../../src/engine/resources';
+import {
+  CommandQueue, IdCounter, MAX_PENDING_COMMANDS, NoticeBoard, PendingChanges, RemovalLedger, SimClock, SnapshotStore, Stockpile,
+  WorldMap,
+} from '../../../src/engine/resources';
 import { BALANCE } from '../../../src/engine/content/balance';
-import { Building, HaulTrip, Home, OutputBuffer, Relocation, Colonist } from '../../../src/engine/components';
+import { Building, HaulTrip, Home, JobAssignment, OutputBuffer, Position, Relocation, WorkerSlots, Colonist } from '../../../src/engine/components';
 import { CommandSystem } from '../../../src/engine/systems/command-system';
+import { handleMoveBuilding } from '../../../src/engine/systems/command-handlers';
+import type { BuildingRow, CommandContext, WorkerRow } from '../../../src/engine/systems/command-handlers';
+import { BUILDINGS } from '../../../src/engine/content/buildings';
 import { HaulSystem, haulerCapacity } from '../../../src/engine/systems/haul-system';
 import { HungerSystem } from '../../../src/engine/systems/hunger-system';
 import { ProductionSystem } from '../../../src/engine/systems/production-system';
@@ -15,6 +21,7 @@ import {
 } from '../../../src/engine/world';
 import type { Command } from '../../../src/shared/commands';
 import type { SaveGameV5 } from '../../../src/shared/save';
+import { DEFAULT_MAP, type TileRef } from '../../../src/shared/placement';
 
 /**
  * What a hauler in this file's fixtures carries per trip.
@@ -241,6 +248,113 @@ describe('CommandSystem', () => {
     // 91, never 90: the re-seat runs after the demolition is on the pending
     // ledger, so `shelterWithRoom` cannot hand back the house being removed.
     expect(nomad!.getComponent(Home)!.buildingId).toBe(91);
+  });
+
+  /**
+   * OBS-6-07 path 1. `reseatArrivalsOf` loops, and its doc comment claims the
+   * loop is safe for SEVERAL displaced arrivals at once because
+   * `shelterWithRoom` reads `ctx.pending.arrivals` live — so each arrival it
+   * re-seats is already counted against its new house by the time the next one
+   * asks. The two scenario tests above only ever put ONE arrival through it.
+   *
+   * The branch cannot be reached through the command path at all:
+   * `recruitCooldownTicks` refuses a second nomad in the same drain (the
+   * handler writes `lastRecruitTick` before the next command is read), and
+   * `tryBirth` — the only other pusher — runs in `PopulationSystem`, after
+   * `CommandSystem` has finished draining. So the handler is driven directly,
+   * with a context built from real components. That is the honest shape of the
+   * claim: this is live code with no live caller, kept because a bulk-arrival
+   * command or a retuned cooldown would make it one overnight.
+   */
+  describe('handleMoveBuilding with more than one arrival to re-seat', () => {
+    /** Real entities, so the rows carry the components production reads. */
+    async function houseRows(tiles: readonly TileRef[]) {
+      const prep = buildColonyPrepWorld({ save: houselessSave(), systems: [] });
+      const ids = getPrepResource(prep, IdCounter);
+      return tiles.map((at, index) => {
+        const entity = spawnBuilding(prep, ids, {
+          id: 90 + index, defId: 'house', progress: 0, batchActive: false, col: at.col, row: at.row, relocatingTicks: 0,
+        });
+        return {
+          entity,
+          building: entity.getComponent(Building)!,
+          slots: entity.getComponent(WorkerSlots)!,
+          position: entity.getComponent(Position)!,
+          buffer: entity.getComponent(OutputBuffer)!,
+          relocation: entity.getComponent(Relocation)!,
+        };
+      });
+    }
+
+    /** One resident of `homeId`, as `ctx.workers` sees them. */
+    function resident(homeId: number): WorkerRow {
+      return { job: new JobAssignment(), trip: new HaulTrip(), home: new Home(homeId), stage: 'adult' };
+    }
+
+    /**
+     * What `CommandSystem` builds, minus what this handler cannot reach.
+     * `shelters` and `occupancy` are derived from the same rows and in the same
+     * shape it uses; `pending.constructed` is left out of `shelters` because
+     * nothing is constructed in this drain, so the fold would be a no-op.
+     * `spawn` and `nomadGate` THROW rather than returning a stub, so a handler
+     * that started using either would fail here rather than read a fiction.
+     */
+    function contextOf(buildings: BuildingRow[], workers: WorkerRow[], pending: PendingChanges): CommandContext {
+      return {
+        clock: new SimClock(),
+        stockpile: new Stockpile({}),
+        ids: new IdCounter(1000),
+        notices: new NoticeBoard(),
+        map: new WorldMap(DEFAULT_MAP.cols, DEFAULT_MAP.rows),
+        buildings,
+        workers,
+        spawn: () => { throw new Error('handleMoveBuilding must not spawn'); },
+        claimedTiles: [],
+        removals: new RemovalLedger(),
+        pending,
+        demolishedIds: new Set<number>(),
+        shelters: () => buildings
+          .filter(({ building }) => BUILDINGS[building.defId].beds > 0)
+          .map(({ building, position, relocation }) => ({
+            id: building.id,
+            beds: BUILDINGS[building.defId].beds,
+            col: position.col,
+            row: position.row,
+            relocating: relocation.ticksLeft > 0,
+          })),
+        occupancy: () => {
+          const byHouse = new Map<number, number>();
+          for (const { home } of workers) {
+            if (home.buildingId !== null) byHouse.set(home.buildingId, (byHouse.get(home.buildingId) ?? 0) + 1);
+          }
+          return byHouse;
+        },
+        nomadGate: () => { throw new Error('handleMoveBuilding must not ask the nomad gate'); },
+      };
+    }
+
+    it('spreads them across the houses that have room, one bed each', async () => {
+      // Houses 91 and 92 hold three residents each, so each has exactly ONE bed
+      // free. That is the whole fixture: with the ledger read live, the first
+      // arrival takes 91's last bed and the second is offered 92; with the
+      // destination resolved once for the whole loop, both are handed 91 and it
+      // ends the drain holding five colonists in four beds.
+      const buildings = await houseRows([{ col: 5, row: 3 }, { col: 7, row: 3 }, { col: 9, row: 3 }]);
+      const workers = [91, 91, 91, 92, 92, 92].map(resident);
+      const pending = new PendingChanges();
+      const first = new Home(90);
+      const second = new Home(90);
+      for (const home of [first, second]) pending.arrivals.push({ home, ageTicks: BALANCE.nomadArrivalTicks });
+
+      handleMoveBuilding(contextOf(buildings, workers, pending), {
+        type: 'moveBuilding', buildingId: 90, to: { col: 15, row: 11 },
+      });
+
+      // Precondition, not the point: house 90 really did lift off, so both
+      // arrivals genuinely had to move.
+      expect(buildings[0].relocation.ticksLeft).toBeGreaterThan(0);
+      expect([first.buildingId, second.buildingId]).toEqual([91, 92]);
+    });
   });
 
   it('assigns and unassigns workers within slot limits', async () => {

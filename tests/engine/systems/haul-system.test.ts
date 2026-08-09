@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { IEntity, IPreptimeWorld, IRuntimeWorld } from 'sim-ecs';
 import type { TileRef } from '../../../src/shared/placement';
-import { Building, HaulTrip, JobAssignment, OutputBuffer, Colonist } from '../../../src/engine/components';
+import { Building, HaulTrip, Home, JobAssignment, OutputBuffer, Colonist } from '../../../src/engine/components';
 import { IdCounter, Stockpile } from '../../../src/engine/resources';
 import { BALANCE } from '../../../src/engine/content/balance';
 import { BUILDINGS } from '../../../src/engine/content/buildings';
 import { HaulSystem, haulerCapacity } from '../../../src/engine/systems/haul-system';
 import { CommandSystem } from '../../../src/engine/systems/command-system';
+import { PopulationSystem } from '../../../src/engine/systems/population-system';
 import { campAdjacentFreeTile, enqueue } from '../fixtures';
 import {
   buildColonyPrepWorld, createColonyWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist, type TColonySystemFactory,
@@ -294,6 +295,54 @@ describe('HaulSystem', () => {
 
     await step(1);
     expect(stockpile.get('wood')).toBe(2 * reduced);
+  });
+
+  // OBS-6-07 path 2. `homeTileOf` falls back to `PendingChanges.tileOf` for a
+  // home the `buildings` query cannot see yet, and this is the only test that
+  // reaches it. ProductionSystem's twin of the same lookup is pinned by
+  // population-system.test.ts's 'charges a colonist housed by a same-tick
+  // construction as housed, not homeless'; this is the haulage half, and it has
+  // to assert on the LOAD, for the same reason that one asserts on the batch:
+  // the published `carrying`/commute figures are built after the post-step sync
+  // and could always see the new house, so they were never the broken reader.
+  it('a hauler housed by a construction earlier in the same tick carries a full load, not a homeless one', async () => {
+    const save = initialSave();
+    save.colonists = [];
+    save.buildings = [];
+    // 15 wood + 5 planks is one house; the wood the hauler fetches is the
+    // forester's buffer below, not this.
+    save.stockpile = { wood: 100, planks: 100 };
+    const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, PopulationSystem, HaulSystem] });
+    const ids = getPrepResource(prep, IdCounter);
+    // (3,0) is 1 tile from the camp: dispatched on tick 1, arrives on tick 2.
+    // Exactly one FULL carry in the buffer, so the two capacities are
+    // distinguishable in both directions — a reduced hauler leaves 3 behind.
+    const forester = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 3, row: 0, relocatingTicks: 0 });
+    forester.getComponent(OutputBuffer)!.add('wood', BALANCE.haulCarryCapacity);
+    // Homeless, and an ADULT: PopulationSystem is in this system list and
+    // stands down any hauler who is not one, which would end the trip instead.
+    const hauler = spawnColonist(prep, ids, {
+      hauling: true, homeId: null, ageTicks: BALANCE.lifeBands.matureTicks,
+    });
+    const world = await prep.prepareRun();
+
+    await world.step();                                       // dispatched, one tick out
+    expect(tripOf(hauler)).toMatchObject({ phase: 'outbound', ticksLeft: 1 });
+
+    // The construction lands on the ARRIVAL tick, so the same tick houses this
+    // hauler (rehome reads pending.constructed) and loads them. The tile is
+    // commute-neutral, so a correctly-resolved home scores capacity exactly
+    // haulCarryCapacity against haulerCapacity(null)'s halved figure.
+    const at = campAdjacentFreeTile([{ col: 3, row: 0 }]);
+    enqueue(world, { type: 'constructBuilding', buildingDefId: 'house', at });
+    await world.step();
+
+    // Precondition, not the point: the house went up and homing seated them.
+    expect(hauler.getComponent(Home)!.buildingId).not.toBeNull();
+    // The point. Resolved through the pending ledger, this hauler carries a
+    // full load; resolved to no tile, they would carry haulerCapacity(null).
+    expect(tripOf(hauler).amount).toBe(BALANCE.haulCarryCapacity);
+    expect(bufferOf(forester).total()).toBe(0); // and the buffer really is cleared
   });
 
   it('a hauler housed beside the camp carries a full load, one housed far away carries less', async () => {

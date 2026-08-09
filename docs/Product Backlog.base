@@ -12,8 +12,9 @@ views:
     horizonProperty: note.horizon
     startProperty: note.start
     targetProperty: note.due
-    stateValues: New, Active, Done
+    stateValues: Open, Active, Done
     startedStates: Active
+    doneValues: Done, Closed, Completed, Removed, Resolved
   - type: table
     name: Data Quality
     groupBy:

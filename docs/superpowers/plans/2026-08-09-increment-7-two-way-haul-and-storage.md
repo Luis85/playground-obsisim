@@ -116,6 +116,13 @@ describe('nearestSiteWithRoom', () => {
     // this answer, so a mutation that ignores capacity fails here and nowhere else.
     expect(nearestSiteWithRoom(21, 14, [camp, depot], (id) => (id === 7 ? 60 : 0), 6)?.id).toBe(CAMP_SITE_ID);
   });
+  it('accepts a load that fills a depot EXACTLY', () => {
+    // heldAt + amount === capacity must still be a valid destination. Without
+    // this case the prescribed `>` -> `>=` mutation reddens no test at all,
+    // which makes that mutation check vacuous.
+    expect(nearestSiteWithRoom(21, 14, [camp, depot], (id) => (id === 7 ? 54 : 0), 6)?.id).toBe(7);
+  });
+
   it('rejects a depot with SOME room but not enough for the load', () => {
     // The case the `amount` parameter exists for. 55 of 60 held, 12 to bank:
     // a predicate that only skips FULL sites picks the depot and splits the
@@ -235,14 +242,21 @@ it('a colony with goods split across sites spends as one', () => {
 });
 
 it('spends the camp first, then sites by ascending id', () => {
-  // Discriminating: three DIFFERENT amounts, so any draw order other than the
-  // documented one leaves a different residue at each site.
-  const s = new Stockpile({ wood: 4 });
+  // The amounts are chosen so NO subset sums to the payment: camp 5, site3 8,
+  // site9 2, paying 10. Camp-first leaves camp 0, site3 3, site9 2; drawing
+  // site3 first leaves camp 3, site3 0, site9 2. Different residues, so the
+  // assertion actually pins the order.
+  //
+  // An earlier version used camp 4 + site3 8 paying 12 — which those two sum to
+  // EXACTLY, so swapping them left an identical residue and the test pinned
+  // only "site9 last". Any fixture where a prefix of the draw order happens to
+  // sum to the payment cannot discriminate the order.
+  const s = new Stockpile({ wood: 5 });
   s.addAt(depot(60, 9), 'wood', 2);
   s.addAt(depot(60, 3), 'wood', 8);
-  expect(s.pay({ wood: 12 })).toBe(true);
+  expect(s.pay({ wood: 10 })).toBe(true);
   expect(s.getAt(CAMP_SITE_ID, 'wood')).toBe(0);
-  expect(s.getAt(3, 'wood')).toBe(0);
+  expect(s.getAt(3, 'wood')).toBe(3);
   expect(s.getAt(9, 'wood')).toBe(2);
 });
 

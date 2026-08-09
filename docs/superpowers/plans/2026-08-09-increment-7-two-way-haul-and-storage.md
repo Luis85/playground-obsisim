@@ -185,11 +185,14 @@ export function nearestSiteWithRoom(
 - [ ] **Step 4: Mutation-check**
 
 ```bash
+cp src/shared/haul.ts /tmp/mut-haul     # MAKE the backup — the restore below needs it
 sed -i 's/heldAt(site.id) + amount > site.capacity/heldAt(site.id) >= site.capacity/' src/shared/haul.ts
 git diff --quiet src/shared/haul.ts && echo "MUTATION DID NOT APPLY"
-npx vitest run tests/shared/haul.test.ts   # expect ONLY the partial-room test red
-cp /tmp/mut-backup src/shared/haul.ts   # NOT git checkout — see Global Constraints
+npx vitest run tests/shared/haul.test.ts   # expect the exact-fit test red, and only it
+cp /tmp/mut-haul src/shared/haul.ts     # NOT git checkout — see Global Constraints
 ```
+
+This mutation flips `>` to `>=`, which rejects a load that fills a depot *exactly* — so the exact-fit test is the one that must catch it. Without that test the mutation reddens nothing, the check reports a pass, and Step 5 happily commits an implementation that sends exact-fit loads on a needless trip to the camp.
 
 - [ ] **Step 5: Gates and commit**
 

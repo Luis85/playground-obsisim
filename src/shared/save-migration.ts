@@ -143,12 +143,34 @@ const jitter = (id: number) => spreadFor(id, MIGRATION_CONSTANTS.spreadTicks, SA
  * them, and that agreement is the whole point: this must produce the
  * assignment the first homing pass would, or the seed contradicts the engine
  * the instant it runs.
+ *
+ * This answers the SEATING question only — where to put people. It is not the
+ * question of whether the colony owns a shelter at all: `savedHasShelter`
+ * below answers that one, deliberately without this filter. See
+ * docs/issues/2026-08-09-migration-conflates-having-a-shelter-with-having-a-usable-one.md.
  */
 function savedShelterIds(v4: SaveGameV4): number[] {
   return v4.buildings
     .filter((b) => b.defId === 'house' && b.relocatingTicks === 0)
     .map((b) => b.id)
     .sort((a, b) => a - b);
+}
+
+/**
+ * Whether the save owns a house AT ALL, relocating or not — the ELIGIBILITY
+ * question the starter-house gift needs, and a different question from
+ * `savedShelterIds` above.
+ *
+ * Deliberately unfiltered. A house mid-relocation offers no bed today, but the
+ * colony still demonstrably owns one, a relocation ends in a handful of
+ * ticks, and a gifted house is permanent — so answering the gift question from
+ * the seating list (which excludes it) conflated "has a shelter" with "has a
+ * USABLE one": a v4 colony whose only house was mid-relocation at save time
+ * read as shelterless and was handed a second, permanent house it kept
+ * forever, on top of the one it already had.
+ */
+function savedHasShelter(v4: SaveGameV4): boolean {
+  return v4.buildings.some((b) => b.defId === 'house');
 }
 
 /**
@@ -248,7 +270,7 @@ const migrateV4toV5: MigrationStep = {
   migrate: (save) => {
     const v4 = save as SaveGameV4; // the runner guard-validated this shape
     const shelterIds = savedShelterIds(v4);
-    const wantsStarterHouse = shelterIds.length === 0 && v4.buildings.length < MAX_SAVED_ENTITIES;
+    const wantsStarterHouse = !savedHasShelter(v4) && v4.buildings.length < MAX_SAVED_ENTITIES;
     const map = wantsStarterHouse ? grownMap(v4.map, v4.buildings.length) : { ...v4.map };
     // Null is unreachable given the capacity argument on grownMap, and is kept
     // for the same reason its `break` is. Never invent a tile as a fallback: a

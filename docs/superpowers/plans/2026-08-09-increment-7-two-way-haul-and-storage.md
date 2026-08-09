@@ -523,13 +523,23 @@ The heart of it (§2.5, §2.6). `haul-system.ts` is 157 lines and roughly double
 **Interfaces:**
 - `HaulTrip` gains, all runtime-only:
   - `kind: HaulKind = 'collect'`
-  - `atCol` / `atRow` — the **tile** this hauler stands on while idle. A tile, not a site id: there is no membership to dangle when a storehouse is demolished, and nothing to repair at the top of a tick. This one edit deletes the whole reachability class (spec §2.5).
+  - `atCol` / `atRow` — **where this hauler physically is** when not on a leg. A position, not a site id: no membership to dangle when a storehouse is demolished, nothing to repair at the top of a tick. This one edit deletes the whole reachability class (spec §2.5). **Defaults to `CAMP_TILE`, not `(0, 0)`** — every other numeric field on `HaulTrip` defaults to zero, so a fresh or restored hauler would otherwise start in the map's corner and price its first leg from a tile it has never stood on. Set in `colonistComponents` (the single shared spawn list), and covered for both a recruited and a restored hauler.
   - `sourceSiteId` — the site a supply trip fetches from, and the claim on its stock
   - `destSiteId: number = CAMP_SITE_ID` — where the return leg is headed
   - `destCol` / `destRow` — the destination tile, frozen when the return leg begins, exactly as `pickupCol`/`pickupRow` freeze its origin (OBS-5-01's rule applied to the other end of the leg). `destSiteId` alone cannot say where the hauler physically arrives: a depot relocated mid-leg resolves the same id to a *new* tile, and a demolished one resolves to nothing, leaving no origin to price the onward leg from.
   - `pickedUp = false` — whether the load in hand came out of an output buffer. The flow-accounting discriminator (§2.4): by the time a load reaches a site, a genuine delivery and an undelivered supply remainder are indistinguishable without it.
 - `haulerCapacity(homeTile)` — **unchanged from increment 6**, camp-relative. The bed-to-base version was collateral from the discarded base model; reverting it means increment 6's measured commute figures, and §4 q1's control, are not disturbed by this increment at all.
-- `reset()` clears `kind`, `pickedUp`, `sourceSiteId`, `destSiteId` and the rest but **leaves `atCol`/`atRow` alone**: a cancelled trip leaves the hauler standing where it was, not teleported to the camp.
+- `reset()` clears `kind`, `pickedUp`, `sourceSiteId`, `destSiteId` and the rest. **`atCol`/`atRow` must be brought up to date first, not merely preserved.** While a leg runs they name its *origin*, so a trip cancelled several ticks in would otherwise snap the hauler back over every tile it had walked. Derive the position from the leg's frozen endpoints and `legProgress(ticksLeft, legTicks)` — the interpolation the renderer already uses to place the dot — so the hauler stops where the player last saw it:
+
+  ```ts
+  cancel(trip) {
+    const t = legProgress(trip.ticksLeft, trip.legTicks);
+    trip.atCol = trip.pickupCol + (trip.destCol - trip.pickupCol) * t;   // and atRow
+    trip.reset();
+  }
+  ```
+
+  A fractional position is fine; it is only ever a distance origin.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -572,7 +582,7 @@ it('a returning supply remainder is not counted as a delivery', async () => {
 it('a hauler idle where a storehouse stood keeps its tile and dispatches from there', async () => {
   // NOT "dispatches from the camp" — that was the base model, where a hauler
   // belonged to a site and had to be re-homed when the site vanished. Here
-  // atCol/atRow is a physical position, reset() preserves it deliberately, and
+  // atCol/atRow is a physical position, cancellation brings it up to date, and
   // there is no membership to repair. Teleporting the hauler to the camp would
   // mis-price its next leg and draw it in the wrong place.
   //

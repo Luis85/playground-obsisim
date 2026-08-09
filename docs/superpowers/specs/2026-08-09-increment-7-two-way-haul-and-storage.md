@@ -283,9 +283,25 @@ increment at all.
 `HaulTrip` gains, all runtime-only like the rest of it:
 
 - `kind: HaulKind`, where `HaulKind = 'collect' | 'supply'`;
-- `atCol` / `atRow` — the **tile** the hauler is standing on while idle. A
-  tile, not a site id: there is no membership to dangle when a storehouse is
-  demolished, and nothing to repair at the top of a tick;
+- `atCol` / `atRow` — **where the hauler physically is** when it is not on a
+  leg. A position, not a site id: there is no membership to dangle when a
+  storehouse is demolished, and nothing to repair at the top of a tick. Two
+  things about it are easy to get wrong and are therefore stated rather than
+  left to a default:
+  - **It initialises to `CAMP_TILE`, not to `(0, 0)`.** Every other numeric
+    field on `HaulTrip` defaults to zero, so a hauler spawned fresh or restored
+    from a save would otherwise begin at the map's corner — pricing and drawing
+    its first leg from a tile it has never stood on, and shifting the very
+    raw-producer control §4 q1 depends on. Both spawn paths set it, per
+    `buildingComponents`/`colonistComponents`'s single-list rule.
+  - **A cancelled trip updates it before resetting.** `atCol`/`atRow` name the
+    leg's *origin* while a leg is running, so simply preserving them across a
+    cancellation would jump the hauler backwards over every tile it had already
+    walked. On cancel, its position is derived from the leg's frozen endpoints
+    and `legProgress(ticksLeft, legTicks)` — the same interpolation the renderer
+    already uses to place the dot, so the hauler stops exactly where the player
+    last saw it. It may land between tiles; nothing requires this to be integral,
+    since it is only ever a distance origin.
 - `sourceSiteId` — the site a supply trip is fetching from, and the claim on
   its stock (§2.6);
 - `destSiteId`, with `destCol` / `destRow` — where the load is going, and the

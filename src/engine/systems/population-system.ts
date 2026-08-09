@@ -74,7 +74,6 @@ export const PopulationSystem = () => createSystem({
         for (const component of components) entity = entity.with(component);
         entity.build();
       },
-      remove: (entity) => actions.commands.removeEntity(entity),
       deadIds: new Set<number>(),
     };
     ageEveryone(ctx);

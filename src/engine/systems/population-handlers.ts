@@ -43,9 +43,8 @@ export interface PopulationContext {
   colonists: ColonistRow[];
   shelters: ShelterRow[];
   spawn: (...components: object[]) => void;
-  remove: (entity: Readonly<IEntity>) => void;
   /** Colonists who died earlier in THIS tick. Removal is deferred to the
-   * post-step sync, so queries still see them — every later phase must not. */
+   * post-step drain, so queries still see them — every later phase must not. */
   deadIds: Set<number>;
 }
 
@@ -64,7 +63,7 @@ export function ageEveryone(ctx: PopulationContext): void {
 
 /**
  * Strip a colonist of every job. Called on death as well as retirement,
- * because entity removal is DEFERRED to the post-step sync: a colonist killed
+ * because entity removal is DEFERRED to the post-step drain: a colonist killed
  * this tick is still visible to ProductionSystem and HaulSystem later in the
  * same tick, and would contribute one last tick of work from beyond the grave.
  * Anything in a hauler's hands goes to the store — those goods left a building
@@ -77,13 +76,27 @@ function standDown(ctx: PopulationContext, row: ColonistRow): void {
   row.trip.reset();
 }
 
+/**
+ * The three things a death is, in the one place both causes share them: the
+ * colonist stops working, the entity is queued for the post-step drain, and
+ * every later phase this tick stops counting them as alive. The cause supplies
+ * only its own notice.
+ *
+ * Together, not one call each at two sites: an earlier version left
+ * `removals.dirty = true` as a fourth thing to remember beside the removal,
+ * and a remover that forgot it published a stale snapshot. Nothing here can be
+ * half-done now, and a third cause of death gets all of it for free.
+ */
+function die(ctx: PopulationContext, row: ColonistRow): void {
+  standDown(ctx, row);
+  ctx.removals.remove(row.entity);
+  ctx.deadIds.add(row.colonist.id);
+}
+
 export function resolveOldAge(ctx: PopulationContext): void {
   for (const row of livingRows(ctx)) {
     if (row.age.ticks < lifespanFor(row.colonist.id, BALANCE.lifeBands)) continue;
-    standDown(ctx, row);
-    ctx.remove(row.entity);
-    ctx.deadIds.add(row.colonist.id);
-    ctx.removals.dirty = true;
+    die(ctx, row);
     ctx.notices.succeed(`Colonist #${row.colonist.id} died of old age.`);
   }
 }
@@ -91,10 +104,7 @@ export function resolveOldAge(ctx: PopulationContext): void {
 export function resolveStarvation(ctx: PopulationContext): void {
   for (const row of livingRows(ctx)) {
     if (row.hunger.starvingTicks < BALANCE.starvationDeathTicks) continue;
-    standDown(ctx, row);
-    ctx.remove(row.entity);
-    ctx.deadIds.add(row.colonist.id);
-    ctx.removals.dirty = true;
+    die(ctx, row);
     ctx.notices.succeed(`Colonist #${row.colonist.id} starved.`);
   }
 }

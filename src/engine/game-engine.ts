@@ -4,9 +4,9 @@ import type { EngineStatus, Snapshot } from '../shared/snapshot';
 import type { SaveGameV5 } from '../shared/save';
 import { LATEST_SAVE_VERSION, MAX_SAVED_COUNTER } from '../shared/save';
 import { BALANCE } from './content/balance';
-import { CommandQueue, IdCounter, RemovalLedger, SimClock, SnapshotStore, Stockpile, WorldMap } from './resources';
+import { CommandQueue, IdCounter, SimClock, SnapshotStore, Stockpile, WorldMap } from './resources';
 import { gatherEntityFacts, savedBuildingOf, savedColonistOf } from './snapshot-builder';
-import { createColonyWorld, initialSave, refreshEntitySections } from './world';
+import { applyRemovals, createColonyWorld, initialSave, refreshEntitySections } from './world';
 
 export type UpdateListener = (snapshot: Snapshot | null, status: EngineStatus) => void;
 
@@ -124,25 +124,28 @@ export class GameEngine {
       const idsBefore = this.world.getResource(IdCounter).peek();
       clock.tick++;
       await this.world.step();
+      // Deaths and demolitions land HERE, not through sim-ecs's command queue:
+      // batching more than one removal into one queue froze the whole
+      // simulation for a tick per extra corpse (OBS-6-02). Before the refresh
+      // below and before the autosave, so neither can publish or persist
+      // somebody the tick has already killed.
+      const removed = applyRemovals(this.world);
       // sim-ecs syncs this tick's newly-created entities only after step() resolves,
       // so SnapshotSystem's snapshot (written mid-tick) can miss them. Patch the
       // entity-derived sections now, before publishing, so a paused manual step
       // shows its own commands' effects without waiting on a follow-up tick.
       //
-      // GATED: only a tick that created something can be affected, and creation
-      // is the only thing that consumes ids -> an id-counter delta is an exact
-      // signal, so the common case skips a full entity walk.
+      // GATED: only a tick that created or removed something can be affected.
+      // Creation is the only thing that consumes ids -> an id-counter delta is
+      // an exact signal for it, so the common case skips a full entity walk.
       //
       // INVARIANT from increment 2: entity REMOVAL consumes no id, so the
-      // id-counter delta alone cannot see it. The RemovalLedger dirty flag
-      // closes the gap for demolishBuilding — its handler raises it, and this
-      // gate reads-and-clears it beside the id check, so a tick that only
-      // removes something still refreshes on its own tick. The invariant
-      // itself stands: ANY future remover (aging, death, disasters) must
-      // raise the same flag, or its removal publishes a stale snapshot.
-      const removals = this.world.getResource(RemovalLedger);
-      if (this.world.getResource(IdCounter).peek() !== idsBefore || removals.dirty) {
-        removals.dirty = false;
+      // id-counter delta alone cannot see it. `applyRemovals`' own count is
+      // the other half of the gate, so a tick that only removes something
+      // still refreshes on its own tick. Nothing for a remover to remember:
+      // the count comes from the removal itself, which is what the
+      // RemovalLedger `dirty` flag this replaced could not promise.
+      if (this.world.getResource(IdCounter).peek() !== idsBefore || removed > 0) {
         refreshEntitySections(this.world);
       }
       if (clock.tick % BALANCE.autosaveEveryTicks === 0) {

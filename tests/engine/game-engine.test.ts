@@ -12,6 +12,7 @@ import { buildSaveFromWorld, GameEngine } from '../../src/engine/game-engine';
 import * as worldModule from '../../src/engine/world';
 import { createColonyWorld, initialSave, isLoadableSave } from '../../src/engine/world';
 import { HaulTrip } from '../../src/engine/components';
+import { BALANCE } from '../../src/engine/content/balance';
 import { Stockpile } from '../../src/engine/resources';
 
 const refreshMock = vi.mocked(worldModule.refreshEntitySections);
@@ -98,6 +99,49 @@ describe('GameEngine', () => {
     expect(save.buildings.find((b) => b.id === FORESTER_ID))
       .toEqual({ id: FORESTER_ID, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0 });
     expect(save.stockpile.wood).toBe(20); // cost paid AND building present
+  });
+
+  it('a save written on the tick after a die-off holds nobody the colony has already killed', async () => {
+    // OBS-6-02's third consequence, and the one a player loses data to. The
+    // autosave fires on `clock.tick % autosaveEveryTicks` INSIDE runStep, and
+    // the clock advanced across the frozen steps a multi-entity removal used
+    // to cost — so a save could land mid-freeze while colonists the snapshot
+    // had already announced dead were still live entities. serialize() walks
+    // live entities, so they went into the file: structurally valid, accepted
+    // by isLoadableSave, and killed again by the first tick after the reload
+    // (a starvation victim reloads at the threshold and dies on tick 1; an
+    // old-age victim is dropped by restore's past-own-lifespan guard and never
+    // appears at all). Nothing rejects such a save — that IS the problem, so
+    // asserting it loads would pass either way. The roster is the assertion.
+    //
+    // tick 98 so the die-off lands on 99 and the autosave boundary on 100:
+    // the first step of the freeze, back when there was one.
+    const dying = [2, 3, 4].map((id) => ({
+      id, hunger: BALANCE.hungerMax, buildingId: null, toolTicks: 0, hauling: false,
+      ageTicks: BALANCE.lifeBands.matureTicks, homeId: 1, starvingTicks: BALANCE.starvationDeathTicks - 1,
+    }));
+    const survivor = {
+      id: 5, hunger: 0, buildingId: null, toolTicks: 0, hauling: false,
+      ageTicks: 1000, homeId: 1, starvingTicks: 0,
+    };
+    const engine = await GameEngine.create({
+      ...initialSave(), tick: 98, stockpile: {}, colonists: [...dying, survivor], nextEntityId: 6,
+    });
+    const autosave = vi.fn();
+    engine.onAutosave(autosave);
+
+    await engine.stepOnce(); // tick 99
+    // Precondition, not the finding: the colony really did announce all three
+    // deaths on one tick. Without this the roster check below could pass on a
+    // tick that only ever killed one.
+    expect(engine.snapshot!.notices.map((n) => n.message))
+      .toEqual(['Colonist #2 starved.', 'Colonist #3 starved.', 'Colonist #4 starved.']);
+
+    await engine.stepOnce(); // tick 100 -> autosave fires
+    expect(autosave).toHaveBeenCalledTimes(1);
+    const written: SaveGameV5 = autosave.mock.calls[0][0];
+    expect(written.tick).toBe(100);
+    expect(written.colonists.map((c) => c.id)).toEqual([survivor.id]);
   });
 
   it('serialize before any step reflects the initial colony', async () => {

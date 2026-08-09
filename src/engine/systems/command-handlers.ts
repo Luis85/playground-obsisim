@@ -56,9 +56,8 @@ export interface CommandContext {
   claimedTiles: TileRef[];
   removals: RemovalLedger;
   pending: PendingChanges;
-  remove: (entity: Readonly<IEntity>) => void;
   /** Buildings demolished earlier in this same drain: removal is deferred to
-   * the post-step sync, so queries still see them — every lookup must not. */
+   * the post-step drain, so queries still see them — every lookup must not. */
   demolishedIds: Set<number>;
   /** Shelters as the homing phase sees them, so the bed a nomad is given and
    * the bed the gate counted come from one description. A function, not a
@@ -281,10 +280,9 @@ export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Com
     // destroy the load (mirrors handleMoveBuilding's guard below).
     if (trip.phase === 'outbound' && trip.targetId === command.buildingId) trip.reset();
   }
-  ctx.remove(found.entity);
+  ctx.removals.remove(found.entity);
   ctx.demolishedIds.add(command.buildingId);
   ctx.pending.demolished.add(command.buildingId);
-  ctx.removals.dirty = true;
   // Colonists spawned EARLIER THIS TICK are not in ctx.workers — the query
   // cannot see them until the post-step sync — so a nomad welcomed before this
   // demolition keeps a homeId pointing at the building being removed unless

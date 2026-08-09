@@ -3,12 +3,12 @@ import { BALANCE, MAX_AGE_TICKS } from '../../src/engine/content/balance';
 import { lifespanFor } from '../../src/shared/population';
 import { RESOURCE_IDS } from '../../src/engine/content/resources';
 import { Building, Hunger, JobAssignment, Relocation, ToolCoverage, Colonist } from '../../src/engine/components';
-import { IdCounter, SimClock, SnapshotStore, Stockpile } from '../../src/engine/resources';
+import { IdCounter, RemovalLedger, SimClock, SnapshotStore, Stockpile } from '../../src/engine/resources';
 import type { IRuntimeWorld } from 'sim-ecs';
 import { GameEngine } from '../../src/engine/game-engine';
 import {
-  ALL_SYSTEMS, buildColonyPrepWorld, createColonyWorld, decideLoad, getPrepResource, initialSave, isLoadableSave, prepareLoadedSave,
-  refreshEntitySections,
+  ALL_SYSTEMS, applyRemovals, buildColonyPrepWorld, createColonyWorld, decideLoad, getPrepResource, initialSave, isLoadableSave,
+  prepareLoadedSave, refreshEntitySections,
 } from '../../src/engine/world';
 import { buildSaveFromWorld } from '../../src/engine/game-engine';
 import { CommandSystem } from '../../src/engine/systems/command-system';
@@ -1446,6 +1446,48 @@ describe('live-world projections agree', () => {
     const factKeys = Object.keys(foresterOf(engine)).filter((k) => !derivedBuilding.includes(k));
     const savedKeys = Object.keys(engine.serialize().buildings[0]);
     expect(factKeys.filter((key) => !savedKeys.includes(key))).toEqual([]);
+  });
+});
+
+describe('applyRemovals', () => {
+  // The seam OBS-6-02 moved entity removal onto. End-to-end cases prove a
+  // die-off costs no ticks; these prove the two properties that make that
+  // true, at the one function that has them.
+
+  it('removes EVERY entity on the ledger in a single call, and says how many', async () => {
+    // Three at once, deliberately: batching more than one removal through
+    // sim-ecs's command queue is precisely what froze the simulation, because
+    // its runtime removal throws (harmlessly, after the fact) for any entity
+    // spawned at prep time and the sync point abandoned the rest of the batch.
+    const world = await createColonyWorld();
+    const ledger = world.getResource(RemovalLedger);
+    const colonists = [...world.getEntities()].filter((e) => e.hasComponent(Colonist));
+    expect(colonists).toHaveLength(3); // fixture precondition
+    for (const entity of colonists) ledger.remove(entity);
+
+    expect(applyRemovals(world)).toBe(3);
+    expect([...world.getEntities()].filter((e) => e.hasComponent(Colonist))).toHaveLength(0);
+    // Drained, not merely read: a second call must find nothing left to do,
+    // or a later tick would try to remove the same entities again.
+    expect(applyRemovals(world)).toBe(0);
+  });
+
+  it('re-throws when the entity is still in the world, rather than swallowing it', async () => {
+    // The tolerated throw is sim-ecs unhooking listeners that were never
+    // registered — which happens AFTER the entity is gone. A throw that
+    // leaves the entity present is something else entirely, and the silent
+    // catch at sim-ecs's own sync point is what made this defect invisible
+    // for a whole increment. This guard is the difference.
+    const ledger = new RemovalLedger();
+    ledger.remove({} as never);
+    const boom = new Error('removal genuinely failed');
+    const stubWorld = {
+      getResource: () => ledger,
+      removeEntity: () => { throw boom; },
+      hasEntity: () => true,
+    } as unknown as IRuntimeWorld;
+
+    expect(() => applyRemovals(stubWorld)).toThrow(boom);
   });
 });
 

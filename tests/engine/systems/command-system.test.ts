@@ -10,7 +10,9 @@ import { ProductionSystem } from '../../../src/engine/systems/production-system'
 import { SnapshotSystem } from '../../../src/engine/systems/snapshot-system';
 import { enqueue } from '../fixtures';
 import { buildSaveFromWorld } from '../../../src/engine/game-engine';
-import { buildColonyPrepWorld, COMPONENT_TYPES, getPrepResource, initialSave, spawnBuilding, spawnColonist } from '../../../src/engine/world';
+import {
+  applyRemovals, buildColonyPrepWorld, COMPONENT_TYPES, getPrepResource, initialSave, spawnBuilding, spawnColonist,
+} from '../../../src/engine/world';
 import type { Command } from '../../../src/shared/commands';
 import type { SaveGameV5 } from '../../../src/shared/save';
 
@@ -50,15 +52,36 @@ function houselessSave(): SaveGameV5 {
   return { ...base, buildings: [], colonists: base.colonists.map((c) => ({ ...c, homeId: null })) };
 }
 
+/**
+ * A tick as this file needs it: the clock nudged (the recruit cooldown reads
+ * `SimClock.tick`, so without it the cooldown can never elapse), the world
+ * stepped, and the tick's removals APPLIED.
+ *
+ * `applyRemovals` is not optional decoration. Since OBS-6-02 a demolition no
+ * longer goes through sim-ecs's deferred command queue — `handleDemolishBuilding`
+ * puts the entity on `RemovalLedger` and the post-step drain is the only thing
+ * that takes it off — so a step without this leaves every demolished building
+ * standing for the rest of the run.
+ *
+ * Deliberately NOT `stepTick`, which is the full production sequence: it also
+ * refreshes the snapshot's entity-derived sections, and a dozen cases in this
+ * file assert on the DEFERRAL that gate exists to close ("entity appears next
+ * tick", the notices a freed tile does or does not produce). This harness runs
+ * a partial system set and publishes what SnapshotSystem itself wrote; the
+ * removal drain is the one post-step step it cannot do without.
+ */
+function ticker(world: IRuntimeWorld) {
+  return async () => {
+    world.getResource(SimClock).tick++;
+    await world.step();
+    applyRemovals(world);
+  };
+}
+
 async function setup(save: SaveGameV5 = houselessSave()) {
   const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, HaulSystem, SnapshotSystem] });
   const world = await prep.prepareRun();
-  // mirror GameEngine.stepOnce: the engine owns time, bumping the clock before each step.
-  // Without this the recruit cooldown (which compares SimClock.tick) can never elapse.
-  const tick = async () => {
-    world.getResource(SimClock).tick++;
-    await world.step();
-  };
+  const tick = ticker(world);
   const dispatch = async (...commands: Command[]) => {
     enqueue(world, ...commands);
     await tick();
@@ -94,10 +117,7 @@ function saveThatCanHouseArrivals(): SaveGameV5 {
 async function setupWithProduction(save: SaveGameV5 = houselessSave()) {
   const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, ProductionSystem, HaulSystem, SnapshotSystem] });
   const world = await prep.prepareRun();
-  const tick = async () => {
-    world.getResource(SimClock).tick++;
-    await world.step();
-  };
+  const tick = ticker(world);
   const dispatch = async (...commands: Command[]) => {
     enqueue(world, ...commands);
     await tick();

@@ -120,6 +120,72 @@ describe('PopulationSystem — starvation', () => {
   });
 });
 
+describe('PopulationSystem — a die-off of more than one colonist', () => {
+  /**
+   * OBS-6-02. Every other death test in this file kills exactly ONE colonist
+   * — including the lifespan test, which deliberately gives two colonists
+   * different lifespans so that only one dies — so none of them can see what
+   * happens when a tick removes more than one entity.
+   *
+   * What happened before the RemovalLedger carried the entities: removals went
+   * through sim-ecs's deferred command queue, and sim-ecs 0.6.4 throws inside
+   * `removeEntity` for any entity that entered the world at prep time (its
+   * event-handler record is never registered, and `removeEntity` unhooks the
+   * listeners AFTER deleting the entity). The throw was swallowed at the sync
+   * point, aborting the rest of that batch, and each leftover removal then
+   * drained on a subsequent `step()` that ran NO systems at all. A die-off of
+   * `n` cost `n - 1` steps in which nothing aged, nothing was produced and no
+   * snapshot was published — while `SimClock.tick` advanced across them.
+   *
+   * The fed survivor is the instrument: its age is the one thing that must
+   * change on every tick regardless of who died, so an age that stands still
+   * is a tick that did not happen.
+   */
+  it('kills three colonists on one tick without costing the colony a single tick', async () => {
+    const save = { ...initialSave(), colonists: [], buildings: [], stockpile: {}, nextEntityId: 100 };
+    const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
+    const ids = getPrepResource(prep, IdCounter);
+    // Three colonists one tick from starving, so the next tick's HungerSystem
+    // (empty store) pushes all three over the threshold together.
+    for (const id of [1, 2, 3]) {
+      spawnColonist(prep, ids, {
+        id, ageTicks: BALANCE.lifeBands.matureTicks, hunger: BALANCE.hungerMax,
+        starvingTicks: BALANCE.starvationDeathTicks - 1,
+      });
+    }
+    // Fed (hunger 0 with an empty store still leaves ~200 ticks of slide) and
+    // nowhere near its own lifespan, so nothing about this colonist may change
+    // over the six steps below except its age.
+    spawnColonist(prep, ids, { id: 4, ageTicks: 1000, hunger: 0 });
+    const world = await prep.prepareRun();
+
+    const snapshotTicks: number[] = [];
+    const survivorAges: number[] = [];
+    const rosters: number[][] = [];
+    let starvedNotices = 0;
+    for (let i = 0; i < 6; i++) {
+      await stepTick(world);
+      const snapshot = world.getResource(SnapshotStore).latest!;
+      snapshotTicks.push(snapshot.tick);
+      survivorAges.push(snapshot.colonists.find((c) => c.id === 4)!.ageTicks);
+      rosters.push(snapshot.colonists.map((c) => c.id));
+      starvedNotices += snapshot.notices.filter((n) => n.message.includes('starved')).length;
+    }
+
+    // All three gone in the ONE step that killed them, not one per step.
+    expect(rosters[0]).toEqual([4]);
+    // Every step advanced the simulation: the snapshot's own tick moves each
+    // time, which it cannot do unless SnapshotSystem ran.
+    expect(snapshotTicks).toEqual([1, 2, 3, 4, 5, 6]);
+    // ...and PopulationSystem ran, which SnapshotSystem alone would not prove.
+    expect(survivorAges).toEqual([1001, 1002, 1003, 1004, 1005, 1006]);
+    // Three deaths, three notices. A frozen step republishes the same
+    // Snapshot object, so a per-tick tally re-reads its notices — which is
+    // how this defect was found (nine starvation deaths for three colonists).
+    expect(starvedNotices).toBe(3);
+  });
+});
+
 /**
  * Point colonist `id`'s HaulTrip mid-return, `amount` of `resource` in hand —
  * the shape `standDown` must bank when this colonist dies. `ticksLeft` is set

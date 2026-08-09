@@ -372,6 +372,59 @@ export function refreshEntitySections(world: IRuntimeWorld): void {
 }
 
 /**
+ * sim-ecs types entity removal on `IMutableWorld` and on the concrete
+ * `RuntimeWorld` class, but `IRuntimeWorld` — the type GameEngine and every
+ * fixture hold a world by — extends only `IImmutableWorld`. The runtime world
+ * genuinely implements both, so this narrows to what the object already is
+ * rather than granting it anything. Declared once here, not at the call site.
+ */
+type MutableEntities = { removeEntity(entity: Readonly<IEntity>): void };
+
+/**
+ * Take one entity out of the world, tolerating sim-ecs 0.6.4's own bug and
+ * nothing else.
+ *
+ * Its runtime `removeEntity` deletes the entity and updates every query, and
+ * only THEN unhooks the entity's event listeners — which throws a TypeError
+ * for any entity that entered the world at prep time, because `prepareRun`
+ * copies the preptime entity set into the runtime world without going through
+ * `addEntity` and so never records listeners for it. The removal has already
+ * happened by the time it throws, so the throw is noise; but that is a claim
+ * with a postcondition, and the postcondition is checked. Anything that leaves
+ * the entity still in the world is a real failure and is re-thrown, rather
+ * than swallowed the way the sync point used to swallow this one (OBS-6-02).
+ */
+function detach(world: IRuntimeWorld, entity: Readonly<IEntity>): void {
+  try {
+    (world as IRuntimeWorld & MutableEntities).removeEntity(entity);
+  } catch (err) {
+    if (world.hasEntity(entity)) throw err;
+  }
+}
+
+/**
+ * Apply the removals this tick recorded, now that `world.step()` has resolved
+ * and every system has had its last look at the entities. Returns how many
+ * were removed.
+ *
+ * That count is the refresh signal: removal consumes no id, so the id-counter
+ * delta the post-step `refreshEntitySections` gate is built on cannot see one.
+ * Both drivers of a tick — `GameEngine.runStep` and `tests/engine/fixtures.ts`'s
+ * `stepTick` — call this immediately after `step()` and before the gate, and
+ * they MUST keep doing the same thing: a tick driven any other way removes
+ * nobody at all.
+ *
+ * One removal per call, deliberately. Batching them through sim-ecs's command
+ * queue is what froze the simulation for a tick per extra corpse — see
+ * RemovalLedger.
+ */
+export function applyRemovals(world: IRuntimeWorld): number {
+  const removed = world.getResource(RemovalLedger).drain();
+  for (const entity of removed) detach(world, entity);
+  return removed.length;
+}
+
+/**
  * sim-ecs's Scheduler drives each step() through `requestAnimationFrame` (or,
  * absent that global, `setTimeout`) purely to yield a macrotask between frames
  * for continuous run loops. GameEngine already owns pacing via its own

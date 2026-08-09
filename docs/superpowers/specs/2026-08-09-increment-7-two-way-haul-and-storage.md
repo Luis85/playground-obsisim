@@ -566,6 +566,17 @@ here and the four claims below all follow from it:
   is already walking toward leaves that hauler arriving with a load that no
   longer fits, which is the split-and-forward reservation exists to remove.
 
+  **A trip releases its own reservation before resolving a new destination.**
+  Otherwise a cancellation double-counts itself: a returning hauler carrying
+  six to a depot holding 54 of 60 has already reserved that six, so a
+  reservation-aware lookup reports 60, adding its six again exceeds capacity,
+  and the depot is rejected in favour of the camp — for a load whose room was
+  reserved for exactly this purpose. Releasing costs nothing to implement,
+  because §2.6's claim invariant makes reservations a projection of live
+  components: clearing `destSiteId` *is* releasing the reservation. Clear it
+  first, resolve second. Every *other* trip's reservation must of course still
+  be counted.
+
   **Honouring it is the caller's job, not the banking call's.** `addAt` and
   `refundAt` see a site's *physical* contents and know nothing of what has been
   promised, and giving them reservation awareness would mean teaching the

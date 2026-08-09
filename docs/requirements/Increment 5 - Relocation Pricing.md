@@ -15,7 +15,7 @@ due: ""
 
 # Increment 5 - Relocation Pricing
 
-Moving a building stops being free and instant: Increment 5's balance harness measured that free relocation let a player cluster everything at the camp and never pay Increment 4's haul gradient, so moving now costs distance-scaled ticks of downtime, saved as part of the colony rather than runtime-only. Demolition, by contrast, keeps its full refund unchanged — confirmed rather than revised, so demolish-and-rebuild is never accidentally cheaper than a priced move.
+Moving a building stops being free and instant: Increment 5's balance harness measured that free relocation let a player cluster everything at the camp and never pay Increment 4's haul gradient, so moving now costs distance-scaled ticks of downtime, saved as part of the colony rather than runtime-only. Demolition's full construction-cost refund was confirmed rather than revised alongside it, which was not a complete answer: for an empty, unstaffed building, demolish-and-rebuild pays the same net resources and no downtime at all, undercutting the price this increment just added to moving. What still makes a real move worth its downtime is what a rebuild does not preserve — the building's buffer contents (never refunded, by OBS-4-07's deliberate design), any batch in progress, and its worker assignments.
 
 ## Documentation
 

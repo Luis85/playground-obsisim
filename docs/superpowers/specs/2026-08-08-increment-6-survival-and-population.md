@@ -122,8 +122,28 @@ would make an elder's retirement a gradual invisible fade instead of a dated
 event the player can plan around.
 
 An adult who reaches the elder band is **unassigned from its job or hauling
-role** by `PopulationSystem`, freeing the slot, with a notice. The
-`assignWorker` command rejects a non-adult with a reason.
+role** by `PopulationSystem`, freeing the slot. The `assignWorker` command
+rejects a non-adult with a reason.
+
+**The notice fires on the band transition, not on the unassignment** (OBS-6-03).
+It reports that the assignable pool shrank, which is true whether or not the
+colonist happened to hold a job — so an idle adult crossing the elder band is
+announced exactly like a working one. Tying it to the unassignment made the two
+indistinguishable cases look different: §4.1's colony holds 34-40 colonists
+against roughly six job slots, so the idle, silent retirement was the large
+majority of them. **Coming of age is announced by the same rule**, since a
+child reaching `matureTicks` grows that pool exactly as an elder leaving it
+shrinks the pool.
+
+The trigger is `age.ticks === matureTicks` / `=== retireTicks`: `ageEveryone`
+increments by exactly 1, so each boundary is met on exactly one tick per
+colonist. A colonist RESTORED past a boundary never meets it and is
+deliberately not announced — only a balance retune writes such a save, and
+§4.5's load principle already treats it as a repair (`restoredColonists` clears
+a now-non-adult's job at load) rather than as an event in the colony's life.
+The **"is too young to work"** message stays keyed to the unassignment for that
+same reason: it is that repair's explanation for an emptied building, not a
+life event, and it is unreachable except through a `matureTicks` retune.
 
 ### 2.3 Housing
 
@@ -346,9 +366,13 @@ CommandSystem → HungerSystem → PopulationSystem → EfficiencySystem
   retired or died this tick is unassigned before work power is summed.
   Otherwise a corpse contributes for one tick.
 
-Within the system the order is: **age → deaths → retirements → homing →
-births**. Homing precedes births so §2.6's free-bed test is meaningful, and
-deaths precede homing so a bed freed this tick is reusable this tick.
+Within the system the order is: **age → deaths → retirements → band notices →
+homing → births**. Homing precedes births so §2.6's free-bed test is
+meaningful, and deaths precede homing so a bed freed this tick is reusable this
+tick. Band notices (§2.2) follow the deaths for the same kind of reason — a
+colonist who starves on the very tick they cross a band is not also announced
+as retiring — and follow the retirements so "retired" is published once the job
+slot it names is already free.
 
 ### 2.10 Save v5
 
@@ -474,7 +498,8 @@ producers).
 - **World view** gains a house glyph, a stage marker on colonists, and a
   homeless flag — each with a legend entry, per the standing rule that every
   encoding is explained under the canvas.
-- **Notices** for birth, death (naming the cause), and retirement.
+- **Notices** for birth, death (naming the cause), coming of age, and
+  retirement. The last two are the two halves of one rule — see §2.2.
 
 `src/app/world/renderer.ts` is at **419 non-blank lines against the hard
 500-line LOC gate**, with nothing baselined — 81 lines of headroom for a house
@@ -542,8 +567,11 @@ unnecessary it is dropped — but the baseline is not loosened either way.
 1. A colony with surplus food and a free bed produces a child; that child
    cannot be assigned to a building, eats like everyone else, and becomes
    assignable at year 10.
-2. An adult reaching year 55 is automatically unassigned from its job with a
-   notice, keeps eating, and dies of old age within the spread around year 65 —
+2. An adult reaching year 55 is automatically unassigned from its job and
+   announced with a notice on that same tick (the two are separate rules since
+   OBS-6-03 — see §2.2 — but an *employed* adult, which is what this criterion
+   describes, still gets both), keeps eating, and dies of old age within the
+   spread around year 65 —
    and two colonists of *identical age* but different ids do not die on the
    same tick. (They cannot be born on the same tick — births are cooldown-gated
    colony-wide — so the test seeds equal ages directly.)

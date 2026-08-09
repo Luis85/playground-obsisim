@@ -822,6 +822,35 @@ describe('balance-coupled states a save is repaired into, not rejected for', () 
     expect(seeded.colonists[0].hauling).toBe(false);
   });
 
+  it('never announces a band a colonist crossed OUTSIDE this session', async () => {
+    // What the OBS-6-03 equality trigger rests on. `announceBandChanges` fires
+    // on `age.ticks === matureTicks` / `=== retireTicks`, so a colonist
+    // restored PAST a boundary — only a retune can write one — never meets it.
+    // That is the intended reading, not a gap: the crossing happened while
+    // nobody was playing, so it is a repair like the two cases above rather
+    // than an event in the colony's life, and announcing it on load would
+    // report something that never happened.
+    const bands = BALANCE.lifeBands;
+    const save = saveWith([
+      { ageTicks: bands.retireTicks + 137 },  // a lowered retireTicks
+      { ageTicks: bands.matureTicks + 40 },   // a lowered matureTicks
+      { ageTicks: bands.retireTicks },        // sitting exactly ON a boundary at load
+      { ageTicks: bands.matureTicks },
+    ]);
+    expect(isLoadableSave(save)).toBe(true); // accepted, then repaired — see above
+    const world = await createColonyWorld(save);
+    const seeded = world.getResource(SnapshotStore).latest!;
+    expect(seeded.colonists.map((c) => c.stage)).toEqual(['elder', 'adult', 'elder', 'adult']); // fixture precondition
+
+    // Several ticks, not one: an inequality in place of the equality would
+    // re-announce all four on EVERY tick, which a single step could not tell
+    // apart from a one-off announcement at load.
+    for (let i = 0; i < 3; i++) {
+      await stepTick(world);
+      expect(world.getResource(SnapshotStore).latest!.notices).toEqual([]);
+    }
+  });
+
   it('does not restore a colonist whose saved age has passed their OWN lifespan', async () => {
     // The third instance of the same rule, and the one clampedAge cannot
     // reach: it bounds a restored age to MAX_AGE_TICKS, the LONGEST lifespan

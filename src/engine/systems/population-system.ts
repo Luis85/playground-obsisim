@@ -3,7 +3,8 @@ import { BUILDINGS } from '../content/buildings';
 import { Age, Building, Colonist, HaulTrip, Home, Hunger, JobAssignment, Position, Relocation } from '../components';
 import { IdCounter, NoticeBoard, PendingChanges, RemovalLedger, SimClock, Stockpile } from '../resources';
 import {
-  ageEveryone, rehome, resolveOldAge, resolveStarvation, standDownNonAdults, tryBirth, type PopulationContext,
+  ageEveryone, announceBandChanges, rehome, resolveOldAge, resolveStarvation, standDownNonAdults, tryBirth,
+  type PopulationContext,
 } from './population-handlers';
 
 /**
@@ -13,8 +14,8 @@ import {
  * ProductionSystem, so a colonist who retired or died this tick is unassigned
  * before work power is summed.
  *
- * Phase order within the tick is age -> deaths -> retirements -> homing,
- * extended by later tasks to -> births.
+ * Phase order within the tick is age -> deaths -> retirements -> band notices
+ * -> homing, extended by later tasks to -> births.
  */
 export const PopulationSystem = () => createSystem({
   actions: Actions,
@@ -80,6 +81,10 @@ export const PopulationSystem = () => createSystem({
     resolveOldAge(ctx);
     resolveStarvation(ctx);
     standDownNonAdults(ctx);
+    // After the stand-down, not before: the notice reports a settled fact, so
+    // "retired" is published once the job slot it freed is already free. After
+    // the deaths for a load-bearing reason — see announceBandChanges.
+    announceBandChanges(ctx);
     rehome(ctx);
     // Births LAST, after homing, so "a free bed exists" and "nobody is
     // homeless" are the same condition and the gate can test either.

@@ -27,6 +27,16 @@ async function colonyWith(ages: { id: number; ageTicks: number; buildingId?: num
   return { world, buildingId };
 }
 
+/**
+ * The tick's notices, as plain sentences. Read off the SNAPSHOT rather than
+ * off NoticeBoard: `takeAll` empties the board during the snapshot phase, so
+ * the published snapshot is the only place a notice still exists after a tick
+ * — and it is what the player actually reads.
+ */
+const messages = (snapshot: Snapshot): string[] => snapshot.notices.map((n) => n.message);
+const retirements = (snapshot: Snapshot): string[] => messages(snapshot).filter((m) => m.includes('retired'));
+const comingsOfAge = (snapshot: Snapshot): string[] => messages(snapshot).filter((m) => m.includes('came of age'));
+
 describe('PopulationSystem — aging', () => {
   it('ages every colonist one tick per tick', async () => {
     const { world } = await colonyWith([{ id: 1, ageTicks: 0 }]);
@@ -54,6 +64,74 @@ describe('PopulationSystem — aging', () => {
     expect(me.buildingId).toBeNull();       // unassigned by retirement
     const building = world.getResource(SnapshotStore).latest!.buildings.find((b) => b.id === buildingId)!;
     expect(building.workers).toBe(0);        // and the slot is free
+  });
+
+  it('announces BOTH adults who cross the elder band, the idle one as well as the employed one', async () => {
+    // OBS-6-03. The notice used to hang off the unassignment, so an idle
+    // colonist retired in silence — and in §4.1's own curve the colony holds
+    // 34-40 against roughly six job slots, so the silent kind was the large
+    // majority. The test above cannot see it: one colonist, holding a job.
+    const { world, buildingId } = await colonyWith([
+      { id: 1, ageTicks: BALANCE.lifeBands.retireTicks - 1, buildingId: 1 },
+      { id: 2, ageTicks: BALANCE.lifeBands.retireTicks - 1 },
+    ]);
+    // Re-point ONLY the seeded assignment at the real building id — a blanket
+    // re-point would employ colonist 2 as well and erase the whole comparison.
+    const jobs = [...world.getEntities()].map((e) => e.getComponent(JobAssignment)).filter((j) => j !== undefined);
+    const staffed = jobs.filter((job) => job.buildingId !== null);
+    expect(staffed).toHaveLength(1); // fixture precondition: exactly one is employed, one idle
+    staffed[0].buildingId = buildingId;
+
+    await stepTick(world);
+    const snapshot = world.getResource(SnapshotStore).latest!;
+    expect(snapshot.colonists.map((c) => c.stage)).toEqual(['elder', 'elder']); // both crossed
+    expect(retirements(snapshot)).toEqual(['Colonist #1 retired.', 'Colonist #2 retired.']);
+
+    // And exactly once each: `>=` in place of the equality would re-announce
+    // every elder on every tick for the rest of their life.
+    await stepTick(world);
+    expect(retirements(world.getResource(SnapshotStore).latest!)).toEqual([]);
+  });
+
+  it('announces BOTH children who come of age, the mirror of retirement', async () => {
+    // The other end of the same rule (OBS-6-03): a child reaching matureTicks
+    // grows the assignable pool exactly as an elder leaving it shrinks the
+    // pool. Neither child holds a job — a child never can — so this notice is
+    // reachable ONLY from the band transition, never from a stand-down.
+    const { world } = await colonyWith([
+      { id: 1, ageTicks: BALANCE.lifeBands.matureTicks - 1 },
+      { id: 2, ageTicks: BALANCE.lifeBands.matureTicks - 1 },
+    ]);
+    await stepTick(world);
+    const snapshot = world.getResource(SnapshotStore).latest!;
+    expect(snapshot.colonists.map((c) => c.stage)).toEqual(['adult', 'adult']); // both crossed
+    expect(comingsOfAge(snapshot)).toEqual(['Colonist #1 came of age.', 'Colonist #2 came of age.']);
+
+    await stepTick(world);
+    expect(comingsOfAge(world.getResource(SnapshotStore).latest!)).toEqual([]); // once each, not every tick
+  });
+
+  it('still calls a staffed child a repair, not a coming-of-age event', async () => {
+    // The "is too young to work" branch deliberately did NOT move to a band
+    // trigger. It fires only for a save loaded after matureTicks was raised —
+    // a repair explaining why a staffed building emptied — so it must stay
+    // keyed to the stand-down, and must not be reworded into the mirror
+    // notice above. Seeded well short of the band so no transition is in play.
+    const { world, buildingId } = await colonyWith([
+      { id: 1, ageTicks: BALANCE.lifeBands.matureTicks - 50, buildingId: 1 },
+    ]);
+    const staffed = [...world.getEntities()]
+      .map((e) => e.getComponent(JobAssignment)).filter((j) => j !== undefined)
+      .filter((job) => job.buildingId !== null);
+    expect(staffed).toHaveLength(1); // fixture precondition: the child really is staffed
+    staffed[0].buildingId = buildingId;
+
+    await stepTick(world);
+    const snapshot = world.getResource(SnapshotStore).latest!;
+    expect(snapshot.colonists[0].buildingId).toBeNull(); // stood down
+    expect(messages(snapshot)).toContain('Colonist #1 is too young to work.');
+    expect(comingsOfAge(snapshot)).toEqual([]);
+    expect(retirements(snapshot)).toEqual([]);
   });
 
   it('kills a colonist who reaches its own lifespan, not a shared one', async () => {

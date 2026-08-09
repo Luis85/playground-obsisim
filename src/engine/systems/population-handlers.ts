@@ -120,7 +120,58 @@ export function standDownNonAdults(ctx: PopulationContext): void {
     if (stage === 'adult') continue;
     if (row.job.buildingId === null && !row.job.hauling) continue; // already stood down
     standDown(ctx, row);
-    ctx.notices.succeed(`Colonist #${row.colonist.id} ${stage === 'elder' ? 'retired' : 'is too young to work'}.`);
+    // Only the CHILD branch speaks here, and it is not the mirror of a
+    // retirement notice — it is a REPAIR notice. It is reachable solely
+    // through a save loaded after `matureTicks` was raised, telling the
+    // player why a building they staffed is suddenly empty. An elder is
+    // silent because `announceBandChanges` below already announced the
+    // retirement on the very tick this stand-down happens; saying it twice
+    // is the defect the transition trigger was moved to avoid.
+    if (stage === 'child') ctx.notices.succeed(`Colonist #${row.colonist.id} is too young to work.`);
+  }
+}
+
+/**
+ * The two band crossings, announced (spec 2.13) — the labour pool grew, or it
+ * shrank.
+ *
+ * Triggered on the TRANSITION, not on the stand-down that accompanies one
+ * (OBS-6-03). Tying the retirement notice to `standDownNonAdults`'s "is there
+ * anything to unassign?" test answered a second question with it — "is there
+ * anything to announce?" — and got it wrong: in §4.1's own curve the colony
+ * holds 34-40 against roughly six job slots, so the large majority of
+ * retirements were of idle colonists and went unannounced. Two colonists
+ * crossing on the same tick were treated differently purely on whether they
+ * happened to be employed.
+ *
+ * Coming of age is announced for the same reason and by the same rule. A child
+ * reaching `matureTicks` grows the assignable pool exactly as an elder leaving
+ * it shrinks the pool, and announcing one without the other would replace the
+ * old asymmetry with a new one.
+ *
+ * EQUALITY, not `>=`: `ageEveryone` increments by exactly 1, so each colonist
+ * meets each boundary on exactly one tick of one run. A colonist RESTORED past
+ * a boundary never meets it and is deliberately never announced — only a
+ * balance retune can write such a save, and `restoredColonists` treats it as a
+ * repair (clearing a now-non-adult's job at load) rather than as an event in
+ * the colony's life. That holds at both ends: an elder restored past
+ * `retireTicks` arrives already stood down with nothing left to announce, and
+ * an adult restored past `matureTicks` came of age in an earlier session, so
+ * announcing it on load would report an event that never happened.
+ *
+ * Which notice a boundary gets is asked of `stageOf` rather than hard-coded to
+ * the field name, so a degenerate retune with `matureTicks >= retireTicks`
+ * says the same thing here as every other reader of the bands does.
+ *
+ * Runs after the deaths so a colonist who starves on the very tick they cross
+ * is not announced as retiring: `livingRows` has already dropped them.
+ */
+export function announceBandChanges(ctx: PopulationContext): void {
+  const bands = BALANCE.lifeBands;
+  for (const row of livingRows(ctx)) {
+    if (row.age.ticks !== bands.matureTicks && row.age.ticks !== bands.retireTicks) continue;
+    const entered = stageOf(row.age.ticks, bands);
+    ctx.notices.succeed(`Colonist #${row.colonist.id} ${entered === 'elder' ? 'retired' : 'came of age'}.`);
   }
 }
 

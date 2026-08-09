@@ -40,13 +40,24 @@ get different treatment purely on whether they happened to be employed: the one
 staffing a forester is announced, the one standing idle at the camp is not.
 
 It is not rare. In the self-feeding curve of spec §4.1 the colony holds 34–40
-against roughly six job slots — four in the huts and two hauling — so the large
-majority of the 38 retirements in the increment's own headline measurement are
-the silent kind. (The figure was 41 against the same six slots before the
-`birthFoodPerHead` retune, when that curve ended in extinction rather than a
-plateau. The retune changed the ending, not this ratio: the harness's chain is
-the same size either way, so the gap between population and job slots is what
-it always was.)
+against roughly six job slots — four in the huts and two hauling — so most
+colonists who cross into the elder band are idle when they do, and would have
+retired silently under the old code.
+
+No retirement count backs that "most" with a number, and none should be
+quoted as if one existed: `runPopulationScenario`'s notice tally
+(`tests/support/population-harness.ts`) counts a message containing `was
+born`, `died of old age` or `starved`, and nothing else — a "retired" notice
+matches none of the three, so retirements are not tallied anywhere in this
+codebase. The nearest published figure is **38 deaths of old age** over that
+same 12,000-tick run (§4.1), which is a related but smaller count, not a
+retirement count: every colonist who died of old age retired first, but the
+five colonists still in the elder band at tick 12,000 retired without dying
+yet, so 38 is a floor, not the total. (Before the `birthFoodPerHead` retune,
+when this fixture ended in extinction rather than a plateau, the colony peaked
+at 41 against the same six job slots — the retune changed the ending, not the
+ratio: the harness's chain is the same size either way, so the gap between
+population and job slots is what it always was.)
 
 ## Why this is filed rather than fixed
 

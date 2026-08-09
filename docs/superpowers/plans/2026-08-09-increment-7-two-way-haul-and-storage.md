@@ -727,9 +727,18 @@ The alternative — making source claims bind aggregate spends — was rejected:
 
 ```ts
 it('a construction ordered mid-fetch cannot make the hauler create goods', async () => {
-  // Order a build that spends the exact wheat a fetching hauler claimed, while
-  // it is still walking. Assert the COLONY TOTAL across the whole trip — the
-  // hauler must arrive with what was actually there, or with nothing.
+  // The resource must be one that is BOTH a recipe input and a construction
+  // cost, or the fixture cannot discriminate at all. No building costs wheat,
+  // so a wheat-fetching hauler's source can never be drained by a build order,
+  // the mutation that carries plannedAmount instead of takeAt's return still
+  // passes, and the regression this test exists for goes untested.
+  //
+  // The intersection is exactly two: WOOD (a sawmill's input) and PLANKS (a
+  // workshop's input). Use a sawmill fetching wood, and order a build that
+  // spends that wood while the hauler is walking.
+  //
+  // Assert the COLONY TOTAL across the whole trip — the hauler must arrive
+  // with what was actually there, or with nothing.
 });
 ```
 

@@ -210,9 +210,21 @@ and becomes a map per site.
 every way of getting them wrong loses goods silently:
 
 1. **A bank never partially fails.** `addAt` and `refundAt` put what fits at
-   the named site and **forward the shortfall to the camp**, which is
-   unbounded and therefore cannot refuse. Callers get no remainder to
-   mishandle. Without this, every caller has to remember the overflow rule —
+   the named site and **forward the shortfall to the camp**, which has no
+   capacity and so refuses nothing a colony can actually produce. Callers get
+   no remainder to mishandle.
+
+   One exception, stated because the invariant above is otherwise an
+   overclaim: the camp is unbounded in *game* terms but every stock still
+   saturates at `MAX_SAVED_COUNTER`, so that the engine can never write a save
+   its own guard would reject. With the camp at that ceiling — around 9×10¹⁵
+   units, organically unreachable, and only arrivable at through a hand-edited
+   `data.json` — a forwarded shortfall is dropped rather than banked. That is
+   not a new loss this increment introduces: `Stockpile.bank` has saturated
+   silently since increment 1, and per-site saturation keeps every site's
+   amount inside what the v6 guard accepts. It does mean §2.9's "conservation
+   is exact" holds *below the serialization ceiling*, which is the only regime
+   play can reach. Without this, every caller has to remember the overflow rule —
    and the ones most likely to forget are the cancellation paths (§2.7), which
    run once in a rare branch and are exactly where a dropped remainder would go
    unnoticed.

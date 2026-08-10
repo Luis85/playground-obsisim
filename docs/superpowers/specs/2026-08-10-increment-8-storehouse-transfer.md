@@ -1038,6 +1038,124 @@ one variable each. Recorded in §4 as its own table.
 - The hauler-tick split, to confirm the fix did not simply convert throughput
   into walking.
 
+**The readings, and the tree really was clean.** Every figure below is
+`BALANCE_REPORT=1 vitest run --project balance` on the report blocks in
+`tests/engine/balance.test.ts`, run twice: at this branch's HEAD, and at
+`be4566c` — the commit immediately before Task 1's floor, whose `src/` is
+increment 7's end state with nothing changed. No `HaulKind` has a third member
+in either tree, no transfer candidate exists, and no constant in
+`src/engine/content/balance.ts` differs between the two runs. **The only
+variable is the starvation term**, which is the entire reason this measurement
+is a task of its own.
+
+**1. The mill/bakery fixture, both tile orders, one to three haulers.**
+OBS-7-01's table in its own columns. **Both** halves of each cell are runs taken
+here — the "before" is the `be4566c` run, not a quotation — and every row the
+issue published comes back digit for digit, which is a check on the instrument
+as much as on the fix. The two three-hauler rows are new; the issue stopped at
+two. The near-camp row is a re-take: the tiles the issue used are not recorded
+anywhere, so (5,2) and (6,3) were chosen on its two *legs*, and at `be4566c`
+they reproduce its row exactly, so it is comparable after all.
+
+| layout | haulers | mill leg | bakery leg | flour | bread | mill wait% | bakery wait% |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| mill near, bakery far | 1 | 6 | 8 | 254 → **115** | **0 → 108** | 43 → 74 | **100 → 79** |
+| mill far, bakery near | 1 | 8 | 6 | 114 → 114 | 108 → 108 | 75 → 75 | 79 → 79 |
+| mill near, bakery far | 2 | 6 | 8 | 313 → 260 | 150 → **189** | 28 → 42 | 71 → 63 |
+| mill far, bakery near | 2 | 8 | 6 | 229 → 230 | 210 → 210 | 49 → 49 | 59 → 59 |
+| mill near, bakery far | 3 | 6 | 8 | 335 → 335 | 319 → 319 | 22 → 22 | 35 → 35 |
+| mill far, bakery near | 3 | 8 | 6 | 310 → 310 | 292 → 292 | 25 → 25 | 41 → 41 |
+| both beside the camp | 1 | 2 | 3 | 397 → **259** | 144 → **250** | 2 → 42 | 72 → 51 |
+
+**Acceptance criterion 1 is met, and by the bound that discriminates.** The far
+bakery goes from 0 to 108 loaves, the exchanged layout still reads 108, and the
+answer therefore no longer depends on which of the two the player put farther
+out — 108 against 108 is a ratio of 1.00, where the pre-floor tree and a
+dispatcher that starved the second stage regardless of layout both read 0.
+
+**It behaves as a floor rather than as a rival priority, which §2.1 asserted and
+this is the measurement of.** The layout that was already being served does not
+move: `mill far, bakery near` differs by one unit of flour at two haulers and
+not at all at one or three. And at **three haulers every figure in both layouts
+is identical before and after** — with that much hauling nobody is ever starved,
+so the new band is empty and the old ordering decides in full. The floor is
+inert exactly where there is nothing to fix.
+
+**2. Acceptance criterion 2 held — digit for digit, both sweeps, every column.**
+Increment 5's sixteen-row distance sweep and increment 7's sixteen-row processor
+sweep were re-run on unchanged fixtures at both commits and the two outputs are
+**byte-identical**, including `delivered`, `%ceiling`, `stalled%`, `waiting%`,
+`idle`, `supplyReturns` and `loaded`. They also still agree with the figures
+increment 7 §4.1 recorded (100/99/53/98/33/65/96 on the raw sweep;
+99/89/48/30, 98/80/55, 97/71, 72 on the processor half). **No figure moved, so
+nothing needs justifying here.** That the raw sweep is unmoved is close to
+structural — a forester has no inputs, so it is never a supply candidate at all
+— but the processor sweep is a genuine test of the term and it is unmoved for a
+reason worth stating: with one consuming building and one resource, every
+candidate carries the same `starving` value, so the new term is constant across
+the comparison and the route ordering below it decides exactly as before.
+
+**3. The hauler-tick split: the throughput was not converted into walking.**
+Percentages are of working (non-idle) hauler ticks.
+
+| fixture | haulers | idle | working | collect% | supply% | fetch% | out% | return% | supply round trips | loaded% |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| mill→bakery | 1 | 42 → 37 | 558 → 563 | 0 → 0 | 100 → 100 | 8 → 7 | 46 → 47 | 46 → 46 | 43 → **38** | 98 → 95 |
+| mill→bakery | 2 | 80 → 77 | 1120 → 1123 | 0 → 0 | 100 → 100 | 7 → 7 | 47 → 47 | 46 → 46 | 78 → 77 | 96 → 96 |
+| mill→bakery | 3 | 122 → 122 | 1678 → 1678 | 0 → 0 | 100 → 100 | 7 → 7 | 47 → 47 | 46 → 46 | 113 → 113 | 97 → 97 |
+| mill→bakery | 4 | 175 → 175 | 2225 → 2225 | 0 → 0 | 100 → 100 | 7 → 7 | 47 → 47 | 46 → 46 | 151 → 151 | 98 → 98 |
+| mill→bakery + depot | 2 / 4 | unchanged | unchanged | 0/1 | 100/99 | 20 / 17 | 44 / 45 | 36 / 39 | 89 / 165 | 96 / 98 |
+| forester→sawmill | 1–4 | unchanged | unchanged | 41–47 | 53–59 | 2 | 49–50 | 48 | 12–49 | 88–97 |
+
+The split is flat to the percentage point in every row: the haulers do not walk
+a different *shape* of trip, and they do not walk more of one. Working ticks
+move by +5 of 558 at one hauler and +3 of 1,123 at two — under 1% — and idle
+ticks fall rather than rise, so the fix is not being paid for out of slack
+either.
+
+**4. What the floor costs, which is not nothing, and the mechanism is in the
+row above.** The near mill loses badly wherever the floor fires: **254 → 115**
+flour at one hauler (−55%), 313 → 260 at two (−17%), 397 → 259 beside the camp
+(−35%). Gross units across both stages fall too — 254 → 223 at one hauler
+(−12%), 463 → 449 at two (−3%), 541 → 509 beside the camp (−6%) — and the
+hauler-tick split says why: the same working ticks complete **43 → 38** supply
+round trips, because a trip to the leg-8 building is longer than a trip to the
+leg-6 one. Fewer, longer trips is the honest price of serving the far consumer,
+and it is charged in the intermediate good.
+
+**What it buys is the thing the colony eats.** Bread rises in every
+configuration where the floor fires at all: 0 → 108, 150 → 189, 144 → 250. A
+loaf costs one flour, so at one hauler 108 of the 115 flour the mill made was
+baked, against 0 of 254 before — the intermediate stopped accumulating at a camp
+whose only consumer of it was never supplied. **§4 records the trade rather than
+netting it out**: a chain's last stage gains, its first stage loses, and the two
+are not the same quantity.
+
+**5. A finding the fixture was not built to look for: the floor's reach is wider
+than the pathology it was written for.** The near-camp row starves nobody —
+before the change the bakery there already made 144 loaves — and it is the row
+that moves *most* in percentage terms (bread +74%, flour −35%). The cause is one
+step below the new term, in `movable` descending. The mill's wheat is seeded at
+1,000,000, so its `movable` is the whole tray room (12) on every tick its tray
+is empty; the bakery's flour is only ever what the mill has already delivered,
+so its `movable` is usually smaller and it lost that comparison whether or not
+it was starving. The starvation term sits *above* `movable` and so corrects a
+bias that had nothing to do with distance. That is within §2.1's guarantee — the
+promotion is still extinguished by one delivery — but it means the term is
+better described as **"an empty tray outranks a full pipeline"** than as a
+purely distance-related fairness floor, and any later reading that assumes the
+term only fires on far buildings will be wrong. Task 11 should not attribute
+this movement to transfer.
+
+**6. Nothing was tuned to produce any of this.** No constant moved, no fixture
+was adjusted, and the one test bound that changed was *widened in form and not
+in strength*: `Math.abs(far - near) < 10` became a ratio against a stated 15%
+tolerance, because the absolute form was passing at a measured difference of
+**zero** (108 and 108) with nothing recording how much room it had. The same
+fixture at two and three haulers spreads to ratios of 0.90 and 0.92, so a later
+change that shifts throughput asymmetrically now reds with a message that reads
+as a tolerance to re-take rather than as a balance regression.
+
 ### 4.2 The transfer mechanic
 
 - **The corner chain**, with and without a depot, at 600 / 1,200 / 2,400 — every

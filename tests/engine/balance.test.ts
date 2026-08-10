@@ -910,6 +910,15 @@ const millAndBakery = (mill: TileRef, bakery: TileRef, haulers: number) => runSc
 const NEAR: TileRef = { col: 12, row: 6 };
 const FAR: TileRef = { col: 15, row: 9 };
 
+/** OBS-7-01's control row — the same two buildings with neither of them far
+ * from the camp. The two tiles the issue used are not recorded anywhere, so
+ * these were chosen to land on its two LEGS (2 and 3) rather than on its two
+ * tiles; run against the pre-floor commit they reproduce the issue's row
+ * exactly (397 flour, 144 bread, 2% and 72% waiting), so the row IS comparable
+ * digit for digit and §4.1 quotes it as such. */
+const CAMP_MILL: TileRef = { col: 5, row: 2 };
+const CAMP_BAKERY: TileRef = { col: 6, row: 3 };
+
 describe('dispatch order under a drained ledger', () => {
   it('collection resumes, and the farther consumer is served late rather than never', async () => {
     // The two runs are the SAME two buildings with their tiles exchanged, and
@@ -928,6 +937,14 @@ describe('dispatch order under a drained ledger', () => {
     // the starvation to the other layout fails the third — which is the bound
     // doing the work, because it is the one that says the answer no longer
     // depends on which of the two the player happened to put farther out.
+    //
+    // ONE hauler, and that is a discrimination point rather than a saving on
+    // run time: at three haulers this fixture reads identically before and
+    // after the floor, digit for digit in both layouts (335 flour / 319 bread
+    // and 310 / 292), because with that much hauling nobody is starved for the
+    // ordering to sort out. A guard taken there would stay green on a
+    // dispatcher with no floor at all. §4.1 of the increment-8 spec has the
+    // whole table, taken before any transfer code existed in the tree.
     const bakeryFar = await millAndBakery(NEAR, FAR, 1);
     const bakeryNear = await millAndBakery(FAR, NEAR, 1);
 
@@ -943,7 +960,21 @@ describe('dispatch order under a drained ledger', () => {
     expect(bakeryFar.stages[1].made).toBeGreaterThan(50);
     expect(bakeryNear.stages[1].made).toBeGreaterThan(50);
     // THE bound: exchanging the two tiles no longer changes who gets served.
-    expect(Math.abs(bakeryFar.stages[1].made - bakeryNear.stages[1].made)).toBeLessThan(10);
+    //
+    // A RATIO with a named tolerance, not an absolute gap, because the absolute
+    // form hid its own margin: the two runs measure 108 and 108, so
+    // `Math.abs(far - near) < 10` was passing at a difference of ZERO and
+    // nothing recorded whether 10 was generous or a hair's breadth. The same
+    // fixture at two and three haulers — printed by the report below and
+    // deliberately not asserted — spreads to 189/210 and 319/292, ratios of
+    // 0.90 and 0.92. So this fixture family's own widest spread is about a
+    // tenth, 0.85 sits just below it, and a later task that shifts throughput
+    // asymmetrically reds here reading as a tolerance to re-take rather than as
+    // a balance regression. Both failure modes are nowhere near it: a
+    // dispatcher that starves the far bakery whatever the layout, and the
+    // pre-floor tree itself, both read 0 / 108 = 0.
+    const [far, near] = [bakeryFar.stages[1].made, bakeryNear.stages[1].made];
+    expect(Math.min(far, near) / Math.max(far, near)).toBeGreaterThan(0.85);
     // Nor does the floor pin the hauler to the far bakery instead — it is
     // extinguished by one delivery, so the mill keeps being fed: 115 flour in
     // the far layout and 114 in the near one, against the 254 it made while it
@@ -954,6 +985,32 @@ describe('dispatch order under a drained ledger', () => {
     // queue whose front it never reached.
     expect(bakeryFar.stages[1].waitingForInputTicks).toBeLessThan(TICKS * 0.85);
   }, 180000);
+
+  it('prints the fairness table when BALANCE_REPORT is set', async () => {
+    if (!process.env.BALANCE_REPORT) return;
+    // OBS-7-01's own table, re-taken in the same columns so the issue's "before"
+    // and section 4.1's "after" can be set side by side and read row for row.
+    // The quantity the issue turns on is the SECOND stage's gross output with
+    // the two tiles exchanged, and the wait percentages are what say whether a
+    // low figure is a starved building or merely a slow one.
+    const lines = ['', 'fairness floor — OBS-7-01\'s table, mill/bakery with the tiles exchanged',
+      'layout                  haulers  mill leg  bakery leg  flour  bread  mill wait%  bakery wait%'];
+    const emit = (label: string, haulers: number, r: BalanceResult) => {
+      const [mill, bakery] = r.stages;
+      const wait = (s: { waitingForInputTicks: number }) => ((s.waitingForInputTicks / TICKS) * 100).toFixed(0);
+      lines.push(
+        `${label.padEnd(22)}  ${String(haulers).padStart(7)}  ${String(mill.legTicks).padStart(8)}  ` +
+        `${String(bakery.legTicks).padStart(10)}  ${String(mill.made).padStart(5)}  ${String(bakery.made).padStart(5)}  ` +
+        `${wait(mill).padStart(10)}  ${wait(bakery).padStart(12)}`,
+      );
+    };
+    for (const haulers of [1, 2, 3]) {
+      emit('mill near, bakery far', haulers, await millAndBakery(NEAR, FAR, haulers));
+      emit('mill far, bakery near', haulers, await millAndBakery(FAR, NEAR, haulers));
+    }
+    emit('both beside the camp', 1, await millAndBakery(CAMP_MILL, CAMP_BAKERY, 1));
+    console.log(lines.join('\n'));
+  }, 900000);
 
   it('prints the hauler-tick split when BALANCE_REPORT is set', async () => {
     if (!process.env.BALANCE_REPORT) return;

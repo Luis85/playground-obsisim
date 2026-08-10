@@ -166,6 +166,14 @@ function stageInto(
   ledger: SiteLedger, capacity: number, out: TransferCandidate[],
 ): void {
   const deficit = ledger.deficit(dest.id, resource);
+  // Nothing wanted here, so nothing can be staged here — and every `surplus`
+  // below is a fresh traversal of every hauler in the colony, for each of
+  // seven resources at each of several sites, rebuilt for each idle hauler.
+  // Most (site, resource) pairs have no deficit at all, and this is what keeps
+  // the cost proportional to the deficits that exist rather than to the square
+  // of the site list. Behaviour is unchanged: a zero deficit makes `movable`
+  // zero, which `candidateOf` already refuses.
+  if (deficit <= 0) return;
   const room = ledger.room(dest);
   for (const source of sites) {
     // A site moving goods to itself is not a trip, and today it is also not

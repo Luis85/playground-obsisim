@@ -291,11 +291,28 @@ Concretely, per tick and from live components only:
   `BALANCE.siteStagingTarget` units.
 - Every other site's demand for that resource is 0 from that building.
 
-A site's **deficit** of a resource is `max(0, demand − held − inbound)` and its
-**surplus** is `max(0, held − outbound − demand)`, where `inbound` and `outbound`
-are the claims in §2.7 — the units already walking toward the site on a transfer,
-and the units already spoken for by haulers fetching from it. **Both are net of
-claims, and §2.4 explains what goes wrong when one of them is not.**
+A site's **deficit** of a resource is `max(0, demand − unclaimedAt − inbound)`
+and its **surplus** is `max(0, unclaimedAt − demand)`, where `unclaimedAt` is the
+site's stock of that resource less what fetching haulers have already planned to
+take out, and `inbound` is what transfers are already walking toward it (§2.7).
+**Both are net of claims in both directions, and §2.4 explains what goes wrong
+when either is not.**
+
+**The deficit is claimed-net on the OUTGOING side too, and an earlier draft
+wrote it `demand − held − inbound`, which is not.** That asymmetry is visible
+the moment the two formulas sit side by side: surplus subtracted outgoing claims
+and deficit did not, for no reason either could state. Concretely, a depot
+holding exactly its 12-unit target with a supply hauler already fetching six of
+them reports a deficit of **zero** until that hauler physically arrives, so no
+second hauler can stage the replacement concurrently and the refill waits a full
+trip. That is latency in the pipeline stage this feature exists to keep full —
+not a lost unit, which is why it is easy to miss, and exactly the value §1.1
+claims a depot delivers.
+
+Writing both through `unclaimedAt` also removes the special vocabulary: there is
+one claimed-net holding, and demand is measured against it from either side.
+Stock already spoken for by a departing hauler no longer counts as satisfying
+local demand, because it is leaving.
 
 **A site can never be both a source and a sink for the same resource**, because
 deficit and surplus are computed from one comparison of the site's *claimed-net*
@@ -325,6 +342,31 @@ Three properties worth stating because each is a place this could go wrong:
   nearest to nothing has zero demand for everything, which is exactly the
   corner-chain depot in §4.3's measurement and exactly the case the push rule
   is for.
+- **Additive demand can exceed what a bounded site should hold, and staging —
+  not demand — is what gets bounded.** Five staffed mills nearest one 60-unit
+  depot make its wheat demand `5 × 12 = 60`. Nothing in the staging formula
+  stopped that: `roomAt(D)` is `capacity − heldAt(D)`, so staging could fill the
+  depot to 60 of 60. Every unit is then demanded, `surplus` is zero everywhere,
+  and §2.4's drain refuses to remove anything below demand — so the depot sits
+  saturated, cannot accept the short-hop collect deposits that are its entire
+  outbound value, and the `storehouseFreeFloor` it is supposed to keep is
+  unreachable by any rule. That is the §4.3 silting-up defect again, arriving
+  through the staging door this time.
+
+  **Staging therefore may not consume the free floor**: for a bounded
+  destination the staging term is `capacity − storehouseFreeFloor − heldAt(D)`,
+  floored at zero, rather than `capacity − heldAt(D)`. The camp is unbounded and
+  keeps no floor, so it is unaffected.
+
+  This is the right place for the bound, and capping demand itself would have
+  been the wrong one. Demand says what the consumers around a site want; it is
+  an honest number and clamping it would need a rule for splitting the clamp
+  between competing resources, which is machinery in service of a
+  misattribution. **The floor is the room a depot keeps for its inbound
+  short hops — its outbound job — and staging is its other job.** One job may
+  not eat the other's reserve. Collect can still fill that reserve, because
+  collect does not consult demand at all, and the drain exists for exactly the
+  stock that arrives that way.
 
 ### 2.3 The transfer trip: the supply trip minus the building
 
@@ -380,9 +422,15 @@ Two candidate classes, in this priority order.
 `D.deficit(r) > 0` and `S.surplus(r) > 0` and `S ≠ D`.
 
 ```
-S.surplus(r) = max(0, unclaimedAt(S, r) − S.demand(r))     ← NOT held(r) − demand(r)
+S.surplus(r) = max(0, unclaimedAt(S, r) − S.demand(r))          ← NOT held(r) − demand(r)
+D.deficit(r) = max(0, D.demand(r) − unclaimedAt(D, r) − inboundAt(D, r))
 movable      = min(haulerCapacity, D.deficit(r), S.surplus(r), roomAt(D))
 ```
+
+Both sides are claimed-net in both directions (§2.2): the deficit subtracts what
+is already leaving `D` as well as what is already arriving, so a depot at its
+target with a supply hauler mid-fetch can be restaged concurrently instead of
+waiting a whole trip to notice the hole.
 
 **Surplus is defined *through* `unclaimedAt`, not beside it.** Sizing it from
 physical `held` while listing `unclaimedAt` as a separate term in the `min` is
@@ -416,7 +464,21 @@ what §2.9 and the plan's "goods are carried, never teleported" constraint
 forbid, and which would flatter the depot exactly where §4.2 is measuring it.
 
 `roomAt` is the reservation-aware occupancy `heldAt` already computes, corrected
-per §2.7: `capacity − heldAt(D)`, unbounded for the camp.
+per §2.7 — and for a **bounded** destination it stops at the free floor rather
+than at the capacity:
+
+```
+roomAt(D) = max(0, D.capacity − storehouseFreeFloor − heldAt(D))   ← bounded
+roomAt(camp) = unbounded
+```
+
+§2.2 has the reasoning. In short: additive demand can reach a bounded site's
+whole capacity (five mills nearest one 60-unit depot demand 60), and staging to
+`capacity − heldAt` would then fill it completely, leaving no surplus anywhere,
+no drain able to fire, and the free floor unreachable by any rule — the §4.3
+silting-up defect through the staging door. The floor is the room a depot keeps
+for the short-hop collect deposits that are its outbound value; staging is its
+inbound job and may not eat the other job's reserve.
 
 **2. Drain (push), bounded → unbounded only.** Source `S` is a **bounded** site
 whose free space has fallen below `BALANCE.storehouseFreeFloor`; destination is

@@ -14,7 +14,7 @@ import {
   applyRemovals, buildColonyPrepWorld, createColonyWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist,
   type TColonySystemFactory,
 } from '../../../src/engine/world';
-import type { SaveGameV5 } from '../../../src/shared/save';
+import type { SaveGameV6 } from '../../../src/shared/save';
 
 /**
  * A supply trip is a state machine, so these fixtures are read tick by tick
@@ -124,7 +124,7 @@ describe('where a hauler starts', () => {
   // from the map's corner, a tile it has never stood on. Both paths into the
   // world are checked, because they were once allowed to drift apart (OBS-4-02).
   it('a restored hauler stands at the camp tile, not at the map corner', async () => {
-    const save: SaveGameV5 = { ...initialSave() };
+    const save: SaveGameV6 = { ...initialSave() };
     save.colonists = save.colonists.map((worker) => ({ ...worker, hauling: true }));
     const world = await createColonyWorld(save);
     const trips = [...world.getEntities()].map((e) => e.getComponent(HaulTrip)).filter((t) => t !== undefined);
@@ -135,7 +135,7 @@ describe('where a hauler starts', () => {
   });
 
   it('a hauler recruited during play stands at the camp tile too', async () => {
-    const save: SaveGameV5 = { ...initialSave(), stockpile: { bread: 5000 } };
+    const save: SaveGameV6 = { ...initialSave(), stockpile: { bread: 5000 } };
     const prep = buildColonyPrepWorld({ save, systems: [CommandSystem] });
     const world = await prep.prepareRun();
     const before = new Set([...world.getEntities()].filter((e) => e.getComponent(JobAssignment) !== undefined));
@@ -442,22 +442,23 @@ describe('a remote depot is reachable by anyone', () => {
   });
 
   it('...after a reload, when every hauler wakes at the camp with no memory', async () => {
-    const save: SaveGameV5 = { ...initialSave(), colonists: [], buildings: [], stockpile: {} };
+    const save: SaveGameV6 = { ...initialSave(), colonists: [], buildings: [], stockpile: {} };
     save.buildings = [
-      { id: 40, defId: 'house', col: 3, row: 0, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 },
-      { id: 41, defId: 'storehouse', ...DEPOT, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 },
-      { id: 42, defId: 'mill', ...BESIDE_DEPOT, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 },
+      { inputBuffer: {}, stored: {}, id: 40, defId: 'house', col: 3, row: 0, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 },
+      { inputBuffer: {}, stored: { wheat: 30 }, id: 41, defId: 'storehouse', ...DEPOT, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 },
+      { inputBuffer: {}, stored: {}, id: 42, defId: 'mill', ...BESIDE_DEPOT, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 },
     ];
     save.colonists = [
       { id: 43, hunger: 0, buildingId: 42, toolTicks: 0, hauling: false, ageTicks: BALANCE.startingAgeTicks, homeId: 40, starvingTicks: 0 },
       { id: 44, hunger: 0, buildingId: null, toolTicks: 0, hauling: true, ageTicks: BALANCE.startingAgeTicks, homeId: 40, starvingTicks: 0 },
     ];
     save.nextEntityId = 45;
+    // The depot's stock comes out of the save itself since v6, rather than
+    // being seeded after the restore; what this case exercises is the RESTORED
+    // hauler, which wakes idle at the camp tile with no site membership to
+    // inherit and must still reach that stock.
     const world = await createColonyWorld(save);
-    // Seeded after the restore because a storehouse's contents are not part of
-    // save v5 yet; what this case exercises is the RESTORED hauler, which wakes
-    // idle at the camp tile with no site membership to inherit.
-    world.getResource(Stockpile).refundAt({ id: 41, ...DEPOT, capacity: BALANCE.storehouseCapacity }, 'wheat', 30);
+    expect(world.getResource(Stockpile).getAt(41, 'wheat')).toBe(30);
     for (let i = 0; i < RUN; i++) await world.step();
     expect(produced(world)).toBeGreaterThan(0);
   });

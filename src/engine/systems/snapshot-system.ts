@@ -2,7 +2,7 @@ import { createSystem, queryComponents, Read, ReadResource, WriteResource } from
 import type { ResourceStats } from '../../shared/snapshot';
 import type { ResourceId } from '../../shared/content-types';
 import { RESOURCES, RESOURCE_IDS } from '../content/resources';
-import { Age, Building, Efficiency, HaulTrip, Home, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Colonist, WorkerSlots } from '../components';
+import { Age, Building, Efficiency, HaulTrip, Home, Hunger, InputBuffer, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Colonist, WorkerSlots } from '../components';
 import { NoticeBoard, SimClock, SnapshotStore, StatsHistory, Stockpile, WorldMap } from '../resources';
 import type { BuildingFacts, ColonistFacts } from '../snapshot-builder';
 import { buildEntitySections, buildingFactsOf, colonistFactsOf } from '../snapshot-builder';
@@ -16,7 +16,7 @@ export const SnapshotSystem = () => createSystem({
   map: ReadResource(WorldMap),
   buildings: queryComponents({
     building: Read(Building), slots: Read(WorkerSlots), production: Read(Production), position: Read(Position), buffer: Read(OutputBuffer),
-    relocation: Read(Relocation),
+    relocation: Read(Relocation), input: Read(InputBuffer),
   }),
   workers: queryComponents({
     worker: Read(Colonist), hunger: Read(Hunger), job: Read(JobAssignment), efficiency: Read(Efficiency), coverage: Read(ToolCoverage), trip: Read(HaulTrip),
@@ -36,8 +36,11 @@ export const SnapshotSystem = () => createSystem({
     }
 
     const buildingFacts: BuildingFacts[] = [];
-    for (const { building, slots, production, position, buffer, relocation } of buildings.iter()) {
-      buildingFacts.push(buildingFactsOf(building, slots, production, position, buffer, relocation));
+    for (const { building, slots, production, position, buffer, relocation, input } of buildings.iter()) {
+      // siteJSON per building: a storehouse's stock is a fact ABOUT that
+      // building for everything downstream (the save, and any surface that
+      // shows what a depot holds), even though it lives in the ledger.
+      buildingFacts.push(buildingFactsOf(building, slots, production, position, buffer, relocation, input, stockpile.siteJSON(building.id)));
     }
 
     // colonyStock, not toJSON: mealsPerHead answers "how long can the colony

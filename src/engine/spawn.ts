@@ -103,12 +103,10 @@ export function clampedBuffer(saved: Partial<Record<ResourceId, number>>, cap: n
  * goes through, the same way `OutputBuffer` goes through `clampedBuffer`
  * directly with `BALANCE.outputBufferCap`.
  *
- * Its only caller is `buildingComponents` below, in this same file —
- * `InputBuffer` isn't part of the save format yet (Task 3 doesn't persist
- * it), so unlike `clampedBuffer` there is no `initial-snapshot.ts` restore
- * path to share it with. Not exported: nothing outside this file uses it
- * today, and a save-format task that gives it a second caller can export it
- * then.
+ * Its only caller is `buildingComponents` below, in this same file. Not
+ * exported: nothing outside this file trims an in-tray today, and spec §2.9's
+ * paused-snapshot bullet — the one that gives `initial-snapshot.ts` a reason to
+ * — can export it when it lands.
  */
 function clampedInputBuffer(saved: Partial<Record<ResourceId, number>>): Map<ResourceId, number> {
   return clampedBuffer(saved, BALANCE.inputBufferCap);
@@ -123,10 +121,9 @@ export interface BuildingSpec {
   progress?: number;
   batchActive?: boolean;
   buffer?: Partial<Record<ResourceId, number>>;
-  // Not part of SaveGameV5 (Task 3 does not persist it): a building's input
-  // buffer is runtime-only for now, same as HaulTrip, so a reload always
-  // starts a building's in-tray empty. Present here so a test fixture — or a
-  // future save-format task — can seed one without a second spec shape.
+  // Persisted since save v6 (`SavedBuilding.inputBuffer`), so a reload no
+  // longer empties a building's in-tray. Optional here because the live
+  // construct path has nothing to put in one yet, and a fixture may not care.
   inputBuffer?: Partial<Record<ResourceId, number>>;
   relocatingTicks?: number;
 }

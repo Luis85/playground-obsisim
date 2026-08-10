@@ -1,5 +1,5 @@
 import type { ResourceId } from '../shared/content-types';
-import type { SavedBuilding, SavedColonist, SaveGameV5 } from '../shared/save';
+import type { SavedBuilding, SavedColonist, SaveGameV6 } from '../shared/save';
 import { MAX_SAVED_COUNTER } from '../shared/save';
 import type { ResourceStats, Snapshot } from '../shared/snapshot';
 import { stageOf } from '../shared/population';
@@ -28,7 +28,7 @@ import { restoredColonists } from './restore';
  * already a self-contained save -> Snapshot projection with no world-building
  * concerns, the same mechanical split save-guard.ts came from.
  */
-export function buildInitialSnapshot(save: SaveGameV5): Snapshot {
+export function buildInitialSnapshot(save: SaveGameV6): Snapshot {
   const colonistFacts = restoredColonists(save).map(colonistFactsOfSaved);
   const buildingFacts = save.buildings.map(buildingFactsOfSaved);
   const {
@@ -94,12 +94,23 @@ function buildingFactsOfSaved(saved: SavedBuilding): BuildingFacts {
     batchActive: saved.batchActive,
     buffered: buffer.total(),
     buffer: Object.fromEntries(buffer.amounts) as Partial<Record<ResourceId, number>>,
+    // Carried AS WRITTEN, unlike `buffer` and `progress` above, and that is a
+    // scoped gap rather than an oversight: nothing in `buildEntitySections`
+    // reads either field yet, so there is no seeded figure for a clamp to
+    // correct. The load-time authority on both already exists elsewhere —
+    // `buildingComponents` trims an over-cap in-tray, `seedStoredGoods` spills
+    // an over-capacity `stored` to the camp — and spec §2.9's remaining bullet
+    // (the paused colony's wealth and meals-per-head, which must aggregate the
+    // camp WITH every restored `stored` map) is what gives these two a reader
+    // and these clamps something to be measured against.
+    inputBuffer: saved.inputBuffer,
+    stored: saved.stored,
     relocatingTicks: clampedRelocation(saved.relocatingTicks ?? 0),
   };
 }
 
 /** Per-resource stats and the wealth they sum to, from a saved stockpile. */
-function stockpileSections(saved: SaveGameV5['stockpile']): Pick<Snapshot, 'stockpile' | 'colonyWealth'> {
+function stockpileSections(saved: SaveGameV6['stockpile']): Pick<Snapshot, 'stockpile' | 'colonyWealth'> {
   const stockpile = {} as Record<ResourceId, ResourceStats>;
   let colonyWealth = 0;
   for (const resourceId of RESOURCE_IDS) {

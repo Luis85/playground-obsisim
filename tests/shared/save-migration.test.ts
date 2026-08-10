@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { MigrationStep, SaveGuards } from '../../src/shared/save-migration';
 import { MIGRATION_CONSTANTS, migrateSaveToLatest, readSaveVersion } from '../../src/shared/save-migration';
 import { ALL_SYSTEMS, buildColonyPrepWorld, createColonyWorld, getPrepResource, initialSave } from '../../src/engine/world';
-import { SnapshotStore } from '../../src/engine/resources';
+import { SnapshotStore, Stockpile } from '../../src/engine/resources';
 import { BALANCE } from '../../src/engine/content/balance';
-import type { SaveGameV4, SaveGameV5 } from '../../src/shared/save';
+import type { SaveGameV4, SaveGameV5, SaveGameV6 } from '../../src/shared/save';
+import { CAMP_SITE_ID } from '../../src/shared/haul';
 import { stepTick } from '../engine/fixtures';
 
 /** A structurally valid v1 save (pre-spatial: no map, no positions). */
@@ -176,8 +177,8 @@ describe('migrateSaveToLatest (real chain)', () => {
 
 describe('migrateSaveToLatest (v1 -> v2)', () => {
   it('migrates v1 to v2 with legacy-pattern positions and the default map', () => {
-    const out = migrateSaveToLatest(v1Fixture(7)) as SaveGameV5;
-    expect(out.version).toBe(5);
+    const out = migrateSaveToLatest(v1Fixture(7)) as SaveGameV6;
+    expect(out.version).toBe(6);
     expect(out.map).toEqual({ cols: 24, rows: 16 });
     // The legacy buildings only: v4->v5 appends a starter house of its own,
     // which lands on the first tile the plot sequence has left over.
@@ -192,7 +193,7 @@ describe('migrateSaveToLatest (v1 -> v2)', () => {
   it('assigns positions in ascending id order regardless of array order', () => {
     const shuffled = v1Fixture(2);
     shuffled.buildings.reverse();
-    const out = migrateSaveToLatest(shuffled) as SaveGameV5;
+    const out = migrateSaveToLatest(shuffled) as SaveGameV6;
     expect(out.buildings.find((b) => b.id === 10)).toMatchObject({ col: 4, row: 1 });
     expect(out.buildings.find((b) => b.id === 11)).toMatchObject({ col: 6, row: 1 });
   });
@@ -200,8 +201,8 @@ describe('migrateSaveToLatest (v1 -> v2)', () => {
   it('preserves a valid colony bigger than the default map by growing the map', () => {
     // v1 had no building cap: 337 buildings is a legal save, never a corrupt
     // one — the migration must not route it to the backup-and-start-fresh path
-    const out = migrateSaveToLatest(v1Fixture(337)) as SaveGameV5;
-    expect(out.version).toBe(5);
+    const out = migrateSaveToLatest(v1Fixture(337)) as SaveGameV6;
+    expect(out.version).toBe(6);
     expect(out.buildings.filter((b) => b.defId === 'forester')).toHaveLength(337);
     expect(out.map.rows).toBeGreaterThan(16); // grown past the 336-tile default
     const tiles = new Set(out.buildings.map((b) => `${b.col},${b.row}`));
@@ -216,7 +217,7 @@ describe('migrateSaveToLatest (v1 -> v2)', () => {
     // the sequence walk is linear — this is a performance contract as much as
     // a correctness one (a save must never hang plugin startup); vitest's
     // default per-test timeout doubles as the stall detector
-    const out = migrateSaveToLatest(v1Fixture(10_000)) as SaveGameV5;
+    const out = migrateSaveToLatest(v1Fixture(10_000)) as SaveGameV6;
     // No starter house on top: the structural guard admits at most
     // MAX_SAVED_ENTITIES buildings, so gifting a 10,000-building colony one
     // more would make the migration's own output unloadable.
@@ -252,7 +253,7 @@ describe('migrateSaveToLatest (v2 -> v3)', () => {
 
   it('fills empty buffers and no haulers — what a v2 colony was', () => {
     const out = migrateSaveToLatest(v2Save())!;
-    expect(out.version).toBe(5);
+    expect(out.version).toBe(6);
     expect(out.buildings.every((b) => Object.keys(b.buffer).length === 0)).toBe(true);
     expect(out.colonists.every((c) => c.hauling === false)).toBe(true);
   });
@@ -277,7 +278,7 @@ describe('migrateSaveToLatest (v2 -> v3)', () => {
       workers: [], nextEntityId: 2,
     };
     const out = migrateSaveToLatest(v1)!;
-    expect(out.version).toBe(5);
+    expect(out.version).toBe(6);
     expect(out.buildings[0]).toMatchObject({ col: 4, row: 1, buffer: {}, relocatingTicks: 0 });
   });
 });
@@ -290,8 +291,8 @@ describe('migrateSaveToLatest (v3 -> v4)', () => {
       buildings: [{ id: 1, defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, buffer: { wood: 2 } }],
       workers: [{ id: 2, hunger: 0, buildingId: null, toolTicks: 0, hauling: false }],
     };
-    const migrated = migrateSaveToLatest(v3) as SaveGameV5;
-    expect(migrated.version).toBe(5);
+    const migrated = migrateSaveToLatest(v3) as SaveGameV6;
+    expect(migrated.version).toBe(6);
     const forester = migrated.buildings.find((b) => b.id === 1)!;
     expect(forester.relocatingTicks).toBe(0);
     expect(forester.buffer).toEqual({ wood: 2 }); // everything else survives
@@ -322,8 +323,8 @@ function v4WithThreeWorkers(): SaveGameV4 {
 
 describe('migrateSaveToLatest (v4 -> v5)', () => {
   it('v4 -> v5: colonists become adults, a starter house appears, and its beds are already assigned', () => {
-    const v5 = migrateSaveToLatest(v4WithThreeWorkers()) as SaveGameV5;
-    expect(v5.version).toBe(5);
+    const v5 = migrateSaveToLatest(v4WithThreeWorkers()) as SaveGameV6;
+    expect(v5.version).toBe(6);
 
     // Adults, staggered — not all the same age, or they die together.
     const ages = v5.colonists.map((c) => c.ageTicks);
@@ -344,7 +345,7 @@ describe('migrateSaveToLatest (v4 -> v5)', () => {
     // buildColonyPrepWorld seeds the initial snapshot straight from the save and
     // a restored engine starts paused, so relying on the homing phase would show
     // a wholly homeless colony at penalty work power until the player unpauses.
-    const v5 = migrateSaveToLatest(v4WithThreeWorkers()) as SaveGameV5;
+    const v5 = migrateSaveToLatest(v4WithThreeWorkers()) as SaveGameV6;
     const prep = buildColonyPrepWorld({ save: v5, systems: ALL_SYSTEMS });
     const seeded = getPrepResource(prep, SnapshotStore).latest!;
     expect(seeded.homeless).toBe(0);
@@ -361,7 +362,7 @@ describe('migrateSaveToLatest (v4 -> v5)', () => {
       id: 90, defId: 'house', col: 5, row: 3,
       progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0,
     });
-    const v5 = migrateSaveToLatest(v4) as SaveGameV5;
+    const v5 = migrateSaveToLatest(v4) as SaveGameV6;
 
     expect(v5.colonists.every((c) => c.homeId === 90)).toBe(true);
     // AND no starter house was gifted on top: a colony with shelter does not
@@ -381,7 +382,7 @@ describe('migrateSaveToLatest (v4 -> v5)', () => {
       id: 90, defId: 'house', col: 5, row: 3,
       progress: 0, batchActive: false, buffer: {}, relocatingTicks: 6,
     });
-    const v5 = migrateSaveToLatest(v4) as SaveGameV5;
+    const v5 = migrateSaveToLatest(v4) as SaveGameV6;
 
     expect(v5.colonists.every((c) => c.homeId !== 90)).toBe(true);
     // The colony owns a house — mid-relocation, but a house all the same — so
@@ -404,7 +405,7 @@ describe('migrateSaveToLatest (v4 -> v5)', () => {
       id: 90, defId: 'house', col: 5, row: 3,
       progress: 0, batchActive: false, buffer: {}, relocatingTicks: 6,
     });
-    const v5 = migrateSaveToLatest(v4) as SaveGameV5;
+    const v5 = migrateSaveToLatest(v4) as SaveGameV6;
 
     const world = await createColonyWorld(v5);
     const seeded = world.getResource(SnapshotStore).latest!;
@@ -428,7 +429,7 @@ describe('migrateSaveToLatest (v4 -> v5)', () => {
       id: 90, defId: 'house', col: 5, row: 3,
       progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0,
     });
-    const v5 = migrateSaveToLatest(v4) as SaveGameV5;
+    const v5 = migrateSaveToLatest(v4) as SaveGameV6;
 
     expect(v5.colonists.filter((c) => c.homeId === 90)).toHaveLength(MIGRATION_CONSTANTS.houseBeds);
     expect(v5.colonists.filter((c) => c.homeId === null)).toHaveLength(6 - MIGRATION_CONSTANTS.houseBeds);
@@ -444,7 +445,7 @@ describe('migrateSaveToLatest (v4 -> v5)', () => {
     // would cancel a penalty already incurred.
     const v4 = v4WithThreeWorkers();
     v4.workers[0] = { ...v4.workers[0], ageTicks: 5100, starvingTicks: 40 };
-    const v5 = migrateSaveToLatest(v4) as SaveGameV5;
+    const v5 = migrateSaveToLatest(v4) as SaveGameV6;
 
     const kept = v5.colonists.find((c) => c.id === v4.workers[0].id)!;
     expect(kept.ageTicks).toBe(5100);
@@ -458,7 +459,7 @@ describe('migrateSaveToLatest (v4 -> v5)', () => {
 
   it('a v4 save written before the cooldown elapsed can still give birth immediately', () => {
     const early = { ...v4WithThreeWorkers(), tick: 0, lastRecruitTick: 0 };
-    const v5 = migrateSaveToLatest(early) as SaveGameV5;
+    const v5 = migrateSaveToLatest(early) as SaveGameV6;
     // Discriminating: 0 would block a tick-0 colony's first birth for 50 ticks
     // purely because the save was reopened.
     expect(v5.lastBirthTick).toBeLessThanOrEqual(-BALANCE.birthCooldownTicks);
@@ -474,7 +475,7 @@ describe('migrateSaveToLatest (v4 -> v5)', () => {
       progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0,
     }));
     full.nextEntityId = 1000;
-    const v5 = migrateSaveToLatest(full) as SaveGameV5;
+    const v5 = migrateSaveToLatest(full) as SaveGameV6;
 
     expect(v5).not.toBeNull();
     expect(v5.buildings.some((b) => b.defId === 'house')).toBe(true);
@@ -493,7 +494,7 @@ describe('migrateSaveToLatest (v4 -> v5)', () => {
       progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0,
     }));
     wide.nextEntityId = 1000;
-    const v5 = migrateSaveToLatest(wide) as SaveGameV5;
+    const v5 = migrateSaveToLatest(wide) as SaveGameV6;
 
     expect(v5).not.toBeNull();               // NOT the corrupt-backup path
     expect(v5.map.cols).toBeGreaterThanOrEqual(50);
@@ -507,5 +508,64 @@ describe('migrateSaveToLatest (v4 -> v5)', () => {
     const input = v4WithThreeWorkers();
     migrateSaveToLatest(input);
     expect(input).toEqual(v4WithThreeWorkers());
+  });
+});
+
+
+/**
+ * A guard-valid v5 save with a PRODUCER in it, not shelters alone: `inputBuffer`
+ * is a producing building's field, and a colony of houses could not tell an
+ * empty in-tray from a missing one.
+ *
+ * Every quantity here is pairwise distinct — 37 wood, 11 planks, 5 buffered
+ * flour, tick 800 — so no assertion below can read a neighbour's number and
+ * pass. In particular 37 and 11 differ from each other and from every total
+ * under test, which is what makes "the stockpile landed at the camp" fail on
+ * the VALUE rather than on a total that happens to differ.
+ */
+function v5WithAMill(): SaveGameV5 {
+  return {
+    version: 5, tick: 800, lastRecruitTick: 700, lastBirthTick: 600,
+    stockpile: { wood: 37, planks: 11 },
+    map: { cols: 24, rows: 16 },
+    buildings: [
+      { id: 1, defId: 'house', col: 4, row: 1, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 },
+      { id: 2, defId: 'mill', col: 6, row: 1, progress: 0, batchActive: false, buffer: { flour: 5 }, relocatingTicks: 0 },
+    ],
+    colonists: [{
+      id: 3, hunger: 0, buildingId: 2, toolTicks: 0, hauling: false,
+      ageTicks: MIGRATION_CONSTANTS.startingAgeTicks, homeId: 1, starvingTicks: 0,
+    }],
+    nextEntityId: 4,
+  };
+}
+
+describe('migrateSaveToLatest (v5 -> v6)', () => {
+  it('a v5 colony loads as v6 with empty input buffers and its stockpile at the camp', async () => {
+    const migrated = migrateSaveToLatest(v5WithAMill());
+    expect(migrated?.version).toBe(6);
+    const v6 = migrated!;
+
+    for (const b of v6.buildings) {
+      expect(b.inputBuffer, `building ${b.id} in-tray`).toEqual({});
+      expect(b.stored, `building ${b.id} stored`).toEqual({});
+    }
+    // Nothing else moves: a v5 colony was already a v6 one with no storehouses
+    // and every input paid.
+    expect(v6.buildings.find((b) => b.id === 2)!.buffer).toEqual({ flour: 5 });
+    expect(v6.stockpile).toEqual({ wood: 37, planks: 11 });
+
+    // The half a shape check cannot see. v6 redefines `stockpile` as the CAMP's
+    // contents, so the migration is a no-op only if the restored ledger puts
+    // every unit there — and creates no site for a colony that has no store.
+    const stockpile = (await createColonyWorld(v6)).getResource(Stockpile);
+    expect(stockpile.siteJSON(CAMP_SITE_ID)).toEqual({ wood: 37, planks: 11 });
+    expect(stockpile.siteIds()).toEqual([CAMP_SITE_ID]);
+  });
+
+  it('does not mutate the v5 save it was handed', () => {
+    const input = v5WithAMill();
+    migrateSaveToLatest(input);
+    expect(input).toEqual(v5WithAMill());
   });
 });

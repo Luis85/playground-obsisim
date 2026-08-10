@@ -1,8 +1,8 @@
 import { buildWorld } from 'sim-ecs';
 import type { IEntity, IPreptimeWorld, IRuntimeWorld } from 'sim-ecs';
-import { isSaveGameV5, LATEST_SAVE_VERSION, MAX_SAVED_COUNTER } from '../shared/save';
+import { isSaveGameV6, LATEST_SAVE_VERSION, MAX_SAVED_COUNTER } from '../shared/save';
 import { migrateSaveToLatest } from '../shared/save-migration';
-import type { SaveGameV5, SavedBuilding } from '../shared/save';
+import type { SaveGameV6, SavedBuilding } from '../shared/save';
 import type { ResourceId } from '../shared/content-types';
 import { autoPlacePosition, DEFAULT_MAP } from '../shared/placement';
 import { SALT, spreadFor } from '../shared/population';
@@ -13,7 +13,7 @@ import {
 } from './components';
 import { isBuffersValid, isBuildingsValid, isIdsValid, isPositionsValid, isStockpileValid, isColonistsValid } from './save-guard';
 import { buildingComponents, colonistComponents } from './spawn';
-import { restoredColonists } from './restore';
+import { restoredColonists, seedStoredGoods } from './restore';
 import {
   CommandQueue, IdCounter, NoticeBoard, PendingChanges, ProductionLedger, RemovalLedger, SimClock, SnapshotStore, StatsHistory, Stockpile,
   WorldMap,
@@ -91,7 +91,7 @@ export const COMPONENT_TYPES: (new (...args: any[]) => object)[] = [
  * builds still gets the id after the last founder. */
 const STARTER_HOUSE_ID = 1;
 
-export function initialSave(): SaveGameV5 {
+export function initialSave(): SaveGameV6 {
   return {
     version: LATEST_SAVE_VERSION,
     tick: 0,
@@ -107,7 +107,7 @@ export function initialSave(): SaveGameV5 {
     // spare bed, and the fourth colonist is the first thing you must build for.
     buildings: [{
       id: STARTER_HOUSE_ID, defId: 'house', ...autoPlacePosition(DEFAULT_MAP, [])!,
-      progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0,
+      progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0, inputBuffer: {}, stored: {},
     }],
     colonists: Array.from({ length: STARTING_COLONISTS }, (_, index) => ({
       id: index + 1 + STARTER_HOUSE_ID,
@@ -125,7 +125,7 @@ export function initialSave(): SaveGameV5 {
 }
 
 /**
- * Structural validity (isSaveGameV5) plus referential integrity against the content
+ * Structural validity (isSaveGameV6) plus referential integrity against the content
  * catalog, for a save that is ALREADY at the current version. This is the internal
  * current-version validator, not the shell's entry point: it has no idea how to
  * migrate an older save, so calling it directly on unmigrated data would crash
@@ -143,8 +143,8 @@ export function initialSave(): SaveGameV5 {
  * grandfathered at load (see spawnColonist) so retuning balance down never
  * orphans a previously valid save.
  */
-export function isLoadableSave(data: unknown): data is SaveGameV5 {
-  if (!isSaveGameV5(data)) return false;
+export function isLoadableSave(data: unknown): data is SaveGameV6 {
+  if (!isSaveGameV6(data)) return false;
   // SAFE integers: a fractional tick would desync every modulo-based cadence
   // (autosave, recruit cooldown) forever; past 2^53, ++ stops incrementing.
   // No upper REJECT bound: any hard accept-bound would orphan a save that
@@ -188,14 +188,14 @@ export function isLoadableSave(data: unknown): data is SaveGameV5 {
  * 7.2). Kept here rather than in src/shared/ because isLoadableSave needs the
  * content catalog, while the migration chain is pure structure.
  */
-export function prepareLoadedSave(data: unknown): SaveGameV5 | null {
+export function prepareLoadedSave(data: unknown): SaveGameV6 | null {
   const migrated = migrateSaveToLatest(data);
   return migrated !== null && isLoadableSave(migrated) ? migrated : null;
 }
 
 /** The three things the shell can do after reading data.json's `save` field. */
 export type LoadDecision =
-  | { kind: 'restore'; save: SaveGameV5 }
+  | { kind: 'restore'; save: SaveGameV6 }
   | { kind: 'backup' }
   | { kind: 'fresh' };
 
@@ -233,12 +233,9 @@ function attach(prep: IPreptimeWorld, components: object[]): IEntity {
 export function spawnBuilding(
   prep: IPreptimeWorld,
   ids: IdCounter,
-  saved: Omit<SavedBuilding, 'id' | 'buffer'> & {
+  saved: Omit<SavedBuilding, 'id' | 'buffer' | 'inputBuffer' | 'stored'> & {
     id?: number;
     buffer?: Partial<Record<ResourceId, number>>;
-    // Not a SavedBuilding field (Task 3 doesn't persist InputBuffer — see
-    // BuildingSpec.inputBuffer in spawn.ts): a test fixture's own way to seed
-    // one, since nothing in a save record can.
     inputBuffer?: Partial<Record<ResourceId, number>>;
   },
 ): IEntity {
@@ -290,7 +287,7 @@ function assertSystemOrder(systems: readonly TColonySystemFactory[]): void {
 }
 
 export function buildColonyPrepWorld(
-  options: { save?: SaveGameV5; systems?: readonly TColonySystemFactory[] } = {},
+  options: { save?: SaveGameV6; systems?: readonly TColonySystemFactory[] } = {},
 ): IPreptimeWorld {
   const save = options.save ?? initialSave();
   const systems = options.systems ?? ALL_SYSTEMS;
@@ -315,8 +312,11 @@ export function buildColonyPrepWorld(
   clock.lastBirthTick = Math.min(save.lastBirthTick, clock.tick);
   const ids = new IdCounter(save.nextEntityId);
   const store = new SnapshotStore();
+  // The CAMP's contents, which is all `save.stockpile` is since v6. Every other
+  // site is reconstructed from its own building's record, below.
+  const stockpile = new Stockpile(save.stockpile);
   const instances = [
-    new Stockpile(save.stockpile),
+    stockpile,
     clock,
     new CommandQueue(),
     new NoticeBoard(),
@@ -336,6 +336,10 @@ export function buildColonyPrepWorld(
   PREP_RESOURCES.set(prep, registry);
 
   for (const saved of save.buildings) spawnBuilding(prep, ids, saved);
+  // After the spawns, and against the same records: a storehouse's stock is
+  // serialized off its building, so restoring it is a second pass over the same
+  // list rather than anything spawnBuilding could carry (see seedStoredGoods).
+  seedStoredGoods(stockpile, save.buildings);
   // Through restoredColonists, never straight off `save.colonists`: it is the
   // one place the load-time clamps and repairs live, and buildInitialSnapshot
   // reads the very same records — so the seeded snapshot and the entities
@@ -507,6 +511,6 @@ export function applyRemovals(world: IRuntimeWorld): number {
 // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type -- mirrors sim-ecs's TExecutionFunction callback type exactly
 const runSynchronously = (callback: Function): void => (callback as () => void)();
 
-export async function createColonyWorld(save?: SaveGameV5): Promise<IRuntimeWorld> {
+export async function createColonyWorld(save?: SaveGameV6): Promise<IRuntimeWorld> {
   return buildColonyPrepWorld({ save }).prepareRun({ executionFunction: runSynchronously });
 }

@@ -9,9 +9,10 @@ import { BALANCE, workerWorkPower } from './content/balance';
 import { MEAL_WEIGHTS } from './content/resources';
 import { batchOutputUnits, BUILDINGS } from './content/buildings';
 import {
-  Age, Building, Efficiency, HaulTrip, Home, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Colonist,
-  WorkerSlots,
+  Age, Building, Efficiency, HaulTrip, Home, Hunger, InputBuffer, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage,
+  Colonist, WorkerSlots,
 } from './components';
+import { Stockpile } from './resources';
 
 /**
  * Plain per-entity facts, decoupled from sim-ecs and from where they came
@@ -52,6 +53,13 @@ export interface BuildingFacts {
   batchActive: boolean;
   buffered: number;
   buffer: Partial<Record<ResourceId, number>>;
+  /** This building's own in-tray, and its share of the colony ledger. Neither
+   * is published in a `BuildingSnapshot` today; both are here because
+   * `savedBuildingOf` below is fed from these facts and save v6 persists them,
+   * and a fact the save needs but the facts do not carry is precisely how a
+   * producer ends up writing `{}` for a depot full of goods. */
+  inputBuffer: Partial<Record<ResourceId, number>>;
+  stored: Partial<Record<ResourceId, number>>;
   relocatingTicks: number;
 }
 
@@ -363,8 +371,15 @@ export function colonistFactsOf(
   };
 }
 
+/**
+ * `stored` arrives as an argument rather than being read off a component,
+ * because it is not one: a building's share of the ledger lives in the
+ * `Stockpile` resource, keyed by the building's own id (`siteJSON`). Both
+ * callers hold that resource already.
+ */
 export function buildingFactsOf(
   building: Building, slots: WorkerSlots, production: Production, position: Position, buffer: OutputBuffer, relocation: Relocation,
+  input: InputBuffer, stored: Partial<Record<ResourceId, number>>,
 ): BuildingFacts {
   return {
     id: building.id,
@@ -376,6 +391,8 @@ export function buildingFactsOf(
     batchActive: production.batchActive,
     buffered: buffer.total(),
     buffer: Object.fromEntries(buffer.amounts) as Partial<Record<ResourceId, number>>,
+    inputBuffer: Object.fromEntries(input.amounts) as Partial<Record<ResourceId, number>>,
+    stored,
     relocatingTicks: relocation.ticksLeft,
   };
 }
@@ -417,6 +434,13 @@ export function savedBuildingOf(facts: BuildingFacts): SavedBuilding {
   return {
     id: facts.id, defId: facts.defId, col: facts.col, row: facts.row,
     progress: facts.progress, batchActive: facts.batchActive, buffer: facts.buffer,
+    // Goods, not derivations, and neither is recoverable from anything else in
+    // the save: the in-tray holds inputs a hauler already walked out and the
+    // colony already paid for, and `stored` is THE serialization of a
+    // storehouse's share of the ledger — `Stockpile.toJSON` writes the camp
+    // alone, so a `{}` here is not an empty depot, it is a deleted one.
+    inputBuffer: facts.inputBuffer,
+    stored: facts.stored,
     relocatingTicks: facts.relocatingTicks,
   };
 }
@@ -434,6 +458,7 @@ export interface EntityFacts {
 export function gatherEntityFacts(world: IRuntimeWorld): EntityFacts {
   const workers: ColonistFacts[] = [];
   const buildings: BuildingFacts[] = [];
+  const stockpile = world.getResource(Stockpile);
   for (const entity of world.getEntities()) {
     const building = entity.getComponent(Building);
     if (building) {
@@ -444,6 +469,8 @@ export function gatherEntityFacts(world: IRuntimeWorld): EntityFacts {
         entity.getComponent(Position)!,
         entity.getComponent(OutputBuffer)!,
         entity.getComponent(Relocation)!,
+        entity.getComponent(InputBuffer)!,
+        stockpile.siteJSON(building.id),
       ));
       continue;
     }

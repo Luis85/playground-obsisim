@@ -1,4 +1,4 @@
-import type { SaveGameV5 } from '../shared/save';
+import type { SaveGameV6 } from '../shared/save';
 import { MAX_SAVED_COUNTER } from '../shared/save';
 import { CAMP_COLS, isInsideMap } from '../shared/placement';
 import { BUILDINGS } from './content/buildings';
@@ -25,7 +25,7 @@ import { RESOURCES, RESOURCE_IDS } from './content/resources';
 // save): Stockpile.add saturates at that same ceiling, and buildSaveFromWorld's
 // deposit-on-save loop saturates identically, so the engine never banks an
 // amount this guard would refuse.
-export function isStockpileValid(stockpile: SaveGameV5['stockpile']): boolean {
+export function isStockpileValid(stockpile: SaveGameV6['stockpile']): boolean {
   // Key-count cap FIRST (same principle as MAX_SAVED_ENTITIES): a valid
   // stockpile has at most one key per catalog resource, and Object.entries
   // on an adversarially huge object would materialize every entry before
@@ -40,7 +40,7 @@ export function isStockpileValid(stockpile: SaveGameV5['stockpile']): boolean {
   );
 }
 
-export function isBuildingsValid(buildings: SaveGameV5['buildings']): boolean {
+export function isBuildingsValid(buildings: SaveGameV6['buildings']): boolean {
   return buildings.every((b) => {
     if (!Object.hasOwn(BUILDINGS, b.defId)) return false;
     if (b.batchActive) {
@@ -82,7 +82,7 @@ interface ColonistTargets {
   shelters: ReadonlySet<number>;
 }
 
-function colonistTargets(buildings: SaveGameV5['buildings']): ColonistTargets {
+function colonistTargets(buildings: SaveGameV6['buildings']): ColonistTargets {
   const workplaces = new Set<number>();
   const shelters = new Set<number>();
   for (const b of buildings) {
@@ -112,7 +112,7 @@ function isValidToolTicks(toolTicks: number): boolean {
   return Number.isSafeInteger(toolTicks) && toolTicks >= 0 && toolTicks <= MAX_SAVED_COUNTER;
 }
 
-function isColonistRecordValid(c: SaveGameV5['colonists'][number], targets: ColonistTargets): boolean {
+function isColonistRecordValid(c: SaveGameV6['colonists'][number], targets: ColonistTargets): boolean {
   if (!isValidHunger(c.hunger)) return false;
   if (!isValidToolTicks(c.toolTicks)) return false;
   // Present, sheltering AND settled, all three in one membership test — see
@@ -135,7 +135,7 @@ function isColonistRecordValid(c: SaveGameV5['colonists'][number], targets: Colo
   return targets.workplaces.has(c.buildingId);
 }
 
-export function isColonistsValid(data: SaveGameV5): boolean {
+export function isColonistsValid(data: SaveGameV6): boolean {
   const targets = colonistTargets(data.buildings);
   return data.colonists.every((c) => isColonistRecordValid(c, targets));
 }
@@ -146,7 +146,7 @@ export function isColonistsValid(data: SaveGameV5): boolean {
 // The MAX_SAVED_COUNTER ceiling cannot ping-pong (accepted save -> play ->
 // rejected save): IdCounter saturates at that same ceiling, refusing entity
 // creation instead of writing a counter the guard would refuse to load.
-export function isIdsValid(data: SaveGameV5): boolean {
+export function isIdsValid(data: SaveGameV6): boolean {
   const allIds = [...data.buildings.map((b) => b.id), ...data.colonists.map((c) => c.id)];
   // SAFE integers: past 2^53, ++ stops incrementing and ids would collide
   if (!allIds.every((id) => Number.isSafeInteger(id) && id > 0)) return false;
@@ -166,7 +166,7 @@ export function isIdsValid(data: SaveGameV5): boolean {
  * 10,000-building hand-edited save (the flooded-save principle: cheap
  * checks before expensive walks).
  */
-export function isPositionsValid(data: SaveGameV5): boolean {
+export function isPositionsValid(data: SaveGameV6): boolean {
   const tiles = new Set<string>();
   for (const b of data.buildings) {
     if (!isInsideMap(data.map, b.col, b.row) || b.col < CAMP_COLS) return false;
@@ -178,19 +178,34 @@ export function isPositionsValid(data: SaveGameV5): boolean {
 }
 
 /**
+ * One goods map naming only resources the catalog has. Written once and called
+ * for all three of a building's maps rather than per field: they are the same
+ * question about the same shape, and a per-field copy is how the newest map
+ * ends up being the one nobody checks.
+ */
+function isCatalogBuffer(buffer: Partial<Record<string, number>>): boolean {
+  const ids = Object.keys(buffer);
+  // Key-count cap FIRST (same principle as isStockpileValid above): a valid
+  // buffer has at most one key per catalog resource, and the membership walk
+  // below would otherwise run once per key of an adversarially wide object —
+  // multiplied by up to MAX_SAVED_ENTITIES buildings.
+  if (ids.length > RESOURCE_IDS.length) return false;
+  return ids.every((id) => Object.hasOwn(RESOURCES, id));
+}
+
+/**
  * Buffer contents are a cross-field truth like positions: catalog membership
  * needs the content catalog, which the structural guard in src/shared/ cannot
- * see. The cap is NOT checked here — see spawnBuilding, which clamps an
- * over-cap buffer at load exactly as it clamps saved batch progress.
+ * see. All THREE of a building's goods maps go through it — the out-tray, the
+ * in-tray and its share of the ledger — because an unknown resource id is
+ * equally unrestorable in each.
+ *
+ * The caps are NOT checked here: an over-cap buffer is clamped by spawnBuilding
+ * and an over-capacity `stored` spills to the camp (restore.ts), exactly as
+ * saved batch progress is clamped rather than rejected.
  */
-export function isBuffersValid(data: SaveGameV5): boolean {
-  return data.buildings.every((b) => {
-    const ids = Object.keys(b.buffer);
-    // Key-count cap FIRST (same principle as isStockpileValid above): a valid
-    // buffer has at most one key per catalog resource, and the membership walk
-    // below would otherwise run once per key of an adversarially wide object —
-    // multiplied by up to MAX_SAVED_ENTITIES buildings.
-    if (ids.length > RESOURCE_IDS.length) return false;
-    return ids.every((id) => Object.hasOwn(RESOURCES, id));
-  });
+export function isBuffersValid(data: SaveGameV6): boolean {
+  return data.buildings.every(
+    (b) => isCatalogBuffer(b.buffer) && isCatalogBuffer(b.inputBuffer) && isCatalogBuffer(b.stored),
+  );
 }

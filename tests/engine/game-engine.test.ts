@@ -12,12 +12,16 @@ import { buildSaveFromWorld, GameEngine } from '../../src/engine/game-engine';
 import * as worldModule from '../../src/engine/world';
 import { createColonyWorld, initialSave, isLoadableSave } from '../../src/engine/world';
 import type { IEntity, IRuntimeWorld } from 'sim-ecs';
-import { Building, HaulTrip } from '../../src/engine/components';
+import { Building, HaulTrip, InputBuffer, OutputBuffer } from '../../src/engine/components';
+import { RESOURCE_IDS } from '../../src/engine/content/resources';
+import { CAMP_SITE_ID, CAMP_TILE } from '../../src/shared/haul';
+import type { ResourceId } from '../../src/shared/content-types';
+import { colonyTotal } from './fixtures';
 import { BALANCE } from '../../src/engine/content/balance';
 import { Stockpile } from '../../src/engine/resources';
 
 const refreshMock = vi.mocked(worldModule.refreshEntitySections);
-import type { SaveGameV5 } from '../../src/shared/save';
+import type { SaveGameV6 } from '../../src/shared/save';
 import { MAX_SAVED_COUNTER } from '../../src/shared/save';
 
 /** The forester scriptedRun builds: the starter house holds id 1 and the
@@ -62,7 +66,7 @@ function stageDetachFailure(engine: GameEngine): () => void {
 }
 
 /** Deterministic scripted session used by both determinism tests. */
-async function scriptedRun(ticks: number, save?: SaveGameV5): Promise<GameEngine> {
+async function scriptedRun(ticks: number, save?: SaveGameV6): Promise<GameEngine> {
   const engine = await GameEngine.create(save ?? null);
   if (!save) {
     engine.dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
@@ -129,9 +133,15 @@ describe('GameEngine', () => {
     await steps(engine, 99);
     engine.dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
     await engine.stepOnce(); // tick 100 -> autosave fires
-    const save: SaveGameV5 = autosave.mock.calls[0][0];
+    const save: SaveGameV6 = autosave.mock.calls[0][0];
     expect(save.buildings.find((b) => b.id === FORESTER_ID))
-      .toEqual({ id: FORESTER_ID, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0 });
+      .toEqual({
+        id: FORESTER_ID, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1,
+        // Both empty, and both asserted rather than omitted: `toEqual` on the
+        // whole record is what makes a producer that stopped writing either
+        // field fail here as well as in the round-trip cases.
+        buffer: {}, inputBuffer: {}, stored: {}, relocatingTicks: 0,
+      });
     expect(save.stockpile.wood).toBe(20); // cost paid AND building present
   });
 
@@ -173,7 +183,7 @@ describe('GameEngine', () => {
 
     await engine.stepOnce(); // tick 100 -> autosave fires
     expect(autosave).toHaveBeenCalledTimes(1);
-    const written: SaveGameV5 = autosave.mock.calls[0][0];
+    const written: SaveGameV6 = autosave.mock.calls[0][0];
     expect(written.tick).toBe(100);
     expect(written.colonists.map((c) => c.id)).toEqual([survivor.id]);
   });
@@ -224,7 +234,13 @@ describe('GameEngine', () => {
     await engine.flush(); // runs one final tick to process the queue
     const save = engine.serialize();
     expect(save.buildings.find((b) => b.id === FORESTER_ID))
-      .toEqual({ id: FORESTER_ID, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0 });
+      .toEqual({
+        id: FORESTER_ID, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1,
+        // Both empty, and both asserted rather than omitted: `toEqual` on the
+        // whole record is what makes a producer that stopped writing either
+        // field fail here as well as in the round-trip cases.
+        buffer: {}, inputBuffer: {}, stored: {}, relocatingTicks: 0,
+      });
     expect(save.stockpile.wood).toBe(20); // cost paid AND building present
     await engine.flush(); // empty queue: no extra tick
     expect(engine.serialize().tick).toBe(1);
@@ -237,8 +253,8 @@ describe('GameEngine', () => {
   it('serializes entities in ascending id order regardless of spawn order', async () => {
     const save = initialSave();
     save.buildings = [
-      { id: 6, defId: 'sawmill', progress: 0, batchActive: false, col: 8, row: 1, buffer: {}, relocatingTicks: 0 },
-      { id: 5, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0 },
+      { inputBuffer: {}, stored: {}, id: 6, defId: 'sawmill', progress: 0, batchActive: false, col: 8, row: 1, buffer: {}, relocatingTicks: 0 },
+      { inputBuffer: {}, stored: {}, id: 5, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0 },
       ...initialSave().buildings, // the starter house, id 1, listed LAST on purpose
     ];
     save.colonists = [4, 2, 3].map((id) => ({
@@ -460,5 +476,208 @@ describe('GameEngine', () => {
     // save) the load guard's comment says cannot happen.
     expect(save.stockpile.wood).toBe(MAX_SAVED_COUNTER);
     expect(isLoadableSave(save)).toBe(true);
+  });
+});
+
+
+/**
+ * The save format's producer side — the half of save v6 that no shape check can
+ * reach. `SavedBuilding` gains two required fields, and writing `{}` for both
+ * typechecks, migrates, round-trips and passes every guard while silently
+ * deleting every storehouse's contents and every in-tray on save.
+ */
+describe('buildSaveFromWorld writes all four places goods can be', () => {
+  const DEPOT_ID = 5;
+  const MILL_ID = 6;
+  /** Out on the map and one tile apart, so a supply trip has a real leg to be
+   * caught part-way through, and neither sits on the starter house's tile. */
+  const DEPOT_TILE = { col: 14, row: 5 };
+  const MILL_TILE = { col: 15, row: 5 };
+
+  /** The private world a GameEngine drives, reached the way `stageDetachFailure`
+   * above reaches it — there is no other seam, and these cases must read the
+   * LIVE ledger rather than a save's own account of itself. */
+  const worldOf = (engine: GameEngine) => (engine as unknown as { world: IRuntimeWorld }).world;
+
+  /** initialSave() plus a depot holding `stored` and a mill beside it. */
+  function colonyWithADepot(
+    stored: Partial<Record<ResourceId, number>>, camp: Partial<Record<ResourceId, number>>,
+  ): SaveGameV6 {
+    const save = initialSave();
+    save.stockpile = { ...camp };
+    save.buildings.push(
+      {
+        id: DEPOT_ID, defId: 'storehouse', ...DEPOT_TILE,
+        progress: 0, batchActive: false, buffer: {}, inputBuffer: {}, stored, relocatingTicks: 0,
+      },
+      {
+        id: MILL_ID, defId: 'mill', ...MILL_TILE,
+        progress: 0, batchActive: false, buffer: {}, inputBuffer: {}, stored: {}, relocatingTicks: 0,
+      },
+    );
+    save.nextEntityId = MILL_ID + 1;
+    return save;
+  }
+
+  /**
+   * Every resource the colony owns, wherever it stands — `colonyTotal` per
+   * resource, walking sites, both trays of every building and every hauler's
+   * hands. THE conservation quantity: a field the producer just wrote can be
+   * made to agree with itself, a colony-wide total cannot.
+   */
+  function totals(world: IRuntimeWorld): Record<string, number> {
+    return Object.fromEntries(RESOURCE_IDS.map((id) => [id, colonyTotal(world, id)]));
+  }
+
+  /** A colony working its depot: the mill staffed, one hauler on duty. Bread so
+   * nobody starves out of the fixture mid-run; wheat ONLY in the depot, so every
+   * unit the mill ever holds was physically fetched from a site. */
+  async function workingColony() {
+    const engine = await GameEngine.create(colonyWithADepot({ wheat: 41 }, { wood: 30, bread: 90 }));
+    engine.dispatch({ type: 'assignWorker', buildingId: MILL_ID });
+    engine.dispatch({ type: 'assignHauler' });
+    return engine;
+  }
+
+  /** The hauler's hands, when they hold a SUPPLY load and are still walking.
+   * `pickedUp === false` is what makes it supply rather than collect — the same
+   * discriminator §2.4's flow table needs. */
+  function supplyLoad(world: IRuntimeWorld): HaulTrip | undefined {
+    return [...world.getEntities()]
+      .map((e) => e.getComponent(HaulTrip))
+      .find((t) => t !== undefined && t.amount > 0 && !t.pickedUp);
+  }
+
+  /**
+   * How much is standing in each of the five places a unit of goods can be.
+   * Read as a set rather than summed, because "conserved" is only worth
+   * asserting once every place actually holds something: the first version of
+   * this fixture stopped at the first loaded hauler, when the mill's in-tray was
+   * still empty — so it would have conserved four places out of five and passed
+   * with `inputBuffer` deleted from the save entirely.
+   */
+  function wherever(world: IRuntimeWorld) {
+    const stockpile = world.getResource(Stockpile);
+    const mill = [...world.getEntities()].find((e) => e.getComponent(Building)?.id === MILL_ID)!;
+    return {
+      camp: stockpile.totalAt(CAMP_SITE_ID),
+      depot: stockpile.totalAt(DEPOT_ID),
+      inTray: mill.getComponent(InputBuffer)!.total(),
+      outTray: mill.getComponent(OutputBuffer)!.total(),
+      hands: supplyLoad(world)?.amount ?? 0,
+    };
+  }
+
+  /** Steps until every one of those five places holds something, or throws — a
+   * fixture that silently stopped short is exactly how a conservation test ends
+   * up conserving only the places it happened to reach. */
+  async function stepToGoodsEverywhere(engine: GameEngine): Promise<void> {
+    for (let i = 0; i < 60; i++) {
+      await engine.stepOnce();
+      if (Object.values(wherever(worldOf(engine))).every((held) => held > 0)) return;
+    }
+    throw new Error('the colony never had goods in all five places at once');
+  }
+
+  it('a colony with goods in the camp AND a storehouse round-trips both', async () => {
+    // Distinct amounts AND distinct resources at each site — 30 wood at the
+    // camp, 17 planks in the depot — so every wrong producer fails on a VALUE
+    // rather than on a total that happens to differ: one that writes only the
+    // camp reads 0 planks, one that writes only `stored` reads 0 wood, and one
+    // that wrote `colonyStock()` into `stockpile` would double-count the depot
+    // and read 34 planks. A fixture with an empty camp would pass with the site
+    // half deleted.
+    const engine = await GameEngine.create(colonyWithADepot({ planks: 17 }, { wood: 30 }));
+    const save = engine.serialize();
+
+    expect(save.stockpile).toEqual({ wood: 30 }); // the CAMP alone, never the aggregate
+    expect(save.buildings.find((b) => b.id === DEPOT_ID)!.stored).toEqual({ planks: 17 });
+
+    const stockpile = worldOf(await GameEngine.create(save)).getResource(Stockpile);
+    expect(stockpile.getAt(CAMP_SITE_ID, 'wood')).toBe(30);
+    expect(stockpile.getAt(DEPOT_ID, 'planks')).toBe(17);
+    expect(stockpile.get('planks')).toBe(17); // banked once, not once per projection
+    expect(stockpile.get('wood')).toBe(30);
+  });
+
+  it('every ledger site other than the camp names a building in the save', async () => {
+    // The sentinel for §2.4's second invariant, asserted from the other end. A
+    // site with no building behind it is unserializable BY CONSTRUCTION here —
+    // savedBuildingOf walks buildings — so its goods would count in
+    // colonyWealth, be unreachable by any hauler, and then vanish at the next
+    // save with nothing reporting it. Run over a colony that has been through a
+    // demolition, the one path in the game that removes a site.
+    const engine = await GameEngine.create(colonyWithADepot({ planks: 17 }, { wood: 30, planks: 5 }));
+    // Guard against a vacuous sentinel: there must BE a non-camp site to orphan.
+    expect(worldOf(engine).getResource(Stockpile).siteIds()).toContain(DEPOT_ID);
+
+    engine.dispatch({ type: 'demolishBuilding', buildingId: DEPOT_ID });
+    await engine.stepOnce();
+
+    const save = engine.serialize();
+    expect(save.buildings.some((b) => b.id === DEPOT_ID)).toBe(false); // the building really is gone
+    const named = new Set(save.buildings.map((b) => b.id));
+    const orphans = worldOf(engine).getResource(Stockpile).siteIds().filter((id) => id !== CAMP_SITE_ID && !named.has(id));
+    expect(orphans).toEqual([]);
+
+    // And the goods came with it. 5 at the camp + 17 spilled out of the depot +
+    // the storehouse's own 10-plank cost refunded = 32; no subset of those
+    // coincides, so a spill that lost or double-counted a pile fails on 32.
+    expect(save.stockpile.planks).toBe(32);
+    expect(save.stockpile.wood).toBe(50); // 30 + the refunded 20
+  });
+
+  it('save and load conserves everything and the colony resumes work', async () => {
+    const engine = await workingColony();
+    await stepToGoodsEverywhere(engine);
+    const live = worldOf(engine);
+    const before = totals(live);
+    // Guard, stated place by place rather than as one total: each of the five
+    // is a separate way for the save format to lose goods, and a single summed
+    // assertion cannot say which of them the fixture actually reached.
+    for (const [place, held] of Object.entries(wherever(live))) {
+      expect(held, `nothing standing at ${place}`).toBeGreaterThan(0);
+    }
+
+    // Resource by resource, across every site, both trays and the hauler's
+    // hands — NOT the field the producer just wrote. Dropping `stored` loses the
+    // depot's wheat; dropping `inputBuffer` loses the mill's.
+    const restored = await GameEngine.create(engine.serialize());
+    expect(totals(worldOf(restored))).toEqual(before);
+
+    // NOT tick-identical resumption — that was an overclaim and is now false: a
+    // colony saved with a hauler beside a depot comes back with everyone at the
+    // camp, so claims, travel times and distribution all differ. What IS
+    // guaranteed is that every site's stock is still reachable, so work resumes
+    // within a bounded number of ticks.
+    await steps(restored, 40);
+    expect(totals(worldOf(restored)).flour).toBeGreaterThan(before.flour);
+  });
+
+  it('a hauler mid-supply-trip banks its load at the camp and stands there on load', async () => {
+    // HaulTrip still never enters the save (increment 4's simplification,
+    // kept): conservation exact, no guard, no migration.
+    const engine = await workingColony();
+    await stepToGoodsEverywhere(engine);
+    const trip = supplyLoad(worldOf(engine))!;
+    const carried = trip.amount;
+    const live = worldOf(engine);
+    const campWheat = live.getResource(Stockpile).getAt(CAMP_SITE_ID, 'wheat');
+
+    const save = engine.serialize();
+    expect(save.stockpile.wheat).toBe(campWheat + carried);
+    // A save is a snapshot, not an event: the live colony still walks that load
+    // to the mill.
+    expect(trip.amount).toBe(carried);
+
+    const restored = await GameEngine.create(save);
+    expect(totals(worldOf(restored))).toEqual(totals(live));
+    const trips = [...worldOf(restored).getEntities()]
+      .map((e) => e.getComponent(HaulTrip))
+      .filter((t) => t !== undefined);
+    expect(trips.length).toBeGreaterThan(0);
+    for (const t of trips) {
+      expect(t).toMatchObject({ phase: 'idle', amount: 0, atCol: CAMP_TILE.col, atRow: CAMP_TILE.row });
+    }
   });
 });

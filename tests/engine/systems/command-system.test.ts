@@ -26,7 +26,7 @@ import { PopulationSystem } from '../../../src/engine/systems/population-system'
 import { RESOURCES } from '../../../src/engine/content/resources';
 import { CAMP_SITE_ID, type StoreSite } from '../../../src/shared/haul';
 import type { Command } from '../../../src/shared/commands';
-import type { SaveGameV5 } from '../../../src/shared/save';
+import type { SaveGameV6 } from '../../../src/shared/save';
 import { DEFAULT_MAP, type TileRef } from '../../../src/shared/placement';
 
 /**
@@ -60,7 +60,7 @@ const ONE_LOAD = haulerCapacity(null);
  * with housing. Stating the houseless colony explicitly keeps them honest —
  * the same move `houseHaulers: false` makes in haul-system.test.ts.
  */
-function houselessSave(): SaveGameV5 {
+function houselessSave(): SaveGameV6 {
   const base = initialSave();
   return { ...base, buildings: [], colonists: base.colonists.map((c) => ({ ...c, homeId: null })) };
 }
@@ -91,7 +91,7 @@ function ticker(world: IRuntimeWorld) {
   };
 }
 
-async function setup(save: SaveGameV5 = houselessSave(), systems: readonly TColonySystemFactory[] = [CommandSystem, HaulSystem, SnapshotSystem]) {
+async function setup(save: SaveGameV6 = houselessSave(), systems: readonly TColonySystemFactory[] = [CommandSystem, HaulSystem, SnapshotSystem]) {
   const prep = buildColonyPrepWorld({ save, systems });
   const world = await prep.prepareRun();
   const tick = ticker(world);
@@ -111,13 +111,13 @@ async function setup(save: SaveGameV5 = houselessSave(), systems: readonly TColo
  * bed, so the SECOND recruit below would be refused for want of a bed and the
  * cooldown assertion would pass for the wrong reason.
  */
-function saveThatCanHouseArrivals(): SaveGameV5 {
+function saveThatCanHouseArrivals(): SaveGameV6 {
   const base = houselessSave();
   return {
     ...base,
     buildings: [
-      { id: 90, defId: 'house', col: 5, row: 3, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 },
-      { id: 91, defId: 'house', col: 7, row: 3, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 },
+      { inputBuffer: {}, stored: {}, id: 90, defId: 'house', col: 5, row: 3, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 },
+      { inputBuffer: {}, stored: {}, id: 91, defId: 'house', col: 7, row: 3, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 },
     ],
     stockpile: { ...base.stockpile, bread: 5000 },
     nextEntityId: 100,
@@ -127,7 +127,7 @@ function saveThatCanHouseArrivals(): SaveGameV5 {
 // Relocation downtime is enforced by ProductionSystem, which the shared setup()
 // deliberately omits. Order matches ALL_SYSTEMS (buildColonyPrepWorld throws
 // otherwise).
-async function setupWithProduction(save: SaveGameV5 = houselessSave()) {
+async function setupWithProduction(save: SaveGameV6 = houselessSave()) {
   const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, ProductionSystem, HaulSystem, SnapshotSystem] });
   const world = await prep.prepareRun();
   const tick = ticker(world);
@@ -207,9 +207,9 @@ describe('CommandSystem', () => {
   async function nomadWithSplitFood(campBread: number, depotBread: number) {
     const base = saveThatCanHouseArrivals();
     const depot = { id: 92, col: 9, row: 3 };
-    const save: SaveGameV5 = {
+    const save: SaveGameV6 = {
       ...base,
-      buildings: [...base.buildings, {
+      buildings: [...base.buildings, { inputBuffer: {}, stored: {},
         ...depot, defId: 'storehouse', progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0,
       }],
       stockpile: { bread: campBread },
@@ -557,7 +557,7 @@ describe('CommandSystem', () => {
     let id = 10;
     for (let row = 0; row < 16; row++) {
       for (let col = 3; col < 24; col++) {
-        save.buildings.push({ id: id++, defId: 'forester', progress: 0, batchActive: false, col, row, buffer: {}, relocatingTicks: 0 });
+        save.buildings.push({ inputBuffer: {}, stored: {}, id: id++, defId: 'forester', progress: 0, batchActive: false, col, row, buffer: {}, relocatingTicks: 0 });
       }
     }
     save.nextEntityId = id;
@@ -1011,13 +1011,13 @@ describe('CommandSystem', () => {
   // path only, so buildings constructed during play had no buffer at all, and
   // nothing in the suite would have noticed.
   it('a constructed building carries the same components as a restored one', async () => {
-    const save: SaveGameV5 = {
+    const save: SaveGameV6 = {
       ...initialSave(),
       // Beside the starter house, not instead of it: the founders' homeId
       // points at it, and the load guard refuses a home that names nothing.
       buildings: [
         ...initialSave().buildings,
-        { id: 10, defId: 'forester', col: 6, row: 3, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 },
+        { inputBuffer: {}, stored: {}, id: 10, defId: 'forester', col: 6, row: 3, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 },
       ],
       nextEntityId: 11, // strictly past every id above, or the load guard refuses the save
     };
@@ -1140,12 +1140,12 @@ describe('CommandSystem', () => {
    * capacity, so no assertion below can read one for another. */
   const DEPOT_WHEAT = 17;
 
-  function withBuildings(...buildings: SaveGameV5['buildings']): SaveGameV5 {
+  function withBuildings(...buildings: SaveGameV6['buildings']): SaveGameV6 {
     return { ...houselessSave(), buildings, stockpile: {}, nextEntityId: 100 };
   }
 
-  const storeSpec = (id: number, at: TileRef, defId: 'mill' | 'storehouse') =>
-    ({ id, defId, col: at.col, row: at.row, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 });
+  const storeSpec = (id: number, at: TileRef, defId: 'mill' | 'storehouse'): SaveGameV6['buildings'][number] =>
+    ({ id, defId, col: at.col, row: at.row, progress: 0, batchActive: false, buffer: {}, inputBuffer: {}, stored: {}, relocatingTicks: 0 });
 
   /**
    * A staffed mill wanting wheat, and a storehouse holding all of it. The one
@@ -1153,7 +1153,7 @@ describe('CommandSystem', () => {
    * mill staffed, one hauler on duty and its supply trip already dispatched,
    * because CommandSystem runs before HaulSystem in the real order.
    */
-  async function millAndDepot(systems?: readonly TColonySystemFactory[], extras: SaveGameV5['buildings'] = []) {
+  async function millAndDepot(systems?: readonly TColonySystemFactory[], extras: SaveGameV6['buildings'] = []) {
     const fixture = await setup(
       withBuildings(storeSpec(MILL_ID, MILL_TILE, 'mill'), storeSpec(DEPOT_ID, DEPOT_TILE, 'storehouse'), ...extras),
       systems,

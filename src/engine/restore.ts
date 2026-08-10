@@ -1,8 +1,10 @@
-import type { SavedColonist, SaveGameV5 } from '../shared/save';
+import type { ResourceId } from '../shared/content-types';
+import type { SavedBuilding, SavedColonist, SaveGameV6 } from '../shared/save';
 import { lifespanFor, stageOf } from '../shared/population';
 import { BALANCE } from './content/balance';
 import { BUILDINGS } from './content/buildings';
-import { clampedAge, clampedHunger, clampedStarving, clampedToolTicks } from './spawn';
+import type { Stockpile } from './stockpile';
+import { clampedAge, clampedBuffer, clampedHunger, clampedStarving, clampedToolTicks } from './spawn';
 
 /**
  * The roster a save actually restores as.
@@ -24,7 +26,7 @@ import { clampedAge, clampedHunger, clampedStarving, clampedToolTicks } from './
  * that deliberately spawns an elder holding a job — to prove
  * `standDownNonAdults` clears it — would become vacuous rather than fail.
  */
-export function restoredColonists(save: SaveGameV5): SavedColonist[] {
+export function restoredColonists(save: SaveGameV6): SavedColonist[] {
   // Before the bed count, not after: a colonist the rules have already killed
   // must not hold one of the beds `settledHomes` is handing out, or the repair
   // for one balance retune displaces a living colonist on behalf of a dead one
@@ -113,7 +115,7 @@ function hasLifeLeft(saved: SavedColonist): boolean {
  * The same exclusion governs the FILL half below, for the same one-line reason:
  * a bed in a house in transit is not a bed to move anyone into either.
  */
-function usableBeds(buildings: SaveGameV5['buildings']): Map<number, number> {
+function usableBeds(buildings: SaveGameV6['buildings']): Map<number, number> {
   const beds = new Map<number, number>();
   for (const b of buildings) {
     if (!Object.hasOwn(BUILDINGS, b.defId)) continue;
@@ -177,7 +179,7 @@ function claimOpening(openings: [number, number][]): number | null {
  */
 function settledHomes(
   colonists: readonly SavedColonist[],
-  buildings: SaveGameV5['buildings'],
+  buildings: SaveGameV6['buildings'],
 ): ReadonlyMap<number, number | null> {
   const beds = usableBeds(buildings);
   const rows = [...colonists].sort((a, b) => a.id - b.id);
@@ -195,4 +197,41 @@ function settledHomes(
     homes.set(saved.id, claimed);
   }
   return homes;
+}
+
+/**
+ * Reconstruct every saved building's share of the ledger — the other half of a
+ * v6 restore, beside the colonist repairs above, and the reason a storehouse's
+ * stock survives a reload at all.
+ *
+ * `seedSite`, never `addAt`: a save can legitimately be taken while a STOCKED
+ * storehouse is mid-relocation, and §2.3 keeps a store in transit out of the
+ * site list, so there is no `StoreSite` to bank against. Seeding reconstructs a
+ * state the engine itself previously wrote and records no delivery; the
+ * invariant `addAt`'s `StoreSite` parameter enforces is about PLAY creating a
+ * site with no building behind it, which this is not (see Stockpile.seedSite).
+ *
+ * The one load-time repair, per spec §2.9: goods the building cannot legally
+ * hold today — an over-capacity `stored`, or ANY `stored` on a def whose
+ * `storage` is 0, which is what a hand-edited save or a capacity retuned DOWN
+ * leaves behind — SPILL TO THE CAMP rather than being trimmed away. The camp is
+ * unbounded, so conservation is exact and no save loses banked goods; trimming
+ * would make a retune silently confiscate them. What is kept is chosen by
+ * `clampedBuffer`, the same catalog-order rule an over-cap output buffer is
+ * trimmed by, so which resources survive a down-tune is deterministic.
+ *
+ * An unknown `defId` reads as storage 0 rather than throwing, exactly as
+ * `usableBeds` skips one: `isLoadableSave` has already refused such a save, but
+ * `createColonyWorld` is callable directly with one.
+ */
+export function seedStoredGoods(stockpile: Stockpile, buildings: readonly SavedBuilding[]): void {
+  for (const saved of buildings) {
+    const capacity = Object.hasOwn(BUILDINGS, saved.defId) ? BUILDINGS[saved.defId].storage : 0;
+    const kept = clampedBuffer(saved.stored, capacity);
+    if (kept.size > 0) stockpile.seedSite(saved.id, Object.fromEntries(kept));
+    for (const [id, amount] of Object.entries(saved.stored)) {
+      const spilled = (amount ?? 0) - (kept.get(id as ResourceId) ?? 0);
+      if (spilled > 0) stockpile.refund(id as ResourceId, spilled);
+    }
+  }
 }

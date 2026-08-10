@@ -1297,6 +1297,25 @@ The instruments §4 needs. A task, not an afterthought — increment 6 shipped a
 - Modify: `tests/support/population-harness.ts` (`storehouses?: number`)
 - Test: `tests/engine/balance.test.ts` (the `balance` vitest project)
 
+- [ ] **Step 0: `made` currently counts other buildings' inputs as this building's output. Fix it before measuring anything.**
+
+  `balance-harness.ts` derives gross production as `delivered + finalBuffer + inTransit`, where
+
+  ```ts
+  const inTransit = snapshot.colonists.reduce((sum, w) => sum + w.carrying, 0);
+  ```
+
+  That sums **every hauler's load, of every resource, in every direction.** Its comment explains the reasoning — "everything made either reached the store, is still in the buffer, or is in a hauler's hands" — and that reasoning was sound when a hauler could only ever be carrying the measured building's *output*. Two-way haul broke it: six wood walking **toward** a sawmill is now counted as six planks the sawmill produced. Every §4 figure that divides by `made` inherits the error, and it inflates precisely in the scenarios this increment adds, since those are the ones with supply trips in flight.
+
+  **Verified against the code, so you do not have to rediscover it:** `ColonistSnapshot` publishes `carrying` (a number) and `haulPickedUp` (whether the load came out of an **output** buffer) but **no cargo resource id**. So filtering by direction is available today; filtering by resource is not, and would need a new published field. Weigh three routes and say which you took and why:
+  - filter on `haulPickedUp === true` — cheap, correct for a single-measured-building scenario, still wrong if a second producer's output is in flight;
+  - publish the cargo resource on `ColonistSnapshot` and filter on it — exact, but a snapshot field added for a test harness;
+  - derive `made` from authoritative production data instead of reconstructing it from where the goods are standing — most robust, and it retires the whole class.
+
+  While you are here: `carrying`'s doc comment in `src/shared/snapshot.ts` still reads "0 unless carrying a load home", which stopped being true the moment a supply leg carried a load **out**.
+
+  This is Step 0 because §4's numbers are the deliverable of Tasks 14 and 15, and an instrument that over-reports is worse than no instrument — it produces a plausible figure nobody re-derives.
+
 - [ ] **Step 1: `Scenario` grows a second stage.** Today it measures one building. §4 q1 and q2 both need a *chain* — a forester feeding a sawmill at a distance — so the descriptor needs a second building and the result needs per-stage figures. Keep the existing single-building path working unchanged: increment 5's sweep is the control in q1, and a control that had to be rewritten is not one.
 - [ ] **Step 2: `storehouses`,** placed at a scenario-specified tile. In the population harness this closes a gap increment 6 flagged and this increment widens: the harness *cannot build*, which was a conservative control there and is a distortion here, because a colony that cannot build a depot cannot play this increment.
 - [ ] **Step 3: Sentinels.** `frozenSteps` must stay 0 (OBS-6-02's regression sentinel). Add a conservation sentinel while the instrument is open: **opening holdings**, plus what was made, **minus what production consumed**, minus the true sinks (eaten, and destroyed by demolition), equals total goods at the end — counting every site, every input and output buffer, and every load in a hauler's hands.

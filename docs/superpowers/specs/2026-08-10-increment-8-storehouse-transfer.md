@@ -242,11 +242,31 @@ bought nothing.
 **The risk this takes, stated because §4 must measure it in both directions.**
 The failure mode opposite to starvation is a hauler crossing the map past a
 building it could have served on the way, which the whole-route term exists to
-prevent. Two things bound it: within the starving band the route term still
-decides, so among starving buildings the nearest is served; and only a
-starving-versus-satisfied comparison can invert on distance. §4.1 measures the
-mill/bakery fixture in **both** tile orders and the existing distance gradient,
-and a fix that moves the first while wrecking the second is not a fix.
+prevent. Two things bound it: within the starving band the ordinary terms still
+decide, so the band promotes without also rearranging what is inside it; and
+only a starving-versus-satisfied comparison can invert on distance. §4.1
+measures the mill/bakery fixture in **both** tile orders and the existing
+distance gradient, and a fix that moves the first while wrecking the second is
+not a fix.
+
+**A qualification, because an earlier draft over-claimed it.** That draft said
+"within the starving band the route term still decides, so among starving
+buildings the nearest is served", and that is false as written. The order is
+starving, then `movable` descending, then route — so route decides only among
+starving candidates with **equal** movable stock. Where movable differs, a
+farther starving building with six units still outranks a nearer starving
+building with a two-unit tail, and a hauler does cross the map.
+
+That is the pre-existing movable-first policy, not something this band
+introduces: the identical trade-off has always governed the topping-up band and
+is the reason `movable` sits ahead of route at all. It is left exactly where it
+is. **Reordering movable and route inside one band would be a real balance
+change**, made in the same increment whose §4.1 is supposed to measure the
+starvation term alone — which is the one thing §1.2 is emphatic that this
+increment must not do. So the guarantee is narrowed to what is true rather than
+the code being changed to match a sentence, and the unequal-movable case gets a
+test so the actual behaviour is pinned instead of assumed. If §4.1 shows the
+crossing is expensive, that is a finding and a successor, not a quiet retune.
 
 **`inputBufferCap` stays at 12.** §4.2 of increment 7 established that the cap
 is currently the dispatcher's only fairness floor and an accidental one. This

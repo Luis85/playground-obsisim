@@ -109,8 +109,22 @@ it('a starving building outranks a topping-up one that is nearer', () => {
   // also wins on distance passes with the new term deleted.
 });
 
-it('among starving buildings the nearer is still served first', () => {
-  // The counter-direction §2.1 requires. Both starving; route decides.
+it('among starving buildings with equal movable the nearer is served first', () => {
+  // The counter-direction §2.1 requires. Both starving, movable EQUAL; route
+  // decides. Equal movable is not incidental — see the next test.
+});
+
+it('among starving buildings movable still outranks route', () => {
+  // The limit of the guarantee above, pinned rather than assumed. A FARTHER
+  // starving candidate with six movable beats a NEARER starving one with a
+  // two-unit tail, because the order is starving -> movable -> route and this
+  // band does not rearrange what is inside it.
+  //
+  // This is the pre-existing movable-first policy, which has always governed
+  // the topping-up band too. It is NOT changed here: reordering movable and
+  // route inside a band would be a real balance change made in the increment
+  // whose §4.1 measures the starvation term alone. The test exists so the
+  // behaviour is recorded, and so §4.1 can be read knowing what it includes.
 });
 
 it('among topping-up buildings nothing has changed', () => {

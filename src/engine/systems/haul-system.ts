@@ -1,7 +1,7 @@
 import { createSystem, queryComponents, Read, ReadResource, Write, WriteResource } from 'sim-ecs';
 import type { StoreSite } from '../../shared/haul';
 import { haulDistance } from '../../shared/haul';
-import type { TileRef } from '../../shared/placement';
+import { isRelocating, type TileRef } from '../../shared/placement';
 import { commuteFactor } from '../../shared/population';
 import { BALANCE } from '../content/balance';
 import { RESOURCE_IDS } from '../content/resources';
@@ -134,17 +134,22 @@ function fetchArrival(ctx: TickContext, trip: HaulTrip): void {
 /**
  * Put a supply load into the building it was fetched for.
  *
- * Staffing is a DISPATCH-TIME filter and the world moves during a leg: the
- * target's last worker can be unassigned, retire or die while this hauler
- * walks, and none of those cancels the trip the way a demolition does.
- * Unloading anyway parks goods in a processor that cannot use them and loses
- * them if it is demolished — exactly what the staffing rule prevents, defeated
- * by travel time. The load stays in hand instead; `pickedUp` stays false, so it
+ * Staffing and relocation are both DISPATCH-TIME filters (`needOf` refuses
+ * both) and the world moves during a leg: the target's last worker can be
+ * unassigned, retire or die while this hauler walks, or the target can be sent
+ * into relocation by `handleMoveBuilding` — which retargets an ALREADY
+ * outbound leg to the building's new tile and re-prices it from wherever the
+ * hauler is standing, so a short retarget can land the hauler before a long
+ * relocation countdown ends. Neither cancels the trip the way a demolition
+ * does. Unloading anyway parks goods in a building that cannot use them —
+ * providing no service while still banking a delivery — and loses them if it
+ * is demolished mid-relocation: exactly what each rule prevents, defeated by
+ * travel time. The load stays in hand instead; `pickedUp` stays false, so it
  * is an undelivered remainder and goes home to its source.
  */
 function unload(ctx: TickContext, trip: HaulTrip, row: HaulBuildingRow): void {
   if (trip.kind !== 'supply' || trip.resource === null || trip.amount === 0) return;
-  if (!ctx.staffed.has(row.building.id)) return;
+  if (!ctx.staffed.has(row.building.id) || isRelocating(row.relocation.ticksLeft)) return;
   const placed = Math.min(trip.amount, row.input.room(BALANCE.inputBufferCap));
   if (placed <= 0) return;
   row.input.add(trip.resource, placed);

@@ -846,11 +846,94 @@ describe('a target that moves under an outbound hauler', () => {
     await step(RETARGETED - 2);
     expect(tripOf(haulers[0]).phase).toBe('outbound');
 
-    await step(1); // arrival AT THE NEW TILE: the load goes in, and the return leg starts there
+    await step(1); // arrival AT THE NEW TILE: the return leg starts there regardless
     expect(tripOf(haulers[0])).toMatchObject({
       phase: 'returning', legFromCol: MOVER_MILL_MOVED.col, legFromRow: MOVER_MILL_MOVED.row,
     });
-    expect(inputOf(mill).amounts.get('wheat')).toBe(6);
+    // The 12.8-tile move this case needs to exercise the re-pricing puts the
+    // mill 13 ticks from being back in service — far longer than the 5-tick
+    // retargeted leg above lands the hauler in, so this fixture's own numbers
+    // land the hauler on a mill still mid-relocation. `haul-system.ts`'s
+    // `unload` rechecks that on arrival the same way it rechecks staffing:
+    // the load stays in hand as an undelivered remainder rather than being
+    // banked into a building providing no service — see the dedicated case
+    // below for that recheck itself.
+    expect(inputOf(mill).total()).toBe(0);
+    expect(colonyTotal(world, 'wheat')).toBe(20);
+    expect(systemErrors).toBe(0);
+  });
+
+  it('a target that starts relocating mid-leg is not unloaded into on arrival', async () => {
+    // §2.5's rule applied to the same retarget as above, but this time the
+    // move is what `needOf` refuses at DISPATCH — `unload` must therefore
+    // recheck it on ARRIVAL, exactly as it already rechecks staffing.
+    // `handleMoveBuilding` re-prices the retargeted leg from wherever the
+    // hauler has actually walked to, which can be a short hop even when the
+    // relocation countdown that same move starts is long: that gap is what
+    // lets the hauler land before the building is back in service. Every
+    // number below is checked, not asserted by comment, and the two the case
+    // turns on — the retargeted leg and the relocation countdown — are 3 and
+    // 12, a leg neither multiple of the other:
+    //   fetch, camp -> depot                                7
+    //   the outbound leg, depot -> mill                     8   (walked half)
+    //   what remains of it when the move lands               4
+    //   depot/mill midpoint -> the new tile (retarget)      3   (short hop)
+    //   the old mill tile -> the new tile (relocation)     12   (long countdown)
+    const RELOC_DEPOT = { col: 15, row: 0 };
+    const RELOC_MILL = { col: 15, row: 15 };
+    const RELOC_MILL_MOVED = { col: 15, row: 3 };
+    const FETCH = legTicks(CAMP_TILE, RELOC_DEPOT);
+    const OUTBOUND = legTicks(RELOC_DEPOT, RELOC_MILL);
+    const WALKED = OUTBOUND / 2;
+    const HALFWAY = { col: (RELOC_DEPOT.col + RELOC_MILL.col) / 2, row: (RELOC_DEPOT.row + RELOC_MILL.row) / 2 };
+    const RETARGETED = legTicks(HALFWAY, RELOC_MILL_MOVED);
+    expect(new Set([FETCH, OUTBOUND, WALKED, RETARGETED]).size).toBe(4);
+
+    const { world, buildings, haulers, step, stockpile } = await setup([
+      { defId: 'storehouse', ...RELOC_DEPOT, stored: { wheat: 20 } },
+      { defId: 'mill', ...RELOC_MILL, crew: 1 },
+    ], 1, { systems: [CommandSystem, ProductionSystem, HaulSystem] });
+    const [depot, mill] = buildings;
+    const depotId = idOf(depot);
+    let systemErrors = 0;
+    world.eventBus.subscribe(SystemError, () => { systemErrors++; });
+    expect(colonyTotal(world, 'wheat')).toBe(20);
+
+    await step(1 + FETCH); // dispatched, fetched: outbound from the depot
+    expect(tripOf(haulers[0])).toMatchObject({ phase: 'outbound', amount: 6, ticksLeft: OUTBOUND, legTicks: OUTBOUND });
+    expect(stockpile.totalAt(depotId)).toBe(14); // out of the depot, in a pair of hands
+
+    await step(WALKED); // half the walk done, half still to go
+    expect(tripOf(haulers[0]).ticksLeft).toBe(WALKED);
+
+    // Dispatched onto a building that was NOT relocating — this is exactly
+    // what makes the recheck necessary rather than redundant with `needOf`.
+    expect(mill.getComponent(Relocation)!.ticksLeft).toBe(0);
+    enqueue(world, { type: 'moveBuilding', buildingId: idOf(mill), to: RELOC_MILL_MOVED });
+    await step(1); // retargeted onto the new, near tile; relocation starts its long countdown THE SAME TICK
+    expect(tripOf(haulers[0])).toMatchObject({ phase: 'outbound', legTicks: RETARGETED, ticksLeft: RETARGETED - 1 });
+    expect(mill.getComponent(Relocation)!.ticksLeft).toBe(11); // 12, minus this tick's decrement
+
+    await step(RETARGETED - 2); // one tick short of arrival
+    expect(tripOf(haulers[0])).toMatchObject({ phase: 'outbound', ticksLeft: 1 });
+    expect(mill.getComponent(Relocation)!.ticksLeft).toBe(10); // still a long way from 0
+
+    await step(1); // arrival at the new tile — the tick under test
+    // The building is still mid-relocation, providing no service: this is the
+    // fact `unload` must recheck, not merely one that was true at dispatch.
+    expect(mill.getComponent(Relocation)!.ticksLeft).toBe(9);
+    // The load is an undelivered remainder, not a delivery: still in the
+    // hauler's hands, and the mill's in-tray never grew to receive it.
+    expect(tripOf(haulers[0])).toMatchObject({ phase: 'returning', kind: 'supply', resource: 'wheat', amount: 6, pickedUp: false });
+    expect(inputOf(mill).total()).toBe(0);
+    // Colony-wide, not the field just written: nothing was destroyed and
+    // nothing was teleported to a site the hauler never walked to.
+    expect(colonyTotal(world, 'wheat')).toBe(20);
+    expect(stockpile.totalAt(depotId)).toBe(14); // still out of the ledger, still in transit home
+
+    await step(legTicks(RELOC_MILL_MOVED, RELOC_DEPOT)); // and the remainder really does walk all the way home
+    expect(tripOf(haulers[0]).phase).toBe('idle');
+    expect(stockpile.totalAt(depotId)).toBe(20); // back where it came from
     expect(colonyTotal(world, 'wheat')).toBe(20);
     expect(systemErrors).toBe(0);
   });

@@ -337,10 +337,20 @@ it('a bounded site never demands more than it can hold above its floor', () => {
 });
 
 it('an over-subscribed cap is split proportionally and floored', () => {
-  // The same five mills: 48 / 5 = 9.6 -> 9 each, total 45. Deterministic, and
-  // under-allocating is the safe direction. Assert the SPLIT, not just the
-  // total, or an implementation that gives the first mill 48 and the rest 0
-  // passes.
+  // CORRECTED. This first read "the same five mills: 48 / 5 = 9.6 -> 9 each",
+  // which is impossible: the cap is split across RESOURCES, not across sources.
+  // Five mills all wanting wheat produce ONE resource entry, so the capped
+  // answer is just 48 and the test would duplicate the one above while
+  // asserting nothing about the split.
+  //
+  // Use sources wanting DIFFERENT resources, in UNEQUAL shares: e.g. three
+  // wheat consumers and one flour consumer against a cap of 30, giving 22 / 7.
+  // Unequal is what makes it discriminate — an equal-division implementation
+  // survives any fixture whose shares happen to be equal, which the original
+  // 9/9/9/9/9 could not have caught.
+  //
+  // Assert the SPLIT, not just the total, or an implementation that gives the
+  // first resource everything and the rest zero passes.
 });
 
 it('the camp is never capped', () => {

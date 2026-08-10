@@ -370,7 +370,7 @@ describe('siteDemandOf', () => {
     // site 0 and leaves site 3 empty, which is this assertion inverted.
     const depot: StoreSite = { id: 3, col: 20, row: 14, capacity: 60 };
     const mill: DemandSource = { col: 21, row: 14, inputs: ['wheat'] };
-    const demand = siteDemandOf([camp, depot], [mill], 12, 12);
+    const demand = siteDemandOf([camp, depot], [mill], { targetPerSource: 12, reserveFreeSpace: 12 });
     expect(demandFor(demand, 3, 'wheat')).toBe(12);
     expect(demandFor(demand, CAMP_SITE_ID, 'wheat')).toBe(0);
   });
@@ -385,7 +385,7 @@ describe('siteDemandOf', () => {
       { col: 2, row: 2, inputs: ['wheat'] },
       { col: 3, row: 1, inputs: ['wheat'] },
     ];
-    const demand = siteDemandOf([near, far], mills, 7, 12);
+    const demand = siteDemandOf([near, far], mills, { targetPerSource: 7, reserveFreeSpace: 12 });
     expect(demandFor(demand, 5, 'wheat')).toBe(14);
     expect(demandFor(demand, 3, 'wheat')).toBe(0);
   });
@@ -397,7 +397,7 @@ describe('siteDemandOf', () => {
     const lower: StoreSite = { id: 3, col: 0, row: 0, capacity: 60 };
     const mill: DemandSource = { col: 2, row: 4, inputs: ['wheat'] }; // hypot(2, 4) from both
     for (const sites of [[higher, lower], [lower, higher]]) {
-      const demand = siteDemandOf(sites, [mill], 5, 12);
+      const demand = siteDemandOf(sites, [mill], { targetPerSource: 5, reserveFreeSpace: 12 });
       expect(demandFor(demand, 3, 'wheat')).toBe(5);
       expect(demandFor(demand, 9, 'wheat')).toBe(0);
     }
@@ -408,7 +408,7 @@ describe('siteDemandOf', () => {
     const near: StoreSite = { id: 5, col: 2, row: 1, capacity: 60 };
     const cornerDepot: StoreSite = { id: 8, col: 20, row: 14, capacity: 60 };
     const mill: DemandSource = { col: 3, row: 1, inputs: ['wheat'] };
-    const demand = siteDemandOf([near, cornerDepot], [mill], 9, 12);
+    const demand = siteDemandOf([near, cornerDepot], [mill], { targetPerSource: 9, reserveFreeSpace: 12 });
     expect(demandFor(demand, 5, 'wheat')).toBe(9);
     expect(demandFor(demand, 8, 'wheat')).toBe(0);
     expect(demand.get(8)).toBeUndefined();
@@ -427,7 +427,7 @@ describe('siteDemandOf', () => {
     const millSite: StoreSite = { id: 3, col: 20, row: 14, capacity: 60 };
     const forager: DemandSource = { col: 2, row: 2, inputs: [] };
     const mill: DemandSource = { col: 21, row: 14, inputs: ['wheat'] };
-    const demand = siteDemandOf([foragerSite, millSite], [forager, mill], 12, 12);
+    const demand = siteDemandOf([foragerSite, millSite], [forager, mill], { targetPerSource: 12, reserveFreeSpace: 12 });
     expect(demandFor(demand, 3, 'wheat')).toBe(12);
     expect(demand.get(5)).toBeUndefined();
   });
@@ -438,7 +438,7 @@ describe('siteDemandOf', () => {
     // in being unbounded — never here.
     const depot: StoreSite = { id: 7, col: 20, row: 14, capacity: 60 };
     const mill: DemandSource = { col: 3, row: 0, inputs: ['wheat'] };
-    const demand = siteDemandOf([camp, depot], [mill], 12, 12);
+    const demand = siteDemandOf([camp, depot], [mill], { targetPerSource: 12, reserveFreeSpace: 12 });
     expect(demandFor(demand, CAMP_SITE_ID, 'wheat')).toBe(12);
     expect(demandFor(demand, 7, 'wheat')).toBe(0);
   });
@@ -450,7 +450,7 @@ describe('siteDemandOf', () => {
     const depot: StoreSite = { id: 4, col: 2, row: 1, capacity: 60 };
     const far: StoreSite = { id: 8, col: 20, row: 14, capacity: 60 };
     const workshop: DemandSource = { col: 2, row: 2, inputs: ['wheat', 'planks'] };
-    const demand = siteDemandOf([depot, far], [workshop], 11, 12);
+    const demand = siteDemandOf([depot, far], [workshop], { targetPerSource: 11, reserveFreeSpace: 12 });
     expect(demandFor(demand, 4, 'wheat')).toBe(11);
     expect(demandFor(demand, 4, 'planks')).toBe(11);
     expect(demandFor(demand, 4, 'tools')).toBe(0);
@@ -472,7 +472,7 @@ describe('siteDemandOf', () => {
       { col: 2, row: 2, inputs: ['wheat'] }, { col: 1, row: 2, inputs: ['wheat'] },
       { col: 3, row: 2, inputs: ['wheat'] },
     ];
-    const demand = siteDemandOf([depot, far], mills, 12, 12);
+    const demand = siteDemandOf([depot, far], mills, { targetPerSource: 12, reserveFreeSpace: 12 });
     expect(demandFor(demand, 6, 'wheat')).toBe(48);
   });
 
@@ -491,7 +491,7 @@ describe('siteDemandOf', () => {
       { col: 2, row: 2, inputs: ['wheat'] },
       { col: 1, row: 2, inputs: ['flour'] },
     ];
-    const demand = siteDemandOf([depot, far], consumers, 12, 20);
+    const demand = siteDemandOf([depot, far], consumers, { targetPerSource: 12, reserveFreeSpace: 20 });
     expect(demandFor(demand, 6, 'wheat')).toBe(22);
     expect(demandFor(demand, 6, 'flour')).toBe(7);
   });
@@ -503,7 +503,7 @@ describe('siteDemandOf', () => {
     // silences the camp's demand entirely. ONE source with ONE input, so only
     // the missing branch can move this number.
     const mill: DemandSource = { col: 3, row: 0, inputs: ['wheat'] };
-    const demand = siteDemandOf([camp], [mill], 30, 12);
+    const demand = siteDemandOf([camp], [mill], { targetPerSource: 30, reserveFreeSpace: 12 });
     expect(demandFor(demand, CAMP_SITE_ID, 'wheat')).toBe(30);
   });
 
@@ -511,6 +511,6 @@ describe('siteDemandOf', () => {
     // `nearestSite` returns null only for an empty list. Real callers always
     // pass the camp, but the branch exists and would otherwise be unexercised.
     const mill: DemandSource = { col: 3, row: 0, inputs: ['wheat'] };
-    expect(siteDemandOf([], [mill], 12, 12).size).toBe(0);
+    expect(siteDemandOf([], [mill], { targetPerSource: 12, reserveFreeSpace: 12 }).size).toBe(0);
   });
 });

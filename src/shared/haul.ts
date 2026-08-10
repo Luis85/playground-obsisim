@@ -303,9 +303,16 @@ function capTotalDemand(atSite: Map<ResourceId, number>, cap: number): void {
  * capped. It is otherwise an ORDINARY site here: a building beside the camp
  * pulls on the camp, and the camp is special only in the push rule (§2.4).
  */
+export interface SiteDemandOptions {
+  /** What each consuming building asks its nearest site to hold. */
+  targetPerSource: number;
+  /** The room a bounded site may never be asked to fill. */
+  reserveFreeSpace: number;
+}
+
 export function siteDemandOf(
   sites: readonly StoreSite[], sources: readonly DemandSource[],
-  targetPerSource: number, reserveFreeSpace: number,
+  { targetPerSource, reserveFreeSpace }: SiteDemandOptions,
 ): Map<number, Map<ResourceId, number>> {
   const demand = new Map<number, Map<ResourceId, number>>();
   for (const source of sources) {

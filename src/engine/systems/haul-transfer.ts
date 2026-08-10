@@ -65,21 +65,13 @@ function demandSourcesOf(buildings: readonly HaulBuildingRow[], staffed: Staffed
 /**
  * Per-site, per-resource demand — `siteDemandOf` with this engine's two
  * constants wired in, and the ONE place that wiring happens.
- *
- * The order of the last two arguments is load-bearing and does not typecheck
- * its way to safety: both are plain numbers, so a swapped call site compiles.
- * `targetPerSource` is what each consuming building asks its nearest site to
- * hold; `reserveFreeSpace` is the room a bounded site may never be asked to
- * fill. They are equal today (12 and 12), which is precisely why the wiring
- * has a test that retunes one of them rather than one that would pass either
- * way.
  */
 export function siteDemandFrom(
   sites: readonly StoreSite[], buildings: readonly HaulBuildingRow[], staffed: StaffedSet,
 ): Map<number, Map<ResourceId, number>> {
-  return siteDemandOf(
-    sites, demandSourcesOf(buildings, staffed), BALANCE.siteStagingTarget, BALANCE.storehouseFreeFloor,
-  );
+  return siteDemandOf(sites, demandSourcesOf(buildings, staffed), {
+    targetPerSource: BALANCE.siteStagingTarget, reserveFreeSpace: BALANCE.storehouseFreeFloor,
+  });
 }
 
 /**
@@ -116,6 +108,11 @@ interface SiteLedger {
 
 function ledgerOf(claims: Claims, demand: ReadonlyMap<number, ReadonlyMap<ResourceId, number>>): SiteLedger {
   const demandFor = (siteId: number, resource: ResourceId) => demand.get(siteId)?.get(resource) ?? 0;
+  // `occupancy` nets out units already scheduled to leave, which is the
+  // "how full will this end up" `drainNeed` wants; `room` below deliberately
+  // omits that subtraction, wanting "how full is this right now" instead, so
+  // staging never counts space a drain has not yet actually vacated. Both
+  // asymmetries err toward doing less, the safe direction for each.
   const occupancy = (site: StoreSite) => claims.heldAt(site.id) - claims.plannedOutAt(site.id);
   return {
     surplus: (siteId, resource) => Math.max(0, claims.unclaimedAt(siteId, resource) - demandFor(siteId, resource)),

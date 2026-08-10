@@ -485,32 +485,21 @@ describe('which transfer a hauler takes', () => {
 
 describe('what a site demands', () => {
   it('is the staging target per consuming building, capped by the free floor', () => {
-    // The wiring of `siteDemandOf`, whose third and fourth arguments are both
-    // plain numbers — so a swapped call site TYPECHECKS. It also cannot be
-    // told apart by any fixture while `siteStagingTarget` and
-    // `storehouseFreeFloor` are both 12, which they are today: the two orders
-    // compute identical answers for every input. Retuning one of them for the
-    // length of this test is the only thing that can discriminate, so that is
-    // what this does, and it puts the constant back either way.
-    const tunable = BALANCE as unknown as { siteStagingTarget: number };
-    const real = tunable.siteStagingTarget;
-    try {
-      tunable.siteStagingTarget = 10;
-      const one = [consumer('mill', NEAR_A)];
-      expect(siteDemandFrom([CAMP, A], one, new Set(one.map((row) => row.building.id))).get(A_ID)?.get('wheat'))
-        .toBe(10); // the TARGET per building, not the floor
+    // The wiring of `siteDemandOf`: `targetPerSource` and `reserveFreeSpace`
+    // are a named-options argument (`SiteDemandOptions`), not two positional
+    // numbers, so a transposed call site fails to typecheck rather than
+    // needing a fixture to tell the two orders apart. This just asserts the
+    // wiring's behaviour, against the real constants.
+    const one = [consumer('mill', NEAR_A)];
+    expect(siteDemandFrom([CAMP, A], one, new Set(one.map((row) => row.building.id))).get(A_ID)?.get('wheat'))
+      .toBe(BALANCE.siteStagingTarget); // the TARGET per building, not the floor
 
-      // Five mills ask for 50 and a 60-unit depot may only be asked for
-      // `capacity - storehouseFreeFloor` = 48. Under the swapped order the
-      // same fixture reads 50 (five times the floor, capped at 60 minus the
-      // target), which is what makes this pair of numbers the assertion.
-      const five = [NEAR_A, ALSO_NEAR_A, { col: 19, row: 10 }, { col: 20, row: 9 }, { col: 21, row: 11 }]
-        .map((at) => consumer('mill', at));
-      expect(siteDemandFrom([CAMP, A], five, new Set(five.map((row) => row.building.id))).get(A_ID)?.get('wheat'))
-        .toBe(BALANCE.storehouseCapacity - BALANCE.storehouseFreeFloor);
-    } finally {
-      tunable.siteStagingTarget = real;
-    }
+    // Five mills ask for five times the target, and a bounded depot may only
+    // be asked for `capacity - storehouseFreeFloor`.
+    const five = [NEAR_A, ALSO_NEAR_A, { col: 19, row: 10 }, { col: 20, row: 9 }, { col: 21, row: 11 }]
+      .map((at) => consumer('mill', at));
+    expect(siteDemandFrom([CAMP, A], five, new Set(five.map((row) => row.building.id))).get(A_ID)?.get('wheat'))
+      .toBe(BALANCE.storehouseCapacity - BALANCE.storehouseFreeFloor);
   });
 
   it('counts only staffed, non-relocating consumers', () => {

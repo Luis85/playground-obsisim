@@ -5,7 +5,9 @@ import {
   WorldMap,
 } from '../../../src/engine/resources';
 import { BALANCE } from '../../../src/engine/content/balance';
-import { Building, HaulTrip, Home, JobAssignment, OutputBuffer, Position, Relocation, WorkerSlots, Colonist } from '../../../src/engine/components';
+import {
+  Building, Colonist, HaulTrip, Home, Hunger, InputBuffer, JobAssignment, OutputBuffer, Position, Relocation, WorkerSlots,
+} from '../../../src/engine/components';
 import { CommandSystem } from '../../../src/engine/systems/command-system';
 import type { BuildingRow, CommandContext, WorkerRow } from '../../../src/engine/systems/command-handlers';
 import { handleMoveBuilding } from '../../../src/engine/systems/placement-handlers';
@@ -14,11 +16,15 @@ import { HaulSystem, haulerCapacity } from '../../../src/engine/systems/haul-sys
 import { HungerSystem } from '../../../src/engine/systems/hunger-system';
 import { ProductionSystem } from '../../../src/engine/systems/production-system';
 import { SnapshotSystem } from '../../../src/engine/systems/snapshot-system';
-import { enqueue } from '../fixtures';
+import { colonyTotal, enqueue } from '../fixtures';
 import { buildSaveFromWorld } from '../../../src/engine/game-engine';
 import {
   applyRemovals, buildColonyPrepWorld, COMPONENT_TYPES, getPrepResource, initialSave, spawnBuilding, spawnColonist,
+  type TColonySystemFactory,
 } from '../../../src/engine/world';
+import { PopulationSystem } from '../../../src/engine/systems/population-system';
+import { RESOURCES } from '../../../src/engine/content/resources';
+import { CAMP_SITE_ID, type StoreSite } from '../../../src/shared/haul';
 import type { Command } from '../../../src/shared/commands';
 import type { SaveGameV5 } from '../../../src/shared/save';
 import { DEFAULT_MAP, type TileRef } from '../../../src/shared/placement';
@@ -85,8 +91,8 @@ function ticker(world: IRuntimeWorld) {
   };
 }
 
-async function setup(save: SaveGameV5 = houselessSave()) {
-  const prep = buildColonyPrepWorld({ save, systems: [CommandSystem, HaulSystem, SnapshotSystem] });
+async function setup(save: SaveGameV5 = houselessSave(), systems: readonly TColonySystemFactory[] = [CommandSystem, HaulSystem, SnapshotSystem]) {
+  const prep = buildColonyPrepWorld({ save, systems });
   const world = await prep.prepareRun();
   const tick = ticker(world);
   const dispatch = async (...commands: Command[]) => {
@@ -324,6 +330,7 @@ describe('CommandSystem', () => {
           slots: entity.getComponent(WorkerSlots)!,
           position: entity.getComponent(Position)!,
           buffer: entity.getComponent(OutputBuffer)!,
+          input: entity.getComponent(InputBuffer)!,
           relocation: entity.getComponent(Relocation)!,
         };
       });
@@ -373,6 +380,7 @@ describe('CommandSystem', () => {
           return byHouse;
         },
         nomadGate: () => { throw new Error('handleMoveBuilding must not ask the nomad gate'); },
+        sites: () => { throw new Error('handleMoveBuilding must not resolve store sites'); },
       };
     }
 
@@ -1110,6 +1118,302 @@ describe('CommandSystem', () => {
     for (let i = 0; i < 40; i++) await tick();
     expect(world.getResource(Stockpile).get('wood')).toBe(before + ONE_LOAD);
     expect(snapshot().buildings[0].buffered).toBe(0); // the buffer genuinely drained
+  });
+
+  // ---------------------------------------------------------------------
+  // §2.7: goods, and the buildings that hold them. Four places goods can now
+  // stand (camp, storehouse, in-tray, out-tray) plus a pair of hands, and every
+  // path that ends a trip or removes a building has to account for all five.
+  // ---------------------------------------------------------------------
+
+  /** The depot, a whole map away from the camp: 11 ticks. */
+  const DEPOT_TILE = { col: 20, row: 12 };
+  /** The mill, 8 ticks from the camp and 4 from the depot — three leg lengths
+   * (11, 8, 4) no two of which coincide, and none of which is ONE_LOAD. */
+  const MILL_TILE = { col: 14, row: 9 };
+  const MILL_ID = 80;
+  const DEPOT_ID = 81;
+  const DEPOT_SITE: StoreSite = { id: DEPOT_ID, ...DEPOT_TILE, capacity: BALANCE.storehouseCapacity };
+  /** Every unit of wheat this colony owns, and it all starts in the depot: the
+   * camp holds none, so a supply job can only be the walk out and back. 17 is
+   * distinct from every leg length, from ONE_LOAD, and from the depot's own
+   * capacity, so no assertion below can read one for another. */
+  const DEPOT_WHEAT = 17;
+
+  function withBuildings(...buildings: SaveGameV5['buildings']): SaveGameV5 {
+    return { ...houselessSave(), buildings, stockpile: {}, nextEntityId: 100 };
+  }
+
+  const storeSpec = (id: number, at: TileRef, defId: 'mill' | 'storehouse') =>
+    ({ id, defId, col: at.col, row: at.row, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 });
+
+  /**
+   * A staffed mill wanting wheat, and a storehouse holding all of it. The one
+   * fixture every cancellation case below runs in: `dispatch` returns with the
+   * mill staffed, one hauler on duty and its supply trip already dispatched,
+   * because CommandSystem runs before HaulSystem in the real order.
+   */
+  async function millAndDepot(systems?: readonly TColonySystemFactory[], extras: SaveGameV5['buildings'] = []) {
+    const fixture = await setup(
+      withBuildings(storeSpec(MILL_ID, MILL_TILE, 'mill'), storeSpec(DEPOT_ID, DEPOT_TILE, 'storehouse'), ...extras),
+      systems,
+    );
+    fixture.world.getResource(Stockpile).refundAt(DEPOT_SITE, 'wheat', DEPOT_WHEAT);
+    await fixture.dispatch({ type: 'assignWorker', buildingId: MILL_ID });
+    await fixture.dispatch({ type: 'assignHauler' });
+    return fixture;
+  }
+
+  /** The one hauler `millAndDepot` puts on duty, as a live trip. */
+  function haulerTrip(world: IRuntimeWorld): HaulTrip {
+    return [...world.getEntities()]
+      .filter((e) => e.getComponent(JobAssignment)?.hauling === true)
+      .map((e) => e.getComponent(HaulTrip)!)[0];
+  }
+
+  /** Walk the hauler's current leg down to its last tick, so the NEXT tick is
+   * the one it arrives on. Returns the trip for chaining. */
+  async function walkToLastTick(world: IRuntimeWorld, tick: () => Promise<void>): Promise<HaulTrip> {
+    while (haulerTrip(world).ticksLeft > 1) await tick();
+    return haulerTrip(world);
+  }
+
+  it('demolishing a storehouse leaves colony wealth unchanged', async () => {
+    // THE assertion for §2.7, and it is wealth across the tick rather than "the
+    // camp gained 37 bread": wealth is the figure the player watches, the one a
+    // notice reading "cost refunded" would be lying about, and the one a future
+    // refactor of WHERE goods live cannot accidentally satisfy.
+    //
+    // Unchanged does not mean "identical", because demolition also refunds the
+    // construction cost — 20 Wood and 10 Planks, worth 50. That refund is the
+    // ONLY thing wealth may move by. Destroying the contents instead would move
+    // it by 50 - 296 = -246, a number nothing here could be confused for.
+    const refundValue = Object.entries(BUILDINGS.storehouse.cost)
+      .reduce((sum, [id, amount]) => sum + amount * RESOURCES[id as keyof typeof RESOURCES].value, 0);
+    const { world, tick, dispatch, snapshot } = await setup(withBuildings(storeSpec(DEPOT_ID, DEPOT_TILE, 'storehouse')));
+    const stockpile = world.getResource(Stockpile);
+    stockpile.refundAt(DEPOT_SITE, 'bread', 37);
+    await tick();
+    const wealthBefore = snapshot().colonyWealth;
+    expect(wealthBefore).toBe(37 * RESOURCES.bread.value); // the goods really are in the ledger already
+
+    await dispatch({ type: 'demolishBuilding', buildingId: DEPOT_ID });
+    expect(snapshot().colonyWealth - wealthBefore).toBe(refundValue);
+    expect(snapshot().notices).toEqual([
+      { kind: 'success', message: 'Demolished the Storehouse — cost refunded, 37 Bread moved to the camp.' },
+    ]);
+    // And the ledger holds no site behind a building that is gone: §2.4's second
+    // invariant, which the save would otherwise silently drop at the next write.
+    expect(stockpile.getAt(CAMP_SITE_ID, 'bread')).toBe(37);
+    expect(stockpile.siteIds()).toEqual([CAMP_SITE_ID]);
+  });
+
+  it('demolishing a producer loses both its buffers, and says so', async () => {
+    // OBS-4-07's decision, extended to the in-tray for the same reason: neither
+    // tray is in the ledger, and a building left full of goods should be
+    // expensive to bulldoze.
+    //
+    // "AND SAYS SO" IS HALF THE TEST. The notice used to be worded from the
+    // OUT-tray alone, so a mill holding only delivered wheat reported that its
+    // cost was refunded while silently deleting the wheat. The two trays hold
+    // different resources in different amounts, at different catalog positions,
+    // so a notice built from either one alone fails on its text.
+    const { world, tick, dispatch, snapshot } = await setup(withBuildings(storeSpec(MILL_ID, MILL_TILE, 'mill')));
+    const mill = [...world.getEntities()].find((e) => e.getComponent(Building)?.id === MILL_ID)!;
+    mill.getComponent(InputBuffer)!.add('wheat', 4);
+    mill.getComponent(OutputBuffer)!.add('flour', 9);
+    await tick();
+    expect(colonyTotal(world, 'wheat')).toBe(4);
+    expect(colonyTotal(world, 'flour')).toBe(9);
+
+    await dispatch({ type: 'demolishBuilding', buildingId: MILL_ID });
+    expect(snapshot().notices).toEqual([
+      { kind: 'success', message: 'Demolished the Mill — cost refunded, 4 Wheat, 9 Flour lost.' },
+    ]);
+    // Colony-wide, not "the buffer is empty": both really left the colony, and
+    // neither quietly reappeared in the ledger as a refund.
+    expect(colonyTotal(world, 'wheat')).toBe(0);
+    expect(colonyTotal(world, 'flour')).toBe(0);
+  });
+
+  it('a hauler fetching for a building demolished this tick does not set off', async () => {
+    // The rule Task 5 established for store sites, unapplied to a second lookup.
+    // CommandSystem runs before HaulSystem and entity removal is deferred to the
+    // post-step drain, so on the demolish tick — and only on that tick — the
+    // target's row is still in `byId`. The fetch arrival is lined up to land on
+    // exactly that tick, which is the only tick the bug exists on.
+    const { world, tick, dispatch } = await millAndDepot();
+    const stockpile = world.getResource(Stockpile);
+    expect(haulerTrip(world)).toMatchObject({ phase: 'fetching', targetId: MILL_ID, sourceSiteId: DEPOT_ID, ticksLeft: 11 });
+    await walkToLastTick(world, tick);
+
+    await dispatch({ type: 'demolishBuilding', buildingId: MILL_ID });
+    // Idle, not outbound: the recheck's own doc comment promises "either recheck
+    // failing is a clean cancel: no load, no disposal, no remainder".
+    expect(haulerTrip(world)).toMatchObject({ phase: 'idle', targetId: null, amount: 0 });
+    // UNTOUCHED, which colonyTotal alone could never show: the round trip
+    // conserves either way, so 14 in the depot and 3 in a pair of hands would
+    // pass a conservation assertion while the goods walked to a demolished mill.
+    expect(stockpile.getAt(DEPOT_ID, 'wheat')).toBe(DEPOT_WHEAT);
+    expect(colonyTotal(world, 'wheat')).toBe(DEPOT_WHEAT);
+  });
+
+  it('a cancelled trip disposes of its load by whether a hauler is left to walk', async () => {
+    // §2.7's split, both sides from one fixture. A FETCHING hauler has taken
+    // nothing yet, so every path cancels it clean; a loaded one splits on
+    // whether anybody is left to do the walking.
+    const { world, tick, dispatch } = await millAndDepot();
+    const stockpile = world.getResource(Stockpile);
+
+    // (1) Nothing taken yet: unassigning mid-fetch disposes of nothing.
+    await dispatch({ type: 'unassignHauler' });
+    expect(stockpile.getAt(DEPOT_ID, 'wheat')).toBe(DEPOT_WHEAT);
+    expect(colonyTotal(world, 'wheat')).toBe(DEPOT_WHEAT);
+
+    // Back on duty, and this time walked all the way out and loaded.
+    await dispatch({ type: 'assignHauler' });
+    await walkToLastTick(world, tick);
+    await tick();
+    expect(haulerTrip(world)).toMatchObject({ phase: 'outbound', resource: 'wheat', amount: ONE_LOAD, pickedUp: false });
+    expect(stockpile.getAt(DEPOT_ID, 'wheat')).toBe(DEPOT_WHEAT - ONE_LOAD);
+    await tick(); await tick(); // halfway along the four-tick walk out, standing on neither end
+
+    // (2) The hauler survives and can carry it: the target is demolished under
+    // it, so it turns for home ON THIS TICK from where it stands. The TICKS are
+    // the assertion, not the destination — "the goods arrived" would pass for a
+    // teleport. 2 is the walk back from the tile it actually reached; pricing it
+    // from the leg's frozen origin instead gives 1 (the depot is underfoot
+    // there), from the camp 11, and to the camp rather than to its own source
+    // 10. Four different numbers, so this tells all four apart.
+    expect(haulerTrip(world)).toMatchObject({ legTicks: 4, ticksLeft: 2 });
+    await dispatch({ type: 'demolishBuilding', buildingId: MILL_ID });
+    expect(haulerTrip(world)).toMatchObject({
+      phase: 'returning', amount: ONE_LOAD, destSiteId: DEPOT_ID, legTicks: 2, ticksLeft: 1,
+    });
+    expect(colonyTotal(world, 'wheat')).toBe(DEPOT_WHEAT);
+
+    // (3) Nobody left to walk it: the same load, in the same hands, banked
+    // immediately because this colonist stops being a hauler. Held by entity
+    // rather than found by `hauling`, which is the very flag being cleared.
+    const carrier = [...world.getEntities()].find((e) => e.getComponent(JobAssignment)?.hauling === true)!;
+    await dispatch({ type: 'unassignHauler' });
+    expect(carrier.getComponent(HaulTrip)!).toMatchObject({ phase: 'idle', amount: 0, resource: null });
+    expect(stockpile.getAt(DEPOT_ID, 'wheat')).toBe(DEPOT_WHEAT); // back where it came from
+    expect(colonyTotal(world, 'wheat')).toBe(DEPOT_WHEAT);
+  });
+
+  /**
+   * A hauler killed mid-trip, and what the ledger recorded for the load in its
+   * hands. Both worlds end with the SAME colonist holding the SAME three wheat
+   * — only `pickedUp` differs, which is the whole discriminator §2.4 asks for.
+   */
+  async function deathMidTrip(carrying: 'supply' | 'collect') {
+    const systems = [CommandSystem, PopulationSystem, HaulSystem, SnapshotSystem];
+    const fixture = carrying === 'supply'
+      ? await millAndDepot(systems)
+      : await setup({ ...withBuildings(storeSpec(MILL_ID, MILL_TILE, 'mill')), stockpile: {} }, systems);
+    const { world, tick, dispatch } = fixture;
+    if (carrying === 'collect') {
+      // A full out-tray and no in-tray: the only job on offer is a collect run,
+      // so the hauler comes back holding goods it PICKED UP.
+      const mill = [...world.getEntities()].find((e) => e.getComponent(Building)?.id === MILL_ID)!;
+      mill.getComponent(OutputBuffer)!.add('wheat', DEPOT_WHEAT);
+      await dispatch({ type: 'assignHauler' });
+    }
+    await walkToLastTick(world, tick);
+    await tick();
+    return fixture;
+  }
+
+  it('a hauler who dies mid-supply-trip refunds rather than delivers', async () => {
+    // standDown's own path, reached through death rather than any command — it
+    // banked with `stockpile.add` until Task 8, which records a delivery, so a
+    // colonist dying with an undelivered SUPPLY load inflated Delivered/t for
+    // wheat that was merely going back where it came from.
+    //
+    // producedThisTick is exactly what StatsSystem publishes as deliveredRate,
+    // read directly so the assertion is not filtered through a rolling window.
+    const supply = await deathMidTrip('supply');
+    expect(haulerTrip(supply.world)).toMatchObject({ amount: ONE_LOAD, pickedUp: false });
+    const hauler = [...supply.world.getEntities()].find((e) => e.getComponent(JobAssignment)?.hauling === true)!;
+    hauler.getComponent(Hunger)!.starvingTicks = BALANCE.starvationDeathTicks;
+    await supply.tick();
+    expect(supply.snapshot().notices.some((n) => n.message.includes('starved'))).toBe(true);
+    expect(supply.world.getResource(Stockpile).producedThisTick.get('wheat') ?? 0).toBe(0);
+    expect(colonyTotal(supply.world, 'wheat')).toBe(DEPOT_WHEAT);
+
+    // The discriminating half: same death, same three wheat, but PICKED UP out
+    // of an out-tray — goods the ledger has never counted, so this one IS a
+    // delivery. Without it the case above passes with the banking deleted.
+    const collect = await deathMidTrip('collect');
+    expect(haulerTrip(collect.world)).toMatchObject({ amount: ONE_LOAD, pickedUp: true });
+    const doomed = [...collect.world.getEntities()].find((e) => e.getComponent(JobAssignment)?.hauling === true)!;
+    doomed.getComponent(Hunger)!.starvingTicks = BALANCE.starvationDeathTicks;
+    await collect.tick();
+    expect(collect.world.getResource(Stockpile).producedThisTick.get('wheat') ?? 0).toBe(ONE_LOAD);
+    expect(colonyTotal(collect.world, 'wheat')).toBe(DEPOT_WHEAT);
+  });
+
+  it('cancelling a supply trip whose source filled meanwhile loses nothing', async () => {
+    // The source depot is BOUNDED and back at exactly its capacity by the time
+    // the trip is cancelled, so the load cannot go home to where it came from.
+    //
+    // A SECOND depot stands one tick from the hauler, and it is what gives this
+    // case teeth: conservation alone cannot fail here, because every wrong
+    // answer still ends at the camp — banking blind with `stockpile.add` (the
+    // pre-Task-8 code) lands there, and so does resolving the full source and
+    // letting §2.4's forward-to-camp catch the overflow. Naming the site the
+    // load actually reaches tells all three apart: 1 tick to NEAR_DEPOT, 2 back
+    // to the full source, 10 on to the camp.
+    const NEAR_DEPOT_ID = 82;
+    const NEAR_DEPOT_TILE = { col: 16, row: 10 };
+    const { world, tick, dispatch } = await millAndDepot(undefined, [storeSpec(NEAR_DEPOT_ID, NEAR_DEPOT_TILE, 'storehouse')]);
+    const stockpile = world.getResource(Stockpile);
+    await walkToLastTick(world, tick);
+    await tick();
+    expect(haulerTrip(world)).toMatchObject({ phase: 'outbound', amount: ONE_LOAD, sourceSiteId: DEPOT_ID });
+    await tick(); await tick(); // halfway out, so all three sites are different distances away
+
+    // Packed to exactly capacity with something else while the hauler walked.
+    // The equality IS the subject here, so it is stated rather than avoided.
+    const filler = BALANCE.storehouseCapacity - (DEPOT_WHEAT - ONE_LOAD);
+    stockpile.refundAt(DEPOT_SITE, 'planks', filler);
+    expect(stockpile.totalAt(DEPOT_ID)).toBe(BALANCE.storehouseCapacity);
+
+    await dispatch({ type: 'unassignHauler' });
+    expect(colonyTotal(world, 'wheat')).toBe(DEPOT_WHEAT);
+    // The camp's share is ZERO, and that is the assertion: a load with nobody
+    // left to walk it is still banked at a site chosen by distance, not dumped
+    // at the camp by reflex — the camp is the last resort, not the route.
+    expect(stockpile.getAt(CAMP_SITE_ID, 'wheat')).toBe(0);
+    expect(stockpile.getAt(NEAR_DEPOT_ID, 'wheat')).toBe(ONE_LOAD);
+    // And the full source is neither drawn from again nor overfilled.
+    expect(stockpile.getAt(DEPOT_ID, 'wheat')).toBe(DEPOT_WHEAT - ONE_LOAD);
+    expect(stockpile.totalAt(DEPOT_ID)).toBe(BALANCE.storehouseCapacity);
+  });
+
+  it('cancelling a supply trip whose source was demolished in the same drain loses nothing', async () => {
+    // Sharper than the case above, and the reason addAt/refundAt take a resolved
+    // StoreSite: banking into a dead storehouse would create a ledger site no
+    // building owns. Those goods would count in colonyWealth, be unreachable by
+    // any hauler, and disappear at the next save, because a storehouse's
+    // contents are serialized off the BUILDING record.
+    const { world, tick, dispatch } = await millAndDepot();
+    const stockpile = world.getResource(Stockpile);
+    await walkToLastTick(world, tick);
+    await tick();
+    expect(haulerTrip(world)).toMatchObject({ phase: 'outbound', amount: ONE_LOAD, sourceSiteId: DEPOT_ID });
+
+    // ONE drain: the source is gone by the time the release resolves a site.
+    await dispatch(
+      { type: 'demolishBuilding', buildingId: DEPOT_ID },
+      { type: 'unassignHauler' },
+    );
+    expect(colonyTotal(world, 'wheat')).toBe(DEPOT_WHEAT);
+    // The one that catches an orphan: every ledger site must name a live
+    // building, and the camp is the only site left standing.
+    expect(stockpile.siteIds()).toEqual([CAMP_SITE_ID]);
+    expect(stockpile.getAt(CAMP_SITE_ID, 'wheat')).toBe(DEPOT_WHEAT);
   });
 
   it('demolition still refunds 100% of construction cost', async () => {

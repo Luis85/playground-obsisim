@@ -1,5 +1,7 @@
 import { Actions, createSystem, queryComponents, Read, ReadEntity, Write, WriteResource } from 'sim-ecs';
+import { isRelocating } from '../../shared/placement';
 import { BUILDINGS } from '../content/buildings';
+import { storeSitesFrom } from './haul-dispatch';
 import { Age, Building, Colonist, HaulTrip, Home, Hunger, JobAssignment, Position, Relocation } from '../components';
 import { IdCounter, NoticeBoard, PendingChanges, RemovalLedger, SimClock, Stockpile } from '../resources';
 import {
@@ -33,12 +35,18 @@ export const PopulationSystem = () => createSystem({
 })
   .withName('PopulationSystem')
   .withRunFunction(({ actions, clock, stockpile, ids, notices, removals, pending, colonists, buildings }) => {
+    const buildingRows = [...buildings.iter()];
     const ctx: PopulationContext = {
       clock, stockpile, ids, notices, removals, pending,
       colonists: [...colonists.iter()].map(({ entity, colonist, age, hunger, job, trip, home }) =>
         ({ entity, colonist, age, hunger, job, trip, home })),
+      // A dying hauler's load has to land somewhere real (§2.7). Derived from
+      // the same rows the shelters below are, through the same helper
+      // HaulSystem uses, so a relocating or same-tick-demolished storehouse is
+      // no more a destination here than it is there.
+      sites: storeSitesFrom(buildingRows, pending),
       shelters: [
-        ...[...buildings.iter()]
+        ...buildingRows
           .filter(({ building }) => BUILDINGS[building.defId].beds > 0)
           .map(({ building, position, relocation }) => ({
             id: building.id,
@@ -56,7 +64,7 @@ export const PopulationSystem = () => createSystem({
             // tick early, handing sumWorkPower's full placementFactor to
             // residents whose house is still mid-move for a tick genuinely
             // charged as downtime.
-            relocating: relocation.ticksLeft > 0,
+            relocating: isRelocating(relocation.ticksLeft),
           })),
         // Buildings constructed THIS tick (PendingChanges.constructed):
         // invisible to the `buildings` query above until the post-step sync,

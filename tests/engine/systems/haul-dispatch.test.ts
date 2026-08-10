@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { SystemError, type IEntity, type IPreptimeWorld, type IRuntimeWorld } from 'sim-ecs';
 import type { BuildingDefId, ResourceId } from '../../../src/shared/content-types';
-import { CAMP_SITE_ID, CAMP_TILE, haulTicksBetween, type StoreSite } from '../../../src/shared/haul';
+import { CAMP_SITE_ID, CAMP_TILE, haulTicksBetween, legPositionOf, type StoreSite } from '../../../src/shared/haul';
 import type { TileRef } from '../../../src/shared/placement';
 import { BALANCE } from '../../../src/engine/content/balance';
 import { Building, HaulTrip, InputBuffer, JobAssignment, OutputBuffer, Position, Relocation } from '../../../src/engine/components';
@@ -9,7 +9,7 @@ import { IdCounter, Stockpile } from '../../../src/engine/resources';
 import { CommandSystem } from '../../../src/engine/systems/command-system';
 import { ProductionSystem } from '../../../src/engine/systems/production-system';
 import { HaulSystem } from '../../../src/engine/systems/haul-system';
-import { campAdjacentFreeTile, enqueue } from '../fixtures';
+import { campAdjacentFreeTile, colonyTotal, enqueue } from '../fixtures';
 import {
   applyRemovals, buildColonyPrepWorld, createColonyWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist,
   type TColonySystemFactory,
@@ -102,23 +102,6 @@ const tripOf = (colonist: IEntity) => colonist.getComponent(HaulTrip)!;
 const inputOf = (building: IEntity) => building.getComponent(InputBuffer)!;
 const bufferOf = (building: IEntity) => building.getComponent(OutputBuffer)!;
 const idOf = (building: IEntity) => building.getComponent(Building)!.id;
-
-/**
- * Every unit of one resource the colony owns, wherever it is standing: banked
- * at any site, waiting in any building's in-tray or out-tray, or in a hauler's
- * hands. THE assertion for conservation — the field a handler just wrote can be
- * made to agree with itself, a colony-wide total cannot.
- */
-function colonyTotal(world: IRuntimeWorld, resource: ResourceId): number {
-  let total = world.getResource(Stockpile).get(resource);
-  for (const entity of world.getEntities()) {
-    total += entity.getComponent(InputBuffer)?.amounts.get(resource) ?? 0;
-    total += entity.getComponent(OutputBuffer)?.amounts.get(resource) ?? 0;
-    const trip = entity.getComponent(HaulTrip);
-    if (trip !== undefined && trip.resource === resource) total += trip.amount;
-  }
-  return total;
-}
 
 /** The leg a fixture expects, computed the way the engine computes it, so a
  * retune of `haulTilesPerTick` moves the fixture and the engine together. */
@@ -328,10 +311,13 @@ describe('the supply leg', () => {
   });
 
   it('demolishing the target under a LOADED outbound hauler destroys none of the load', async () => {
-    // The demolition guard (`&& trip.amount === 0`) and the branch it enables,
-    // together. Before the supply leg an outbound hauler was always empty, so
-    // cancelling it on the demolish tick cost nothing; now it can be carrying
-    // inputs it drew out of a store, and cancelling deletes them.
+    // The demolition branch for a hauler with something in its hands. Before
+    // the supply leg an outbound hauler was always empty, so cancelling it on
+    // the demolish tick cost nothing; now it can be carrying inputs it drew out
+    // of a store, and cancelling deletes them. §2.7: the hauler survives and is
+    // perfectly able to carry them, so it turns for home ON THE DEMOLISH TICK
+    // from where it stands — it does not walk the rest of the way to a tile
+    // with nothing on it, and its load is not teleported off it either.
     const { world, buildings, haulers, step, stockpile } = await setup(
       [{ defId: 'mill', ...MILL, crew: 1 }], 1, { systems: [CommandSystem, HaulSystem], camp: { wheat: 20 } },
     );
@@ -340,19 +326,30 @@ describe('the supply leg', () => {
     expect(tripOf(haulers[0])).toMatchObject({ phase: 'outbound', amount: 6, pickedUp: false });
     expect(stockpile.get('wheat')).toBe(14); // out of the ledger, in a pair of hands
 
+    // Three of the seven ticks out, so the hauler is a third of the way along a
+    // leg no endpoint of the fixture stands on — the tile a turn-for-home has
+    // to be priced from, and one no other number here can be confused with.
+    const WALKED = 3;
+    await step(WALKED);
+    expect(tripOf(haulers[0])).toMatchObject({ phase: 'outbound', ticksLeft: legTicks(CAMP_TILE, MILL) - WALKED });
+    const partWay = legPositionOf(tripOf(haulers[0]));
+
     enqueue(world, { type: 'demolishBuilding', buildingId: idOf(buildings[0]) });
     await step(1);
     expect(world.hasEntity(buildings[0])).toBe(false); // the target really did go
-    expect(tripOf(haulers[0])).toMatchObject({ phase: 'outbound', amount: 6 });
+    // The TICKS, not merely the destination: the walk home is priced from where
+    // this hauler actually got to (3 ticks), which is neither the walk it had
+    // left to the mill (4) nor the walk home from the mill it never reached (7).
+    // Asserting only "it ends up at the camp" passes for a teleport.
+    expect(legTicks(partWay, CAMP_TILE)).toBe(3);
+    expect(tripOf(haulers[0])).toMatchObject({
+      phase: 'returning', amount: 6, destSiteId: CAMP_SITE_ID, legTicks: 3, ticksLeft: 2,
+    });
     // THE assertion, and it is colony-wide rather than on the trip: a cancel
     // here reads amount 0 on a field the handler just cleared, and 14 here.
     expect(colonyTotal(world, 'wheat')).toBe(20);
 
-    await step(legTicks(CAMP_TILE, MILL) - 1); // walks on to a tile with nothing on it
-    expect(tripOf(haulers[0])).toMatchObject({ phase: 'returning', amount: 6, destSiteId: CAMP_SITE_ID });
-    expect(colonyTotal(world, 'wheat')).toBe(20);
-
-    await step(legTicks(MILL, CAMP_TILE)); // and carries it home rather than teleporting it
+    await step(2); // and carries it home rather than teleporting it
     expect(stockpile.get('wheat')).toBe(20);
     expect(colonyTotal(world, 'wheat')).toBe(20);
   });

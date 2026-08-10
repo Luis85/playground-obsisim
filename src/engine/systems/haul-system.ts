@@ -1,16 +1,15 @@
 import { createSystem, queryComponents, Read, ReadResource, Write, WriteResource } from 'sim-ecs';
 import type { StoreSite } from '../../shared/haul';
-import { CAMP_SITE_ID, haulDistance, nearestSiteWithRoom } from '../../shared/haul';
+import { haulDistance } from '../../shared/haul';
 import type { TileRef } from '../../shared/placement';
 import { commuteFactor } from '../../shared/population';
 import { BALANCE } from '../content/balance';
-import { BUILDINGS } from '../content/buildings';
 import { RESOURCE_IDS } from '../content/resources';
 import { Building, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Relocation } from '../components';
 import { PendingChanges, Stockpile } from '../resources';
 import type { Claims, DispatchInputs, HaulBuildingRow, HaulWorkerRow, StaffedSet } from './haul-dispatch';
-import { chooseJob, claimsOf } from './haul-dispatch';
-import { storeSitesOf, type StoreSiteRow } from './haul-sites';
+import { chooseJob, claimsOf, storeSitesFrom } from './haul-dispatch';
+import { bankLoad, destinationFor } from './haul-sites';
 
 /**
  * What THIS hauler carries per trip. A hauler's output is goods moved, so
@@ -53,24 +52,6 @@ function homeTileOf(homeId: number | null, byId: ReadonlyMap<number, HaulBuildin
   return row === undefined ? pending.tileOf(homeId) : row.position;
 }
 
-/**
- * The buildings that are places goods can be dropped, in the shape
- * `storeSitesOf` takes. Capacity is resolved from the catalog HERE rather than
- * inside that helper — the same split command-system.ts makes for a shelter's
- * beds, which keeps the site law free of a content dependency.
- */
-function storeRowsOf(rows: readonly HaulBuildingRow[]): StoreSiteRow[] {
-  return rows
-    .filter((row) => BUILDINGS[row.building.defId].storage > 0)
-    .map((row) => ({
-      id: row.building.id,
-      col: row.position.col,
-      row: row.position.row,
-      capacity: BUILDINGS[row.building.defId].storage,
-      relocating: row.relocation.ticksLeft > 0,
-    }));
-}
-
 /** Everything the leg handlers below read, gathered once per tick. */
 interface TickContext {
   stockpile: Stockpile;
@@ -79,57 +60,38 @@ interface TickContext {
   siteById: ReadonlyMap<number, StoreSite>;
   staffed: StaffedSet;
   claims: Claims;
+  /** Buildings demolished by `CommandSystem` earlier in this same tick. Entity
+   * removal is deferred to the post-step drain, so every one of them is still
+   * in `byId` — see `targetRowOf`. */
+  demolished: ReadonlySet<number>;
 }
 
-/** The camp: always in the site list, always unbounded, and therefore the
- * destination no resolution can fail to find. */
-function campOf(ctx: TickContext): StoreSite {
-  return ctx.siteById.get(CAMP_SITE_ID)!;
-}
-
-/**
- * An undelivered supply remainder goes back where it CAME from, not to
- * whatever site is nearest: routing it onward would turn camp wheat into depot
- * stock without it ever being consumed — the store-to-store transfer §2.13
- * excludes. `!pickedUp && amount > 0` is exactly this case, because a hauler
- * only loads output with empty hands.
- */
-function remainderHome(ctx: TickContext, trip: HaulTrip): StoreSite | null {
-  const source = ctx.siteById.get(trip.sourceSiteId);
-  if (trip.pickedUp || trip.amount === 0 || source === undefined) return null;
-  const full = source.capacity !== null && ctx.claims.heldAt(source.id) + trip.amount > source.capacity;
-  return full ? null : source;
+/** A site's occupancy as this tick's lookups must see it, in the shape
+ * `destinationFor` takes. */
+function heldAtIn(ctx: TickContext): (siteId: number) => number {
+  return (siteId) => ctx.claims.heldAt(siteId);
 }
 
 /**
- * Where this load is going, with room RESERVED for it from the moment it is
- * chosen — which is what makes the load fit on arrival rather than needing a
- * rule for when it does not. Checking for room only at pickup lets two haulers
- * aim at a depot with room for one; re-resolving on arrival fixes the FULL
- * depot and misses the partially full one, splitting a load between a bank and
- * a forward nobody walks.
+ * The building this trip is aimed at, or undefined when it is not there to be
+ * aimed at any more.
  *
- * The trip releases its own reservation first. Otherwise a hauler carrying six
- * to a depot holding 54 of 60 double-counts itself: its own six is already
- * reserved, the lookup reports 60, adding six again overflows, and the depot is
- * rejected for a load whose room was reserved for exactly this. Clearing
- * `destSiteId` IS the release, because reservations are a projection of live
- * components — every OTHER trip's reservation still counts.
+ * `pending.demolished` is filtered here rather than at each arrival, and that
+ * exclusion is the same one `storeSitesOf` already applies to a store site:
+ * `CommandSystem` runs before this system and entity removal is deferred, so
+ * `byId` answers for a building demolished moments ago. Without it a fetching
+ * hauler passes its recheck, takes the goods, and walks a full outbound leg to
+ * a tile with nothing on it.
  */
-function destinationFor(ctx: TickContext, trip: HaulTrip, from: TileRef): StoreSite {
-  trip.destSiteId = CAMP_SITE_ID;
-  const heldAt = (siteId: number) => ctx.claims.heldAt(siteId);
-  const dest = remainderHome(ctx, trip)
-    ?? nearestSiteWithRoom(from.col, from.row, ctx.sites, heldAt, trip.amount)
-    ?? campOf(ctx);
-  trip.destSiteId = dest.id;
-  return dest;
+function targetRowOf(ctx: TickContext, trip: HaulTrip): HaulBuildingRow | undefined {
+  if (trip.targetId === null || ctx.demolished.has(trip.targetId)) return undefined;
+  return ctx.byId.get(trip.targetId);
 }
 
 /** Turn for home from wherever this hauler is standing, carrying whatever it
  * holds. The one exit from a leg that both arrival handlers share. */
 function turnForHome(ctx: TickContext, trip: HaulTrip, at: TileRef): void {
-  trip.startLeg('returning', at, destinationFor(ctx, trip, at), BALANCE.haulTilesPerTick);
+  trip.startLeg('returning', at, destinationFor(trip, at, ctx.sites, heldAtIn(ctx)), BALANCE.haulTilesPerTick);
 }
 
 /**
@@ -145,7 +107,7 @@ function turnForHome(ctx: TickContext, trip: HaulTrip, at: TileRef): void {
  * no load, no disposal, no remainder.
  */
 function fetchArrival(ctx: TickContext, trip: HaulTrip): void {
-  const row = trip.targetId === null ? undefined : ctx.byId.get(trip.targetId);
+  const row = targetRowOf(ctx, trip);
   const source = ctx.siteById.get(trip.sourceSiteId);
   if (row === undefined || trip.resource === null) {
     trip.cancel();
@@ -215,7 +177,7 @@ function loadOutput(trip: HaulTrip, row: HaulBuildingRow, capacity: number): voi
 
 /** Arrival at the target building: unload, then load, then pick a destination. */
 function buildingArrival(ctx: TickContext, trip: HaulTrip, capacity: number): void {
-  const row = trip.targetId === null ? undefined : ctx.byId.get(trip.targetId);
+  const row = targetRowOf(ctx, trip);
   // Demolished while this hauler walked. An empty trip simply ends; a hauler
   // holding a load is still standing on the map and perfectly able to carry it,
   // so it walks that load somewhere rather than having it teleported away.
@@ -256,13 +218,7 @@ function depositArrival(ctx: TickContext, trip: HaulTrip): void {
     else turnForHome(ctx, trip, at);
     return;
   }
-  if (trip.resource !== null && trip.amount > 0) {
-    // `addAt` for goods the ledger has never counted, `refundAt` for a supply
-    // remainder the colony already owned — recording the second as a delivery
-    // would inflate Delivered/t for a round trip that produced nothing.
-    if (trip.pickedUp) ctx.stockpile.addAt(dest, trip.resource, trip.amount);
-    else ctx.stockpile.refundAt(dest, trip.resource, trip.amount);
-  }
+  bankLoad(ctx.stockpile, dest, trip);
   trip.cancel();
 }
 
@@ -293,7 +249,7 @@ export const HaulSystem = () => createSystem({
     const buildingRows = [...buildings.iter()];
     const byId = new Map(buildingRows.map((row) => [row.building.id, row]));
     const workerRows = [...workers.iter()];
-    const sites = storeSitesOf(storeRowsOf(buildingRows), pending);
+    const sites = storeSitesFrom(buildingRows, pending);
     const capacityOf = (row: HaulWorkerRow) => haulerCapacity(homeTileOf(row.home.buildingId, byId, pending));
     const claims = claimsOf(workerRows, stockpile, capacityOf);
     // ONE derivation, read by the dispatch filter and by the arrival recheck.
@@ -307,6 +263,7 @@ export const HaulSystem = () => createSystem({
       siteById: new Map(sites.map((site) => [site.id, site])),
       staffed,
       claims,
+      demolished: pending.demolished,
     };
     const inputs: DispatchInputs = { buildings: buildingRows, sites, staffed, claims };
 

@@ -1,6 +1,6 @@
 import { createSystem, queryComponents, Read, ReadResource, Write, WriteResource } from 'sim-ecs';
 import type { CostMap, RecipeDef, ResourceId } from '../../shared/content-types';
-import type { TileRef } from '../../shared/placement';
+import { relocatingIdsOf, type TileRef } from '../../shared/placement';
 import { commuteFactor } from '../../shared/population';
 import { BALANCE, workerWorkPower } from '../content/balance';
 import { batchOutputUnits, BUILDINGS } from '../content/buildings';
@@ -92,14 +92,23 @@ function placementFactorOf(homeId: number | null, buildingId: number, tileById: 
  * Haulers never reach the accumulation: their `buildingId` is null, and their
  * commute is charged against carry capacity in HaulSystem instead, because
  * their output is goods moved rather than batches produced.
+ *
+ * Neither does a crew whose building is mid-move (OBS-6-08). Their zero used to
+ * be reached by control flow instead: a real contribution was computed and
+ * stored here, then never read, because the loop below `continue`s past a
+ * relocating building before it looks work power up. That answered correctly
+ * while agreeing with the snapshot's own zero only by coincidence — both now
+ * read `relocatingIdsOf`, so there is one membership question rather than two
+ * differently-shaped tests of the same fact.
  */
 function sumWorkPower(
   workers: Iterable<{ job: JobAssignment; efficiency: Efficiency; coverage: ToolCoverage; home: Home }>,
   tileById: ReadonlyMap<number, TileRef>,
+  relocating: ReadonlySet<number>,
 ): Map<number, number> {
   const powerByBuilding = new Map<number, number>();
   for (const { job, efficiency, coverage, home } of workers) {
-    if (job.buildingId === null) continue;
+    if (job.buildingId === null || relocating.has(job.buildingId)) continue;
     const factor = placementFactorOf(home.buildingId, job.buildingId, tileById);
     const contribution = workerWorkPower(efficiency.value, coverage.remainingTicks, factor);
     powerByBuilding.set(job.buildingId, (powerByBuilding.get(job.buildingId) ?? 0) + contribution);
@@ -131,7 +140,11 @@ export const ProductionSystem = () => createSystem({
     // tile and a workplace tile, and neither has any business knowing which
     // side of the sync its building came from.
     for (const built of pending.constructed) tileById.set(built.id, { col: built.col, row: built.row });
-    const powerByBuilding = sumWorkPower(workers.iter(), tileById);
+    // Read BEFORE the loop below, which decrements: this is therefore the
+    // PRE-decrement answer, the same one `relocation.ticksLeft > 0` gave when
+    // asked inside the loop, since each building is visited exactly once.
+    const relocating = relocatingIdsOf(buildingRows.map((row) => ({ id: row.building.id, relocatingTicks: row.relocation.ticksLeft })));
+    const powerByBuilding = sumWorkPower(workers.iter(), tileById, relocating);
 
     // Isolated so the run function itself stays a flat dispatch loop.
     const advanceBatches = (building: Building, production: Production, input: InputBuffer, buffer: OutputBuffer, workPower: number) => {
@@ -151,7 +164,7 @@ export const ProductionSystem = () => createSystem({
       // A relocating building is out of action: its crew are carrying it, not
       // working. Haulers still collect from its buffer — goods already made
       // exist regardless of whether the crew is working.
-      if (relocation.ticksLeft > 0) {
+      if (relocating.has(building.id)) {
         relocation.ticksLeft--;
         // Decrementing here means the tick that brings this to 0 is
         // worked-through-zero: this tick's work is still skipped (continue,

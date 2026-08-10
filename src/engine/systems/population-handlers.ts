@@ -1,8 +1,11 @@
 import type { IEntity } from 'sim-ecs';
+import type { StoreSite } from '../../shared/haul';
 import { birthBlocker, lifespanFor, stageOf } from '../../shared/population';
 import { BALANCE } from '../content/balance';
 import { MEAL_WEIGHTS } from '../content/resources';
 import { colonistComponents } from '../spawn';
+import { heldAtOf } from './haul-dispatch';
+import { bankCarriedLoad } from './haul-sites';
 import { Age, Colonist, HaulTrip, Home, Hunger, JobAssignment } from '../components';
 import type { IdCounter, NoticeBoard, PendingChanges, RemovalLedger, SimClock, Stockpile } from '../resources';
 
@@ -42,6 +45,10 @@ export interface PopulationContext {
   pending: PendingChanges;
   colonists: ColonistRow[];
   shelters: ShelterRow[];
+  /** Where a dying hauler's load may be banked. A value rather than a function
+   * (unlike `CommandContext.sites`): no phase of this system removes a
+   * building, so the site list cannot change under it mid-tick. */
+  sites: StoreSite[];
   spawn: (...components: object[]) => void;
   /** Colonists who died earlier in THIS tick. Removal is deferred to the
    * post-step drain, so queries still see them — every later phase must not. */
@@ -66,13 +73,21 @@ export function ageEveryone(ctx: PopulationContext): void {
  * because entity removal is DEFERRED to the post-step drain: a colonist killed
  * this tick is still visible to ProductionSystem and HaulSystem later in the
  * same tick, and would contribute one last tick of work from beyond the grave.
- * Anything in a hauler's hands goes to the store — those goods left a building
- * and must land somewhere, exactly as handleUnassignHauler banks them.
+ *
+ * The FOURTH cancellation path §2.7 names, and the one easiest to miss because
+ * it lives in another system entirely — this runs BEFORE `HaulSystem` in the
+ * tick, and it used to bank with `stockpile.add`. That was right while every
+ * carried load was collected output, and wrong the moment a hauler could be
+ * carrying goods the colony already owned: `add` records a delivery, so a
+ * colonist dying mid-SUPPLY-trip inflated `Delivered/t` for wheat that was
+ * merely going back where it came from. `bankCarriedLoad` reads `pickedUp` and
+ * banks at a resolved site, exactly as `handleUnassignHauler` does — the other
+ * path where nobody is left to walk the load.
  */
 function standDown(ctx: PopulationContext, row: ColonistRow): void {
   row.job.buildingId = null;
   row.job.hauling = false;
-  if (row.trip.resource !== null && row.trip.amount > 0) ctx.stockpile.add(row.trip.resource, row.trip.amount);
+  bankCarriedLoad(ctx.stockpile, row.trip, ctx.sites, heldAtOf(ctx.colonists, ctx.stockpile));
   row.trip.cancel();
 }
 

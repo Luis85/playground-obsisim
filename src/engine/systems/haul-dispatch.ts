@@ -1,13 +1,14 @@
 import type { ResourceId } from '../../shared/content-types';
 import type { HaulCandidate, StoreSite, SupplyCandidate } from '../../shared/haul';
 import { CAMP_SITE_ID, nextHaulTarget, nextSupplyTarget, sitesHolding } from '../../shared/haul';
-import type { TileRef } from '../../shared/placement';
+import { isRelocating, type TileRef } from '../../shared/placement';
 import { BALANCE } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
 import { RESOURCE_IDS } from '../content/resources';
 import type { HaulKind } from '../components';
 import { Building, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Relocation } from '../components';
-import type { Stockpile } from '../resources';
+import type { PendingChanges, Stockpile } from '../resources';
+import { storeSitesOf, type StoreSiteRow } from './haul-sites';
 
 /**
  * The building fields haulage cares about, materialized once per tick by
@@ -28,7 +29,41 @@ export interface HaulBuildingRow {
   relocation: Relocation;
 }
 
-export interface HaulWorkerRow { job: JobAssignment; trip: HaulTrip; home: Home; }
+/** Just the trip. The narrowest row any claim reads, and the one the
+ * cancellation paths outside `HaulSystem` can supply: `CommandContext.workers`
+ * and `PopulationContext.colonists` both carry a live `HaulTrip` and neither
+ * carries a hauler's home. */
+export interface TripRow { trip: HaulTrip; }
+
+export interface HaulWorkerRow extends TripRow { job: JobAssignment; home: Home; }
+
+/** The building fields a store site is derived from — a subset of
+ * `HaulBuildingRow`, so a command handler can build the site list without
+ * materialising the two buffers it has no use for. */
+export interface StoreRow { building: Building; position: Position; relocation: Relocation; }
+
+/**
+ * The site list, straight from live building rows: the catalog lookup that
+ * turns a `storehouse` into a capacity, then `storeSitesOf`'s exclusions.
+ *
+ * One function rather than the two calls written out at each of the three
+ * systems that now need sites — `HaulSystem` to haul against, `CommandSystem`
+ * and `PopulationSystem` to bank a cancelled hauler's load into. Capacity is
+ * resolved HERE rather than inside `storeSitesOf`, which keeps the site law
+ * free of a content dependency.
+ */
+export function storeSitesFrom(rows: readonly StoreRow[], pending: PendingChanges): StoreSite[] {
+  const stores = rows
+    .filter((row) => BUILDINGS[row.building.defId].storage > 0)
+    .map((row): StoreSiteRow => ({
+      id: row.building.id,
+      col: row.position.col,
+      row: row.position.row,
+      capacity: BUILDINGS[row.building.defId].storage,
+      relocating: isRelocating(row.relocation.ticksLeft),
+    }));
+  return storeSitesOf(stores, pending);
+}
 
 /**
  * Which buildings have at least one colonist assigned — the workplace ids of
@@ -74,10 +109,27 @@ export interface Claims {
 
 /** One pass over the haulers, adding whatever the caller says each one claims.
  * Shared by all four lookups so there is exactly one traversal to get wrong. */
-function sumOverTrips(workers: readonly HaulWorkerRow[], claimOf: (trip: HaulTrip) => number): number {
+function sumOverTrips(workers: readonly TripRow[], claimOf: (trip: HaulTrip) => number): number {
   let total = 0;
   for (const { trip } of workers) total += claimOf(trip);
   return total;
+}
+
+/**
+ * `Claims.heldAt`, on its own — a site's occupancy as a destination lookup must
+ * see it: what it physically holds, plus what returning haulers have been
+ * promised room for.
+ *
+ * Exported separately from `claimsOf` because the two cancellation paths that
+ * bank a load outside `HaulSystem` need exactly this one lookup and none of the
+ * other three. Building the whole `Claims` object for them would drag in
+ * `capacityOf`, and with it a hauler's home tile and the pending-construction
+ * map — none of which any occupancy answer reads.
+ */
+export function heldAtOf(workers: readonly TripRow[], stockpile: Stockpile): (siteId: number) => number {
+  return (siteId) => stockpile.totalAt(siteId) + sumOverTrips(workers, (trip) => (
+    trip.phase === 'returning' && trip.destSiteId === siteId ? trip.amount : 0
+  ));
 }
 
 export function claimsOf(
@@ -97,9 +149,7 @@ export function claimsOf(
         ? trip.plannedAmount + (trip.phase === 'outbound' ? trip.amount : 0)
         : 0
     )),
-    heldAt: (siteId) => stockpile.totalAt(siteId) + sumOverTrips(workers, (trip) => (
-      trip.phase === 'returning' && trip.destSiteId === siteId ? trip.amount : 0
-    )),
+    heldAt: heldAtOf(workers, stockpile),
     unclaimedAt: (siteId, resource) => stockpile.getAt(siteId, resource) - sumOverTrips(workers, (trip) => (
       trip.phase === 'fetching' && trip.sourceSiteId === siteId && trip.resource === resource ? trip.plannedAmount : 0
     )),
@@ -129,7 +179,7 @@ function collectCandidates(buildings: readonly HaulBuildingRow[], claims: Claims
 function needOf(row: HaulBuildingRow, claims: Claims, capacity: number): { resource: ResourceId; room: number } | null {
   const { recipe } = BUILDINGS[row.building.defId];
   if (recipe === null || Object.keys(recipe.inputs).length === 0) return null;
-  if (row.relocation.ticksLeft > 0) return null;
+  if (isRelocating(row.relocation.ticksLeft)) return null;
   const resource = row.input.shortestOf(recipe, RESOURCE_IDS);
   if (resource === null) return null;
   const room = row.input.room(BALANCE.inputBufferCap) - claims.input(row.building.id);

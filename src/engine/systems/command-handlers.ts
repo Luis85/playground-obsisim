@@ -1,5 +1,6 @@
 import type { IEntity } from 'sim-ecs';
 import type { Command } from '../../shared/commands';
+import type { StoreSite } from '../../shared/haul';
 // NOMAD_REJECTIONS is imported, not declared here: the Population view shows
 // the same sentence beside its disabled button before the click, and one list
 // beside the union it explains is what keeps the two from drifting apart.
@@ -7,7 +8,9 @@ import { nomadBlocker, NOMAD_REJECTIONS, SALT, spreadFor, type LifeStage, type N
 import type { TileRef } from '../../shared/placement';
 import { BALANCE } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
-import { Building, HaulTrip, Home, JobAssignment, OutputBuffer, Position, Relocation, WorkerSlots } from '../components';
+import { Building, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Relocation, WorkerSlots } from '../components';
+import { heldAtOf } from './haul-dispatch';
+import { bankCarriedLoad } from './haul-sites';
 import { shelterWithRoom, spawnArrival, type ShelterRow } from './population-handlers';
 import type { IdCounter, NoticeBoard, PendingChanges, RemovalLedger, SimClock, Stockpile, WorldMap } from '../resources';
 
@@ -24,6 +27,9 @@ export interface BuildingRow {
   slots: WorkerSlots;
   position: Position;
   buffer: OutputBuffer;
+  /** The in-tray, read only by demolition — which destroys it with the
+   * building (§2.7) and has to name what it destroyed. */
+  input: InputBuffer;
   relocation: Relocation;
 }
 
@@ -67,6 +73,12 @@ export interface CommandContext {
   /** The nomad gate's inputs, built from the same rows — so the gate and the
    * bed it then picks cannot disagree. */
   nomadGate: () => NomadGate;
+  /** Where a load may be banked right now. A function, not a value, for the
+   * reason `shelters` is one and one sharper: demolishing a storehouse earlier
+   * in this same drain must remove it as a destination, or a later
+   * `unassignHauler` in the same drain banks into a site with no building
+   * behind it — the one thing §2.4's invariant 2 makes inexpressible. */
+  sites: () => StoreSite[];
 }
 
 /** The live row for one building id, or null when it is gone — the ONE lookup
@@ -190,26 +202,30 @@ export function handleAssignHauler(ctx: CommandContext): void {
  * entity-iteration order — which could interrupt a loaded worker most of the way
  * home while an idle one stood at the camp (OBS-4-08).
  *
- * Cheapest trip to throw away first, ranked by PHASE: idle, then outbound, then
- * returning — take the one closest to home among those, whose remaining walk is
- * smallest. Ties break by the same entity-iteration order as before, which keeps
- * the choice deterministic.
+ * Cheapest trip to throw away first: EMPTY HANDS before a load, then the one
+ * with the least walking left to lose, then entity-iteration order — which
+ * keeps the choice deterministic.
  *
- * The reasoning that ordering was built on ("an outbound hauler carries nothing
- * yet") stopped being true with the supply leg: an outbound SUPPLY hauler is
- * carrying inputs, and a `fetching` one is empty but is not in the ordering at
- * all. Ranking on `trip.amount` — which is what carrying actually means — is
- * spec §2.7 / Task 8 Step 3b, deliberately not changed here: release order is
- * balance-visible, and a task that only had comments to fix should not move it.
+ * `trip.amount` rather than the phase OBS-4-08's rule named, because that rule
+ * rested on "an outbound hauler carries nothing yet" and three legs broke it:
+ * a `fetching` hauler is empty and was not in the phase ordering at all, while
+ * an `outbound` hauler on a SUPPLY trip is carrying inputs. Left alone, the
+ * ordering inverted — it released the loaded worker and kept the empty one on
+ * duty, the exact opposite of what it exists to do.
+ *
+ * `amount > 0` IS the definition of carrying, and the kind is no substitute for
+ * it either: when an aggregate spend drains a source before a fetching hauler
+ * arrives, `fetchArrival` sets `amount` to 0 and the trip carries on as a
+ * collect, so a `supply`/`outbound` trip can be genuinely empty.
  */
 export function cheapestHaulerToRelease(workers: WorkerRow[]): WorkerRow | undefined {
   const haulers = workers.filter(({ job }) => job.hauling);
-  const cost = ({ trip }: WorkerRow) => (trip.phase === 'idle' ? 0 : trip.phase === 'outbound' ? 1 : 2);
+  const cost = ({ trip }: WorkerRow) => (trip.amount === 0 ? 0 : 1);
   return haulers.reduce<WorkerRow | undefined>((best, hauler) => {
     if (best === undefined) return hauler;
     if (cost(hauler) !== cost(best)) return cost(hauler) < cost(best) ? hauler : best;
-    // Same phase: prefer the one with the least walking left to lose. Strict <
-    // keeps the earlier worker on a tie, preserving iteration order.
+    // Equally laden: prefer the one with the least walking left to lose. Strict
+    // < keeps the earlier worker on a tie, preserving iteration order.
     return hauler.trip.ticksLeft < best.trip.ticksLeft ? hauler : best;
   }, undefined);
 }
@@ -221,13 +237,13 @@ export function handleUnassignHauler(ctx: CommandContext): void {
     return;
   }
   hauler.job.hauling = false;
-  // Anything already in hand goes to the store: those goods left their site and
-  // must land somewhere. NOT the mid-return case alone since the supply leg —
-  // an outbound hauler can be carrying inputs it fetched from a store — which is
-  // why this is guarded on `amount` rather than on the phase.
-  if (hauler.trip.resource !== null && hauler.trip.amount > 0) {
-    ctx.stockpile.add(hauler.trip.resource, hauler.trip.amount);
-  }
+  // Anything already in hand is banked HERE rather than carried: this colonist
+  // has stopped being a hauler, so nobody is left to walk it (§2.7's split).
+  // Through `bankCarriedLoad`, never `stockpile.add`, for two reasons that both
+  // used to be wrong here: the load may be an undelivered SUPPLY remainder the
+  // colony already owned, which `add` would report as a fresh delivery, and it
+  // belongs at a resolved site rather than at the camp by reflex.
+  bankCarriedLoad(ctx.stockpile, hauler.trip, ctx.sites(), heldAtOf(ctx.workers, ctx.stockpile));
   hauler.trip.cancel();
   ctx.notices.succeed('Unassigned a hauler.');
 }

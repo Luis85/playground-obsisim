@@ -2,7 +2,7 @@ import type { IRuntimeWorld } from 'sim-ecs';
 import type { BuildingDefId, RecipeDef, ResourceId } from '../shared/content-types';
 import type { SavedBuilding, SavedColonist } from '../shared/save';
 import type { BuildingSnapshot, BuildingState, ColonistSnapshot } from '../shared/snapshot';
-import type { TileRef } from '../shared/placement';
+import { isRelocating, relocatingIdsOf, type TileRef } from '../shared/placement';
 import { CAMP_TILE } from '../shared/haul';
 import { commuteFactor, mealsPerHead, stageOf } from '../shared/population';
 import { BALANCE, workerWorkPower } from './content/balance';
@@ -97,7 +97,7 @@ function isOutputBlocked(recipe: RecipeDef | null, buffered: number): boolean {
 function buildingState(
   recipe: RecipeDef | null, storage: number, relocatingTicks: number, staffed: number, outputBlocked: boolean, batchActive: boolean,
 ): BuildingState {
-  if (relocatingTicks > 0) return 'relocating';
+  if (isRelocating(relocatingTicks)) return 'relocating';
   if (storage > 0) return 'storing';
   if (recipe === null) return 'housing';
   if (staffed === 0) return 'unstaffed';
@@ -167,34 +167,6 @@ function deliveredWorkPowerOf(w: ColonistFacts, factor: number, relocatingIds: R
   return workerWorkPower(w.efficiency, w.toolTicks, factor);
 }
 
-/**
- * Buildings whose next production pass banks nothing.
- *
- * THE BOUNDARY, and this project has already spent two rounds on this exact
- * one (task 6's `> 0` vs `> 1`): the `relocatingTicks` reaching this module is
- * the POST-decrement value. ProductionSystem skips the building and decrements
- * in the same arm, and the snapshot is published afterwards. So a published
- * `> 0` means "the next production pass will skip this building" — which is
- * precisely the forward-looking quantity `BuildingSnapshot.relocatingTicks` is
- * already documented as ("ticks until a moved building can work again"), and
- * precisely the boundary `buildingState` and `beds.total` in this same file
- * already draw.
- *
- * Read BACKWARDS it overstates by exactly one tick: on the landing tick this
- * returns full power for a tick whose work was genuinely skipped — the tick
- * production-system.ts's own comment names as "the one genuinely-charged tick
- * nothing ever displays as in-flight", where `state` reads 'producing' and the
- * Buildings view's Downtime column reads '—' for the same reason. That is
- * accepted rather than special-cased: the pre-decrement value is not in the
- * snapshot at all, and `buildEntitySections` also serves the save seed and the
- * post-step refresh, neither of which has a "this tick" to ask about. Putting
- * work power alone on some other boundary would leave it the only figure on
- * screen disagreeing with the other three about whether the building is moving.
- */
-function relocatingBuildingIds(buildings: readonly BuildingFacts[]): ReadonlySet<number> {
-  return new Set(buildings.filter((b) => b.relocatingTicks > 0).map((b) => b.id));
-}
-
 /** Pure aggregation shared by SnapshotSystem, the initial-snapshot seed, and the post-step refresh. */
 export function buildEntitySections(
   workers: readonly ColonistFacts[],
@@ -221,7 +193,31 @@ export function buildEntitySections(
   // by inspection.) Mirrors ProductionSystem's own commute read, both going
   // through commuteTiles above, so neither disagrees with the power the
   // simulation actually spent.
-  const relocatingIds = relocatingBuildingIds(buildings);
+  // `relocatingIdsOf`, the same derivation ProductionSystem's own skip reads
+  // (OBS-6-08) — one boundary rather than two independently-maintained tests of
+  // the same fact.
+  //
+  // THE BOUNDARY, and this project has already spent two rounds on this exact
+  // one (task 6's `> 0` vs `> 1`): the `relocatingTicks` reaching this module is
+  // the POST-decrement value. ProductionSystem skips the building and decrements
+  // in the same arm, and the snapshot is published afterwards. So a published
+  // `> 0` means "the next production pass will skip this building" — which is
+  // precisely the forward-looking quantity `BuildingSnapshot.relocatingTicks` is
+  // already documented as ("ticks until a moved building can work again"), and
+  // precisely the boundary `buildingState` and `beds.total` in this same file
+  // already draw.
+  //
+  // Read BACKWARDS it overstates by exactly one tick: on the landing tick this
+  // returns full power for a tick whose work was genuinely skipped — the tick
+  // production-system.ts's own comment names as "the one genuinely-charged tick
+  // nothing ever displays as in-flight", where `state` reads 'producing' and the
+  // Buildings view's Downtime column reads '—' for the same reason. That is
+  // accepted rather than special-cased: the pre-decrement value is not in the
+  // snapshot at all, and `buildEntitySections` also serves the save seed and the
+  // post-step refresh, neither of which has a "this tick" to ask about. Putting
+  // work power alone on some other boundary would leave it the only figure on
+  // screen disagreeing with the other three about whether the building is moving.
+  const relocatingIds = relocatingIdsOf(buildings);
   const deliveredById = new Map(workers.map((w): [number, number | null] => [
     w.id, deliveredWorkPowerOf(w, factorOf(w.id), relocatingIds),
   ]));

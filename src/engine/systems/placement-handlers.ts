@@ -1,11 +1,14 @@
 import type { ResourceId } from '../../shared/content-types';
 import type { Command } from '../../shared/commands';
-import { legPositionOf } from '../../shared/haul';
+import { CAMP_SITE_ID, legPositionOf } from '../../shared/haul';
 import { autoPlacePosition, isTileBuildable, relocationTicks, type TileRef } from '../../shared/placement';
 import { BALANCE } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
 import { RESOURCES, RESOURCE_IDS } from '../content/resources';
+import type { HaulTrip } from '../components';
 import { buildingComponents } from '../spawn';
+import { heldAtOf } from './haul-dispatch';
+import { destinationFor } from './haul-sites';
 import { shelterWithRoom } from './population-handlers';
 import { findBuilding, type CommandContext } from './command-handlers';
 
@@ -68,18 +71,63 @@ export function handleConstructBuilding(ctx: CommandContext, command: Extract<Co
   ctx.notices.succeed(`Built a ${def.name}.`);
 }
 
-/** What a demolished building's buffer held, worded for the success notice:
+/** What a demolished building was holding, worded for the success notice:
  * resource names from the same catalog `BUILDINGS` comes from, in catalog
  * order — the determinism rule `OutputBuffer.fullestResource` also uses — and
- * comma-separated. Empty when the buffer held nothing; the caller decides
- * whether that is worth a clause of its own. */
-function bufferLossText(amounts: ReadonlyMap<ResourceId, number>): string {
+ * comma-separated. Empty when it held nothing; the caller decides whether that
+ * is worth a clause of its own.
+ *
+ * Takes a lookup rather than a map because the two clauses below count
+ * different things: the goods DESTROYED are the in-tray and the out-tray
+ * summed (a mill demolished mid-batch loses both, and one clause naming only
+ * the flour would be a false receipt for the wheat), while the goods MOVED are
+ * a storehouse's share of the ledger, which lives in the Stockpile and not on
+ * the entity at all. */
+function heldText(amountOf: (id: ResourceId) => number): string {
   const parts: string[] = [];
   for (const id of RESOURCE_IDS) {
-    const amount = amounts.get(id) ?? 0;
+    const amount = amountOf(id);
     if (amount > 0) parts.push(`${amount} ${RESOURCES[id].name}`);
   }
   return parts.join(', ');
+}
+
+/**
+ * One clause per thing that happened to this building's goods, in the wording
+ * OBS-4-07 fixed: a zero-units clause would be noise on the common case, so
+ * nothing held means the plain sentence, byte-identical to before §2.7 gave
+ * the storehouse a second outcome.
+ */
+function demolitionNotice(name: string, lost: string, moved: string, displaced: number): string {
+  let notice = `Demolished the ${name} — cost refunded`;
+  if (lost !== '') notice += `, ${lost} lost`;
+  if (moved !== '') notice += `, ${moved} moved to the camp`;
+  notice += '.';
+  return displaced > 0 ? `${notice} — ${displaced} colonist(s) displaced.` : notice;
+}
+
+/**
+ * The hauler walking to a building that has just been demolished.
+ *
+ * §2.7's other half of the split: this colonist is still a hauler, still
+ * standing somewhere on the map, and perfectly able to carry what it holds — so
+ * a load starts a `returning` leg from where the walk got to rather than being
+ * banked from mid-route, which would teleport cargo out of a walking colonist's
+ * hands and understate haul time in exactly the direction that flatters §4's
+ * measurements. Empty-handed, there is nothing to dispose of and the trip ends.
+ *
+ * Both arms go through the components' own two entry points — `startLeg` for a
+ * leg that begins, `cancel` for a trip that ends — so the six leg fields are
+ * always written together.
+ */
+function turnBackOrCancel(ctx: CommandContext, trip: HaulTrip): void {
+  if (trip.amount === 0) {
+    trip.cancel();
+    return;
+  }
+  const at = legPositionOf(trip);
+  const dest = destinationFor(trip, at, ctx.sites(), heldAtOf(ctx.workers, ctx.stockpile));
+  trip.startLeg('returning', at, dest, BALANCE.haulTilesPerTick);
 }
 
 export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Command, { type: 'demolishBuilding' }>): void {
@@ -96,24 +144,40 @@ export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Com
   for (const [resource, amount] of Object.entries(def.cost)) {
     ctx.stockpile.refund(resource as ResourceId, amount);
   }
-  // Whatever was waiting in the buffer dies with the building — decided in
-  // OBS-4-07, against refunding it: a building left full of uncollected goods
-  // should be expensive to bulldoze, since that is exactly the pressure
-  // haulers exist to relieve, and a player who wants the goods kept already
-  // has the non-destructive moveBuilding. The notice below names the loss
-  // instead of hiding it. Read here, before the clear, purely to word that
-  // notice — the stockpile loop above is untouched either way. Emptying the
-  // buffer HERE rather than letting the entity carry it off at the post-step
-  // sync is load-bearing for an unrelated reason: HaulSystem runs later in
-  // this same tick and still sees the not-yet-removed entity, so a buffer
-  // left full would have it dispatch a hauler at a building that is already
-  // gone.
-  const lost = bufferLossText(found.buffer.amounts);
+  // Whatever was waiting in either tray dies with the building — decided in
+  // OBS-4-07 for the out-tray, and extended to the IN-tray by §2.7 for the same
+  // reason: neither is in the ledger, and a building left full of goods should
+  // be expensive to bulldoze, since that is exactly the pressure haulers exist
+  // to relieve, and a player who wants the goods kept already has the
+  // non-destructive moveBuilding. The notice below names both losses instead of
+  // hiding them — a mill holding only delivered wheat used to report that its
+  // cost was refunded while silently deleting the wheat. Read here, before the
+  // clear, purely to word that notice — the stockpile loop above is untouched
+  // either way. Emptying the trays HERE rather than letting the entity carry
+  // them off at the post-step sync is load-bearing for an unrelated reason:
+  // HaulSystem runs later in this same tick and still sees the not-yet-removed
+  // entity, so a buffer left full would have it dispatch a hauler at a building
+  // that is already gone.
+  const lost = heldText((id) => (found.buffer.amounts.get(id) ?? 0) + (found.input.amounts.get(id) ?? 0));
   found.buffer.amounts.clear();
+  found.input.amounts.clear();
+  // A storehouse's contents go the OTHER way, and the distinction is OBS-4-07's
+  // own reasoning applied to a different fact: buffered goods are not yet colony
+  // wealth, while a storehouse's contents ARE — they are in the ledger, they
+  // count in colonyWealth, the player has already banked them. Destroying them
+  // would drop a published wealth figure under a notice reading "cost refunded".
+  // Unconditional because `spillTo` is a no-op for a building with no ledger
+  // site, which is every building that is not a storehouse; it banks without
+  // recording a delivery, so moving goods nobody hauled cannot inflate
+  // Delivered/t. BEFORE the pending-ledger writes below only incidentally —
+  // what matters is that it runs before any later command in this drain can
+  // resolve sites, so no site outlives its building even for one command.
+  const moved = heldText((id) => ctx.stockpile.getAt(command.buildingId, id));
+  ctx.stockpile.spillTo(CAMP_SITE_ID, command.buildingId);
   // Read BEFORE the loop below nulls every matching home: this counts exactly
   // who the demolition displaces, for the notice.
   const displaced = ctx.workers.filter(({ home }) => home.buildingId === command.buildingId).length;
-  for (const { job, trip, home } of ctx.workers) {
+  for (const { job, home } of ctx.workers) {
     if (job.buildingId === command.buildingId) job.buildingId = null;
     // Defensive, not load-bearing: rehome (PopulationSystem, later this same
     // tick) already zeroes a demolished shelter's residents on its own —
@@ -123,23 +187,24 @@ export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Com
     // has no row for yet — spawned earlier this same tick — which the
     // pending.arrivals loop below exists to catch.
     if (home.buildingId === command.buildingId) home.buildingId = null;
-    // Spec §2.8: the trip cancels now, riding the same-tick demolishedIds
-    // machinery, rather than lazily when the hauler reaches a tile with nothing
-    // on it — up to 13 ticks later, all of them spent booked to a building the
-    // snapshot no longer contains. Outbound only: a returning hauler is carrying
-    // those goods to the camp, which did not move, and resetting it would
-    // destroy the load (mirrors handleMoveBuilding's guard below).
-    //
-    // Empty-handed only, for that same reason: since increment 7 an OUTBOUND
-    // hauler can be carrying a supply load it fetched from a store, and
-    // cancelling that here would destroy goods the colony already owned. One
-    // still walks to the demolished tile and finds nothing there, which is
-    // where HaulSystem turns it for home with its load intact.
-    if (trip.phase === 'outbound' && trip.targetId === command.buildingId && trip.amount === 0) trip.cancel();
   }
   ctx.removals.remove(found.entity);
   ctx.demolishedIds.add(command.buildingId);
   ctx.pending.demolished.add(command.buildingId);
+  // Spec §2.8: the trip ends now, riding the same-tick demolishedIds machinery,
+  // rather than lazily when the hauler reaches a tile with nothing on it — up to
+  // 13 ticks later, all of them spent booked to a building the snapshot no
+  // longer contains. Outbound only: a returning hauler is carrying its goods to
+  // a site, which the demolition did not move, and a fetching one has taken
+  // nothing yet and simply cancels when its own recheck fails.
+  //
+  // AFTER the two demolished-ledger writes above, deliberately: a loaded hauler
+  // resolves a destination through `ctx.sites()`, and this building must already
+  // be off that list — otherwise a hauler bound for a demolished storehouse
+  // would be sent to bank into it.
+  for (const { trip } of ctx.workers) {
+    if (trip.phase === 'outbound' && trip.targetId === command.buildingId) turnBackOrCancel(ctx, trip);
+  }
   // Colonists spawned EARLIER THIS TICK are not in ctx.workers — the query
   // cannot see them until the post-step sync — so a nomad welcomed before this
   // demolition keeps a homeId pointing at the building being removed unless
@@ -152,13 +217,7 @@ export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Com
   // pending.demolished — re-seating any earlier would hand the arrival a bed in
   // the very house being removed.
   reseatArrivalsOf(ctx, command.buildingId);
-  // A zero-units clause would be noise on the common case, so the empty
-  // buffer keeps the plain wording rather than gaining an empty ", lost."
-  let notice = lost === ''
-    ? `Demolished the ${def.name} — cost refunded.`
-    : `Demolished the ${def.name} — cost refunded, ${lost} lost.`;
-  if (displaced > 0) notice += ` — ${displaced} colonist(s) displaced.`;
-  ctx.notices.succeed(notice);
+  ctx.notices.succeed(demolitionNotice(def.name, lost, moved, displaced));
 }
 
 /**

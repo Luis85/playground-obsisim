@@ -4,11 +4,11 @@ import type { BuildingDefId, ResourceId } from '../../../src/shared/content-type
 import { CAMP_SITE_ID, CAMP_TILE, haulTicksBetween, legPositionOf, type StoreSite } from '../../../src/shared/haul';
 import type { TileRef } from '../../../src/shared/placement';
 import { BALANCE } from '../../../src/engine/content/balance';
-import { Building, HaulTrip, InputBuffer, JobAssignment, OutputBuffer, Position, Relocation } from '../../../src/engine/components';
+import { Building, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Relocation } from '../../../src/engine/components';
 import { IdCounter, Stockpile } from '../../../src/engine/resources';
 import { CommandSystem } from '../../../src/engine/systems/command-system';
 import { ProductionSystem } from '../../../src/engine/systems/production-system';
-import { HaulSystem } from '../../../src/engine/systems/haul-system';
+import { HaulSystem, haulerCapacity } from '../../../src/engine/systems/haul-system';
 import { campAdjacentFreeTile, colonyTotal, enqueue } from '../fixtures';
 import {
   applyRemovals, buildColonyPrepWorld, createColonyWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist,
@@ -546,6 +546,56 @@ describe('what a leg cannot assume', () => {
     await step(legTicks(MILL, CAMP_TILE));
     expect(stockpile.get('wheat')).toBe(20);
     expect(colonyTotal(world, 'wheat')).toBe(20);
+  });
+
+  // Supply's own half of `loadOutput`'s recheck: staffing and a target's
+  // existence are re-verified on arrival because a leg takes ticks and the
+  // world moves during them (spec §2.5) — and a hauler's OWN capacity is no
+  // different. `plannedAmount` is sized at DISPATCH against the capacity the
+  // hauler had then; if its home is demolished, relocated or reassigned while
+  // it walks, arrival must draw against what it can carry NOW.
+  it('a fetch caps its take at CURRENT capacity, not the capacity it was dispatched at', async () => {
+    // Four numbers, pairwise distinct, so no field here can read a
+    // neighbour's value and still pass: the housed capacity the plan is
+    // sized against (6), the homeless capacity the recheck must fall back to
+    // (3), what the depot actually holds (5, more than homeless can carry but
+    // less than housed), and the fetching leg's length (4 ticks — SOURCE is 7
+    // tiles from camp at BALANCE.haulTilesPerTick == 2).
+    const SOURCE = { col: 9, row: 0 };
+    const housedCapacity = BALANCE.haulCarryCapacity;
+    const homelessCapacity = haulerCapacity(null);
+    const sourceStock = 5;
+    const fetchLeg = legTicks(CAMP_TILE, SOURCE);
+    expect(new Set([housedCapacity, homelessCapacity, sourceStock, fetchLeg]).size).toBe(4);
+    expect(sourceStock).toBeGreaterThan(homelessCapacity);
+    expect(sourceStock).toBeLessThan(housedCapacity);
+
+    const { world, buildings, haulers, step, stockpile } = await setup(
+      [{ defId: 'storehouse', ...SOURCE, stored: { wheat: sourceStock } }, { defId: 'mill', ...MILL, crew: 1 }], 1,
+    );
+    const source = idOf(buildings[0]);
+    expect(colonyTotal(world, 'wheat')).toBe(sourceStock);
+
+    await step(1); // dispatched: the plan is sized against the HOUSED capacity
+    expect(tripOf(haulers[0])).toMatchObject({ phase: 'fetching', plannedAmount: sourceStock, amount: 0 });
+
+    await step(fetchLeg - 1); // one tick short of arrival: still walking
+    expect(tripOf(haulers[0])).toMatchObject({ phase: 'fetching', ticksLeft: 1 });
+    haulers[0].getComponent(Home)!.buildingId = null; // home gone mid-fetch
+
+    await step(1); // arrival: the recheck must see the CURRENT (homeless) capacity
+    expect(tripOf(haulers[0])).toMatchObject({ phase: 'outbound', resource: 'wheat', amount: homelessCapacity });
+    // Not drained to zero: the depot still holds what the hauler could not
+    // carry, available for the next one to claim.
+    expect(stockpile.getAt(source, 'wheat')).toBe(sourceStock - homelessCapacity);
+    // Conservation alone cannot tell the fix from the bug — both leave this
+    // sum at sourceStock — but a cap implemented by DISCARDING the remainder
+    // instead of leaving it at the source would fail it, so it stays as a net.
+    expect(colonyTotal(world, 'wheat')).toBe(sourceStock);
+
+    await step(legTicks(SOURCE, MILL)); // walks the reduced load in and unloads it
+    expect(inputOf(buildings[1]).amounts.get('wheat')).toBe(homelessCapacity);
+    expect(colonyTotal(world, 'wheat')).toBe(sourceStock); // still conserved, now split source/input
   });
 });
 

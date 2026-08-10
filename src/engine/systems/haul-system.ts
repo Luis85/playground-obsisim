@@ -106,7 +106,7 @@ function turnForHome(ctx: TickContext, trip: HaulTrip, at: TileRef): void {
  * Nothing has been picked up yet, so either recheck failing is a clean cancel:
  * no load, no disposal, no remainder.
  */
-function fetchArrival(ctx: TickContext, trip: HaulTrip): void {
+function fetchArrival(ctx: TickContext, trip: HaulTrip, capacity: number): void {
   const row = targetRowOf(ctx, trip);
   const source = ctx.siteById.get(trip.sourceSiteId);
   if (row === undefined || trip.resource === null) {
@@ -123,7 +123,18 @@ function fetchArrival(ctx: TickContext, trip: HaulTrip): void {
   // construction costs and meals — so a build ordered while this hauler walked
   // can legitimately have spent the wheat it set out to fetch. Carrying the
   // claimed figure regardless would create goods out of nothing.
-  trip.amount = ctx.stockpile.takeAt(trip.sourceSiteId, trip.resource, trip.plannedAmount);
+  //
+  // Capped at CURRENT capacity, not `plannedAmount` alone — the same recheck
+  // `loadOutput` already applies on the outbound leg (spec §2.5): a hauler's
+  // home can be demolished, relocated or reassigned while it walks, and
+  // `plannedAmount` is sized against the capacity it had at DISPATCH. Without
+  // this cap a hauler dispatched housed, then made homeless mid-leg, still
+  // picks up the housed amount. The gap this leaves in the SOURCE claim
+  // (`unclaimedAt` subtracts `plannedAmount`, not the capped take) is real but
+  // momentary: `plannedAmount` is zeroed two lines below, so the very next
+  // tick's claim is rebuilt from live components and reads the true number —
+  // it does not persist the way a genuine over-reservation would.
+  trip.amount = ctx.stockpile.takeAt(trip.sourceSiteId, trip.resource, Math.min(trip.plannedAmount, capacity));
   trip.plannedAmount = 0;
   // Nothing left to deliver: the trip carries on to the building and finishes
   // as an ordinary collect run.
@@ -292,7 +303,7 @@ export const HaulSystem = () => createSystem({
       }
       trip.ticksLeft -= 1;
       if (trip.ticksLeft > 0) continue;
-      if (trip.phase === 'fetching') fetchArrival(ctx, trip);
+      if (trip.phase === 'fetching') fetchArrival(ctx, trip, capacity);
       else if (trip.phase === 'outbound') buildingArrival(ctx, trip, capacity);
       else depositArrival(ctx, trip);
     }

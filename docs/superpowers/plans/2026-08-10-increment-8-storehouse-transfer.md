@@ -87,7 +87,11 @@ The ranking has no fairness term, so while the nearer hungry building can still 
 **The correction this task rests on — read before starting.** OBS-7-01's "Suggested resolution" offers ageing and says it "could be derived rather than stored: `waitingForInputTicks` is already a live component field and already published." **It is not.** `waitingForInputTicks` is an accumulator in `tests/support/balance-harness.ts` (`StageResult`), summed by sampling snapshot status each tick. Grep confirms no component carries it. Adding one would be memory between ticks, which §2.6 of increment 7 forbids by name. Take the issue's *second* shape instead — a starvation term derived from live state. The issue note is corrected in Task 12.
 
 **Interfaces:**
-- `SupplyCandidate` gains `starving: boolean` — **the building holds zero of the resource this candidate would deliver.** Derived in `supplyCandidates` from `row.input.amounts.get(need.resource) ?? 0`, which is public (`ResourceBuffer.amounts` is `public readonly`). Not "holds zero of any input" — the band must be about the resource this candidate is actually for, or two candidates for the same building rank differently for no reason a player could see.
+- `SupplyCandidate` gains `starving: boolean` — **the building holds zero of the resource this candidate would deliver AND has no batch in progress.** Derived in `supplyCandidates` from `row.input.amounts.get(need.resource) ?? 0` (public: `ResourceBuffer.amounts` is `public readonly`) and `row.production.batchActive`. Not "holds zero of any input" — the band must be about the resource this candidate is actually for, or two candidates for the same building rank differently for no reason a player could see.
+
+  **The `batchActive` clause is a correction, not an embellishment — see spec §2.1.** An empty in-tray on its own does not mean a building is blocked: `payFrom` (production-system.ts) draws a batch's inputs out of the tray *at batch start*, so a mill on a three-tick batch holds zero wheat for three ticks out of every three while producing perfectly well. The one-clause rule promotes a healthy producer over a consumer blocked for 600 ticks, on the tick after every delivery. The clause is also what makes the "this is a floor" argument true: without it the condition is not extinguished by serving the building once, because it returns when the next batch starts.
+
+  **`HaulBuildingRow` gains `production: Production`** and `HaulSystem`'s building query gains `production: Read(Production)`. `Production` is an EXISTING component, so the "no new component" constraint holds — nothing is added to `buildingComponents` in `spawn.ts` or to `COMPONENT_TYPES` in `world.ts`. Any test that hand-builds a `HaulBuildingRow` needs the new field; that is the whole cost.
 - `compareSupplyCandidates` order becomes: **starving first**, then `movable` descending, then whole route ascending, then building id, then site id. One new term at the front; every existing term keeps its position and its meaning.
 
 - [ ] **Step 1: Write the failing tests**
@@ -119,6 +123,25 @@ it('the starving term does not disturb the id tie-breaks', () => {
 it('a building holding some of what it needs is not starving', async () => {
   // 1 unit of flour in the in-tray, room for 11 more. NOT starving.
   // Mutating `=== 0` to `<= 1` must redden this.
+});
+
+it('a building mid-batch is not starving, however empty its tray', async () => {
+  // THE SECOND CLAUSE, and it needs its own fixture for the reason the Global
+  // Constraints give: the other clause is true here, so this one alone carries
+  // the assertion. Fixture: in-tray EMPTY of the resource and
+  // `batchActive === true` (spawnBuilding takes `batchActive` directly). NOT
+  // starving. Deleting `&& !row.production.batchActive` must redden this and
+  // nothing else.
+  //
+  // This is the ordinary state of a working building, not a corner case:
+  // `payFrom` empties the tray at batch start, so a mill spends every tick of
+  // every batch here.
+});
+
+it('a building with an empty tray and no batch running IS starving', async () => {
+  // The other side of the same clause. Both fixtures, or neither proves
+  // anything — the two differ ONLY in `batchActive`, which is what makes them
+  // discriminate as a pair.
 });
 
 // ── `starving is about the resource being delivered, not any input` does NOT
@@ -160,7 +183,7 @@ The comparator term and the `supplyCandidates` field. Put the reasoning where th
 
 - [ ] **Step 3: Mutation-test**
 
-At minimum: delete the starving term; invert it; change `=== 0` to `< 2`. Each must redden exactly one named test.
+At minimum: delete the starving term; invert it; change `=== 0` to `< 2`; **drop `&& !row.production.batchActive` alone** (per-clause, not whole-condition — the empty-tray clause survives and keeps the rest of the suite green, which is exactly the shape the Global Constraints warn about); and make the exported predicate read `input.total() === 0` (the "holds zero of ANY input" bug). Each must redden exactly one named test.
 
 - [ ] **Step 4: Verify and commit**
 
@@ -444,11 +467,19 @@ it('a fetching transfer reserves destination room; a fetching supply does not', 
 // ── single-hauler fixture passes against every bug below.
 
 it('two haulers staging from one source cannot exceed its surplus', () => {
-  // 20 wheat, demand 12, surplus 8, capacity 6. First takes 6, second must take
-  // 2 — NOT 6. Then assert the thing that actually matters: the source is left
-  // AT its demand and has NOT become a sink. A test that only checks the second
-  // load's size passes an implementation that is off by one in the other
-  // direction; assert the invariant, not just the arithmetic.
+  // 22 wheat, demand 12, surplus 10, capacity 6. First takes 6, second must
+  // take 4 — NOT 6 — and the source lands exactly ON its demand of 12. Then
+  // assert the thing that actually matters: the source has NOT become a sink. A
+  // test that only checks the second load's size passes an implementation off by
+  // one in the other direction; assert the invariant, not just the arithmetic.
+  //
+  // CORRECTED FROM 20 wheat / surplus 8. At 20, the second load is 2 units and
+  // `minTransferUnits: 4` refuses it, so the fixture would have asserted a
+  // transfer that cannot exist. 22 is the smallest stock where BOTH loads clear
+  // the minimum AND the source lands exactly on its demand — which is what lets
+  // the test assert the boundary rather than an inequality. Any fixture for a
+  // per-hauler bound must keep every load it asserts at or above
+  // `minTransferUnits`, or the gate hides the bug the fixture exists to catch.
 });
 
 it('a source over-committed into deficit would reverse-transfer', () => {
@@ -466,8 +497,16 @@ it('concurrent drains stop once the floor is scheduled to be restored', () => {
 
 it('a supply fetch from a depot counts toward its drain headroom', () => {
   // plannedOutAt counts every fetching trip, not only transfers. Fixture: a
-  // supply hauler already fetching from a depot that is one unit below its
-  // floor; no drain should be dispatched, because the room is already coming.
+  // depot at 54 of 60 (free space 6, so `drainNeed` is 6 against a floor of 12)
+  // with a supply hauler already fetching 6 units out of it. `plannedOutAt` is
+  // 6, occupancy reads 48, free space reads 12, `drainNeed` falls to 0 and NO
+  // drain is dispatched — the room is already coming.
+  //
+  // CORRECTED FROM "one unit below its floor". At free space 11, `drainNeed` is
+  // 1, which `minTransferUnits: 4` refuses on its own — so the test would have
+  // passed with `plannedOutAt` dropped entirely and proved nothing. These
+  // numbers discriminate: drop the `plannedOutAt` term and `drainNeed` stays at
+  // 6, clears the minimum, and a drain IS dispatched.
 });
 
 it('candidate order does not depend on array order', () => {
@@ -684,17 +723,19 @@ Point `bankLoad` at `addAt` unconditionally; force `pickedUp = true` on a transf
 ### Task 9: Snapshot and surfaces
 
 **Files:**
-- Modify: `src/engine/snapshot-builder.ts` (likely nothing — `haulKind` publishes `trip.kind` directly), `src/app/components/SelectionPanel.vue`, `src/app/components/WorldLegend.vue`, `src/app/world/layout.ts` (only if it branches on kind)
-- Test: `tests/app/selection-panel.test.ts`, `tests/app/world-layout.test.ts`, `npm run smoke:world`
+- Modify: `src/engine/snapshot-builder.ts` (likely nothing — `haulKind` publishes `trip.kind` directly), `src/app/views/PopulationView.vue`, `src/app/components/WorldLegend.vue`, `src/app/world/layout.ts` (only if it branches on kind)
+- Test: `tests/app/population-view.test.ts`, `tests/app/world-layout.test.ts`, `npm run smoke:world`
+
+**`SelectionPanel.vue` is NOT the surface, and the corrected reason is the useful part.** It takes `defineProps<{ buildingId: number }>()` and reads only `store.snapshot?.buildings` — there is no selected colonist and no `haulKind` in scope, so a transfer label cannot be written there without inventing a colonist-selection flow this increment has no business adding. The hauler-aware surface that already exists is **`PopulationView.vue`**: a per-colonist table whose `jobLabel(buildingId, hauling)` already returns `'Hauling'`, with the worker row (and therefore `haulKind`) in hand. That is where a transfer distinguishes itself, and its test file is `tests/app/population-view.test.ts`.
 
 **Interfaces:**
 - `haulPickedUp` **remains the direction marker**, not `haulKind` (§2.10). A transfer's load came from a store, so `pickedUp` is false and the marker draws it carrying goods *in* — which is what it is doing. Do not add a kind-driven branch to the marker; increment 7's §2.10 records why that draws the round trip backwards.
-- `haulTargetId` is `null` for a transfer. Find every surface that resolves it to a building name and give it a transfer rendering — a transfer names no building and must not render as "hauling to —" or crash a lookup.
+- `haulTargetId` is `null` for a transfer. **`layout.ts` already handles that** — line ~344 falls back to the frozen leg endpoints when `haulTargetId === null || !cellById.has(...)`, so the dot is positioned correctly for a transfer with no change. Verify it with a test rather than editing it; the surfaces that need work are the ones that resolve the id to a NAME.
 - No new colour or glyph. This is a job kind, not a new entity.
 
 - [ ] **Step 1: Find the surfaces**
 
-`grep -rn "haulTargetId\|haulKind" src/app` before writing anything. Pre-flight the brief against the real files — roughly half of increment 4's briefs contained an error of exactly this kind.
+`grep -rn "haulTargetId\|haulKind" src/app` before writing anything, and do not trust the file list above without repeating it — the `SelectionPanel` correction above came from a review doing exactly this grep, and roughly half of increment 4's briefs contained an error of the same kind.
 
 - [ ] **Step 2: Write the failing tests, then implement**
 
@@ -702,7 +743,7 @@ Point `bankLoad` at `addAt` unconditionally; force `pickedUp = true` on a transf
 
 - [ ] **Step 3: Mutation-test the smoke checks**
 
-Disable the transfer label in `layout.ts` or the panel and confirm the named check — and only that check — goes red. **No vitest test may import `renderer.ts`, `graphics-cache.ts` or `glyphs.ts`**; if this task splits the renderer again, add the new file to that list in `docs/process/agent-workflow.md` in the same commit.
+Disable the transfer label in `PopulationView.vue` or the legend and confirm the named check — and only that check — goes red. A legend entry on its own is NOT sufficient coverage: a static legend row would go red for a mutation to the legend and stay green for one to the label that actually identifies a transferring hauler, so the discriminating check has to be the per-colonist one. **No vitest test may import `renderer.ts`, `graphics-cache.ts` or `glyphs.ts`**; if this task splits the renderer again, add the new file to that list in `docs/process/agent-workflow.md` in the same commit.
 
 - [ ] **Step 4: Verify and commit**
 

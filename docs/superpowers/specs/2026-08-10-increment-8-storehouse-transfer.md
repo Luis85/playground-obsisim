@@ -124,12 +124,37 @@ So the fix is the issue's second shape, a starvation term derived entirely from
 live state:
 
 > **A candidate is *starving* when the building holds zero of the resource that
-> candidate would deliver**, and *topping up* otherwise. Starving outranks
-> topping up, ahead of every existing term. Within a band nothing changes.
+> candidate would deliver AND has no batch in progress**, and *topping up*
+> otherwise. Starving outranks topping up, ahead of every existing term. Within
+> a band nothing changes.
 
-Derived from `InputBuffer.amounts` and the resource `needOf` already chose. No
-new state, no new component, no iteration-order dependence, and the tie-break
-chain still ends at a site id.
+Derived from `InputBuffer.amounts`, the resource `needOf` already chose, and
+`Production.batchActive`. No new state, no new component, no iteration-order
+dependence, and the tie-break chain still ends at a site id.
+
+**The second clause is not a refinement, and an earlier draft of this section
+was wrong without it.** That draft ranked on the empty in-tray alone and
+justified it with "a building that holds zero of its input cannot start a batch
+at all; one that holds some is producing while it waits." Both halves are
+backwards on the code. `payFrom` (production-system.ts) draws a batch's inputs
+out of the in-tray **at the moment the batch starts** — `startBatch` calls it
+before setting `batchActive`, and `completeBatches` calls it again to chain — so
+holding zero is the *ordinary* state of a building that is producing perfectly
+well, for the whole length of its current batch. A mill on a three-tick batch
+holds no wheat for three ticks out of every three. Holding *some* does not mean
+"producing while it waits"; it means runway banked for the batch after this one.
+
+So the one-clause rule promotes a healthy producer, mid-batch, ahead of a
+consumer that has been blocked for six hundred ticks — and does it on the tick
+after every delivery, which is exactly when the fairness floor is supposed to be
+protecting the blocked one. `batchActive` is what tells the two apart, it is a
+live component field (`Production`), and reading it costs this rule nothing it
+was not already paying: `HaulSystem`'s building query gains `Production`, which
+is an existing component, so §2.3's "no new component" holds.
+
+With both clauses the rule says what the prose always meant: **this building
+cannot turn anything into anything right now, and has nothing to start with.**
+A building mid-batch is not starving, however empty its tray.
 
 **Today this is indistinguishable from "the in-tray is empty", and the
 distinction is still the one to implement.** Every recipe in
@@ -148,13 +173,20 @@ The new order in `compareSupplyCandidates`:
 4. building id
 5. site id
 
-**Why this is a floor and not merely a different priority.** A building that
-holds zero of its input cannot start a batch at all; one that holds some is
-producing while it waits. The rule promotes only the first, and the promotion
+**Why this is a floor and not merely a different priority.** A building with an
+empty tray and no batch running cannot turn anything into anything until
+somebody brings it something; one that is mid-batch is already working, and one
+that holds stock has runway. The rule promotes only the first, and the promotion
 ends the moment a single load lands — after which the building is in band 2 and
 the ordinary route term decides again. It cannot pin a hauler to a distant
 building indefinitely, because the condition it ranks on is extinguished by
 serving it once.
+
+Both clauses are needed for that argument to hold. Without `batchActive` the
+condition is *not* extinguished by serving the building once — it returns on the
+tick the next batch starts and every batch after it — so what looks like a floor
+becomes a term that fires on and off for every consumer in the colony, and the
+band stops distinguishing anything.
 
 **The risk this takes, stated because §4 must measure it in both directions.**
 The failure mode opposite to starvation is a hauler crossing the map past a
@@ -717,8 +749,17 @@ conservation sentinel in `tests/support/goods-audit.ts` is the instrument;
 - `haulTargetId` is `null` for a transfer. Any surface that resolves it to a
   building name must render a transfer without one; the dot's position comes
   from the frozen leg endpoints and is unaffected.
-- The world legend and the selection panel gain a transfer label. No new colour
-  or glyph is required — this is a job kind, not a new entity.
+- The world legend and the **population view's per-colonist job column** gain a
+  transfer label. No new colour or glyph is required — this is a job kind, not a
+  new entity.
+
+  **Not the selection panel**, which an earlier draft named: it takes a
+  `buildingId` and reads only `snapshot.buildings`, so no hauler and no
+  `haulKind` is ever in its scope, and giving it one would mean inventing a
+  colonist-selection flow §2.13 has no room for. `PopulationView`'s `jobLabel`
+  already renders `'Hauling'` per colonist with the worker row in hand, which is
+  the surface where the distinction belongs and the only one that can identify
+  *which* hauler is transferring — a legend row alone cannot.
 
 ### 2.11 Save
 

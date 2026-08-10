@@ -446,6 +446,14 @@ function tallyStates(snapshot: Snapshot, buildingIds: readonly number[], tallies
  * hide the day transfers start, right when a later measurement needs to see
  * them land somewhere on purpose. Split out of `tallyHaulers` so the guard's
  * own branch doesn't push that function over the complexity gate.
+ *
+ * TASK 10 OWNS REMOVING THIS. When `HaulerTicks` gains its fourth category,
+ * delete the throw and let `ticks[haulKind]++` handle every kind — the two are
+ * one change, not two. Neither half can be done alone in silence: leaving the
+ * throw after adding the bucket crashes any balance run carrying a transfer,
+ * and deleting the throw before adding it fails `tsc`, because `HaulerTicks`
+ * is a closed interface rather than an index signature. Said here as well as
+ * in the plan so it is greppable from the code that has to change.
  */
 function tallyKind(ticks: HaulerTicks, haulKind: HaulKind): void {
   if (haulKind === 'transfer') throw new Error('balance-harness: transfer trips are not modelled yet');

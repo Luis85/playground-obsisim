@@ -9,10 +9,18 @@ import type { HaulKind } from '../components';
 import { Building, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Relocation } from '../components';
 import type { Stockpile } from '../resources';
 
-/** The building fields haulage cares about, materialized once per tick by
+/**
+ * The building fields haulage cares about, materialized once per tick by
  * HaulSystem's own query. Declared here rather than there because every
- * function in this file consumes them and the system consumes this file. */
-export interface BuildingRow {
+ * function in this file consumes them and the system consumes this file.
+ *
+ * `Haul`-prefixed because `command-handlers.ts` exports its own `BuildingRow`
+ * and `WorkerRow` — a different shape for a different query — and since Task 8
+ * the command handlers import from this module. Two exports of one name across
+ * a single API surface is what Fallow reports as `duplicate_exports`; the
+ * prefix resolves the collision rather than routing around it.
+ */
+export interface HaulBuildingRow {
   building: Building;
   position: Position;
   buffer: OutputBuffer;
@@ -20,7 +28,7 @@ export interface BuildingRow {
   relocation: Relocation;
 }
 
-export interface WorkerRow { job: JobAssignment; trip: HaulTrip; home: Home; }
+export interface HaulWorkerRow { job: JobAssignment; trip: HaulTrip; home: Home; }
 
 /**
  * Which buildings have at least one colonist assigned — the workplace ids of
@@ -66,14 +74,14 @@ export interface Claims {
 
 /** One pass over the haulers, adding whatever the caller says each one claims.
  * Shared by all four lookups so there is exactly one traversal to get wrong. */
-function sumOverTrips(workers: readonly WorkerRow[], claimOf: (trip: HaulTrip) => number): number {
+function sumOverTrips(workers: readonly HaulWorkerRow[], claimOf: (trip: HaulTrip) => number): number {
   let total = 0;
   for (const { trip } of workers) total += claimOf(trip);
   return total;
 }
 
 export function claimsOf(
-  workers: readonly WorkerRow[], stockpile: Stockpile, capacityOf: (row: WorkerRow) => number,
+  workers: readonly HaulWorkerRow[], stockpile: Stockpile, capacityOf: (row: HaulWorkerRow) => number,
 ): Claims {
   return {
     output: (buildingId) => {
@@ -101,7 +109,7 @@ export function claimsOf(
 /** One collect candidate per building: buffered and claimed amounts read from
  * live components, the shape `nextHaulTarget` picks over. Unchanged from
  * increment 4 apart from who counts as a claimant. */
-function collectCandidates(buildings: readonly BuildingRow[], claims: Claims): HaulCandidate[] {
+function collectCandidates(buildings: readonly HaulBuildingRow[], claims: Claims): HaulCandidate[] {
   return buildings.map(({ building, position, buffer }) => ({
     buildingId: building.id,
     col: position.col,
@@ -118,7 +126,7 @@ function collectCandidates(buildings: readonly BuildingRow[], claims: Claims): H
  * is not a supply target at all — no recipe inputs, mid-relocation, or its
  * in-tray is already spoken for.
  */
-function needOf(row: BuildingRow, claims: Claims, capacity: number): { resource: ResourceId; room: number } | null {
+function needOf(row: HaulBuildingRow, claims: Claims, capacity: number): { resource: ResourceId; room: number } | null {
   const { recipe } = BUILDINGS[row.building.defId];
   if (recipe === null || Object.keys(recipe.inputs).length === 0) return null;
   if (row.relocation.ticksLeft > 0) return null;
@@ -153,7 +161,7 @@ function worthMoving(movable: number, held: number): boolean {
  * use it.
  */
 function supplyCandidates(
-  buildings: readonly BuildingRow[], sites: readonly StoreSite[], staffed: StaffedSet,
+  buildings: readonly HaulBuildingRow[], sites: readonly StoreSite[], staffed: StaffedSet,
   claims: Claims, capacity: number,
 ): SupplyCandidate[] {
   const candidates: SupplyCandidate[] = [];
@@ -200,7 +208,7 @@ function beginCollect(trip: HaulTrip, at: TileRef, target: HaulCandidate): void 
 
 /** Everything a dispatch decision reads, gathered once per tick. */
 export interface DispatchInputs {
-  buildings: readonly BuildingRow[];
+  buildings: readonly HaulBuildingRow[];
   sites: readonly StoreSite[];
   staffed: StaffedSet;
   claims: Claims;

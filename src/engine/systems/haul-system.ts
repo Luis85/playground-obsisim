@@ -8,7 +8,7 @@ import { BUILDINGS } from '../content/buildings';
 import { RESOURCE_IDS } from '../content/resources';
 import { Building, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Relocation } from '../components';
 import { PendingChanges, Stockpile } from '../resources';
-import type { BuildingRow, Claims, DispatchInputs, StaffedSet, WorkerRow } from './haul-dispatch';
+import type { Claims, DispatchInputs, HaulBuildingRow, HaulWorkerRow, StaffedSet } from './haul-dispatch';
 import { chooseJob, claimsOf } from './haul-dispatch';
 import { storeSitesOf, type StoreSiteRow } from './haul-sites';
 
@@ -40,7 +40,7 @@ export function haulerCapacity(homeTile: TileRef | null): number {
 /** Where a hauler sleeps, or null when nowhere — the input haulerCapacity
  * charges. Resolved against the same building rows the haul targets come from,
  * so a house is just another row here. */
-function homeTileOf(homeId: number | null, byId: ReadonlyMap<number, BuildingRow>, pending: PendingChanges): TileRef | null {
+function homeTileOf(homeId: number | null, byId: ReadonlyMap<number, HaulBuildingRow>, pending: PendingChanges): TileRef | null {
   if (homeId === null) return null;
   const row = byId.get(homeId);
   // A house built earlier THIS tick is absent from the query until the
@@ -59,7 +59,7 @@ function homeTileOf(homeId: number | null, byId: ReadonlyMap<number, BuildingRow
  * inside that helper — the same split command-system.ts makes for a shelter's
  * beds, which keeps the site law free of a content dependency.
  */
-function storeRowsOf(rows: readonly BuildingRow[]): StoreSiteRow[] {
+function storeRowsOf(rows: readonly HaulBuildingRow[]): StoreSiteRow[] {
   return rows
     .filter((row) => BUILDINGS[row.building.defId].storage > 0)
     .map((row) => ({
@@ -74,7 +74,7 @@ function storeRowsOf(rows: readonly BuildingRow[]): StoreSiteRow[] {
 /** Everything the leg handlers below read, gathered once per tick. */
 interface TickContext {
   stockpile: Stockpile;
-  byId: ReadonlyMap<number, BuildingRow>;
+  byId: ReadonlyMap<number, HaulBuildingRow>;
   sites: readonly StoreSite[];
   siteById: ReadonlyMap<number, StoreSite>;
   staffed: StaffedSet;
@@ -180,7 +180,7 @@ function fetchArrival(ctx: TickContext, trip: HaulTrip): void {
  * by travel time. The load stays in hand instead; `pickedUp` stays false, so it
  * is an undelivered remainder and goes home to its source.
  */
-function unload(ctx: TickContext, trip: HaulTrip, row: BuildingRow): void {
+function unload(ctx: TickContext, trip: HaulTrip, row: HaulBuildingRow): void {
   if (trip.kind !== 'supply' || trip.resource === null || trip.amount === 0) return;
   if (!ctx.staffed.has(row.building.id)) return;
   const placed = Math.min(trip.amount, row.input.room(BALANCE.inputBufferCap));
@@ -204,7 +204,7 @@ function unload(ctx: TickContext, trip: HaulTrip, row: BuildingRow): void {
  * mixing two resources in one pair of hands, which HaulTrip has no room to
  * represent.
  */
-function loadOutput(trip: HaulTrip, row: BuildingRow, capacity: number): void {
+function loadOutput(trip: HaulTrip, row: HaulBuildingRow, capacity: number): void {
   if (trip.amount !== 0) return;
   const resource = row.buffer.fullestResource(RESOURCE_IDS);
   const taken = resource === null ? 0 : row.buffer.take(resource, capacity);
@@ -294,7 +294,7 @@ export const HaulSystem = () => createSystem({
     const byId = new Map(buildingRows.map((row) => [row.building.id, row]));
     const workerRows = [...workers.iter()];
     const sites = storeSitesOf(storeRowsOf(buildingRows), pending);
-    const capacityOf = (row: WorkerRow) => haulerCapacity(homeTileOf(row.home.buildingId, byId, pending));
+    const capacityOf = (row: HaulWorkerRow) => haulerCapacity(homeTileOf(row.home.buildingId, byId, pending));
     const claims = claimsOf(workerRows, stockpile, capacityOf);
     // ONE derivation, read by the dispatch filter and by the arrival recheck.
     // They are the same rule seen from two ends of a leg, so a second copy of

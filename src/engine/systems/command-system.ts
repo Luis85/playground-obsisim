@@ -9,9 +9,9 @@ import { Age, Building, HaulTrip, Home, JobAssignment, OutputBuffer, Position, R
 import { CommandQueue, IdCounter, NoticeBoard, PendingChanges, RemovalLedger, SimClock, Stockpile, WorldMap } from '../resources';
 import {
   type CommandContext,
-  handleAssignHauler, handleAssignWorker, handleConstructBuilding, handleDemolishBuilding, handleMoveBuilding, handleRecruitWorker,
-  handleUnassignHauler, handleUnassignWorker,
+  handleAssignHauler, handleAssignWorker, handleRecruitWorker, handleUnassignHauler, handleUnassignWorker,
 } from './command-handlers';
+import { handleConstructBuilding, handleDemolishBuilding, handleMoveBuilding } from './placement-handlers';
 
 /** One command, one handler — the mapping the drain loop dispatches every
  * queued command through. */
@@ -47,9 +47,9 @@ export const CommandSystem = () => createSystem({
   workers: queryComponents({ job: Write(JobAssignment), trip: Write(HaulTrip), age: Read(Age), home: Write(Home) }),
 })
   .withName('CommandSystem')
-  // Handlers live in command-handlers.ts, one small function per command
-  // type; this run function only materializes the query rows into a context
-  // and drains the queue through dispatchCommand.
+  // Handlers live in command-handlers.ts and placement-handlers.ts, one small
+  // function per command type; this run function only materializes the query
+  // rows into a context and drains the queue through dispatchCommand.
   .withRunFunction(({ actions, queue, clock, stockpile, ids, notices, removals, pending, map, buildings, workers }) => {
     // Discard the PREVIOUS tick's pending changes, before anything populates
     // this tick's. It used to happen at the end of PopulationSystem, on the

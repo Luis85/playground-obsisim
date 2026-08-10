@@ -7,8 +7,8 @@ import {
 import { BALANCE } from '../../../src/engine/content/balance';
 import { Building, HaulTrip, Home, JobAssignment, OutputBuffer, Position, Relocation, WorkerSlots, Colonist } from '../../../src/engine/components';
 import { CommandSystem } from '../../../src/engine/systems/command-system';
-import { handleMoveBuilding } from '../../../src/engine/systems/command-handlers';
 import type { BuildingRow, CommandContext, WorkerRow } from '../../../src/engine/systems/command-handlers';
+import { handleMoveBuilding } from '../../../src/engine/systems/placement-handlers';
 import { BUILDINGS } from '../../../src/engine/content/buildings';
 import { HaulSystem, haulerCapacity } from '../../../src/engine/systems/haul-system';
 import { HungerSystem } from '../../../src/engine/systems/hunger-system';

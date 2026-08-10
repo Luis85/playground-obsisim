@@ -5,7 +5,8 @@ import type { SaveGameV6 } from '../shared/save';
 import { LATEST_SAVE_VERSION, MAX_SAVED_COUNTER } from '../shared/save';
 import { BALANCE } from './content/balance';
 import { CommandQueue, IdCounter, RemovalLedger, SimClock, SnapshotStore, Stockpile, WorldMap } from './resources';
-import { gatherEntityFacts, savedBuildingOf, savedColonistOf } from './snapshot-builder';
+import { gatherEntityFacts, savedColonistOf } from './snapshot-builder';
+import { savedBuildingOf } from './snapshot-buildings';
 import { applyRemovals, createColonyWorld, initialSave, refreshEntitySections } from './world';
 
 export type UpdateListener = (snapshot: Snapshot | null, status: EngineStatus) => void;

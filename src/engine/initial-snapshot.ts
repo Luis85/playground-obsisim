@@ -7,8 +7,9 @@ import { BALANCE, colonistEfficiency } from './content/balance';
 import { BUILDINGS } from './content/buildings';
 import { RESOURCES, RESOURCE_IDS } from './content/resources';
 import { OutputBuffer } from './components';
-import type { BuildingFacts, ColonistFacts } from './snapshot-builder';
+import type { ColonistFacts } from './snapshot-builder';
 import { buildEntitySections } from './snapshot-builder';
+import type { BuildingFacts } from './snapshot-buildings';
 import { clampedBuffer, clampedProgress, clampedRelocation } from './spawn';
 import { restoredColonists } from './restore';
 

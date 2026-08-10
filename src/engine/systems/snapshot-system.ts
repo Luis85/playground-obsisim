@@ -4,8 +4,10 @@ import type { ResourceId } from '../../shared/content-types';
 import { RESOURCES, RESOURCE_IDS } from '../content/resources';
 import { Age, Building, Efficiency, HaulTrip, Home, Hunger, InputBuffer, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Colonist, WorkerSlots } from '../components';
 import { NoticeBoard, SimClock, SnapshotStore, StatsHistory, Stockpile, WorldMap } from '../resources';
-import type { BuildingFacts, ColonistFacts } from '../snapshot-builder';
-import { buildEntitySections, buildingFactsOf, colonistFactsOf } from '../snapshot-builder';
+import type { ColonistFacts } from '../snapshot-builder';
+import { buildEntitySections, colonistFactsOf } from '../snapshot-builder';
+import type { BuildingFacts } from '../snapshot-buildings';
+import { buildingFactsOf } from '../snapshot-buildings';
 
 export const SnapshotSystem = () => createSystem({
   clock: ReadResource(SimClock),

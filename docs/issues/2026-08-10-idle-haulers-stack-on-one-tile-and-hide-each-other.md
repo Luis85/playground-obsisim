@@ -6,7 +6,7 @@ severity: minor
 area: app
 increment: 7
 created: 2026-08-10
-source: increment-7 task 12 review (recorded as a minor with a rarity argument), sharpened twice — by the reviewer's correction that it is not a tick race, and by a PR review pointing out that canvas picking cannot reach a hidden colonist
+source: increment-7 task 12 review (recorded as a minor with a rarity argument), sharpened three times — by the reviewer's correction that it is not a tick race, by a PR review pointing out that canvas picking cannot reach a hidden colonist, and by the whole-branch review correcting "resolves on the next dispatch" to "bounded but permanent while idle" and the drawing function from haulSpot to restSpot
 affects:
   - src/app/world/layout.ts
   - src/engine/components.ts
@@ -24,13 +24,14 @@ due: ""
 
 ## What happens
 
-A hauler with no trip stands at `atCol`/`atRow`, and `haulSpot`
-(`src/app/world/layout.ts:294`) draws it there. Those fields are written by
-`cancel()` at **every** trip end, to wherever the trip finished — which for an
-ordinary completed trip is the site it banked into. Idle haulers therefore
-gather on whatever tile they last delivered to, and a colony with several of
-them and no work parks them all on the same doorstep, one dot exactly on top of
-another.
+A hauler with no trip stands at `atCol`/`atRow`, and `restSpot`
+(`src/app/world/layout.ts:314`) draws it there — a pure function of that one
+tile, with no slot allocation at all, unlike the camp band a few lines below
+it. Those fields are written by `cancel()` at **every** trip end, to wherever
+the trip finished — which for an ordinary completed trip is the site it banked
+into. Idle haulers therefore gather on whatever tile they last delivered to,
+and a colony with several of them and no work parks them all on the same
+doorstep, one dot exactly on top of another, at the identical pixel.
 
 Buildings and their crews get slot layout — `heldSlots` fans workers out around
 their post — and haulers deliberately do not: they carry `HAULER_SLOT` (-1) and
@@ -55,6 +56,16 @@ wrong": a player cannot select those haulers on the canvas at all. The tables
 still list every colonist, so no-WebGL parity is intact and the colony stays
 playable — but the world view silently loses a subject the rest of the app
 exposes.
+
+The honest framing, put together from both corrections, is **bounded but
+permanent while idle** — not rare, and not self-resolving on its own timeline.
+It resolves the instant any of the stacked haulers is dispatched again, which
+is why "resolves on the next dispatch" felt true; it just says nothing about
+how long that wait is, and a colony with a genuinely idle fleet can sit there
+for as long as the player leaves it. This stays **Minor**, because the tables
+keep the colony fully playable without the canvas — but the reasoning for that
+rating has to be the bound, not an appeal to rarity that a stalled chain
+falsifies on its own.
 
 ## Suggested resolution
 

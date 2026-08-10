@@ -34,7 +34,8 @@ Increment 4 shipped several tests that passed with the feature entirely removed
 — including one guarding user-visible behaviour that survived deletion against
 all 364 tests. A test that has never been seen to fail is a claim, not evidence.
 
-Two failure modes recur, both found again in increment 5:
+Three failure modes recur — the first two found again in increment 5, the
+third in increment 7:
 
 - **Indistinguishable fixture values.** A test asserting `0.00` where the wrong
   field also holds `0` proves nothing. Increment 5's first draft of the
@@ -44,6 +45,17 @@ Two failure modes recur, both found again in increment 5:
 - **The assertion never reaches the code path.** Increment 5's first
   test-only-system case placed the unknown system *last*, where nothing follows
   it, so a mutation that mis-ranked unknown systems changed nothing observable.
+- **Every clause of a compound boolean needs its own fixture.** The two rules
+  above are not enough on their own: increment 7's whole-branch review found
+  ten defects of this one shape. Each was a single clause inside a condition
+  whose OTHER clause was gated — so mutating the *whole* condition reddened the
+  gated chain regardless of the untested clause, and that whole-condition
+  mutation looked like coverage. `worthMoving`'s `|| movable >= held` (a
+  gated first clause hid an untested escape hatch that could strand goods
+  permanently) and `remainderHome`'s exact-fit boundary (a gated capacity
+  check hid an untested `>` vs `>=`) both shipped this way. Test each clause
+  with a fixture where the *other* clause is false, so this one alone has to
+  carry the assertion.
 
 Where an integration test cannot isolate a rule, export the rule and unit-test
 it directly — `cheapestHaulerToRelease` is exported for exactly that reason,

@@ -194,9 +194,12 @@ export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Com
   // Spec §2.8: the trip ends now, riding the same-tick demolishedIds machinery,
   // rather than lazily when the hauler reaches a tile with nothing on it — up to
   // 13 ticks later, all of them spent booked to a building the snapshot no
-  // longer contains. Outbound only: a returning hauler is carrying its goods to
-  // a site, which the demolition did not move, and a fetching one has taken
-  // nothing yet and simply cancels when its own recheck fails.
+  // longer contains. A returning hauler is left alone: it is carrying its goods
+  // to a site, which the demolition did not move. A fetching hauler whose
+  // SOURCE is this building is cancelled here too, not left to its own
+  // by-tile recheck in `fetchArrival` — nothing has been taken yet, so
+  // `trip.cancel()` disposes of nothing, and waiting would leave it walking to
+  // the vacated tile for up to a whole leg of wasted hauler-ticks.
   //
   // AFTER the two demolished-ledger writes above, deliberately: a loaded hauler
   // resolves a destination through `ctx.sites()`, and this building must already
@@ -204,13 +207,15 @@ export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Com
   // would be sent to bank into it.
   for (const { trip } of ctx.workers) {
     if (trip.phase === 'outbound' && trip.targetId === command.buildingId) turnBackOrCancel(ctx, trip);
+    else if (trip.phase === 'fetching' && trip.sourceSiteId === command.buildingId) trip.cancel();
   }
   // Colonists spawned EARLIER THIS TICK are not in ctx.workers — the query
   // cannot see them until the post-step sync — so a nomad welcomed before this
   // demolition keeps a homeId pointing at the building being removed unless
-  // something reaches them through the pending ledger. Since Task 8 wires nomad
-  // welcoming, ctx.pending.arrivals genuinely fills: recruitWorker and
-  // demolishBuilding in one drain is a reachable pair, not a hypothetical.
+  // something reaches them through the pending ledger. Since increment 6's
+  // Task 8 wires nomad welcoming, ctx.pending.arrivals genuinely fills:
+  // recruitWorker and demolishBuilding in one drain is a reachable pair, not
+  // a hypothetical.
   //
   // AFTER the two demolished-ledger writes above, deliberately:
   // reseatArrivalsOf re-seats through shelterWithRoom, which skips
@@ -293,17 +298,25 @@ export function handleMoveBuilding(ctx: CommandContext, command: Extract<Command
   // `buildingArrival`'s demolition branch a standing tile the hauler never
   // reached.
   //
-  // A returning or fetching hauler is deliberately left alone. Its leg is a
-  // walk between two tiles frozen when the leg began, and it is honestly priced
-  // whatever the building does afterwards — including when the building being
-  // moved IS the depot it is walking to, since a relocating storehouse stops
-  // being a store site and `depositArrival` turns the load for a site that
-  // still exists on arrival. That costs it the rest of the walk, which is the
-  // same price demolition already charges, and changing it is a
-  // gameplay-visible decision rather than this fix's business.
+  // A returning hauler is deliberately left alone. Its leg is a walk between
+  // two tiles frozen when the leg began, and it is honestly priced whatever the
+  // building does afterwards — including when the building being moved IS the
+  // depot it is walking to, since a relocating storehouse stops being a store
+  // site and `depositArrival` turns the load for a site that still exists on
+  // arrival. That costs it the rest of the walk, which is the same price
+  // demolition already charges, and changing it is a gameplay-visible decision
+  // rather than this fix's business.
+  //
+  // A fetching hauler whose SOURCE is the building being moved is cancelled,
+  // not left alone: nothing has been taken yet, so `trip.cancel()` disposes of
+  // nothing, and leaving it walking to the vacated tile would waste up to a
+  // whole leg of hauler-ticks before `fetchArrival`'s own by-tile recheck
+  // caught it.
   for (const { trip } of ctx.workers) {
     if (trip.phase === 'outbound' && trip.targetId === command.buildingId) {
       trip.startLeg('outbound', legPositionOf(trip), to, BALANCE.haulTilesPerTick);
+    } else if (trip.phase === 'fetching' && trip.sourceSiteId === command.buildingId) {
+      trip.cancel();
     }
   }
   ctx.notices.succeed(`Moved the ${BUILDINGS[found.building.defId].name}.`);

@@ -181,6 +181,14 @@ function buildingArrival(ctx: TickContext, trip: HaulTrip, capacity: number): vo
   // Demolished while this hauler walked. An empty trip simply ends; a hauler
   // holding a load is still standing on the map and perfectly able to carry it,
   // so it walks that load somewhere rather than having it teleported away.
+  //
+  // No live path reaches this branch: `handleDemolishBuilding` already walks
+  // every outbound trip targeting the building it removes and turns it back
+  // (or cancels it) that same tick, before HaulSystem runs, so an outbound
+  // trip's target is never freshly gone by the time it could arrive here.
+  // Kept anyway as defense-in-depth — a demolished target must never be able
+  // to silently drop a load — and if some future caller ever does reach it,
+  // it must go through `turnForHome`, exactly as below.
   if (row === undefined) {
     if (trip.amount === 0) trip.cancel();
     else turnForHome(ctx, trip, { col: trip.legToCol, row: trip.legToRow });

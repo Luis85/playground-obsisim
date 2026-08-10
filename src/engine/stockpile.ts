@@ -170,9 +170,10 @@ export class Stockpile {
   /**
    * Moves everything `fromSiteId` holds into `toSiteId`, saturating at the
    * same ceiling every other bank does, then empties the source. For a
-   * storehouse leaving play (demolished, or beginning a relocation) with
-   * stock still in it — the goods still belong to the colony, so they land
-   * back on a site rather than vanishing.
+   * storehouse demolished with stock still in it — the goods still belong to
+   * the colony, so they land back on a site rather than vanishing. A moving
+   * storehouse is not this call's business: its contents travel with it, so
+   * nothing here is ever invoked for a relocation.
    */
   spillTo(toSiteId: number, fromSiteId: number): void {
     const from = this.sites.get(fromSiteId);

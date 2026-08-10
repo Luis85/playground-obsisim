@@ -8,7 +8,7 @@ increment: 5
 created: 2026-08-09
 source: Codex review on PR
 affects:
-  - src/engine/systems/command-handlers.ts
+  - src/engine/systems/placement-handlers.ts
 tags:
   - game-design
   - balance

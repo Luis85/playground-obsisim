@@ -6,7 +6,7 @@
 // relocationTicks (the relocation-downtime law) and ticksForDistance (the
 // floor-and-ceiling arithmetic it shares with haulTicks in haul.ts) live
 // here too, but are a separate law with a single caller
-// (command-handlers.ts) — not part of the three-consumer contract above.
+// (placement-handlers.ts) — not part of the three-consumer contract above.
 // Imports nothing, so src/shared/ siblings (save.ts, save-migration.ts,
 // haul.ts) can import from it without cycles.
 

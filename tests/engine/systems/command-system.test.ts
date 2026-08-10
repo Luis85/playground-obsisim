@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { IRuntimeWorld } from 'sim-ecs';
+import { SystemError, type IRuntimeWorld } from 'sim-ecs';
 import {
   CommandQueue, IdCounter, MAX_PENDING_COMMANDS, NoticeBoard, PendingChanges, RemovalLedger, SimClock, SnapshotStore, Stockpile,
   WorldMap,
@@ -1256,6 +1256,60 @@ describe('CommandSystem', () => {
     // pass a conservation assertion while the goods walked to a demolished mill.
     expect(stockpile.getAt(DEPOT_ID, 'wheat')).toBe(DEPOT_WHEAT);
     expect(colonyTotal(world, 'wheat')).toBe(DEPOT_WHEAT);
+  });
+
+  it('cancels a fetching hauler when its source storehouse is moved out from under it', async () => {
+    // §2.7's "stops being one" rule, unapplied to the move loop: it matched an
+    // outbound trip by `targetId`, so a hauler still WALKING TO FETCH from a
+    // storehouse that moves was left alone. Nothing is ever LOST either way —
+    // `fetchArrival`'s own by-tile recheck cancels it clean on arrival — so the
+    // only thing this test can show is the WASTED TICKS: cancelled on the
+    // move's own tick, not the 9 more it would otherwise walk toward a tile the
+    // depot no longer stands on. 11 ticks is deliberately not the 2 ticks
+    // walked before the move, not ONE_LOAD, and not any leg length in this
+    // file's other cases, so "cancelled now" and "cancelled on arrival" cannot
+    // be confused for one another.
+    const { world, tick, dispatch } = await millAndDepot();
+    let systemErrors = 0;
+    world.eventBus.subscribe(SystemError, () => { systemErrors++; });
+    expect(haulerTrip(world)).toMatchObject({ phase: 'fetching', sourceSiteId: DEPOT_ID, ticksLeft: 11 });
+
+    await tick(); await tick(); // partway into the 11-tick leg, nowhere near arrival
+    expect(haulerTrip(world).ticksLeft).toBe(9);
+
+    await dispatch({ type: 'moveBuilding', buildingId: DEPOT_ID, to: { col: 21, row: 12 } });
+    // ON THIS TICK: idle, not still fetching with 9 ticks left to walk off a
+    // tile nothing stands on any more.
+    expect(haulerTrip(world)).toMatchObject({ phase: 'idle', targetId: null, sourceSiteId: CAMP_SITE_ID, amount: 0 });
+    expect(colonyTotal(world, 'wheat')).toBe(DEPOT_WHEAT);
+    expect(systemErrors).toBe(0);
+  });
+
+  it('cancels a fetching hauler when its source storehouse is demolished under it', async () => {
+    const { world, tick, dispatch } = await millAndDepot();
+    let systemErrors = 0;
+    world.eventBus.subscribe(SystemError, () => { systemErrors++; });
+    expect(haulerTrip(world)).toMatchObject({ phase: 'fetching', sourceSiteId: DEPOT_ID, ticksLeft: 11 });
+
+    // The mill is unstaffed before the demolition — not because staffing
+    // matters to a fetch already under way (only the outbound arrival
+    // rechecks it, per §2.5 step 3), but because `spillTo` lands the depot's
+    // whole stock at the camp in the very same command that demolishes it,
+    // and a still-staffed mill would then legitimately claim a FRESH supply
+    // job from the camp on this same tick — a correct redispatch that would
+    // make "idle" the wrong thing to assert for what this test checks.
+    await dispatch({ type: 'unassignWorker', buildingId: MILL_ID });
+    expect(haulerTrip(world).ticksLeft).toBe(10); // this dispatch also costs a tick
+
+    await tick(); await tick(); // partway into the 11-tick leg, nowhere near arrival
+    expect(haulerTrip(world).ticksLeft).toBe(8);
+
+    await dispatch({ type: 'demolishBuilding', buildingId: DEPOT_ID });
+    // ON THIS TICK, and the depot's own stock (spilled to the camp by the
+    // demolition itself) shows nothing was taken by the cancelled fetch.
+    expect(haulerTrip(world)).toMatchObject({ phase: 'idle', targetId: null, sourceSiteId: CAMP_SITE_ID, amount: 0 });
+    expect(colonyTotal(world, 'wheat')).toBe(DEPOT_WHEAT);
+    expect(systemErrors).toBe(0);
   });
 
   it('a cancelled trip disposes of its load by whether a hauler is left to walk', async () => {

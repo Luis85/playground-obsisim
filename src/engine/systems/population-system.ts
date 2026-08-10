@@ -64,6 +64,11 @@ export const PopulationSystem = () => createSystem({
             // tick early, handing sumWorkPower's full placementFactor to
             // residents whose house is still mid-move for a tick genuinely
             // charged as downtime.
+            //
+            // This boundary is no longer private to this call site: it is
+            // `isRelocating` in src/shared/placement.ts, shared by six readers
+            // across the engine (ProductionSystem, buildingState, both shelter
+            // lists here, needOf) — changing it here changes all of them.
             relocating: isRelocating(relocation.ticksLeft),
           })),
         // Buildings constructed THIS tick (PendingChanges.constructed):

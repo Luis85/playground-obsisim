@@ -117,6 +117,48 @@ simulated production chains — in tables and, since Increment 2, a live
   at the old value. §4.1 of the increment 6 spec has the curve, the sweep the
   value was picked from, and the two structural fixes still worth having
 
+## Increment 7 — Two-Way Haul & Storage
+
+- Goods stop teleporting in the other direction too. A recipe's inputs are no
+  longer paid out of the colony store from anywhere on the map: flour has to be
+  **carried** to the bakery, and a building with nothing to work with sits at
+  **Waiting for input** until a hauler brings some
+- Every producing building now has an in-tray beside its out-tray, and a hauler
+  makes one round trip out of two jobs — walk the inputs out, load whatever that
+  building has finished, carry it home. A well-sited pair of buildings gets both
+  halves of its haulage for the price of one walk; measured, 88–98% of supply
+  trips come home loaded
+- So distance costs on the way in as well as out, which is the whole point: a
+  mill or a bakery in the far corner is now genuinely worse than one on the camp
+  band, where before only raw producers paid for where you put them. One hauler
+  serving a processor reaches about **half as far** as one serving a forester
+- **Storehouses** are a third kind of building — 20 wood and 10 planks, no staff
+  needed — and a second place goods may be dropped and picked up, so a distant
+  cluster can keep its stock beside itself instead of walking everything to the
+  camp. Contents move to the camp if you demolish one and travel with it if you
+  move it, and wealth, meals and build costs count depot stock exactly as they
+  count camp stock: one ledger, several places
+- Both buffers are legible with no canvas at all: an **In** column and a
+  `Waiting for input` state in the Buildings table, both buffers in the selection
+  panel, a storehouse's fill as `held / capacity`, and the Economy view naming
+  the **input backlog** — units short, and how many buildings are idle for want
+  of them — beside the output backlog it already named
+- On the world view, a depot glyph with a fill ring showing how full it is, and a
+  hauler carrying goods *in* drawn distinguishably from one carrying goods *out*,
+  so flow direction reads at a glance. Each has its own legend entry
+- Save v6 carries input buffers and storehouse contents; a v5 colony opens as
+  itself, with empty in-trays, no depots, and its whole stockpile at the camp
+- **Measured, and nothing retuned.** `npm run balance:report` re-ran increment
+  5's entire distance/hauler sweep for raw producers, and all sixteen rows are
+  byte-identical to the day they were taken — this increment did not touch what
+  it did not mean to. The storehouse measured worse than its own design argued:
+  nothing ever empties a depot, so it pays once (about 26 planks) and then stops,
+  and beside a camp-fed building it is a small net loss. It still wins where the
+  spec claims it should — beside a producer feeding a consumer, out past leg 11,
+  from the third hauler onward. §4 of the increment 7 spec records both halves,
+  the one constant that had a case for moving, and the second measurement that
+  stopped it moving
+
 ## Development
 
 - `npm install`
@@ -147,6 +189,10 @@ simulated production chains — in tables and, since Increment 2, a live
   — §3.1 checks every acceptance criterion against what shipped, §4 records
   what the harness measured
 - Increment 6 plan: `docs/superpowers/plans/2026-08-08-increment-6-survival-and-population.md`
+- Increment 7 spec: `docs/superpowers/specs/2026-08-09-increment-7-two-way-haul-and-storage.md`
+  — §4 records what the harness measured, including the constant that was
+  retuned on a branch and measured back out again
+- Increment 7 plan: `docs/superpowers/plans/2026-08-09-increment-7-two-way-haul-and-storage.md`
 - Issues: `docs/issues/` — findings judged real and not fixed in the
   increment that found them; each is parented into the product backlog below
 - Process: `docs/process/agent-workflow.md` — working agreements for

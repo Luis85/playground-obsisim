@@ -467,7 +467,7 @@ describe('hauler placement', () => {
     expect(crewSpots.has(`${hauler.x.toFixed(2)},${hauler.y.toFixed(2)}`)).toBe(false); // ...and the hauler stands apart from all of them
   });
 
-  it('parks an outbound hauler at the camp only once its target has vanished (present-target control)', () => {
+  it('clears an outbound hauler\'s post once its target has vanished (present-target control)', () => {
     const present = layoutWorld(haulSnapshot({ haulTargetId: 1 }));
     const stillOutbound = present.colonists.find((w) => w.id === 20)!;
     const cell = present.buildings.find((b) => b.id === 1)!;
@@ -475,7 +475,40 @@ describe('hauler placement', () => {
     expect(stillOutbound.y).toBeGreaterThan(cell.row + 0.5); // ...not camped
 
     const vanished = layoutWorld(haulSnapshot({ haulTargetId: 99 }));
-    expect(vanished.colonists.find((w) => w.id === 20)!.at).toBeNull(); // only the vanished target falls back to camp
+    // No post to be `at` once the target is gone from the snapshot — `at` is
+    // read only by `heldSlots`, which skips HAULER_SLOT entries anyway. This
+    // says nothing about WHERE it is drawn; the case below covers that.
+    expect(vanished.colonists.find((w) => w.id === 20)!.at).toBeNull();
+  });
+
+  it('draws a hauler on its own leg, not at the camp, when its target vanishes mid-leg', () => {
+    // Reviewer repro: a hauler mid-leg (2 of 4 ticks left) between a depot and
+    // a building door — neither leg endpoint is the camp — whose target
+    // building has been demolished out of the snapshot entirely (§2.8:
+    // `turnBackOrCancel` starts a genuine leg but never clears `targetId`, and
+    // the demolish loop leaves a `returning` trip's `targetId` dangling). The
+    // leg the sim is walking is still real; only the building is gone. Three
+    // clearly distinct tiles — depot, door, camp — and the interpolated point
+    // sits at none of them, so a reader of the wrong field lands somewhere
+    // visibly wrong rather than accidentally right.
+    const legFrom = { col: 14, row: 9 }; // a depot, not the camp
+    const legTo = { col: 8, row: 4 }; // the demolished building's door
+    const layout = layoutWorld(makeSnapshot({
+      buildings: [], // the target is gone: no building 1 in this snapshot at all
+      colonists: [makeWorker(30, {
+        hauling: true, haulTargetId: 1, haulPhase: 'returning',
+        haulTicksLeft: 2, haulLegTicks: 4,
+        haulLegFromCol: legFrom.col, haulLegFromRow: legFrom.row,
+        haulLegToCol: legTo.col, haulLegToRow: legTo.row,
+      })],
+    }));
+    const hauler = layout.colonists.find((w) => w.id === 30)!;
+    const travelled = 0.5; // (legTicks - ticksLeft) / legTicks = (4 - 2) / 4
+    expect(hauler.x).toBeCloseTo(legFrom.col + (legTo.col - legFrom.col) * travelled + 0.5); // 11.5
+    expect(hauler.y).toBeCloseTo(legFrom.row + (legTo.row - legFrom.row) * travelled + 1.05); // 7.55
+    expect(hauler.x).toBeGreaterThan(CAMP_COLS); // nowhere near the camp band
+    expect(hauler.at).toBeNull();
+    expect(hauler.travelling).toBe(true); // sim pace, not the cosmetic reassignment walk
   });
 
   it('a former hauler joining the crew at its old target never keeps the hauler sentinel slot', () => {

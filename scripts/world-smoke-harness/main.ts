@@ -148,11 +148,29 @@ const depotHolding = (over: Partial<BuildingSnapshot> = {}) => [building(2, 'sto
   workerSlots: 0, state: 'storing', storage: 60, stored: 15, ...over,
 })];
 
-const storeScene = (tick: number, depot: BuildingSnapshot[], hauler: Partial<ColonistSnapshot> = {}) => snap(tick,
-  [building(1, 'bakery', 4, 1, { workers: 1, state: 'waitingForInput' }), ...depot],
+const storeScene = (
+  tick: number, depot: BuildingSnapshot[], hauler: Partial<ColonistSnapshot> = {}, extra: BuildingSnapshot[] = [],
+) => snap(tick,
+  [building(1, 'bakery', 4, 1, { workers: 1, state: 'waitingForInput' }), ...depot, ...extra],
   [worker(30, {
     hauling: true, haulPhase: 'idle', haulAtCol: CAMP_TILE.col, haulAtRow: CAMP_TILE.row, ...hauler,
   })]);
+
+/**
+ * A NON-store building beside the depot: `storage` stays 0 (the `building()`
+ * default) in every phase below, only `stored` moves — the fixture the fill
+ * gauge's `storage > 0` gate has never had. Without it, nothing distinguishes
+ * "no gauge drawn" from "a gauge always drawn, reading near zero": a track
+ * ring at full radius and a near-invisible fill look the same as no ring at
+ * all in a screenshot diff, so a gate that always passed would still leave
+ * every existing check green. `stored` on a non-store building is not a state
+ * play ever produces — it is forced here purely to pin the gate against a
+ * player-facing symptom (a phantom ring on every tile) that would otherwise
+ * ship silently. id 3 and its own tile, distinct from the bakery, the depot
+ * and the camp.
+ */
+const NEIGHBOR = { col: DEPOT.col + 1, row: DEPOT.row };
+const neighborAt = (stored: number) => [building(3, 'forester', NEIGHBOR.col, NEIGHBOR.row, { stored })];
 
 // Half way along a 2-tick leg into the bakery's door, carrying four units.
 // Only the leg's `from` end differs between the two.
@@ -228,7 +246,7 @@ const phases: Array<() => void> = [
   () => renderer.sync(homeScene(3, { homeId: 1 })),                 // 17: colonist 4 moves in — ONLY its homeId changes
   () => renderer.sync(homeScene(4, { homeId: 1, stage: 'child' })), // 18: the same colonist becomes a child
   () => renderer.sync(homeScene(5, { homeId: 1, stage: 'elder' })), // 19: the same colonist becomes an elder
-  // Eight store phases, one change each — see storeScene above.
+  // Ten store phases, one change each — see storeScene above.
   () => renderer.sync(storeScene(6, [])),                                          // 20: baseline — a bakery and one hauler idle at camp
   () => renderer.sync(storeScene(7, depotHolding({ state: 'unstaffed' }))),         // 21: a storehouse appears, in a state it shares with every other def
   () => renderer.sync(storeScene(8, depotHolding())),                              // 22: ONLY the depot's state changes — unstaffed to storing
@@ -238,7 +256,14 @@ const phases: Array<() => void> = [
   () => renderer.sync(storeScene(12, depotHolding({ stored: 45 }), { ...SUPPLY_FROM_DEPOT, haulPickedUp: true })), // 26: ONLY `haulPickedUp` changes
   () => renderer.sync(storeScene(13, depotHolding({ stored: 45 }))),               // 27: the trip ends — the hauler is idle at the camp
   () => renderer.sync(storeScene(14, depotHolding({ stored: 45 }), { haulAtCol: DEPOT.col, haulAtRow: DEPOT.row })), // 28: ONLY where it rests changes
-  () => renderer.dispose(),                                         // 29
+  // A non-store building appears beside the depot, `stored` forced to 0 — the
+  // gate fixture (see NEIGHBOR/neighborAt above). Nothing else in the scene
+  // moves from phase 28, but a whole new building appearing is itself a
+  // many-pixel change, so this frame carries no check of its own — the same
+  // role phases 20, 24 and 27 already play.
+  () => renderer.sync(storeScene(15, depotHolding({ stored: 45 }), { haulAtCol: DEPOT.col, haulAtRow: DEPOT.row }, neighborAt(0))),  // 29
+  () => renderer.sync(storeScene(16, depotHolding({ stored: 45 }), { haulAtCol: DEPOT.col, haulAtRow: DEPOT.row }, neighborAt(50))), // 30: ONLY the neighbor's `stored` changes, 0 -> 50 (its `storage` stays 0)
+  () => renderer.dispose(),                                         // 31
 ];
 
 window.__step = (index: number) => {

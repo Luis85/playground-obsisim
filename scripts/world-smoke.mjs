@@ -272,7 +272,21 @@ const idleAtDepot = await shot();
 // frames are identical — the colonist a player watches teleport home.
 check('an idle hauler resting at a depot is drawn at the depot, not back at the camp', !idleAtDepot.equals(idleAtCamp));
 
-await step(29); // dispose()
+await step(29); // a non-store building appears beside the depot, `stored` forced to 0
+await wait(400);
+const neighborEmpty = await shot();
+
+await step(30); // ONLY change: that building's `stored`, 0 -> 50 (its `storage` stays 0)
+await wait(400);
+const neighborFull = await shot();
+// The `storage > 0` gate has no fixture of its own elsewhere: a smoke check
+// only pins that the gauge tracks `stored` (see above), which stays green
+// even if the gauge were drawn on every building. This building's `storage`
+// never leaves 0, so with the gate intact its `stored` moving must draw
+// nothing — the two frames must be pixel-identical.
+check('the fill gauge stays hidden on a non-store building however far `stored` moves (the `storage > 0` gate)', neighborFull.equals(neighborEmpty));
+
+await step(31); // dispose()
 await wait(300);
 check('dispose() raises no errors', pageErrors.length === 0);
 

@@ -314,8 +314,17 @@ function restSpot(w: ColonistSnapshot): Spot | null {
 
 /**
  * Haulers stand on their leg, or at the depot a finished or cancelled trip
- * left them at. Everyone else falls through to the camp allocation below,
- * which is also where a hauler whose target was demolished mid-trip ends up.
+ * left them at. Only an idle hauler (no leg running) can fall through to the
+ * camp allocation below, and only when `restSpot` says its resting tile IS
+ * the camp.
+ *
+ * A hauler whose target has been demolished stays on its own leg rather than
+ * falling through: `turnBackOrCancel` and the demolish loop
+ * (placement-handlers.ts) can leave `targetId` pointing at a building that no
+ * longer exists while the hauler is still genuinely walking a leg it froze
+ * before the demolition — the leg is real even once the target is gone, so
+ * `haulSpot` still answers it correctly. `at: null` here means only "no slot
+ * machinery", never "camp".
  *
  * Its own function (not inlined in layoutWorld) purely to keep that
  * orchestrator's complexity within the project's gate.
@@ -328,7 +337,10 @@ function placeHaulers(sorted: ColonistSnapshot[], cellById: Map<number, PlacedBu
       if (rest !== null) placements.set(w.id, { at: null, slot: HAULER_SLOT, spot: rest });
       continue;
     }
-    if (w.haulTargetId === null || !cellById.has(w.haulTargetId)) continue; // target demolished: the camp claims them
+    if (w.haulTargetId === null || !cellById.has(w.haulTargetId)) {
+      placements.set(w.id, { at: null, slot: HAULER_SLOT, spot: haulSpot(w) });
+      continue;
+    }
     placements.set(w.id, { at: w.haulTargetId, slot: HAULER_SLOT, spot: haulSpot(w) });
   }
 }

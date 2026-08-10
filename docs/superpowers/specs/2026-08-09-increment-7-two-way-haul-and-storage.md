@@ -993,9 +993,14 @@ the other is decided and deliberately not fixed.
    produces exactly one notice; the hauler leaves the camp **carrying**,
    reaches the bakery, unloads, and returns with whatever bread was waiting —
    visible as a single round trip on the canvas.
-3. A storehouse built beside a distant cluster measurably raises what that
-   cluster delivers per tick, through the same number of haulers, against the
-   identical colony without it.
+3. A storehouse built beside a distant *producer-feeding-consumer* cluster (leg
+   ≈11–13 from the camp, the placement §1 argues for) raises what that cluster
+   delivers, through the same number of haulers, against the identical colony
+   without it, over the horizon §4.3 measured: a flat one-off gain — not a
+   sustained per-tick rate — that is largest early and decays toward zero the
+   longer the run continues. It does **not** hold beside a camp-fed processor,
+   where §4.3 measures the identical comparison as a **net loss**. See §4.3 for
+   the numbers and for why the mechanic still ships despite them.
 4. With zero haulers assigned, every input-consuming building eventually stops,
    and the Economy view states how many are idle for want of inputs and how
    many units are short — separately from the output backlog it already names.
@@ -1010,9 +1015,11 @@ the other is decided and deliberately not fixed.
 6. A v5 save loads as a v6 colony with empty input buffers, no storehouses, and
    its stockpile intact at the camp — buildings exactly where increment 6 left
    them, colonists exactly as old.
-7. Demolishing a storehouse holding goods leaves `colonyWealth` unchanged
-   across that tick and says where the goods went; demolishing a producer holding
-   goods loses them and says so.
+7. Demolishing a storehouse holding goods moves `colonyWealth` by exactly the
+   refunded construction cost and no more — the goods themselves are neither
+   created nor destroyed, only relocated to the camp — and the notice says
+   where they went; demolishing a producer holding goods loses them and says
+   so.
 8. Moving or demolishing any building mid-trip, of either kind, resolves without
    losing or duplicating a single unit of goods.
 9. The colony remains fully playable from the tables with no canvas:
@@ -1040,7 +1047,7 @@ contradicts §1 rather than quietly editing §1 to agree.
 
 | constant | value | outcome | the measurement behind it |
 | --- | ---: | --- | --- |
-| `inputBufferCap` | 12 | **Validated — for a reason the shipped comment did not give, and against a retune that measured better on one fixture and worse on another.** | It is not runway, it is *concurrency*: a supply hauler claims its whole load against the target's in-tray, so `inputBufferCap / haulCarryCapacity` is how many loads may be walking toward one building at once. At 12 that caps a far processor at **72%** of ceiling however many haulers are hired; at 24 the same run reads **92%**. It is also, today, the dispatcher's only fairness floor — §4.2. |
+| `inputBufferCap` | 12 | **Validated — for a reason the shipped comment did not give, and against a retune that measured better on one fixture and worse on another. Do not raise before `OBS-7-01` lands.** | It is not runway, it is *concurrency*: a supply hauler claims its whole load against the target's in-tray, so `inputBufferCap / haulCarryCapacity` is how many loads may be walking toward one building at once. At 12 that caps a far processor at **72%** of ceiling however many haulers are hired; at 24 the same run reads **92%** on a solo processor but **halves the chain's bread output** on a two-consumer fixture (§4.2) — because this constant is, today, the dispatcher's *only* fairness floor. Until `OBS-7-01` gives the ranking a deliberate fairness term, raising this constant removes the accidental one before its replacement exists — §4.2. |
 | `storehouseCapacity` | 60 | **Validated as a magnitude. The mechanic it sizes is incomplete.** | The depot is full — 60 of 60 — in every measured run, and its benefit is a one-off: **+26 / +24 / +28** planks at 600 / 1,200 / 2,400 ticks. At capacity 240 it is full at 240 and the one-off is proportionally bigger (+114 planks at 2,400 ticks). Raising a capacity does not create the flow that is missing (§4.3). |
 | `storehouse` cost | 20 wood, 10 planks | **Validated, unchanged.** | A crossover against hiring another hauler does exist — **leg ≈ 11, and only from the third hauler onward** — so the depot neither never-wins nor wins-everywhere. The window is narrow, and cutting the price would only make a mechanic that stops paying after 600 ticks cheaper to buy. |
 | `minSupplyUnits` | 2 | **Validated, unchanged.** | Not the binding term in any reading taken: the far processor's plateau is in-tray concurrency, the depot's decay is a missing flow, and q3's starvation is the ranking. Nothing measured here moves it. |

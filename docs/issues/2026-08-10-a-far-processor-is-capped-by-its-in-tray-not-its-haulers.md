@@ -100,11 +100,17 @@ that point, and the numbers above are the ones to re-measure against.
 
 Three things the re-measurement must do that this one could not:
 
-- **Read a chain, not only a single camp-fed processor.** The gradient
-  instrument is a solo sawmill because `StageResult.ceiling` is exact there and
-  `share` is comparable to increment 5's raw sweep row for row. It is a good
-  instrument and a poor model of a colony, and this is the case where the
-  difference decided the answer.
+- **Use a two-consumer fixture, not only a single camp-fed processor.** The
+  entire reversal recorded above turned on solo-versus-chain: at 24 a solo
+  sawmill reads 92% of ceiling while a mill-feeding-a-bakery chain's bread
+  output falls by up to 47%. A re-measurement that repeats the original
+  single-processor gradient run, with no second consumer competing for the
+  same haulers, would reach the original 92%-looks-fine conclusion again and
+  miss the reason 12 stayed shipped. The gradient instrument is a solo sawmill
+  because `StageResult.ceiling` is exact there and `share` is comparable to
+  increment 5's raw sweep row for row — it is a good instrument and a poor
+  model of a colony, and this is the case where the difference decided the
+  answer, so the chain fixture is not optional colour on top of it.
 - **Watch the in-tray's end-of-run occupancy.** Goods in an in-tray are out of
   the spendable ledger, out of `colonyWealth` and out of `mealsPerHead`, and
   they die with the building on demolition. At 48 the far sawmill parked 30

@@ -50,9 +50,14 @@ it directly — `cheapestHaulerToRelease` is exported for exactly that reason,
 because the integration test could not separate its phase term from its
 tiebreak.
 
-**No vitest test may import `src/app/world/renderer.ts` or `graphics-cache.ts`.**
-Excalibur throws on import outside a browser. Their only coverage is
-`npm run smoke:world`, which is why that suite's strength is load-bearing.
+**No vitest test may import `src/app/world/renderer.ts`, `graphics-cache.ts`
+or `glyphs.ts`.** Excalibur throws on import outside a browser. Their only
+coverage is `npm run smoke:world`, which is why that suite's strength is
+load-bearing. The list grows whenever the renderer is split for the line
+budget — `glyphs.ts` joined it in increment 7 — so extend it in the same
+commit as the split, or the rule silently stops covering the code it exists
+for. `src/app/world/layout.ts` is deliberately NOT on it: it is plain
+TypeScript, it is where the geometry belongs, and it is unit-tested.
 
 **Change one thing per fixture phase**, and say so in the phase's name when it
 must change several. Nearly every smoke check has the shape

@@ -1,0 +1,712 @@
+# Spec: Increment 8 — Storehouse-to-Storehouse Transfer
+
+**Status:** Draft
+**Predecessor:** `docs/superpowers/specs/2026-08-09-increment-7-two-way-haul-and-storage.md`
+**Backlog Feature:** `docs/requirements/Storehouse-to-Storehouse Transfer.md`
+**Issues closed:** OBS-7-01 (in scope, first). OBS-7-02 is measured, not moved.
+
+---
+
+## 1. Why this increment exists
+
+Increment 7 shipped the storehouse and then measured it, and §4.3 records that
+the two disagree. §1 sold a depot as an investment. It measures as a **one-off
+buffer**: +26 / +24 / +28 planks at 600 / 1,200 / 2,400 ticks — flat in
+absolute terms, so as a *rate* it decays to zero. Beside a camp-fed processor it
+is a 10% net loss.
+
+The cause named there is structural rather than a magnitude: **a store site can
+be filled by a building's output but never emptied.** `destinationFor` resolves
+source-first and `remainderHome` routes an undelivered load back to its own
+source, both deliberately, so nothing in the game moves goods from one store
+site to another. A depot beside a chain silts up with that chain's finished
+good, reaches 60 of 60, and stops participating. No value of
+`storehouseCapacity` creates a movement that does not exist — 240 was tried and
+the depot is full at 240 too.
+
+This increment supplies the missing flow.
+
+### 1.1 What a storehouse actually becomes, stated so it can be falsified
+
+Increment 7's §1 called a storehouse "a second place to put things". That
+framing is why §4.3 could not find the value it promised, and it is replaced
+here rather than repeated.
+
+**A storehouse is a pipeline stage.** It earns its keep at both ends of a
+chain, and in both cases by *decoupling a short hop from a long haul*:
+
+- **Outbound.** A producer's output goes into the depot on a short hop, so the
+  producer stops sitting in `outputFull` waiting for a hauler to come back from
+  the camp. The long depot → camp leg is then amortised behind it, on a hauler
+  that is not blocking anything.
+- **Inbound.** Camp stock is staged into the depot on the long haul, and the
+  depot → consumer hop is short and turns over fast. The consumer is fed
+  **without occupying in-tray concurrency** — which is precisely OBS-7-02's
+  finding, that a far processor is "capped by its in-tray rather than by its
+  haulers". `inputBufferCap: 12` allows two loads in flight to a building; a
+  depot beside it holds 60 that are not in flight.
+
+**The prediction, and §3 makes it an acceptance criterion:** if a depot is a
+pipeline stage rather than a buffer, its advantage over no depot must **grow
+with the horizon**. §4.3's 26 / 24 / 28 is what a buffer looks like. If this
+increment's numbers are also flat, the mechanic did not land, and §4 will say so
+in §4.3's own manner rather than retuning a constant until the percentage looks
+better.
+
+The mechanism, not only the outcome, is instrumented: `StageResult.stalledTicks`
+(ticks in `outputFull`) and `waitingForInputTicks` already exist, so "the
+producer stopped stalling" and "the consumer stopped starving" are separately
+observable from the throughput number they are supposed to explain.
+
+### 1.2 Product decisions taken for this increment
+
+- **The fairness floor (OBS-7-01) is in scope, and it lands first.** Not
+  because it is adjacent, but because it eats this feature's value. The staging
+  half exists to relieve the in-tray cap; the in-tray cap is OBS-7-02; OBS-7-02
+  is blocked on OBS-7-01. Shipping transfer on a ranking that hands every trip
+  to the nearer consumer means the far building's depot never gets staged, the
+  feature measures as a wash, and the wash is attributed to the feature.
+  §2.1 specifies it and §4.1 measures it **on its own, with no transfer code in
+  the tree**, so the two changes have one variable each.
+- **The trigger is pull, with exactly one push**, and the push is
+  direction-asymmetric. §2.4.
+- **Both halves ship.** Pull-toward-demand alone leaves a depot silting up with
+  finished goods that crowd out the staging it exists for — capacity is measured
+  across every resource, so the §4.3 defect survives a pull-only increment in a
+  slower form. Push alone leaves the far consumer starving.
+- **`inputBufferCap` does not move.** OBS-7-02 asks for a retune; this
+  increment answers it with a measurement instead. If transfer makes the cap
+  non-binding, that issue closes on a finding rather than on a constant.
+- **The camp-fed-processor loss is measured, not rescued.** §4.2 keeps the
+  configuration that lost 10% and reports whatever it shows, including worse.
+  Its named cause — a depot strands haulers far from the stock, so the next
+  fetch leg lengthens (2–8% → 17–20% of working hauler-ticks) — is if anything
+  aggravated by giving haulers more reasons to end a trip out there. No rule is
+  added to rescue it; §4.3 will record it.
+
+### 1.3 What this makes harder, deliberately
+
+- **A third kind of work competes for one pool of haulers.** §2.6 answers this
+  structurally rather than by tuning: transfer is offered **last**, so it can
+  only consume hauler-ticks that would otherwise be idle. What it still costs is
+  *occupancy* — a hauler mid-transfer is unavailable for a supply job that
+  arises next tick — and §2.6 names that cost rather than denying it.
+- **Two store sites and a camp are a machine for moving goods in circles**
+  unless the rule forbids it. §2.4 makes circles inexpressible rather than
+  unattractive, and states the argument.
+- **The guarantee §2.5 of increment 7 rests on is exactly the one a transfer
+  looks like violating.** §2.5 below is entirely about keeping it.
+
+---
+
+## 2. Requirements
+
+### 2.1 The fairness floor, and the state it may not use
+
+`compareSupplyCandidates` ranks on movable stock, then the whole
+hauler → source → building route, then building id, then site id. There is no
+fairness term and no ageing, so while the nearer hungry building can still take
+a load it wins every comparison and takes every trip. Measured: a bakery at leg
+8 behind a mill at leg 6 makes **zero** bread in 600 ticks; exchange the tiles
+and it makes 108.
+
+**OBS-7-01's own suggested resolution is partly wrong, and the correction is
+load-bearing.** The issue offers ageing as the classic fix and says it "could be
+derived rather than stored: `waitingForInputTicks` is already a live component
+field and already published." It is not. `waitingForInputTicks` is an
+accumulator in the *balance harness* (`StageResult`), summed by sampling
+snapshot status each tick. No component carries how long a building has been
+waiting, and adding one would be memory between ticks — which §2.6 of increment
+7 forbids by name, because it is what keeps dispatch a pure function of world
+state and independent of entity iteration order.
+
+So the fix is the issue's second shape, a starvation term derived entirely from
+live state:
+
+> **A candidate is *starving* when the building holds zero of the resource that
+> candidate would deliver**, and *topping up* otherwise. Starving outranks
+> topping up, ahead of every existing term. Within a band nothing changes.
+
+Derived from `InputBuffer.amounts` and the resource `needOf` already chose. No
+new state, no new component, no iteration-order dependence, and the tie-break
+chain still ends at a site id.
+
+**Today this is indistinguishable from "the in-tray is empty", and the
+distinction is still the one to implement.** Every recipe in
+`src/engine/content/buildings.ts` has zero or one input, so `shortestOf` always
+returns that one input and the two phrasings coincide. Stating the rule
+per-candidate rather than per-building costs nothing now and is what stops it
+quietly meaning the wrong thing the first time a recipe gains a second input —
+at which point "holds zero of *any* input" would rank a building starving on the
+strength of a resource this particular candidate is not carrying.
+
+The new order in `compareSupplyCandidates`:
+
+1. **starving before topping up** — new
+2. `movable` descending
+3. whole hauler → source → building route ascending
+4. building id
+5. site id
+
+**Why this is a floor and not merely a different priority.** A building that
+holds zero of its input cannot start a batch at all; one that holds some is
+producing while it waits. The rule promotes only the first, and the promotion
+ends the moment a single load lands — after which the building is in band 2 and
+the ordinary route term decides again. It cannot pin a hauler to a distant
+building indefinitely, because the condition it ranks on is extinguished by
+serving it once.
+
+**The risk this takes, stated because §4 must measure it in both directions.**
+The failure mode opposite to starvation is a hauler crossing the map past a
+building it could have served on the way, which the whole-route term exists to
+prevent. Two things bound it: within the starving band the route term still
+decides, so among starving buildings the nearest is served; and only a
+starving-versus-satisfied comparison can invert on distance. §4.1 measures the
+mill/bakery fixture in **both** tile orders and the existing distance gradient,
+and a fix that moves the first while wrecking the second is not a fix.
+
+**`inputBufferCap` stays at 12.** §4.2 of increment 7 established that the cap
+is currently the dispatcher's only fairness floor and an accidental one. This
+section supplies a deliberate one; moving the constant in the same increment
+would make it impossible to say which one did the work. OBS-7-02 is answered by
+§4.4's measurement.
+
+### 2.2 A site's demand, derived from the buildings nearest to it
+
+A store site has no recipe, so it cannot be asked what it needs. `needOf`
+answers "what does this *building* need". The generalisation is:
+
+> **A site's demand for a resource is the demand of the staffed, consuming
+> buildings for which it is the nearest live store site.**
+
+Concretely, per tick and from live components only:
+
+- For each building with recipe inputs that is staffed and not relocating,
+  resolve `nearestSite(building.col, building.row, sites)` — the function
+  already exported from `src/shared/haul.ts` and currently unused by dispatch.
+- That site's demand for each of the recipe's input resources gains
+  `BALANCE.siteStagingTarget` units.
+- Every other site's demand for that resource is 0 from that building.
+
+A site's **deficit** of a resource is `max(0, demand − held − inbound)`, where
+`inbound` is the new claim in §2.7. Its **surplus** is `max(0, held − demand)`.
+
+**A site can never be both a source and a sink for the same resource**, because
+deficit and surplus are computed from one comparison of `held` against `demand`,
+and at most one of them is positive. This is the whole termination argument for
+the pull half, and it makes circles *inexpressible* rather than merely
+unattractive — which is what the backlog Feature asks for when it says "every
+ranking that makes a transfer attractive also makes the reverse transfer
+attractive the moment it completes."
+
+Three properties worth stating because each is a place this could go wrong:
+
+- **The camp participates as an ordinary site.** A building beside the camp has
+  the camp as its nearest site, so the camp acquires a real demand and a depot
+  holding wheat a camp-side mill needs may legitimately transfer *inward*. The
+  camp is not special in the pull rule; it is special only in the push rule
+  (§2.4) and in being unbounded.
+- **Nearest, not "within range".** No radius constant. A building's inputs are
+  staged at whatever site is closest to it, which is the camp when no depot is
+  closer — the same "nearest, then id" law `closer` already implements, so the
+  answer never depends on array order.
+- **Demand is per-resource and additive across buildings.** Two mills nearest
+  the same depot make its wheat demand `2 × siteStagingTarget`. A depot that is
+  nearest to nothing has zero demand for everything, which is exactly the
+  corner-chain depot in §4.3's measurement and exactly the case the push rule
+  is for.
+
+### 2.3 The transfer trip: the supply trip minus the building
+
+`HaulKind` gains a third member: `'collect' | 'supply' | 'transfer'`.
+
+A transfer is structurally **simpler** than a supply trip, not an addition to
+it. A supply trip is three legs — `fetching` to a source site, `outbound` to a
+building, `returning` to a store site. A transfer is the same trip with the
+middle leg removed:
+
+| leg | supply | transfer |
+| --- | --- | --- |
+| `fetching` | hauler → source site | hauler → source site |
+| `outbound` | source → building | — |
+| `returning` | building → store site | source → destination site |
+
+`targetId` is `null` for the whole trip; a transfer names no building. Both
+arrival handlers already exist (`fetchArrival`, `depositArrival`) and both
+already do most of what a transfer needs.
+
+**The alternative was considered and rejected.** Expressing a transfer as a
+supply trip whose target happens to be a store site is less new vocabulary but
+more new machinery: it forces `needOf` — which reads a building's recipe and
+in-tray — to answer for a thing that has neither, and it puts a site id into
+`targetId`, which every existing recheck, the demolition handler and the
+snapshot all read as a building id. The third kind is the cheaper change, and it
+is cheaper than it looks for one specific reason: **the save does not persist
+trip state.** `buildSaveFromWorld` banks a mid-trip load into the camp stock and
+writes no trip, so haulers restart idle on load and a third `HaulKind` needs
+**no save version bump and no migration**. `LATEST_SAVE_VERSION` stays 6.
+
+### 2.4 Which transfers are legal: pull, and exactly one push
+
+Two candidate classes, in this priority order.
+
+**1. Staging (pull).** Source `S`, destination `D`, resource `r`, where
+`D.deficit(r) > 0` and `S.surplus(r) > 0` and `S ≠ D`.
+
+```
+movable = min(haulerCapacity, D.deficit(r), S.surplus(r), unclaimedAt(S, r))
+```
+
+Terminating for the reason in §2.2: once `D` holds its target its deficit is 0,
+and it cannot have become a source for `r` on the way there.
+
+**2. Drain (push), bounded → unbounded only.** Source `S` is a **bounded** site
+whose free space has fallen below `BALANCE.storehouseFreeFloor`; destination is
+the **camp**, and only the camp. The resource drained is the one `S` holds most
+of among those it has no demand for (ties by catalog order, mirroring
+`fullestResource`).
+
+```
+movable = min(haulerCapacity, S.surplus(r), unclaimedAt(S, r))
+```
+
+**Never camp → anywhere as a push, and never depot → depot as a push.** The
+asymmetry is the termination proof: the camp has no free-space floor to breach
+because it is unbounded, so it never pushes, so nothing the drain moves can come
+back by the same rule. The only way a drained good returns to a depot is
+staging, which requires a real consumer's demand — a different rule, a different
+direction, and bounded by consumption.
+
+**The free-space floor is what makes this a purposeful trip rather than
+tidying.** A drain buys *room*, and room is worth walking for only when it is
+scarce. Below the floor a depot cannot accept the short-hop deposits that are
+its entire outbound value, so a hauler walking its dead stock to the camp is
+restoring the pipeline stage. Above the floor there is nothing to buy and the
+candidate does not exist. Whether the floor is set anywhere useful is a §4
+question, not an assertion here.
+
+**Both classes are additionally gated on `BALANCE.minTransferUnits`**, the
+`minSupplyUnits` precedent: do not walk thirteen tiles to move three units.
+Deliberately a **separate and larger** constant than `minSupplyUnits`, because a
+supply trip serves a building that is blocked right now and a transfer serves
+one that might be later — the speculative job should have the stricter
+threshold. There is **no "or it is everything the site holds" escape hatch**
+here, unlike `worthMoving`: that clause exists so a lone unit at a depot can
+still reach a consumer that would otherwise never see it, and staging keeps that
+route open through the ordinary supply job. A tail too small to transfer is not
+stranded; it is simply left where it is, and supply can still fetch it.
+
+Together, `minTransferUnits` on each side of the target gives the pull rule a
+dead band `2 × minTransferUnits` wide. Oscillation inside it requires a consumer
+to actually eat the difference, which is the only motion this feature exists to
+enable.
+
+### 2.5 Telling a deliberate transfer from a remainder dumped onward
+
+This is the question the increment turns on, and the answer is that **the two
+are not distinguishable at the site, and were never meant to be.**
+
+Increment 7 already solved this shape one level down. When a load reaches a
+site, a genuine delivery and an undelivered supply remainder are
+indistinguishable — so `pickedUp` is a *field on the trip*, set at the moment
+the difference is real, rather than a judgement each banking site makes for
+itself (`bankLoad`'s own doc comment says exactly this). The same move applies
+one level up.
+
+> **A trip's destination is chosen at dispatch, reserved at dispatch, and only
+> *rechecked* on arrival — never *discovered* there.** A remainder is a supply
+> trip that failed and is falling back. A transfer is a trip that was ranked,
+> claimed and reserved as a site → site move before a tile was walked.
+
+Mechanically it is one clause. `remainderHome` today fires on
+`!pickedUp && amount > 0 && source is live`; it gains `kind === 'supply'`:
+
+```ts
+if (trip.kind !== 'supply' || trip.pickedUp || trip.amount === 0 || source === undefined) return null;
+```
+
+That clause **is** the guarantee §2.13 of increment 7 was protecting. Routing a
+remainder onward would turn camp wheat into depot stock without it ever being
+consumed — motion that looks like progress and produces nothing. A transfer
+moves goods because a consumer's demand or a depot's exhausted headroom made it
+worth moving, and it says so in `kind` before it sets off.
+
+**The clause needs its own fixture.** `docs/process/agent-workflow.md`'s third
+recurring failure mode is exactly this shape: mutating the *whole* condition
+stays red on the existing supply cases and proves nothing about the new clause.
+The discriminating test is a transfer with `!pickedUp && amount > 0` and a live
+source that must still **not** go back to its source.
+
+**What is reconstructible.** Everything the rule reads is a component:
+`kind`, `sourceSiteId`, `destSiteId`, `plannedAmount`, `amount`, `pickedUp`. A
+transfer's intent survives a tick boundary with nothing remembered, which is
+what §2.6 of increment 7 demands of any intent a hauler holds.
+
+**Where `destinationFor` is and is not consulted.** A transfer that fetches
+successfully begins its return leg **straight to the destination it reserved at
+dispatch**, without going through `destinationFor` at all — re-resolving would
+discard the reservation the claim in §2.7 is built on. `destinationFor` is
+reached by a transfer in exactly one branch: `depositArrival` finding its
+destination gone (demolished, or moved mid-leg). There, with `remainderHome`
+gated off, it resolves nearest-with-room from where the hauler stands, which is
+correct: the goods are legitimately in motion and walking them all the way back
+to the source is the worst available answer.
+
+### 2.6 Dispatch: three kinds of work, and why the third cannot starve the others
+
+`chooseJob` offers **supply, then collect, then transfer.**
+
+**Supply first** is unchanged and its reasoning is unchanged: a building waiting
+on inputs produces nothing, while one with a full output buffer has already
+produced and its goods are safe where they stand.
+
+**Collect second** is unchanged, and now has a reason of its own worth writing
+down: a full output buffer *does* stall a building — `outputFull` is what
+`StageResult.stalledTicks` counts — so collection unblocks production too, just
+less urgently than supply does.
+
+**Transfer last, and this placement is load-bearing:**
+
+> A transfer moves goods that nothing is currently waiting for. If a building
+> were waiting and servable, supply would have won this hauler; if a producer
+> were stalled, collect would have. **So a transfer can only ever consume
+> hauler-ticks that would otherwise have been idle, and it cannot starve either
+> existing kind.**
+
+That is the structural answer to §1.3's worry about a third competitor, and it
+is also what makes the feature measurable: `haulerIdleTicks` is the budget a
+transfer spends, and §4.3 asks whether the spend bought anything.
+
+**The cost this does not deny: occupancy.** A hauler that begins a transfer is
+unavailable for a supply job that arises on the next tick. Priority at dispatch
+does not undo commitment during a trip. Two things bound it — `minTransferUnits`
+keeps trivial transfers from being started at all, and the free-space floor
+keeps drains from being started when there is nothing to buy — and §4.1's
+hauler-tick split measures whether it bit.
+
+**Ranking within transfer candidates:**
+
+1. **staging before drain** — a real consumer's demand outranks freeing room
+2. `movable` descending
+3. whole hauler → source → destination route ascending, measured from where the
+   hauler is standing, exactly as `supplyRouteDistance` does
+4. source site id
+5. destination site id
+
+Tie-breaks end at ids, so selection is independent of candidate order — the same
+guarantee `compareHaulCandidates` and `compareSupplyCandidates` give.
+
+### 2.7 Claims, and the four that already work
+
+Increment 7's claim invariant governs: claims are recomputed every tick from
+live components, so any intent a hauler holds must be reconstructible from its
+own components. Three of the four existing claims cover a transfer **unchanged**,
+and that is worth verifying rather than assuming:
+
+- **source stock** (`unclaimedAt`) counts `phase === 'fetching' && sourceSiteId === s && resource === r → plannedAmount`.
+  A transfer's fetch leg is identical to a supply trip's. Works unchanged.
+- **destination room** (`heldAt`) counts `phase === 'returning' && destSiteId === s → amount`.
+  A transfer's return leg is identical. Works unchanged — and this is what makes
+  a transfer's load fit on arrival.
+- **output** counts haulers `fetching` or `outbound` with `targetId === buildingId`.
+  A transfer's `targetId` is `null`, so it never matches any building. Works
+  unchanged **by accident of the null**, which is precisely why it needs an
+  explicit test rather than a comment: a transfer must never be counted as
+  claiming a building's output buffer, and nothing but `null` currently says so.
+- **input** counts supply trips against a building's in-tray room. A transfer
+  targets no building. Works unchanged.
+
+**One new claim is required.** A site's deficit must subtract transfers already
+walking toward it, or every idle hauler in the colony transfers into the same
+deficit on the same tick — the identical failure `Claims.input` exists to
+prevent for buildings, and it takes the identical shape:
+
+```ts
+inboundAt(siteId: number, resource: ResourceId): number
+// sum over trips: kind === 'transfer' && destSiteId === siteId && resource matches
+//   → plannedAmount + (phase === 'returning' ? amount : 0)
+```
+
+The two terms are disjoint by construction: `plannedAmount` is zeroed the moment
+`takeAt` returns a real figure, and `amount` is zero until then — the same
+disjointness `Claims.input` relies on.
+
+**The dispatch/arrival rule, applied to the new kind.** Every condition a
+dispatch rests on must be either *reserved* or *rechecked* on arrival. This was
+violated and fixed three separate times in increment 7, so the new job's
+conditions are enumerated here rather than left to the implementation:
+
+| dispatch condition | reserved or rechecked |
+| --- | --- |
+| source site is live and non-relocating | **rechecked** in `fetchArrival`, by tile — a storehouse that relocates keeps its id and moves |
+| source holds the stock | **rechecked**: `takeAt` returns what it actually got, never the claimed figure. `Stockpile.pay` spends camp-first across every site, so a build ordered mid-walk can legitimately have spent it |
+| no other hauler has claimed that stock | **reserved** via `unclaimedAt` |
+| destination site is live | **rechecked** in `depositArrival`, by tile |
+| destination has room | **reserved** via `heldAt` |
+| destination still has a deficit | **reserved** via `inboundAt`, and deliberately **not** rechecked — see below |
+| source is still in surplus | **neither**, and deliberately — see below |
+
+The last two are the ones an implementation would be tempted to recheck, so the
+reasoning is recorded rather than left implicit. If the deficit is filled or the
+surplus consumed while a hauler walks, the load simply arrives at a site that
+has room and is banked there. Conservation holds, no goods are lost, and the
+worst outcome is one trip's worth of goods positioned somewhere marginally less
+useful than intended. Cancelling instead would strand a load mid-map and require
+a second resolution — more machinery for a strictly worse outcome.
+
+**Two arrival branches must become kind-aware**, and each is a compound
+condition needing per-clause fixtures:
+
+- `fetchArrival` cancels when `targetRowOf` is undefined. A transfer's
+  `targetId` is `null`, so it resolves to undefined **always** — the guard must
+  admit a transfer before it reaches the building lookup, or every transfer
+  cancels on arrival at its source.
+- `fetchArrival` ends by starting an `outbound` leg to `row.position`. A
+  transfer has no row; it starts a `returning` leg to its reserved destination.
+  A transfer whose `takeAt` returned **0** (the source was emptied while it
+  walked) has nothing to carry and no building to go on to, so it **cancels**
+  where it stands — the one case with no counterpart in the supply path, where
+  a zero fetch carries on and finishes as an ordinary collect run.
+
+### 2.8 Flow accounting: a transfer is not a delivery
+
+§2.4 of increment 7's flow table gains one row, and the discriminator it needs
+already exists:
+
+| moment | records |
+| --- | --- |
+| a transfer loads at its source (`takeAt`) | **nothing** — goods in transit, exactly as a supply fetch |
+| a transfer banks at its destination | **nothing** (`refundAt`) — the colony already owned these goods, and recording a delivery would inflate `Delivered/t` for a trip that produced nothing |
+
+A transfer's load never came out of an output buffer, so `pickedUp` is `false`
+throughout and `bankLoad` already routes it to `refundAt`. **No code change is
+required for this row**, which makes it exactly the kind of correctness that
+rots silently — so it needs the discriminating test increment 7 wrote for the
+remainder row: the same fixture twice, once banking a transferred load and once
+banking a collected load of the same size at the same tick and site, with
+`deliveredRate` required to move in the second and not the first.
+
+`recordConsumed` must also not fire. It is called only from `unload`, which a
+transfer never reaches, so this too holds by construction and needs the
+assertion rather than the comment.
+
+### 2.9 Conservation, and the paths that end a trip
+
+Goods live in four places — camp, storehouse, input buffer, output buffer —
+plus a hauler's hands. Every path that ends a trip must put a load *somewhere*.
+The new kind's paths:
+
+- **Destination demolished or moved mid-return.** `depositArrival` already
+  detects this by tile and starts a fresh leg through `turnForHome` rather than
+  banking remotely. With `remainderHome` gated off (§2.5), the transfer resolves
+  nearest-with-room from where it stands. The camp is unbounded and cannot
+  vanish, so the walk terminates.
+- **Source demolished while fetching.** A demolished storehouse's contents spill
+  to the camp (`spillTo`). The fetching hauler's tile recheck fails and it
+  cancels empty-handed. No load, no loss.
+- **Source emptied while fetching.** `takeAt` returns 0; the transfer cancels
+  where it stands (§2.7). No load, no loss.
+- **Hauler unassigned or dies mid-transfer.** `bankCarriedLoad` runs, resolving
+  through `destinationFor` from `legPositionOf` — the forward-to-camp guarantee,
+  correct here precisely because no hauler is left to walk it anywhere.
+- **`handleDemolishBuilding` walks outbound trips by `targetId`.** A transfer's
+  `targetId` is `null`, so it is untouched — correct, because a transfer names no
+  building, but it must be tested rather than assumed for the same reason the
+  output claim must be.
+
+**Goods are carried, never teleported.** The forward-to-camp guarantee exists
+only where no hauler remains to do the walking. A transfer is a hauler walking,
+and no transfer may be implemented as a ledger adjustment.
+
+**Assert on colony-wide totals, not on the field just written.** The
+conservation sentinel in `tests/support/goods-audit.ts` is the instrument;
+`conservationError` must be 0 in every scenario, transfers in flight included.
+
+### 2.10 Snapshot and surfaces
+
+- `HaulKind` widens to include `'transfer'` in `src/shared/haul.ts`; the
+  snapshot's `haulKind` field follows for free.
+- **`haulPickedUp` remains the direction marker**, not `haulKind` — increment
+  7's §2.10 decision. A transfer carries goods that came from a store, so
+  `pickedUp` is false and the marker draws it as carrying goods *in*, which is
+  what it is doing.
+- `haulTargetId` is `null` for a transfer. Any surface that resolves it to a
+  building name must render a transfer without one; the dot's position comes
+  from the frozen leg endpoints and is unaffected.
+- The world legend and the selection panel gain a transfer label. No new colour
+  or glyph is required — this is a job kind, not a new entity.
+
+### 2.11 Save
+
+**No version bump.** `LATEST_SAVE_VERSION` stays 6, `SAVE_MIGRATIONS` and
+`SAVE_GUARDS` are untouched. Trip state is not serialized: `buildSaveFromWorld`
+banks a mid-trip hauler's `amount` into the camp stock and writes no trip, so a
+transfer in flight at save time round-trips as camp stock and the hauler restarts
+idle. Storehouse contents are already serialized off the building record (§2.9 of
+increment 7) and are unchanged by this increment.
+
+This is worth stating rather than leaving to be discovered, because "a new
+`HaulKind`" reads like a save concern and is not one.
+
+### 2.12 Testing and gates
+
+Everything in `docs/process/agent-workflow.md` applies. Three rules bind
+unusually hard here:
+
+- **Every clause of a compound boolean needs its own fixture.** Increment 7's
+  whole-branch review found ten defects of this one shape. This increment adds
+  clauses to `remainderHome` (§2.5) and to `fetchArrival`'s cancel guard (§2.7),
+  and both sit inside conditions whose other clauses are already gated — the
+  exact configuration in which a whole-condition mutation looks like coverage.
+- **Mutation-test every test**, confirming the mutation applied by diffing
+  against a backup copy, never `git checkout`.
+- **Balance claims must be measured, not asserted.** §4 is not optional
+  narration; it is where this increment's central claim (§1.1) is either
+  confirmed or contradicted.
+
+The three gates that already exist stay: `conservationError === 0`, the
+frozen-step sentinel at stress colony size, and `npm run check:all` green at the
+end of every task. No baseline may be loosened and no suppression added.
+
+**The 500-nonblank-line cap per `src/` file is a design constraint here.** Named
+owners for the splits this increment forces are in the plan's Global
+Constraints; `src/engine/world.ts` is at 489 and its named contingency remains
+extracting `initialSave`.
+
+### 2.13 Explicitly out of scope
+
+- **Per-resource storehouse filters and priorities.** Excluded again, and now
+  with a better reason than "not yet": under §2.2 a site's target *is* its
+  filter, derived from what stands near it. An authored filter would be a second
+  source of truth for one number, and the two would disagree the first time a
+  player moved a building.
+- **Depot → depot push.** Only demand-pull, or bounded → unbounded. §2.4 is the
+  termination argument and a second push direction voids it.
+- **Changing `inputBufferCap` (OBS-7-02).** Measured in §4.4, not moved. §1.2.
+- **A hauler repositioning while idle, and any rule that weighs a trip's effect
+  on the *next* fetch.** This is the named cause of the camp-fed-processor loss
+  and the obvious place to intervene; it is left alone deliberately so §4.2
+  measures the transfer mechanic rather than a compensator bolted beside it.
+  If §4 shows the loss worsening, that is the finding and the successor.
+- **The structural fix to OBS-7-05** (lifespan jitter derived from entity id).
+  The confound bites only above the first old-age death at ~5,700 ticks, and
+  every reading this increment needs sits below it. The issue's own cheap guard
+  — run a with/without pair below that horizon and require them identical — is
+  in scope; changing `lifespanFor` is not, because it would redefine every
+  existing population figure.
+- **OBS-7-03, OBS-7-04, OBS-7-06.** Carried forward untouched.
+- **Construction as work.** Still the named successor from increment 7 §1.1,
+  and still deferred: it needs a construction-site entity and a builder role,
+  and this increment's §4.3 debt was the louder claim on the branch.
+- **Roads, terrain and pathfinding.** Deferred a fourth time.
+- **Carts, vehicles, or any haul capacity that is not a colonist.**
+- **Multiple storehouse tiers.** Still one def.
+- **A bounded camp.** Unbounded is what makes §2.4's push terminate and §2.9's
+  last resort always succeed.
+- **The tick-interval sync seam** (OBS-4-09's note). Deferred by increments 5,
+  6 and 7; deferred again.
+
+---
+
+## 3. Acceptance criteria
+
+1. **The far consumer is served.** The mill/bakery fixture that measures
+   `bread === 0` today puts the far bakery above zero, and the fixture with the
+   tiles exchanged still puts both above zero. Both bounds stay meaningful: a
+   dispatcher that starved the second stage regardless of position puts both at
+   zero, and a dispatcher that shared haulers puts both above it.
+2. **The existing distance gradient is undisturbed.** Increment 5's sweep and
+   increment 7's processor sweep produce the same figures, or the change is
+   named and justified in §4.
+3. **A depot's advantage grows with the horizon.** On the corner-chain fixture
+   from §4.3, the absolute advantage of a depot over no depot at 2,400 ticks
+   **exceeds** the advantage at 600 ticks. Flat is the increment's failure
+   condition, and §4 records it as such if it happens.
+4. **A depot beside a chain no longer saturates.** `storedAtEnd` is below
+   `storehouseCapacity` at every horizon measured, and the depot's stock over
+   the run shows turnover rather than a monotone climb to 60.
+5. **A transfer never inflates `Delivered/t`.** The discriminating two-run test
+   in §2.8 passes: the same load banked by a transfer moves nothing, and banked
+   by a collect trip moves the rate.
+6. **Conservation is exact.** `conservationError === 0` across every balance
+   scenario, including with transfers in flight at the final tick.
+7. **A transfer's intent is reconstructible.** No new state is remembered
+   between ticks; dispatch remains a pure function of world state and
+   independent of entity iteration order, verified by the existing
+   candidate-order tests extended to transfer candidates.
+8. **No circles.** A property test over randomised site stocks and demands: no
+   sequence of legal transfers returns the ledger to a previously visited
+   per-site distribution without a consumption event in between.
+9. **A transfer cannot starve supply or collect.** With a stalled producer and a
+   starving consumer both available, no idle hauler is dispatched on a transfer.
+10. **`npm run check:all` green**, no baseline loosened, no suppression added,
+    every `src/` file at or under 500 nonblank lines.
+11. **The save is untouched.** `LATEST_SAVE_VERSION === 6`, and a v6 save
+    written before this increment loads and plays.
+
+---
+
+## 4. Balance values
+
+Three new constants, all in `src/engine/content/balance.ts`, all with a starting
+value and a §4 question attached. None is asserted here.
+
+| constant | start | what it means | the question |
+| --- | ---: | --- | --- |
+| `siteStagingTarget` | 12 | units of one input a site aims to hold per consuming building it is nearest to | does staging more than an in-tray's worth pay, or just move the stall? |
+| `minTransferUnits` | 4 | the smallest transfer worth walking | stricter than `minSupplyUnits: 2` because a transfer is speculative — is 4 the right premium? |
+| `storehouseFreeFloor` | 12 | free space a bounded site tries to keep, below which it drains | is buying room worth a walk at all? |
+
+### 4.1 The fairness floor, measured alone
+
+Taken **before any transfer code exists in the tree**, so the two changes have
+one variable each. Recorded in §4 as its own table.
+
+- The mill/bakery fixture in both tile orders, at one, two and three haulers.
+  Acceptance criterion 1.
+- Increment 5's distance sweep and increment 7's processor sweep, unchanged
+  fixtures. Acceptance criterion 2 — the counter-direction the §2.1 risk
+  demands.
+- The hauler-tick split, to confirm the fix did not simply convert throughput
+  into walking.
+
+### 4.2 The transfer mechanic
+
+- **The corner chain**, with and without a depot, at 600 / 1,200 / 2,400 and one
+  horizon beyond (4,800, still below the first old-age death). Acceptance
+  criteria 3 and 4. Reported as absolute advantage per horizon, not only as a
+  percentage — flatness is the finding and a percentage hides it.
+- **`stalledTicks` and `waitingForInputTicks` per stage**, so the *mechanism* in
+  §1.1 is confirmed or denied separately from the throughput it is supposed to
+  explain.
+- **The camp-fed processor**, the configuration that lost 10%. Kept, reported,
+  and not rescued (§1.2).
+- **The hauler-tick split** including transfer as a fourth category, against
+  `haulerIdleTicks` — §2.6's claim is that transfers are paid for out of idle
+  time, and this is where it is checked.
+- **A sweep of each new constant** across at least three values, on the fixture
+  that constant is supposed to govern.
+
+### 4.3 What must be written down whichever way it goes
+
+§4.3 of increment 7 is the model. If the depot's advantage is still flat, that
+is recorded as a second disagreement with §1 and the mechanic is described as
+what it measured as — not retuned until the number cooperates. If the camp-fed
+processor gets worse, that is recorded too, with the fetch-leg share as the
+evidence, and the successor is named.
+
+### 4.4 OBS-7-02, answered by measurement
+
+With transfer live, re-run the fixture that established `inputBufferCap: 12` as
+the binding constraint on a far processor. Either the cap is no longer binding —
+in which case OBS-7-02 closes on a finding and the constant never moves — or it
+still is, in which case the issue carries forward with a second measurement and a
+sharper statement of what a retune would have to buy.
+
+### 4.5 What these instruments cannot do
+
+The balance harness runs no births and no deaths inside the horizons above, so
+OBS-7-05's lifespan-jitter confound cannot reach these readings. The cheap guard
+(a with/without pair below the first old-age death, required identical) is added
+so that stays true rather than remaining a fact about the chosen horizons. Any
+future reading at generation length inherits the confound and must say so.

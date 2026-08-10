@@ -581,9 +581,16 @@ here and the four claims below all follow from it:
   `refundAt` see a site's *physical* contents and know nothing of what has been
   promised, and giving them reservation awareness would mean teaching the
   ledger about haul trips — which the rest of this design keeps out of it. So
-  every caller resolves its destination through `nearestSiteWithRoom(…,
-  heldAt, amount)` with the **same reservation-aware `heldAt`** dispatch uses,
-  and banks only into what that returns. The camp's unbounded capacity is what
+  every caller resolves its destination through `destinationFor` — the load's
+  own **source site first** where that is still live and has room for all of
+  it, then `nearestSiteWithRoom(…, heldAt, amount)` — with the **same
+  reservation-aware `heldAt`** dispatch uses, and banks only into what that
+  returns. Naming only `nearestSiteWithRoom` here, as an earlier draft did,
+  contradicts §2.5 step 4 two sections above: routing a remainder onward turns
+  camp wheat into depot stock without it ever being consumed, which is the
+  store-to-store transfer §2.13 excludes. The reservation-aware `heldAt` is
+  what this paragraph is actually about, and it binds either way.
+  The camp's unbounded capacity is what
   makes that resolution always succeed, and a refund that still cannot fit
   takes the last-resort route there — correct precisely because no hauler is
   left to walk it anywhere.

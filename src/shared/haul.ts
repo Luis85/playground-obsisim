@@ -74,9 +74,10 @@ export function haulTicks(col: number, row: number, tilesPerTick: number): numbe
  */
 export type HaulPhase = 'idle' | 'outbound' | 'returning' | 'fetching';
 
-/** The two jobs a hauler can be doing: bringing raw goods in, or moving
- * stored goods out to a building that needs them. */
-export type HaulKind = 'collect' | 'supply';
+/** The jobs a hauler can be doing: bringing raw goods in, moving stored goods
+ * out to a building that needs them, or moving stored goods from one
+ * storehouse-class site to another. */
+export type HaulKind = 'collect' | 'supply' | 'transfer';
 
 /**
  * How far along a leg a hauler is, as 0 (just left) to 1 (arrived).

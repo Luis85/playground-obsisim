@@ -1,6 +1,6 @@
 import type { IPreptimeWorld } from 'sim-ecs';
 import type { BuildingDefId, ResourceId } from '../../src/shared/content-types';
-import type { HaulPhase } from '../../src/shared/haul';
+import type { HaulKind, HaulPhase } from '../../src/shared/haul';
 import type { SaveGameV6 } from '../../src/shared/save';
 import type { ColonistSnapshot, Snapshot } from '../../src/shared/snapshot';
 import { haulTicks } from '../../src/shared/haul';
@@ -440,6 +440,19 @@ function tallyStates(snapshot: Snapshot, buildingIds: readonly number[], tallies
 }
 
 /**
+ * `ticks[haulKind]++`, guarded against the bucket `HaulerTicks` has no room
+ * for yet. Nothing dispatches a `'transfer'` trip before Task 6, so this
+ * throws rather than guessing at a count for it — a silent 0-guess here would
+ * hide the day transfers start, right when a later measurement needs to see
+ * them land somewhere on purpose. Split out of `tallyHaulers` so the guard's
+ * own branch doesn't push that function over the complexity gate.
+ */
+function tallyKind(ticks: HaulerTicks, haulKind: HaulKind): void {
+  if (haulKind === 'transfer') throw new Error('balance-harness: transfer trips are not modelled yet');
+  ticks[haulKind]++;
+}
+
+/**
  * One tick of hauler bookkeeping: which leg every hauler is walking, on which
  * kind of job, and whether a supply trip that just turned for home turned
  * loaded.
@@ -456,7 +469,7 @@ function tallyHaulers(
   for (const worker of colonists) {
     if (!worker.hauling) continue;
     ticks[worker.haulPhase]++;
-    if (worker.haulKind !== null && worker.haulPhase !== 'idle') ticks[worker.haulKind]++;
+    if (worker.haulKind !== null && worker.haulPhase !== 'idle') tallyKind(ticks, worker.haulKind);
     const turned = phases.get(worker.id) !== 'returning' && worker.haulPhase === 'returning';
     if (turned && worker.haulKind === 'supply') {
       returns.total++;

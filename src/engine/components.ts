@@ -233,6 +233,7 @@ function clearTrip(trip: HaulTrip): void {
   trip.sourceSiteId = CAMP_SITE_ID;
   trip.destSiteId = CAMP_SITE_ID;
   trip.pickedUp = false;
+  trip.staging = false;
   trip.legTicks = 0;
   trip.legFromCol = 0;
   trip.legFromRow = 0;
@@ -257,7 +258,10 @@ export class HaulTrip {
     /** The job this hauler was dispatched on, frozen at dispatch. It stops
      * describing the CARGO the moment the round trip works as intended — a
      * supply trip carrying collected output home is still `'supply'` — so
-     * anything asking "what is in this hauler's hands" reads `pickedUp`. */
+     * anything asking "what is in this hauler's hands" reads `pickedUp`. For
+     * a transfer, though, `kind` DOES describe the whole trip accurately,
+     * unlike for supply: a transfer never picks up a building's output, so
+     * there is no cargo/round-trip gap for it to paper over. */
     public kind: HaulKind = 'collect',
     public targetId: number | null = null,
     public ticksLeft = 0,
@@ -282,6 +286,20 @@ export class HaulTrip {
      * genuine delivery (`addAt`) and an undelivered supply remainder
      * (`refundAt`) are indistinguishable without it. */
     public pickedUp = false,
+    /**
+     * Set at dispatch, for a transfer only: whether this trip is topping up a
+     * site below its staging target (`true`) or draining one above its
+     * demand-plus-floor (`false` — also the value for every `collect` and
+     * `supply` trip, which is the truth rather than a default). The two
+     * classes share every line of trip machinery and no arrival handler tells
+     * them apart, so this rides on the trip rather than becoming a fourth
+     * `HaulKind`. Nothing in the engine reads it; §4.2's measurement does,
+     * because the class is unrecoverable from anything else published on the
+     * trip — the snapshot has no site ids, and the route is not a
+     * discriminator either, since the camp is an ordinary site in the pull
+     * rule and a depot -> camp move can legitimately be either class.
+     */
+    public staging = false,
     // What the leg was charged when it began — frozen, unlike `ticksLeft`,
     // which counts down. Set beside `ticksLeft` at every site that assigns it.
     public legTicks = 0,

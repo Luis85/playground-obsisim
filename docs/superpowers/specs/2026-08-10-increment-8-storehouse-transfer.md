@@ -428,9 +428,20 @@ The discriminating test is a transfer with `!pickedUp && amount > 0` and a live
 source that must still **not** go back to its source.
 
 **What is reconstructible.** Everything the rule reads is a component:
-`kind`, `sourceSiteId`, `destSiteId`, `plannedAmount`, `amount`, `pickedUp`. A
-transfer's intent survives a tick boundary with nothing remembered, which is
-what §2.6 of increment 7 demands of any intent a hauler holds.
+`kind`, `sourceSiteId`, `destSiteId`, `plannedAmount`, `amount`, `pickedUp`,
+`staging`. A transfer's intent survives a tick boundary with nothing remembered,
+which is what §2.6 of increment 7 demands of any intent a hauler holds.
+
+`staging` is the one field this increment adds to `HaulTrip`, and no engine rule
+reads it: it records **which of §2.4's two classes** a transfer was dispatched
+as, for §4.2's instruments alone. It is here rather than derived because the
+class is genuinely unrecoverable afterwards — the snapshot publishes neither
+site id, and §2.2's decision to make the camp an ordinary site in the pull rule
+means a depot → camp move is legitimately either class with the same source,
+destination and resource. `pickedUp` is the precedent exactly: a field written
+at the moment a difference is real, rather than a judgement reconstructed later
+from state that no longer distinguishes the cases. `HaulTrip` is runtime-only,
+so this changes nothing about §2.11.
 
 **Where `destinationFor` is and is not consulted.** A transfer that fetches
 successfully begins its return leg **straight to the destination it reserved at
@@ -581,19 +592,31 @@ conditions are enumerated here rather than left to the implementation:
 
 **Room is the one condition that is both reserved and rechecked**, which looks
 like belt and braces and is not. Reservation covers every *hauler*-driven way a
-site fills, because every one of them goes through a claim. It does not cover
-the paths that bank into a site with no trip behind them — chiefly `spillTo`,
-which empties a demolished storehouse into another site, and the load-time
-spill. Those can consume reserved room, and a transfer arriving to insufficient
-space would then have its overflow forwarded to the camp by `bankWithSpill`:
-free transport, from a hauler who is standing right there and could walk it.
-So `depositArrival` treats "cannot take the whole load" exactly as it already
-treats "destination is gone" — `turnForHome`, and walk it (§2.9).
+site fills, because every one of them goes through a claim. It does not cover a
+path that banks into a site with no trip behind it. Such a path can consume
+reserved room, and a transfer arriving to insufficient space would then have its
+overflow forwarded to the camp by `bankWithSpill`: free transport, from a hauler
+who is standing right there and could walk it. So `depositArrival` treats
+"cannot take the whole load" exactly as it already treats "destination is gone"
+— `turnForHome`, and walk it (§2.9).
 
-This branch is expected to be unreachable in ordinary play, and is specified
-anyway on increment 7's own precedent: `buildingArrival`'s demolished-target
-branch has no live caller either and is kept as defense-in-depth, because a
-vanished destination must never be able to silently drop or teleport a load.
+**No such path exists today, and the branch ships anyway.** An earlier draft of
+this section named `spillTo` as the example, and that was wrong on the code:
+`spillTo(toSiteId, fromSiteId)` has exactly one caller
+(`handleDemolishBuilding`, placement-handlers.ts) and it always passes
+`CAMP_SITE_ID`, so a demolished storehouse's contents can only ever land at the
+unbounded camp — never in a bounded site whose room a transfer had reserved. The
+correction matters twice over: it is the difference between a branch that is
+*rare* and one that is currently *unreachable*, and the plan's fixture for this
+case was written around the `spillTo` story and could not have exercised it.
+
+Unreachable is not a reason to drop it. Increment 7's own precedent governs:
+`buildingArrival`'s demolished-target branch has no live caller either and is
+kept as defense-in-depth, because a vanished or overfull destination must never
+be able to silently drop or teleport a load. The test constructs the state
+directly — banking into the destination while the transfer walks its return leg
+— which is the only honest way to cover a branch with no reachable trigger, and
+is stated as such rather than dressed up as a scenario.
 
 The remaining two are the ones an implementation would be tempted to recheck, so
 the reasoning is recorded rather than left implicit. If the deficit is filled or
@@ -650,9 +673,12 @@ The new kind's paths:
   banking remotely. With `remainderHome` gated off (§2.5), the transfer resolves
   nearest-with-room from where it stands. The camp is unbounded and cannot
   vanish, so the walk terminates.
-- **Destination filled below the reservation.** A site can gain stock without a
-  trip behind it (`spillTo` from a demolished storehouse), so reserved room can
-  be consumed. Same branch, same answer: bank nothing, `turnForHome`, walk it.
+- **Destination filled below the reservation.** Were a site to gain stock with
+  no trip behind it, reserved room could be consumed. §2.7 records that no such
+  path exists today — `spillTo`'s only caller always targets the camp — so this
+  is defense-in-depth rather than a live case, and it is listed here because
+  this is the list an implementer audits conservation against. Same branch, same
+  answer: bank nothing, `turnForHome`, walk it.
   **Not** bank-what-fits-and-forward-the-rest — that is `bankWithSpill`'s
   behaviour and it teleports the remainder to the camp past a hauler standing at
   the depot. §2.7 has the full reasoning; it is repeated here because this is the

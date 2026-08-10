@@ -257,7 +257,13 @@ The type widens and the trip shape is documented. Nothing produces a transfer ye
 
 **Interfaces:**
 - `export type HaulKind = 'collect' | 'supply' | 'transfer';`
-- **No new fields on `HaulTrip`.** `sourceSiteId`, `destSiteId`, `plannedAmount`, `amount`, `resource`, `pickedUp` already carry everything a transfer's intent needs, which is what makes §2.7's claim invariant hold for the new kind. `targetId` stays `null` for a transfer's whole life.
+- **`HaulTrip` gains exactly one field, `staging: boolean`, and no others.** `sourceSiteId`, `destSiteId`, `plannedAmount`, `amount`, `resource`, `pickedUp` already carry everything a transfer's *mechanics* need, which is what makes §2.7's claim invariant hold for the new kind. `targetId` stays `null` for a transfer's whole life.
+
+  **The correction, and why it is not a loosening.** This bullet read "no new fields on `HaulTrip`" until a review of the plan found the consequence: Task 10 requires `transfersStaging` / `transfersDrain` counted separately, because §4.2 must be able to say *which half did the work* — and the class is unrecoverable from everything else on the trip. The snapshot publishes neither `sourceSiteId` nor `destSiteId` (`snapshot-builder.ts` publishes `haulKind`, `haulTargetId` and `haulPickedUp` only), so a harness sees no more than "a transfer started". Worse, the route is not a discriminator even with full trip access: §2.2 makes the camp an ordinary site in the pull rule, so a depot → camp move can legitimately be *either* class, with the same source, destination and resource. Re-deriving the class in the harness by recomputing site demand would put a second copy of the dispatch law in test support — the failure `StaffedSet` exists to prevent, and the shape of increment 7's harness defect.
+
+  A boolean set at dispatch on the trip's own component satisfies the claim invariant exactly as `pickedUp` does: it is written at the moment the difference is real, it is read back from live components, nothing is remembered outside the trip, and dispatch stays a pure function of world state. `HaulTrip` is runtime-only, so **the save is still untouched** — `clearTrip` resets it to `false` beside every other field, and `false` for every `collect` and `supply` trip is the truth rather than a default.
+
+  It is `staging`, not `kind: 'staging' | 'drain'`: the two classes are one job with two reasons, they share every line of the trip machinery, and a fourth `HaulKind` would force a branch at every exhaustive site for a distinction no arrival handler makes.
 - `HaulTrip.kind`'s doc comment gains the transfer case: for a transfer it describes the whole trip accurately, unlike for supply, because a transfer never picks up output.
 
 - [ ] **Step 1: Widen the type and follow the compiler**
@@ -268,8 +274,15 @@ The type widens and the trip shape is documented. Nothing produces a transfer ye
 
 ```ts
 it('a transfer trip carries its whole intent in components', () => {
-  // Set kind/sourceSiteId/destSiteId/plannedAmount by hand; assert every field
-  // a dispatch would need is readable back with no external state.
+  // Set kind/sourceSiteId/destSiteId/plannedAmount/staging by hand; assert
+  // every field a dispatch would need is readable back with no external state.
+});
+
+it('cancel() clears the staging flag', () => {
+  // A hauler that ran a staging transfer and then takes a collect job must not
+  // still report `staging`. DISCRIMINATING: set it true, cancel, assert false —
+  // a `clearTrip` that omits the field passes every other test in the suite,
+  // and the symptom would be a silently inflated `transfersStaging` in §4.2.
 });
 
 it('cancel() brings a transfer to a stop where it is standing', () => {
@@ -478,7 +491,7 @@ The mechanic turns on. §2.5, §2.6, §2.7.
 
 **Interfaces:**
 - `chooseJob` offers **supply, then collect, then transfer** (§2.6). The rationale goes in a comment where the fallthrough is: a transfer moves goods nothing is waiting for, so it can only spend hauler-ticks that would otherwise be idle — and the occupancy cost it *does* have is named there too, not hidden.
-- `beginTransfer(trip, at, target)` mirrors `beginSupply`: sets `kind`, `resource`, `sourceSiteId`, **`destSiteId` (the reservation)**, `plannedAmount`, `targetId = null`, and starts the `fetching` leg.
+- `beginTransfer(trip, at, target)` mirrors `beginSupply`: sets `kind`, `resource`, `sourceSiteId`, **`destSiteId` (the reservation)**, `plannedAmount`, `targetId = null`, **`staging` from the candidate's class**, and starts the `fetching` leg. `staging` is written here and read nowhere in the engine — Task 10's instruments are its only consumer, and that is the whole reason it exists (Task 4). Every other kind leaves it `false`, which `beginTrip` must set rather than assume, or a hauler that ran a staging transfer and then took a collect job would still report `staging`.
 - `remainderHome` gains `trip.kind === 'supply'` as its first clause (§2.5).
 - `fetchArrival` becomes kind-aware in two places:
   - the `targetRowOf === undefined` cancel must admit a transfer *before* the building lookup, or **every transfer cancels on arrival at its source** (a transfer's `targetId` is null, so the lookup always misses);
@@ -522,9 +535,25 @@ it('a transfer whose destination vanished carries its load onward', async () => 
 });
 
 it('a transfer whose destination filled below its reservation carries on', async () => {
-  // Reserved room consumed by a path with no trip behind it — demolish ANOTHER
-  // storehouse so spillTo fills this one. The transfer must turnForHome, not
-  // bank-what-fits-and-forward-the-rest.
+  // Reserved room consumed by a path with no trip behind it. The fixture banks
+  // into the destination directly (`stockpile.addAt(dest, …)`) while the
+  // transfer walks its return leg.
+  //
+  // CORRECTED. This step first said "demolish ANOTHER storehouse so spillTo
+  // fills this one", and that fixture cannot create the condition:
+  // `handleDemolishBuilding` calls `spillTo(CAMP_SITE_ID, …)`
+  // (placement-handlers.ts) and CAMP_SITE_ID is the only destination `spillTo`
+  // is ever passed, so a demolished depot's contents always land at the camp
+  // and never in a bounded site. The destination would keep its reserved room
+  // and the transfer would deposit normally — a test that passes without ever
+  // reaching the branch it names.
+  //
+  // Banking directly is the honest fixture rather than a workaround: §2.7 says
+  // this branch is EXPECTED TO BE UNREACHABLE in ordinary play and is specified
+  // anyway on increment 7's precedent (`buildingArrival`'s demolished-target
+  // branch has no live caller either). A branch with no reachable trigger can
+  // only be tested by constructing the state directly, and pretending otherwise
+  // is how the untested version ships.
   //
   // The assertion is the one a conservation sentinel CANNOT make: colony total
   // is preserved either way, so assert that the camp's stock did NOT rise on
@@ -674,7 +703,7 @@ Disable the transfer label in `layout.ts` or the panel and confirm the named che
 **Interfaces:**
 - `HaulerTicks` gains `transfer` as a fourth job category beside `collect` and `supply`. §2.6's claim is that transfers are paid out of idle time; this is where it is checked.
 - `BalanceResult` gains:
-  - `transfers: number` and `transfersStaging` / `transfersDrain` — the two classes counted separately, because §4.2 must be able to say which half did the work.
+  - `transfers: number` and `transfersStaging` / `transfersDrain` — the two classes counted separately, because §4.2 must be able to say which half did the work. Read from `HaulTrip.staging` at the tick a transfer is dispatched, **not** re-derived from the route: a depot → camp move is legitimately either class (§2.2 makes the camp an ordinary site in the pull rule), so route-based attribution is wrong rather than approximate. Task 4 added the field for exactly this and nothing else.
   - `storedSeries: number[]` — per-site occupancy sampled over the run. **Acceptance criterion 4 is about turnover, and a single `storedAtEnd` cannot distinguish "never filled" from "filled and drained".**
 - The conservation sentinel must count a transfer in flight. Verify `goods-audit.ts` already sums haulers' hands regardless of kind; if it keys on kind anywhere, fix it.
 
@@ -777,4 +806,4 @@ Read the whole diff for the compound-boolean shape specifically — increment 7'
 
 - **Push back on this plan.** Roughly half of increment 4's briefs contained an error — a helper that did not exist, a wrong expected value, a positional parameter that would have corrupted eight call sites. Implementers caught them only because they were told to push back rather than guess. This plan already contains one correction to a written source (OBS-7-01's `waitingForInputTicks` claim, Task 1); assume it is not the only one, and check each brief against the real files before starting.
 - **The one thing not to compromise on** is §2.5's clause and its two fixtures. Everything else in this increment is machinery; that clause is the guarantee increment 7 built two mechanisms to protect, and it is being deliberately opened by one condition. If the transfer-does-not-go-home test and the supply-remainder-does test do not both exist and both discriminate, the increment has traded a working guarantee for a feature.
-- **A transfer that cannot be reconstructed from `kind` / `sourceSiteId` / `destSiteId` / `plannedAmount` is the wrong design.** If an implementation reaches for a field that survives between ticks outside the trip's own components, stop — that is the claim invariant failing, and increment 7's spec broke that rule twice in drafts before catching it.
+- **A transfer that cannot be reconstructed from `kind` / `sourceSiteId` / `destSiteId` / `plannedAmount` / `staging` is the wrong design.** If an implementation reaches for a field that survives between ticks outside the trip's own components, stop — that is the claim invariant failing, and increment 7's spec broke that rule twice in drafts before catching it. `staging` is on that list and is not an exception to it: it lives on the trip, it is written once at dispatch, and nothing outside the trip remembers it. Task 4 states why it had to exist at all.

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { BALANCE } from '../../src/engine/content/balance';
 import { CAMP_TILE } from '../../src/shared/haul';
 import type { TileRef } from '../../src/shared/placement';
-import { runScenario } from '../support/balance-harness';
+import { runScenario, type BalanceResult } from '../support/balance-harness';
 import { runPopulationScenario, type PopulationResult } from '../support/population-harness';
 
 // The measured shape of increment 4's haul constants, pinned so a later change
@@ -225,6 +225,22 @@ describe('population balance', () => {
 const chain = { startingAdults: 4, foodPerTick: 'chain' as const, huts: 2, haulers: 2 };
 const LONG = { ticks: 12000, sampleEvery: 200 };
 const ROOMY_HOUSES = 12;
+/**
+ * The house count at which a depot the harness places actually becomes a store
+ * site, so §4.1's fourth reading measures the depot rather than measuring the
+ * same run twice.
+ *
+ * `autoPlaceSequence` yields 40 plots (5 per row, odd rows) before it falls
+ * back to a row-major scan, and this harness lays huts, then houses, then
+ * depots. With ROOMY_HOUSES the two depots land at plots 15 and 16, further out
+ * than the two huts at plots 1 and 2 — the camp is nearer to both huts than
+ * either depot is, so nothing is ever banked in one. At 40 houses the depots
+ * fall past the plot pass onto row 0, beside the camp band, where they ARE the
+ * nearest site to the huts. Measured over 1,500 ticks: `storedAtEnd` is 0 at
+ * 12 and 30 houses and 120 (both depots full) at 40, 60 and 78, with births
+ * and final population identical in every one of them.
+ */
+const DEPOT_HOUSES = 40;
 const populationOf = (s: { children: number; adults: number; elders: number }) => s.children + s.adults + s.elders;
 const peakOf = (r: { samples: { children: number; adults: number; elders: number }[] }) =>
   Math.max(...r.samples.map(populationOf));
@@ -387,6 +403,36 @@ describe('population report', () => {
       ' above quotable: a non-zero figure means the run simulated fewer ticks than it counted',
     ].join('\n'));
   }, 600000);
+
+  it('prints the population depot reading when BALANCE_REPORT is set', async () => {
+    if (!process.env.BALANCE_REPORT) return;
+    // Section 4.1's FOURTH reading — the 12,000-tick chain repeated with and
+    // without a depot — plus the control pair that says whether the reading is
+    // a reading at all.
+    //
+    // At ROOMY_HOUSES the depot is placed at a plot the huts already beat: the
+    // first two huts take the two plots nearest the camp, so the camp stays
+    // nearest to everything and nothing is ever banked (see
+    // PopulationScenario.storehouses). DEPOT_HOUSES is the smallest house count
+    // measured to push the depots past the 40-plot pass and into the row-major
+    // one, where they land beside the camp band and DO take stock — which is
+    // why every row prints `stored`: a with-depot row reading 0 there is a run
+    // compared against itself, whatever its population figures say.
+    const rows = [[ROOMY_HOUSES, 0], [ROOMY_HOUSES, 2], [DEPOT_HOUSES, 0], [DEPOT_HOUSES, 2]] as const;
+    const lines = ['', 'the fourth reading: 12,000-tick chain, with and without a depot',
+      '  houses  depots  stored  peak  final  trough  births  starved  frozen  min meals/head'];
+    for (const [houses, storehouses] of rows) {
+      const r = await runPopulationScenario({ ...chain, ...LONG, houses, storehouses });
+      const trough = Math.min(...r.samples.filter((s) => s.tick >= 3000).map(populationOf));
+      lines.push(
+        `  ${String(houses).padStart(6)}  ${String(storehouses).padStart(6)}  ${String(r.storedAtEnd).padStart(6)}` +
+        `  ${String(peakOf(r)).padStart(4)}  ${String(populationOf(r.samples.at(-1)!)).padStart(5)}  ${String(trough).padStart(6)}` +
+        `  ${String(r.births).padStart(6)}  ${String(r.deathsByStarvation).padStart(7)}  ${String(r.frozenSteps).padStart(6)}` +
+        `  ${Math.min(...r.samples.map((s) => s.mealsPerHead)).toFixed(1).padStart(14)}`,
+      );
+    }
+    console.log(lines.join('\n'));
+  }, 900000);
 });
 
 // The instruments spec section 4 needs, and the sentinels that keep their
@@ -610,4 +656,376 @@ describe('population instruments', () => {
     // sit among huts that are genuinely far out, and take their stock.
     expect(stress.storedAtEnd).toBeGreaterThan(0);
   }, 180000);
+});
+
+// ---------------------------------------------------------------------------
+// Spec section 4.1's three questions, measured. Everything below this line
+// exists to produce a number for section 4 rather than to guard a behaviour,
+// so each `it` pins the ONE relationship its measurement establishes and the
+// report blocks print the curve those relationships were read off.
+// ---------------------------------------------------------------------------
+
+/**
+ * A processor whose input is seeded at the CAMP, not produced next door.
+ *
+ * This is increment 5's sweep with one thing changed: the building consumes an
+ * input, so haulage now has to walk goods in as well as out. Crew 2 and
+ * ticksPerBatch 3 are the forester's own, which makes `ceiling` the same 400
+ * and `share` directly comparable row for row — that comparability is the whole
+ * instrument, and it is why the processor half is measured this way rather than
+ * as the second stage of a chain.
+ *
+ * `share` is legitimate here, and StageResult.ceiling's caveat does not apply:
+ * that caveat covers a `workshop` (which tools its own crew) and a stage FED BY
+ * ANOTHER STAGE (where the chain, not the crew, is the constraint). A sawmill
+ * drawing on the harness's inexhaustible seeded wood is neither — its crew is
+ * the only thing that bounds production, exactly as a forester's is.
+ */
+const campFedSawmill = (col: number, row: number, haulers: number, storehouses?: TileRef[]) =>
+  runScenario({ defId: 'sawmill', col, row, crew: 2, haulers, ticks: TICKS, resource: 'planks', storehouses });
+
+describe('haul balance gradient — the processor half', () => {
+  it('the one hauler that serves a raw producer at leg 4 no longer serves a processor there', async () => {
+    // The same tile, the same crew, the same one hauler, the same 400-unit
+    // ceiling. The ONLY difference between these two runs is that one recipe
+    // has an input to walk in, so a colony in which input delivery did nothing
+    // would put both on the same side of the bar and fail here. Measured: 0.99
+    // against 0.89, with the 0.95 bar strictly between them and coinciding with
+    // no value either fixture carries.
+    const raw = await forester(8, 4, 1);
+    const processing = await campFedSawmill(8, 4, 1);
+
+    expect(raw.legTicks).toBe(processing.legTicks);
+    expect(raw.ceiling).toBe(processing.ceiling);
+    expect(share(raw)).toBeGreaterThan(0.95);
+    expect(share(processing)).toBeLessThan(0.95);
+    // And the shortfall is the input side specifically, not a generally slower
+    // building: a raw producer can never wait for input, so this is 0 in the
+    // control by construction.
+    expect(raw.waitingForInputTicks).toBe(0);
+    expect(processing.waitingForInputTicks).toBeGreaterThan(0);
+  }, 120000);
+
+  it('at the far corner a processor waits on its in-tray, not on another hauler', async () => {
+    // Section 4.1 expects the processor's reach to be "roughly halved" and it
+    // is (leg 4 -> leg 2 at one hauler, 8 -> 6 at two, 13 -> 8 at three). The
+    // far corner is where that stops being a hauler story: a supply hauler
+    // claims its whole load against the target's in-tray room, so at most
+    // inputBufferCap / haulCarryCapacity loads can be walking toward one
+    // building at a time. That is 2, and 2 loads over a 27-tick round trip is
+    // 0.44 units per tick against a 2-worker sawmill's 0.67 — so the building
+    // starves however many haulers the colony hires.
+    const three = await campFedSawmill(23, 15, 3);
+    const four = await campFedSawmill(23, 15, 4);
+
+    // The concurrency limit, as a ratio rather than a magnitude — the same form
+    // the outputBufferCap / haulCarryCapacity claim above is stated in.
+    expect(BALANCE.inputBufferCap / BALANCE.haulCarryCapacity).toBe(2);
+    // Measured 0.71 and 0.72: the fourth hauler buys one point of ceiling.
+    expect(share(four)).toBeLessThan(0.8);
+    expect(share(four) - share(three)).toBeLessThan(0.05);
+    // Non-vacuity in both directions, and this is what makes the reading a
+    // statement about the in-tray rather than about arithmetic. The building
+    // really is input-starved (measured 30% of ticks), and the haulers really
+    // are NOT standing about (measured 5% of their ticks idle) — so "hire
+    // another hauler" is refuted by the run rather than by the comment.
+    expect(four.waitingForInputTicks / TICKS).toBeGreaterThan(0.25);
+    expect(four.haulerIdleTicks / (TICKS * 4)).toBeLessThan(0.1);
+    // This is a READING, and a retune of inputBufferCap is what falsifies it —
+    // deliberately, because the reading is the evidence for that retune rather
+    // than a guard against it. Measured on this exact fixture: at 24 the same
+    // run reads 0.92 of ceiling with 3% of ticks waiting, and at 48 it reads
+    // 0.89 with 30 units of colony stock parked in the in-tray. If the constant
+    // moves, this block has to be re-measured and rewritten, not relaxed.
+  }, 120000);
+
+  it('prints the processor sweep when BALANCE_REPORT is set', async () => {
+    if (!process.env.BALANCE_REPORT) return;
+    // Deliberately the same four tiles and four hauler counts the raw sweep
+    // prints, so section 4 can set the two blocks side by side and read the
+    // halving off them. Increment 5's regression procedure greps the raw sweep
+    // out with `^\(\s*[0-9]+,`, so these rows lead with the def name instead.
+    const lines = ['', 'processor sweep — a camp-fed sawmill, crew 2, the raw sweep\'s tiles and hauler counts',
+      'sawmill  tile       leg  haulers  delivered  %ceiling  waiting%  idle  supplyReturns  loaded'];
+    for (const [col, row] of [[3, 0], [8, 4], [15, 8], [23, 15]] as const) {
+      for (const haulers of [1, 2, 3, 4]) {
+        const r = await campFedSawmill(col, row, haulers);
+        lines.push(
+          `sawmill (${String(col).padStart(2)},${String(row).padStart(2)})  ${String(r.legTicks).padStart(4)}  ` +
+          `${String(haulers).padStart(7)}  ${String(r.delivered).padStart(9)}  ${(share(r) * 100).toFixed(0).padStart(8)}  ` +
+          `${((r.waitingForInputTicks / TICKS) * 100).toFixed(0).padStart(8)}  ${String(r.haulerIdleTicks).padStart(4)}  ` +
+          `${String(r.supplyReturns).padStart(13)}  ${String(r.supplyReturnsLoaded).padStart(6)}`,
+        );
+      }
+    }
+    console.log(lines.join('\n'));
+  }, 600000);
+});
+
+/**
+ * Section 4.1's second question is asked in the far corner, where the answer
+ * can differ at all: nearer than this every configuration measured reaches its
+ * ceiling with three haulers, and a depot cannot buy throughput a chain is
+ * already getting.
+ *
+ * Crew 3 on the forester against crew 2 on the sawmill, so the wood side
+ * out-produces the plank side and the chain stays haul-bound at every distance
+ * — a crew-1 sawmill saturates by leg 8 and the whole sweep flattens. The two
+ * crews also keep every per-stage figure distinct (ceilings 600 and 400, legs
+ * 11 and 13, different defs and resources), so a reading that took one stage's
+ * number for the other's cannot look plausible.
+ */
+const crewChain = (a: TileRef, b: TileRef, haulers: number, storehouses?: TileRef[], ticks = TICKS) => runScenario({
+  defId: 'forester', col: a.col, row: a.row, crew: 3, haulers, ticks, resource: 'wood',
+  second: { defId: 'sawmill', col: b.col, row: b.row, crew: 2, resource: 'planks' },
+  storehouses,
+});
+
+/** The far-corner instance of it: a leg-11 forester feeding a leg-13 sawmill. */
+const CORNER: readonly [TileRef, TileRef] = [{ col: 20, row: 12 }, { col: 23, row: 15 }];
+const cornerChain = (haulers: number, storehouses?: TileRef[], ticks = TICKS) =>
+  crewChain(CORNER[0], CORNER[1], haulers, storehouses, ticks);
+
+/** The DEPOT tile for the chain above: between the two buildings and 19 tiles
+ * from the camp, so it is the nearest site to both of them — the only
+ * arrangement in which 20 wood and 10 planks could pay for themselves. */
+const CORNER_DEPOT: TileRef = { col: 21, row: 14 };
+
+/** The five chains the crossover sweep walks, near to far: forester tile,
+ * sawmill tile, and the depot tile between them. */
+const CROSSOVER_CHAINS: readonly (readonly [TileRef, TileRef, TileRef])[] = [
+  [{ col: 5, row: 2 }, { col: 8, row: 4 }, { col: 7, row: 3 }],
+  [{ col: 8, row: 4 }, { col: 11, row: 6 }, { col: 10, row: 5 }],
+  [{ col: 12, row: 6 }, { col: 15, row: 9 }, { col: 13, row: 8 }],
+  [{ col: 16, row: 10 }, { col: 19, row: 13 }, { col: 18, row: 12 }],
+  [CORNER[0], CORNER[1], CORNER_DEPOT],
+];
+
+/** One row of that sweep. Split out of the report block purely to keep its
+ * cognitive complexity under the quality gate — same remedy the harness's own
+ * `shelterPlan` and `populateColony` split applied. */
+function crossoverRow(haulers: number, storehouses: TileRef[] | undefined, r: BalanceResult): string {
+  return (
+    `${String(r.stages[0].legTicks).padStart(4)} ${String(r.stages[1].legTicks).padStart(4)}  ` +
+    `${String(haulers).padStart(7)}  ${(storehouses === undefined ? 'no' : 'yes').padStart(5)}  ` +
+    `${String(r.stages[1].made).padStart(6)}  ${String(r.stages[0].made).padStart(4)}  ` +
+    `${((r.stages[1].waitingForInputTicks / TICKS) * 100).toFixed(0).padStart(16)}  ` +
+    `${String(r.storedAtEnd).padStart(6)}  ${String(r.supplyReturns).padStart(13)}  ` +
+    `${String(r.supplyReturnsLoaded).padStart(6)}  ${String(r.haulerIdleTicks).padStart(4)}`
+  );
+}
+
+describe('storehouse balance', () => {
+  it('a depot pays beside a producer feeding a consumer, and not beside a camp-fed one', async () => {
+    // ONE mechanic, TWO placements, and the pair is the measurement: the same
+    // corner, the same three haulers, the same depot. The only thing that
+    // differs is where the processor's input comes from — the forester next
+    // door, or the camp.
+    //
+    // It matters because a store site can only ever be FILLED by a building's
+    // output (haul-sites.ts's remainderHome comment names the store-to-store
+    // transfer section 2.13 excludes). Nothing pushes camp stock outward, so a
+    // depot beside a camp-fed processor can never shorten the leg the input
+    // walks; all it does is move the deposit off the camp, which leaves the
+    // hauler's next fetch starting further from the only site holding wood.
+    //
+    // Neither bound is reachable by a depot that does nothing: a no-op depot
+    // ties both comparisons, which passes the second and fails the first.
+    const [chainPlain, chainDepot] = [await cornerChain(3), await cornerChain(3, [CORNER_DEPOT])];
+    const [soloPlain, soloDepot] = [await campFedSawmill(23, 15, 3), await campFedSawmill(23, 15, 3, [CORNER_DEPOT])];
+
+    // The depots are live store sites in both with-depot runs, and there is
+    // nothing to hold stock in either control. Without this the two bounds
+    // below could both be satisfied by a depot nobody ever walked to.
+    expect(chainPlain.storedAtEnd).toBe(0);
+    expect(soloPlain.storedAtEnd).toBe(0);
+    expect(chainDepot.storedAtEnd).toBeGreaterThan(0);
+    expect(soloDepot.storedAtEnd).toBeGreaterThan(0);
+
+    // Beside the chain it buys throughput a player would notice. Measured 230
+    // against 204 planks, +13%.
+    expect(chainDepot.stages[1].made).toBeGreaterThan(chainPlain.stages[1].made * 1.05);
+    // Beside the camp-fed processor it buys nothing at all — measured 266
+    // against 294, a LOSS of 10%. The bound is stated as "no material gain"
+    // rather than as a loss because the sign flips with hauler count (at four
+    // haulers it is +3%), and the claim section 4 can carry is that this
+    // placement does not pay, not that it always costs.
+    expect(soloDepot.made).toBeLessThan(soloPlain.made * 1.05);
+  }, 300000);
+
+  it('prints the depot crossover sweep when BALANCE_REPORT is set', async () => {
+    if (!process.env.BALANCE_REPORT) return;
+    // Section 4.1 asks for a crossover DISTANCE: the leg beyond which a depot
+    // buys more than another hauler does. Read it by comparing a with-depot row
+    // at h haulers against the no-depot row at h+1.
+    //
+    // `stored` is printed on every row for the reason the population reading
+    // prints it: a with-depot row reading 0 is a run compared against itself.
+    const lines = ['', 'depot crossover — forester crew 3 feeding sawmill crew 2, planks MADE',
+      'legA legB  haulers  depot  planks  wood  sawmill waiting%  stored  supplyReturns  loaded  idle'];
+    for (const [a, b, depot] of CROSSOVER_CHAINS) {
+      for (const storehouses of [undefined, [depot]]) {
+        for (const haulers of [1, 2, 3, 4]) lines.push(crossoverRow(haulers, storehouses, await crewChain(a, b, haulers, storehouses)));
+      }
+      lines.push('');
+    }
+    // Whether the depot keeps paying or fills once and stops. Nothing ever
+    // moves goods from a depot back to the camp, and the chain's planks have no
+    // consumer, so a depot beside one silts up with finished goods — after
+    // which it can neither take another deposit nor stage another input.
+    lines.push('does the depot keep paying — corner chain, 3 haulers', '  ticks  depot  planks  per tick  stored');
+    for (const ticks of [600, 1200, 2400]) {
+      for (const storehouses of [undefined, [CORNER_DEPOT]]) {
+        const r = await cornerChain(3, storehouses, ticks);
+        lines.push(
+          `  ${String(ticks).padStart(5)}  ${(storehouses === undefined ? 'no' : 'yes').padStart(5)}  ` +
+          `${String(r.stages[1].made).padStart(6)}  ${(r.stages[1].made / ticks).toFixed(3).padStart(8)}  ${String(r.storedAtEnd).padStart(6)}`,
+        );
+      }
+    }
+    console.log(lines.join('\n'));
+  }, 900000);
+});
+
+/**
+ * Section 4.1's third question needs a colony where EVERY building wants
+ * inputs, and this is the shortest one the catalog allows: a mill turning
+ * seeded wheat into flour, feeding a bakery turning flour into bread.
+ *
+ * The drain is an OPENING one, not a mid-run one, and section 4 must say so.
+ * `seededResourcesFor` withholds every resource a stage of the scenario
+ * produces, so at t=0 there is no flour at any site in the colony and the
+ * bakery's input has to be manufactured before it can ever be delivered — which
+ * is section 2.6's deadlock shape exactly. Nothing here drains a ledger that
+ * was full a moment ago; no instrument in this repository can stage that today.
+ *
+ * Crew 2 against crew 3 and ticksPerBatch 3 against 4, so the stages' ceilings
+ * (400 and 450), defs, resources and tiles are all distinct.
+ */
+const millAndBakery = (mill: TileRef, bakery: TileRef, haulers: number) => runScenario({
+  defId: 'mill', col: mill.col, row: mill.row, crew: 2, haulers, ticks: TICKS, resource: 'flour',
+  second: { defId: 'bakery', col: bakery.col, row: bakery.row, crew: 3, resource: 'bread' },
+});
+
+const NEAR: TileRef = { col: 12, row: 6 };
+const FAR: TileRef = { col: 15, row: 9 };
+
+describe('dispatch order under a drained ledger', () => {
+  it('collection resumes, but the farther consumer can be starved outright', async () => {
+    // The two runs are the SAME two buildings with their tiles exchanged, and
+    // the measured quantity is the bakery's gross output. A dispatcher that
+    // shared haulers between the two would put both above zero and fail the
+    // first bound; one that starved the second stage whatever its position
+    // would put both at zero and fail the second. Only "the nearer consumer
+    // takes every trip" satisfies both.
+    const bakeryFar = await millAndBakery(NEAR, FAR, 1);
+    const bakeryNear = await millAndBakery(FAR, NEAR, 1);
+
+    // No deadlock: the colony does not sit still, and it accounts for every
+    // unit while not doing so. The mill's own input is seeded, so this is the
+    // half of section 2.6's argument that holds — supply candidates exist, and
+    // collection rides home on them.
+    expect(bakeryFar.stages[0].made).toBeGreaterThan(0);
+    expect(bakeryFar.goods.conservationError).toBe(0);
+
+    // And no thrash either — the opposite. `compareSupplyCandidates` ranks on
+    // movable stock and then on the whole route, with no fairness term and no
+    // ageing, so while the nearer building can still take a load it takes every
+    // one. `toBe(0)` is the strongest form available and is the finding: over
+    // 600 ticks with one hauler the far bakery produced nothing whatever.
+    expect(bakeryFar.stages[1].made).toBe(0);
+    expect(bakeryFar.stages[1].waitingForInputTicks).toBeGreaterThan(TICKS * 0.95);
+    // Swap the tiles and the same bakery is served. Measured 108 loaves.
+    expect(bakeryNear.stages[1].made).toBeGreaterThan(50);
+  }, 180000);
+
+  it('prints the hauler-tick split when BALANCE_REPORT is set', async () => {
+    if (!process.env.BALANCE_REPORT) return;
+    // Section 4.1 asks for three numbers here: the split of hauler-ticks
+    // between the two kinds of job, the fetch leg's share of them, and how
+    // often a supply trip comes home loaded. The depot rows are printed beside
+    // the plain ones because the fetch leg is the term a depot moves — a hauler
+    // that banked at a depot starts its next fetch there, and the camp is the
+    // only site holding a seeded input.
+    const lines = ['', 'hauler-tick split — percentages of WORKING (non-idle) hauler ticks',
+      'fixture              haulers  made0  made1   idle  working  collect%  supply%  fetch%  out%  return%  supplyReturns  loaded%'];
+    const emit = (label: string, haulers: number, r: BalanceResult) => {
+      const t = r.haulerTicks;
+      const working = t.fetching + t.outbound + t.returning;
+      const pct = (n: number, width: number) => ((n / working) * 100).toFixed(0).padStart(width);
+      lines.push(
+        `${label.padEnd(20)} ${String(haulers).padStart(7)}  ${String(r.stages[0].made).padStart(5)}  ${String(r.stages[1].made).padStart(5)}  ` +
+        `${String(t.idle).padStart(5)}  ${String(working).padStart(7)}  ${pct(t.collect, 8)}  ${pct(t.supply, 7)}  ` +
+        `${pct(t.fetching, 6)}  ${pct(t.outbound, 4)}  ${pct(t.returning, 7)}  ${String(r.supplyReturns).padStart(13)}  ` +
+        `${((r.supplyReturnsLoaded / Math.max(1, r.supplyReturns)) * 100).toFixed(0).padStart(7)}`,
+      );
+    };
+    for (const haulers of [1, 2, 3, 4]) emit('mill->bakery', haulers, await millAndBakery(NEAR, FAR, haulers));
+    for (const haulers of [2, 4]) {
+      emit('mill->bakery + depot', haulers, await runScenario({
+        defId: 'mill', col: NEAR.col, row: NEAR.row, crew: 2, haulers, ticks: TICKS, resource: 'flour',
+        second: { defId: 'bakery', col: FAR.col, row: FAR.row, crew: 3, resource: 'bread' },
+        storehouses: [{ col: 13, row: 8 }],
+      }));
+    }
+    for (const haulers of [1, 2, 3, 4]) emit('forester->sawmill', haulers, await cornerChain(haulers));
+    console.log(lines.join('\n'));
+  }, 900000);
+});
+
+/** The stress colony section 4.1's fifth question is asked at: 100 buildings,
+ * eight of them depots, and 100 colonists. Only the hauling pool varies, which
+ * is the multiplier `chooseJob`'s cost is argued from. */
+const stressColony = (haulers: number) => runPopulationScenario({
+  foodPerTick: 'chain', huts: 20, haulers, startingAdults: 100, houses: 72, storehouses: 8,
+  ticks: 500, sampleEvery: 100,
+});
+
+describe('dispatch cost at scale', () => {
+  it('the frozen-step sentinel still reads zero with most of the colony hauling', async () => {
+    // The stress fixture above runs 12 haulers, which is the realistic share.
+    // 80 of 100 is the shape that makes `chooseJob` expensive — it rebuilds
+    // both candidate lists per IDLE hauler, so a colony with more haulers than
+    // work is its worst case, and it is the one configuration where a stalled
+    // tick would be cheapest to miss.
+    const crowded = await stressColony(80);
+
+    expect(crowded.frozenSteps).toBe(0);
+    // The colony really is that size and its depots really are store sites —
+    // a wall-clock figure read off a colony that quietly failed to be large
+    // measures nothing.
+    expect(populationOf(crowded.samples.at(-1)!)).toBeGreaterThan(90);
+    expect(crowded.storedAtEnd).toBeGreaterThan(0);
+  }, 180000);
+
+  it('prints what a tick costs when BALANCE_REPORT is set', async () => {
+    if (!process.env.BALANCE_REPORT) return;
+    // Wall clock is PRINTED and never asserted: it is a property of the machine
+    // the suite happens to run on. What section 4 can carry from it is the
+    // SHAPE — how the figure moves as buildings, depots and haulers are added,
+    // with everything else held fixed.
+    //
+    // Two caveats belong beside the numbers. The per-tick figure includes the
+    // conservation sentinel's three probes, each of which walks every building
+    // and every hauler, so it overstates a production tick and understates
+    // dispatch's share of one. And a realistic colony is the 12-hauler row: the
+    // 40- and 80-hauler rows are there to isolate the term, not to describe a
+    // colony anyone would staff.
+    const lines = ['', 'wall clock per tick — same machine, same run length, one variable at a time',
+      'case                          buildings  haulers   pop  ms/tick  frozen  stored'];
+    const timed = async (label: string, buildings: number, haulers: number, run: () => Promise<PopulationResult>) => {
+      const started = performance.now();
+      const r = await run();
+      lines.push(
+        `${label.padEnd(28)}  ${String(buildings).padStart(9)}  ${String(haulers).padStart(7)}  ` +
+        `${String(populationOf(r.samples.at(-1)!)).padStart(4)}  ${((performance.now() - started) / 500).toFixed(3).padStart(7)}  ` +
+        `${String(r.frozenSteps).padStart(6)}  ${String(r.storedAtEnd).padStart(6)}`,
+      );
+    };
+    const realistic = { foodPerTick: 'chain' as const, huts: 8, haulers: 6, startingAdults: 40, ticks: 500, sampleEvery: 100 };
+    await timed('realistic 40 buildings', 40, 6, () => runPopulationScenario({ ...realistic, houses: 32 }));
+    await timed('realistic, 4 depots', 40, 6, () => runPopulationScenario({ ...realistic, houses: 28, storehouses: 4 }));
+    for (const haulers of [4, 12, 40, 80]) await timed('stress 100 buildings, 8 depots', 100, haulers, () => stressColony(haulers));
+    console.log(lines.join('\n'));
+  }, 900000);
 });

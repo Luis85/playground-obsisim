@@ -5,7 +5,7 @@ import { isRelocating, type TileRef } from '../../shared/placement';
 import { commuteFactor } from '../../shared/population';
 import { BALANCE } from '../content/balance';
 import { RESOURCE_IDS } from '../content/resources';
-import { Building, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Relocation } from '../components';
+import { Building, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Production, Relocation } from '../components';
 import { PendingChanges, Stockpile } from '../resources';
 import type { Claims, DispatchInputs, HaulBuildingRow, HaulWorkerRow, StaffedSet } from './haul-dispatch';
 import { chooseJob, claimsOf, storeSitesFrom } from './haul-dispatch';
@@ -263,7 +263,7 @@ export const HaulSystem = () => createSystem({
   stockpile: WriteResource(Stockpile),
   buildings: queryComponents({
     building: Read(Building), position: Read(Position), buffer: Write(OutputBuffer),
-    input: Write(InputBuffer), relocation: Read(Relocation),
+    input: Write(InputBuffer), relocation: Read(Relocation), production: Read(Production),
   }),
   workers: queryComponents({ job: Read(JobAssignment), trip: Write(HaulTrip), home: Read(Home) }),
   pending: ReadResource(PendingChanges),

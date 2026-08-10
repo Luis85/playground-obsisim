@@ -6,7 +6,7 @@ import { BALANCE } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
 import { RESOURCE_IDS } from '../content/resources';
 import type { HaulKind } from '../components';
-import { Building, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Relocation } from '../components';
+import { Building, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Production, Relocation } from '../components';
 import type { PendingChanges, Stockpile } from '../resources';
 import { storeSitesOf, type StoreSiteRow } from './haul-sites';
 
@@ -27,6 +27,10 @@ export interface HaulBuildingRow {
   buffer: OutputBuffer;
   input: InputBuffer;
   relocation: Relocation;
+  /** Read only for the starvation floor, and unavoidable there: an empty
+   * in-tray means nothing on its own, because `payFrom` empties it at batch
+   * start. See `supplyCandidates`. */
+  production: Production;
 }
 
 /** Just the trip. The narrowest row any claim reads, and the one the
@@ -187,18 +191,19 @@ function needOf(row: HaulBuildingRow, claims: Claims, capacity: number): { resou
 }
 
 /**
- * `SupplyCandidate.starving`, on its own: this building holds NONE of the
- * resource a candidate would deliver, so it is stopped rather than merely
- * running low. Derived from the live `InputBuffer` on every call — an age or a
- * wait counter would be memory between ticks, which §2.6 forbids.
+ * One of `SupplyCandidate.starving`'s three clauses: this building holds NONE
+ * of the resource a candidate would deliver. The other two — no batch running,
+ * no delivery already claimed — stay at the call site in `supplyCandidates`,
+ * because they read a different component and the claim ledger respectively.
  *
- * Per RESOURCE, not per buffer. Every shipped recipe has 0 or 1 inputs, so
- * "holds none of this resource" and "the in-tray is empty" coincide exactly
- * today and no catalog-driven fixture can tell them apart. Exported so the
- * distinction can be unit-tested directly against a two-resource in-tray —
- * the same escape `cheapestHaulerToRelease` is exported for — because the rule
- * that only becomes wrong the first time a recipe gains a second input is the
- * kind that ships silently.
+ * Per RESOURCE, not per buffer. Exported for that clause alone, because it
+ * cannot be reached through dispatch even in principle: no shipped recipe has
+ * two inputs, and `needOf` calls `shortestOf` ONCE, so with resource A at zero
+ * the candidate for a well-stocked resource B is never emitted to compare
+ * against. Unit-testing an exported rule is the repo's documented escape for
+ * exactly this — `cheapestHaulerToRelease` is exported for the same reason —
+ * and it matters here because a rule that only becomes wrong the first time a
+ * recipe gains a second input is the kind that ships silently.
  */
 export function isStarvingFor(input: InputBuffer, resource: ResourceId): boolean {
   return (input.amounts.get(resource) ?? 0) === 0;
@@ -238,9 +243,29 @@ function supplyCandidates(
     const need = needOf(row, claims, capacity);
     if (need === null) continue;
     const unclaimedAt = (siteId: number) => claims.unclaimedAt(siteId, need.resource);
-    // Once per BUILDING rather than per site: it is a fact about the in-tray,
-    // so every candidate for this building must carry the same answer.
-    const starving = isStarvingFor(row.input, need.resource);
+    // Nothing in hand, nothing in progress, nothing on the way. Derived once
+    // per BUILDING rather than per site: it is a fact about the building, so
+    // every candidate for it must carry the same answer.
+    //
+    // All three clauses are load-bearing, each against a different way the
+    // floor would stop being one:
+    //
+    // - `batchActive`, because `payFrom` (production-system.ts) draws a batch's
+    //   inputs out of the in-tray at batch START. An empty tray is therefore
+    //   the ORDINARY state of a building producing perfectly well — a mill on a
+    //   three-tick batch holds no wheat for three ticks out of three — and
+    //   without this clause that healthy producer outranks a consumer blocked
+    //   for six hundred ticks, on the tick after every delivery it receives.
+    // - `claims.input`, because the other two read PHYSICAL state and neither
+    //   moves when a hauler is DISPATCHED, only when one ARRIVES several legs
+    //   later. Dispatch runs every idle hauler inside one tick, so without this
+    //   clause the promotion is not extinguished until a load LANDS and every
+    //   hauler idle on that tick is sent to the same building. `needOf`
+    //   bounds the pile-up at the tray's room, which is not the same as
+    //   intending it.
+    const starving = isStarvingFor(row.input, need.resource)
+      && !row.production.batchActive
+      && claims.input(row.building.id) === 0;
     for (const site of sitesHolding(sites, unclaimedAt)) {
       const movable = Math.min(need.room, unclaimedAt(site.id));
       if (!worthMoving(movable, unclaimedAt(site.id))) continue;

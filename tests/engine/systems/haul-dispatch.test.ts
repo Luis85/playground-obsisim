@@ -38,6 +38,10 @@ interface Spec {
   buffer?: Partial<Record<ResourceId, number>>;
   /** This building's own in-tray, as a hauler would have filled it. */
   inputBuffer?: Partial<Record<ResourceId, number>>;
+  /** A batch already in progress. Its inputs are ALREADY out of the in-tray —
+   * `payFrom` draws them at batch start — which is why an empty tray on its own
+   * says nothing about whether a building is working. */
+  batchActive?: boolean;
   /** Colonists assigned to it — supply dispatch requires at least one. */
   crew?: number;
   /** Ledger stock standing IN this building, for a storehouse. */
@@ -74,7 +78,7 @@ async function setup(specs: readonly Spec[], haulerCount: number, options: Optio
   const prep = buildColonyPrepWorld({ save, systems });
   const ids = getPrepResource(prep, IdCounter);
   const buildings = specs.map((spec) => spawnBuilding(prep, ids, {
-    id: spec.id, defId: spec.defId, progress: 0, batchActive: false, col: spec.col, row: spec.row,
+    id: spec.id, defId: spec.defId, progress: 0, batchActive: spec.batchActive ?? false, col: spec.col, row: spec.row,
     relocatingTicks: 0, buffer: spec.buffer, inputBuffer: spec.inputBuffer,
   }));
   const adult = BALANCE.lifeBands.matureTicks;
@@ -846,53 +850,156 @@ describe('reservations', () => {
   });
 });
 
+/**
+ * Every case below is the same shape: a FAR bakery under test (id 111) against
+ * a NEAR rival (id 222) that is never starving, both staffed, both suppliable
+ * from the camp's flour, and both with more room than one hauler can carry — so
+ * `movable` is 6 for each and the whole route is the only pre-existing term
+ * that can separate them. The far one therefore wins if and only if it is
+ * starving, and it also carries the LOWER building id, so the id tie-break
+ * cannot produce that answer either.
+ */
+const FAR_BAKERY = MILL; // (12, 8) — no other building in these cases stands there
+const NEAR_BAKERY = { col: 6, row: 0 };
+const FAR_ID = 111;
+const NEAR_ID = 222;
+
+/** The rival: five of the twelve it can hold, no batch running, near the camp. */
+const nearRival: Spec = { id: NEAR_ID, defId: 'bakery', ...NEAR_BAKERY, inputBuffer: { flour: 5 }, crew: 1 };
+
 describe('the starvation floor', () => {
   it('a building holding some of what it needs is not starving', async () => {
-    // Two bakeries, both staffed, both suppliable from the camp's flour, both
-    // with more room than a hauler can carry — so `movable` is 6 for each and
-    // the whole route is the only pre-existing term that can separate them.
     // Neither in-tray is EMPTY, so neither is starving and the near bakery
-    // takes the trip.
-    //
-    // Discriminating in both directions, which is the point of the case:
-    // widening the band from `=== 0` to `<= 1` makes the far bakery starving
-    // and hands it the trip, while deleting the starving term altogether
-    // leaves this answer exactly as it stands. The far bakery also carries the
-    // LOWER building id, so the id tie-break cannot be producing the answer
-    // either.
-    const NEAR_BAKERY = { col: 6, row: 0 };
-    const FAR_BAKERY = MILL; // (12, 8) — no other building in this case stands there
+    // takes the trip. Discriminating in both directions, which is the point of
+    // the case: widening the band from `=== 0` to `<= 1` makes the far bakery
+    // starving and hands it the trip, while deleting the starving term
+    // altogether leaves this answer exactly as it stands.
     const holdsOne = 1;
-    const holdsFive = 5;
     // Four pairwise-distinct numbers, so no assertion here can be satisfied by
     // a field that read a neighbour's value.
-    expect(new Set([holdsOne, holdsFive, BALANCE.haulCarryCapacity, BALANCE.inputBufferCap]).size).toBe(4);
+    expect(new Set([holdsOne, 5, BALANCE.haulCarryCapacity, BALANCE.inputBufferCap]).size).toBe(4);
     // Both in-trays leave MORE room than one hauler can carry, so the two
     // candidates really do tie on `movable` and the case turns on nothing else.
     expect(BALANCE.inputBufferCap - holdsOne).toBeGreaterThan(BALANCE.haulCarryCapacity);
-    expect(BALANCE.inputBufferCap - holdsFive).toBeGreaterThan(BALANCE.haulCarryCapacity);
+    expect(BALANCE.inputBufferCap - 5).toBeGreaterThan(BALANCE.haulCarryCapacity);
 
     const { haulers, step, world } = await setup([
-      { id: 111, defId: 'bakery', ...FAR_BAKERY, inputBuffer: { flour: holdsOne }, crew: 1 },
-      { id: 222, defId: 'bakery', ...NEAR_BAKERY, inputBuffer: { flour: holdsFive }, crew: 1 },
+      { id: FAR_ID, defId: 'bakery', ...FAR_BAKERY, inputBuffer: { flour: holdsOne }, crew: 1 },
+      nearRival,
     ], 1, { camp: { flour: 20 } });
     let systemErrors = 0;
     world.eventBus.subscribe(SystemError, () => { systemErrors++; });
 
     await step(1);
     expect(tripOf(haulers[0])).toMatchObject({
-      kind: 'supply', phase: 'fetching', targetId: 222, plannedAmount: BALANCE.haulCarryCapacity,
+      kind: 'supply', phase: 'fetching', targetId: NEAR_ID, plannedAmount: BALANCE.haulCarryCapacity,
+    });
+    expect(systemErrors).toBe(0);
+  });
+
+  /**
+   * The `batchActive` pair. One fixture, one knob, and the knob is the whole
+   * case: `payFrom` (src/engine/systems/production-system.ts) draws a batch's
+   * inputs out of the in-tray at batch START, so an EMPTY in-tray is the
+   * ordinary state of a building producing perfectly well — a mill on a
+   * three-tick batch holds no wheat for three ticks out of three. Nothing but
+   * `batchActive` tells that building apart from one that has actually run dry,
+   * which is why the two cases below differ in nothing else at all.
+   *
+   * They are a pair for the reason `docs/process/agent-workflow.md` gives:
+   * the empty-tray clause is TRUE in both, so this clause alone has to carry
+   * each assertion, and dropping `&& !row.production.batchActive` on its own
+   * reddens the first and leaves the second green.
+   */
+  const emptyTrayBakery = (batchActive: boolean) => setup([
+    { id: FAR_ID, defId: 'bakery', ...FAR_BAKERY, crew: 1, batchActive },
+    nearRival,
+  ], 1, { camp: { flour: 20 } });
+
+  it('a building mid-batch is not starving, however empty its tray', async () => {
+    // The far bakery's tray is empty because its crew is baking what used to be
+    // in it. It is not blocked, so it does not jump the queue: the near rival,
+    // which is nearer and nothing else, takes the trip.
+    const { haulers, step, world } = await emptyTrayBakery(true);
+    let systemErrors = 0;
+    world.eventBus.subscribe(SystemError, () => { systemErrors++; });
+    // The route really is against the far bakery — the only pre-existing term
+    // in play, and by a wide margin.
+    expect(legTicks(CAMP_TILE, FAR_BAKERY)).toBeGreaterThan(legTicks(CAMP_TILE, NEAR_BAKERY));
+
+    await step(1);
+    expect(tripOf(haulers[0])).toMatchObject({
+      kind: 'supply', phase: 'fetching', targetId: NEAR_ID, plannedAmount: BALANCE.haulCarryCapacity,
+    });
+    expect(systemErrors).toBe(0);
+  });
+
+  it('a building with an empty tray and no batch running IS starving', async () => {
+    // The same fixture with the batch stopped: now the empty tray means the
+    // crew has nothing to work with, and the floor sends the hauler the long
+    // way round rather than topping up the rival that is already stocked.
+    const { haulers, step, world } = await emptyTrayBakery(false);
+    let systemErrors = 0;
+    world.eventBus.subscribe(SystemError, () => { systemErrors++; });
+
+    await step(1);
+    expect(tripOf(haulers[0])).toMatchObject({
+      kind: 'supply', phase: 'fetching', targetId: FAR_ID, plannedAmount: BALANCE.haulCarryCapacity,
+    });
+    expect(systemErrors).toBe(0);
+  });
+
+  it('a second hauler is not promoted to a building already being served', async () => {
+    // The multi-hauler check this increment applies to everything else, turned
+    // on the floor itself: if ten idle haulers were dispatched on the same
+    // tick, would this have stopped the tenth?
+    //
+    // An in-tray and a batch flag are both PHYSICAL state, and neither moves
+    // when a hauler is DISPATCHED — only when one ARRIVES, several legs later.
+    // Dispatch runs every idle hauler inside one tick, so on those two clauses
+    // alone the second hauler reads the same empty tray as the first and is
+    // promoted to the same building behind it.
+    //
+    // TWO haulers by construction: the first dispatch is correct with or
+    // without the claim clause, so the assertion that carries this case is the
+    // SECOND hauler's target and a one-hauler fixture would prove nothing.
+    const { haulers, step, world } = await setup([
+      { id: FAR_ID, defId: 'bakery', ...FAR_BAKERY, crew: 1 },
+      nearRival,
+    ], 2, { camp: { flour: 20 } });
+    let systemErrors = 0;
+    world.eventBus.subscribe(SystemError, () => { systemErrors++; });
+
+    await step(1);
+    // The first hauler is promoted across the map, exactly as the case above.
+    expect(tripOf(haulers[0])).toMatchObject({
+      kind: 'supply', phase: 'fetching', targetId: FAR_ID, plannedAmount: BALANCE.haulCarryCapacity,
+    });
+    // THE assertion: the far bakery has a load on the way, so it is no longer
+    // starving and the second hauler falls back to the ordinary order — which
+    // sends it to the nearer building. It is not left idle either: the camp
+    // still holds 14 flour and the rival still has room, so "no supply job at
+    // all" would be a different bug passing as this fix.
+    expect(tripOf(haulers[1])).toMatchObject({
+      kind: 'supply', phase: 'fetching', targetId: NEAR_ID, plannedAmount: BALANCE.haulCarryCapacity,
     });
     expect(systemErrors).toBe(0);
   });
 
   it('starving is about the resource being delivered, not any input', () => {
-    // No shipped recipe has two inputs — every def in
-    // `src/engine/content/buildings.ts` has 0 or 1 — and `needOf` reads the
-    // module-level catalog by defId, so dispatch simply cannot be posed this
-    // question. The rule is exported and unit-tested directly instead, the way
-    // `cheapestHaulerToRelease` is: an `InputBuffer` is content-free, so a
-    // two-resource in-tray needs no def at all.
+    // The empty-tray HALF of the rule, on its own — the `batchActive` half sits
+    // at the call site in `supplyCandidates` and has the pair above.
+    //
+    // Unit-tested rather than dispatched, and it cannot be otherwise. No
+    // shipped recipe has two inputs (every def in
+    // `src/engine/content/buildings.ts` has 0 or 1) and `needOf` reads the
+    // module-level catalog by defId; but even given a two-input def it would
+    // still be unreachable, because `needOf` calls `shortestOf` ONCE and
+    // `supplyCandidates` emits a candidate only for the resource it returns —
+    // with A at zero, A always has the lowest ratio, so the B candidate this
+    // case has to compare against never exists. So the rule is exported and
+    // tested directly, the way `cheapestHaulerToRelease` is: an `InputBuffer`
+    // is content-free, so a two-resource in-tray needs no def at all.
     //
     // What this pins is that the band is per-RESOURCE and not per-buffer.
     // Today "holds none of the resource being delivered" and "in-tray empty"

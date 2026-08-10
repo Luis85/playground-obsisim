@@ -87,7 +87,9 @@ The ranking has no fairness term, so while the nearer hungry building can still 
 **The correction this task rests on — read before starting.** OBS-7-01's "Suggested resolution" offers ageing and says it "could be derived rather than stored: `waitingForInputTicks` is already a live component field and already published." **It is not.** `waitingForInputTicks` is an accumulator in `tests/support/balance-harness.ts` (`StageResult`), summed by sampling snapshot status each tick. Grep confirms no component carries it. Adding one would be memory between ticks, which §2.6 of increment 7 forbids by name. Take the issue's *second* shape instead — a starvation term derived from live state. The issue note is corrected in Task 12.
 
 **Interfaces:**
-- `SupplyCandidate` gains `starving: boolean` — **the building holds zero of the resource this candidate would deliver, has no batch in progress, and has no supply delivery already claimed toward it.** Nothing in hand, nothing in progress, nothing on the way. Derived in `supplyCandidates` from `row.input.amounts.get(need.resource) ?? 0` (public: `ResourceBuffer.amounts` is `public readonly`), `row.production.batchActive`, and `claims.input(row.building.id)`. Not "holds zero of any input" — the band must be about the resource this candidate is actually for, or two candidates for the same building rank differently for no reason a player could see.
+- `SupplyCandidate` gains `starving: boolean` — **delivering this resource right now would start a batch, and nothing is already on its way.** Four clauses: the building holds zero of the resource this candidate would deliver, has no batch in progress, has output room for another batch, and has no supply delivery already claimed toward it. Derived in `supplyCandidates` from `row.input.amounts.get(need.resource) ?? 0` (public: `ResourceBuffer.amounts` is `public readonly`), `row.production.batchActive`, `row.buffer.room(BALANCE.outputBufferCap) >= batchOutputUnits(recipe)`, and `claims.input(row.building.id)`. Not "holds zero of any input" — the band must be about the resource this candidate is actually for, or two candidates for the same building rank differently for no reason a player could see.
+
+  **Read the four clauses as one idea.** Three of them are exactly `startBatch`'s own early returns (production-system.ts): batch already running, output buffer without room for another batch's worth, inputs absent. The fourth is the reservation. The rule is one question — *would a load land and immediately do something* — asked against the function that actually decides, plus *is a load already coming*. `batchOutputUnits` is exported from `src/engine/content/buildings.ts` and `needOf` already destructures `recipe`, so the clause costs no new plumbing.
 
   **The claim clause is this increment's own multi-hauler rule applied to itself, and it is the one bound nobody thought to check.** An in-tray and a batch flag are both PHYSICAL state: neither moves when a hauler is *dispatched*, only when one *arrives*. Dispatch runs every idle hauler within one tick, so on the two physical clauses alone the second hauler reads the same empty tray as the first and is promoted to the same building. `Claims.input` bounds it at `inputBufferCap / capacity` (two haulers today) because `needOf` returns null once the tray's room is fully claimed — but bounded is not intended, and the "promotion ends the moment a single load lands" guarantee is false without this clause. Apply the check the Global Constraints state: *if ten idle haulers were dispatched on the same tick, would this have stopped the tenth?*
 
@@ -146,6 +148,19 @@ it('a building with an empty tray and no batch running IS starving', async () =>
   // discriminate as a pair.
 });
 
+it('a processor blocked on a full output buffer is not starving', async () => {
+  // THE FOURTH CLAUSE, with the other three true: in-tray empty of the
+  // resource, `batchActive` false, nothing claimed inbound — and the output
+  // buffer at `outputBufferCap`. `startBatch` returns on output room BEFORE it
+  // reaches `payFrom`, so a delivery cannot start a batch and the trip buys
+  // nothing. What unblocks this building is a COLLECT trip.
+  //
+  // The common case, not a corner one: this is the far-processor `outputFull`
+  // stall that `StageResult.stalledTicks` counts.
+  //
+  // Dropping the output-room clause alone must redden this and nothing else.
+});
+
 it('a second hauler is not promoted to a building already being served', async () => {
   // THE THIRD CLAUSE, and it needs MORE HAULERS THAN ONE by construction — a
   // single-hauler fixture passes against its absence. Two idle haulers, one
@@ -200,7 +215,7 @@ The comparator term and the `supplyCandidates` field. Put the reasoning where th
 
 - [ ] **Step 3: Mutation-test**
 
-At minimum: delete the starving term; invert it; change `=== 0` to `< 2`; **drop `&& !row.production.batchActive` alone**; **drop the `claims.input(...) === 0` clause alone**; and make the exported predicate read `input.total() === 0` (the "holds zero of ANY input" bug). The two "alone" mutations are the point — per-clause, not whole-condition, because each clause's neighbours survive the whole-condition mutation and keep the rest of the suite green, which is exactly the shape the Global Constraints warn about. Each must redden exactly one named test.
+At minimum: delete the starving term; invert it; change `=== 0` to `< 2`; **drop `&& !row.production.batchActive` alone**; **drop the output-room clause alone**; **drop the `claims.input(...) === 0` clause alone**; and make the exported predicate read `input.total() === 0` (the "holds zero of ANY input" bug). The three "alone" mutations are the point — per-clause, not whole-condition, because each clause's neighbours survive the whole-condition mutation and keep the rest of the suite green, which is exactly the shape the Global Constraints warn about. Each must redden exactly one named test.
 
 - [ ] **Step 4: Verify and commit**
 

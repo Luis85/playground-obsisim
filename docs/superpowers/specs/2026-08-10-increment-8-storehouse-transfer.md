@@ -123,15 +123,27 @@ state and independent of entity iteration order.
 So the fix is the issue's second shape, a starvation term derived entirely from
 live state:
 
-> **A candidate is *starving* when the building holds zero of the resource that
-> candidate would deliver, has no batch in progress, and has no supply delivery
-> already claimed toward it** — nothing in hand, nothing in progress, nothing on
-> the way. *Topping up* otherwise. Starving outranks topping up, ahead of every
-> existing term. Within a band nothing changes.
+> **A candidate is *starving* when delivering it this resource, right now, would
+> start a batch — and nothing is already on its way.** Concretely: the building
+> holds zero of the resource that candidate would deliver, has no batch in
+> progress, has output room for another batch, and has no supply delivery
+> already claimed toward it. *Topping up* otherwise. Starving outranks topping
+> up, ahead of every existing term. Within a band nothing changes.
 
 Derived from `InputBuffer.amounts`, the resource `needOf` already chose,
-`Production.batchActive`, and `Claims.input`. No new state, no new component, no
-iteration-order dependence, and the tie-break chain still ends at a site id.
+`Production.batchActive`, `OutputBuffer.room` against `batchOutputUnits`, and
+`Claims.input`. No new state, no new component, no iteration-order dependence,
+and the tie-break chain still ends at a site id.
+
+**Read the four clauses as one idea, not as an accumulation.** Three of them are
+exactly `startBatch`'s own preconditions (production-system.ts): it returns
+early if a batch is already running, returns early if the output buffer lacks
+room for another batch's worth, and otherwise starts only if `payFrom` finds the
+inputs. The fourth is the reservation. So the rule is not four conditions that
+happened to survive review — it is a single question, *would a load land and
+immediately do something*, asked against the function that actually decides,
+plus *is a load already coming*. Anything `startBatch` checks belongs here by
+construction, and anything it does not check does not.
 
 **The second clause is not a refinement, and an earlier draft of this section
 was wrong without it.** That draft ranked on the empty in-tray alone and
@@ -163,6 +175,17 @@ third after it. `Claims.input` bounds the damage at `inputBufferCap / capacity`
 tray's room is fully claimed. Bounded is not the same as intended: the guarantee
 below says the promotion "ends the moment a single load lands", and without this
 clause that sentence is simply false.
+
+**The output-room clause closes the mirror-image hole.** A processor that
+finishes a batch into a full output buffer with an empty in-tray leaves
+`batchActive` false, so the first three clauses call it starving — but
+`startBatch` cannot begin work no matter what arrives, because it returns on
+output room before it ever reaches `payFrom`. That building is blocked on
+*collection*, not on input, and the thing that unblocks it is a collect trip. On
+three clauses the floor promotes it ahead of a processor that would resume the
+instant a load landed, and spends a supply trip on a building that cannot use
+it. This is the far-processor `outputFull` stall that `StageResult.stalledTicks`
+counts, so it is the common case rather than a corner one.
 
 Apply this spec's own test, the one §2.4 opens with and Task 12 puts in
 `docs/process/agent-workflow.md`: *if ten idle haulers were dispatched on the
@@ -203,7 +226,7 @@ the ordinary route term decides again. It cannot pin a hauler to a distant
 building indefinitely, because the condition it ranks on is extinguished by
 serving it once.
 
-All three clauses are needed for that argument to hold, and each fails it a
+All four clauses are needed for that argument to hold, and each fails it a
 different way. Without `batchActive` the condition is *not* extinguished by
 serving the building once — it returns on the tick the next batch starts and
 every batch after it — so what looks like a floor becomes a term that fires on
@@ -211,7 +234,10 @@ and off for every consumer in the colony, and the band stops distinguishing
 anything. Without the claim clause the promotion is not extinguished until a
 load physically *lands*, several legs later, so every hauler idle on the
 dispatch tick is promoted to the same building and "serving it once" is not what
-happens at all.
+happens at all. Without the output-room clause serving the building does not
+extinguish the condition either, because the delivery cannot start a batch: the
+load sits in the tray, the building stays blocked on collection, and the trip
+bought nothing.
 
 **The risk this takes, stated because §4 must measure it in both directions.**
 The failure mode opposite to starvation is a hauler crossing the map past a

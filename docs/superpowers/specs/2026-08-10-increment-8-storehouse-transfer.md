@@ -706,6 +706,25 @@ correction matters twice over: it is the difference between a branch that is
 *rare* and one that is currently *unreachable*, and the plan's fixture for this
 case was written around the `spillTo` story and could not have exercised it.
 
+**The recheck asks "did something else eat my room", not "does my load fit".**
+`heldAt` counts every returning trip's `amount` against its `destSiteId`,
+including the amount carried by the trip now arriving — so the arriving load is
+already in the figure and adding it again double-counts. A four-unit transfer
+reaching a 60-capacity depot that physically holds 56 reads `heldAt === 60`, and
+a recheck of the form `heldAt + amount > capacity` compares 64 against 60 and
+turns away an arrival whose room was reserved for it exactly. Every exact fit
+would fail, quietly, with the loads ending up at the camp — the very number §4.2
+exists to measure. `destinationFor` already documents this double-count and
+releases the trip's own reservation before resolving; this recheck must either
+do the same or compare `heldAt` against capacity directly.
+
+The boundary needs a fixture of its own, at exact fit. A roomy arrival passes
+under both forms and an overfull one fails under both, so neither of §2.9's
+other cases can distinguish them. That is not a hypothetical concern here:
+increment 7 shipped this identical off-by-one twice, in `nearestSiteWithRoom`
+and in `remainderHome`'s inline copy of it, and both were caught by review
+rather than by a test.
+
 Unreachable is not a reason to drop it. Increment 7's own precedent governs:
 `buildingArrival`'s demolished-target branch has no live caller either and is
 kept as defense-in-depth, because a vanished or overfull destination must never

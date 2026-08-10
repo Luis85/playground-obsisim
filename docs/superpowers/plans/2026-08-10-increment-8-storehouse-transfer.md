@@ -600,7 +600,13 @@ The mechanic turns on. §2.5, §2.6, §2.7.
   - the `targetRowOf === undefined` cancel must admit a transfer *before* the building lookup, or **every transfer cancels on arrival at its source** (a transfer's `targetId` is null, so the lookup always misses);
   - the tail starts a `returning` leg to the **reserved** destination, not an `outbound` leg to a building — and **without going through `destinationFor`**, which would discard the reservation `heldAt` is built on;
   - a transfer whose `takeAt` returned **0** cancels where it stands. No load and no building to continue to — the one case with no counterpart in the supply path, where a zero fetch carries on and finishes as an ordinary collect run.
-- `depositArrival`'s "did not arrive at a live destination" branch widens to "**or the destination cannot take the whole load**", taking the same `turnForHome` exit. Reservation covers every hauler-driven way a site fills; it does not cover `spillTo` from a demolished storehouse. Bank-what-fits-and-forward-the-rest is `bankWithSpill`'s behaviour and it teleports the remainder to the camp past a hauler standing at the depot.
+- `depositArrival`'s "did not arrive at a live destination" branch widens to "**or the destination cannot take the whole load**", taking the same `turnForHome` exit. Reservation covers every hauler-driven way a site fills; §2.7 records that no non-trip path can currently consume reserved room, so this is defense-in-depth. Bank-what-fits-and-forward-the-rest is `bankWithSpill`'s behaviour and it teleports the remainder to the camp past a hauler standing at the depot.
+
+  **The recheck must NOT be `heldAt(dest) + trip.amount > capacity`, and this is the third time this codebase has met this boundary.** `heldAt` counts `phase === 'returning' && destSiteId === dest → amount`, so the arriving trip's own load is **already inside** the figure. Adding it again double-counts: a 4-unit transfer arriving at a 60-capacity depot physically holding 56 reads `heldAt === 60`, then tests `60 + 4 > 60` and turns for home — a correct, exactly-reserved arrival walking away from the room that was reserved for it. Every exact fit fails, silently, and the loads end up at the camp, which is precisely the number §4.2 measures.
+
+  Write it as `heldAt(dest) > capacity` (the reservation is already counted, so this asks "did something else eat my room"), or release this trip's reservation first the way `destinationFor` does — that function's doc comment already explains this exact double-count and is the precedent to follow rather than rediscover.
+
+  **It needs an exact-fit fixture, because neither planned test can see it.** The roomy end-to-end fixture has slack and passes either way; the deliberately-overfilled fixture turns for home either way. Only a transfer whose load fits its destination *exactly* distinguishes the two forms. This repo has now shipped this same off-by-one boundary twice — `nearestSiteWithRoom`'s `>` vs `>=` and `remainderHome`'s inline copy of it, both in increment 7, both found by review rather than by a test — so an exact-fit arrival test is not optional here.
 
 - [ ] **Step 1: Write the failing tests, tick by tick**
 
@@ -635,6 +641,22 @@ it('a transfer whose destination vanished carries its load onward', async () => 
   // Demolish the destination depot mid-return. NOT banked remotely, NOT walked
   // back to source: nearest-with-room from where it stands. Assert the hauler
   // walks a fresh leg (phase still returning, new legTo) rather than teleporting.
+});
+
+it('a transfer whose load fits its destination EXACTLY is banked, not turned away', async () => {
+  // The exact-fit boundary, and the only fixture that can see the double-count.
+  // A 4-unit transfer arriving at a 60-capacity depot physically holding 56.
+  // `heldAt` already includes this trip's own 4, so a recheck written as
+  // `heldAt(dest) + trip.amount > capacity` reads 60 + 4 and turns a perfectly
+  // reserved arrival for home.
+  //
+  // The roomy fixture below passes either way and the overfilled one fails
+  // either way — neither discriminates. Assert the depot GAINED the load and
+  // the trip ended (phase idle), not merely that the colony total held.
+  //
+  // Third time in this codebase: `nearestSiteWithRoom`'s `>` vs `>=` and
+  // `remainderHome`'s inline copy of it were the first two, both increment 7,
+  // both found by review rather than by a test.
 });
 
 it('a transfer whose destination filled below its reservation carries on', async () => {

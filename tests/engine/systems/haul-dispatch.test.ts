@@ -666,28 +666,91 @@ describe('reservations', () => {
     expect(new Set(targets).size).toBe(3);
   });
 
+  it('an input claim is SUBTRACTED from room, not treated as an all-or-nothing exclusion', async () => {
+    // One mill, an EMPTY 12-unit in-tray, one crew, and three haulers: room for
+    // exactly two 6-unit loads. This is the case the three-starved-mills test
+    // above cannot be, because there `room` (6) and `haulCarryCapacity` (6) are
+    // equal — a fixture where any claim at all excludes the whole building
+    // passes it exactly as well as one where the claim is subtracted. Here
+    // room (12) is not haulCarryCapacity (6), so "subtract 6, then 6 again"
+    // and "exclude on any nonzero claim" diverge on the SECOND hauler: the
+    // first must find room, the second must find a smaller room, and the
+    // third must find none.
+    const { world, haulers, step } = await setup(
+      [{ defId: 'mill', ...MILL, crew: 1 }], 3, { camp: { wheat: 100 } },
+    );
+    let systemErrors = 0;
+    world.eventBus.subscribe(SystemError, () => { systemErrors++; });
+
+    await step(1);
+    const jobs = haulers
+      .map((h) => tripOf(h))
+      .map((t) => ({ kind: t.kind, phase: t.phase, planned: t.plannedAmount }))
+      .sort((a, b) => b.planned - a.planned);
+    expect(jobs).toEqual([
+      { kind: 'supply', phase: 'fetching', planned: 6 },
+      { kind: 'supply', phase: 'fetching', planned: 6 },
+      { kind: 'collect', phase: 'idle', planned: 0 },
+    ]);
+    expect(systemErrors).toBe(0);
+  });
+
+  it('an outbound leg still claims the room it will fill, so a second hauler is not sent for it too', async () => {
+    // The mill's in-tray already holds 6 of 12: room for exactly one more
+    // load, stated as such, because that equality (not haulCarryCapacity
+    // against itself, but held-stock against room) is what makes "claim it
+    // fully while outbound" and "claim nothing once outbound" tell apart —
+    // the first hauler's `plannedAmount` resets to 0 the moment it picks up
+    // and turns outbound, so only the `amount` term can still be holding the
+    // room claimed. A second hauler, still idle, is re-evaluated on the very
+    // tick the first goes outbound and must still find none.
+    const { world, haulers, step } = await setup(
+      [{ defId: 'mill', ...MILL, inputBuffer: { wheat: 6 }, crew: 1 }], 2, { camp: { wheat: 100 } },
+    );
+    let systemErrors = 0;
+    world.eventBus.subscribe(SystemError, () => { systemErrors++; });
+
+    await step(1);
+    expect(tripOf(haulers[0])).toMatchObject({ kind: 'supply', phase: 'fetching', plannedAmount: 6 });
+    expect(tripOf(haulers[1])).toMatchObject({ phase: 'idle' });
+
+    await step(legTicks(CAMP_TILE, CAMP_TILE)); // source arrival: loaded, and now outbound
+    expect(tripOf(haulers[0])).toMatchObject({ phase: 'outbound', amount: 6, plannedAmount: 0 });
+    // Still nothing for the second hauler — the claim moved from plannedAmount
+    // to amount, it did not vanish.
+    expect(tripOf(haulers[1])).toMatchObject({ kind: 'collect', phase: 'idle', plannedAmount: 0 });
+    expect(systemErrors).toBe(0);
+  });
+
   it('a supply hauler claims the output it will load on arrival, so no second hauler is sent at it', async () => {
     // The output claim counts haulers of BOTH kinds, because a supply hauler
     // loads the target's out-tray on arrival too (§2.5 step 3).
     //
-    // The camp holds exactly one carry of wheat, so the SOURCE claim (already
-    // covered above) is what leaves the second hauler with no supply job and
-    // pushes it onto the collect list — deliberately, so this case turns on the
-    // output claim alone rather than sharing the input claim's fixture. There
-    // the mill's 4 flour is the biggest backlog going and the forester's 3 wood
-    // the only other, so counting the supply hauler's carry against that 4 is
-    // the one thing that can send it to the forester instead.
+    // The camp holds fewer than one hauler's carry of wheat (5, against a
+    // haulCarryCapacity of 6), so the SOURCE claim (already covered above) is
+    // what leaves the second hauler with no supply job and pushes it onto the
+    // collect list — deliberately, so this case turns on the output claim
+    // alone rather than sharing the input claim's fixture. There the mill's 4
+    // flour is the biggest backlog going and the forester's 3 wood the only
+    // other, so counting the supply hauler's carry against that 4 is the one
+    // thing that can send it to the forester instead.
+    //
+    // 5 rather than a flat 6: camp stock, haulCarryCapacity and the room a
+    // bare-in-tray mill offers would otherwise all read 6, and so would the
+    // asserted plannedAmount — a fixture that cannot tell `movable = min(room,
+    // unclaimed)` apart from a flat capacity. 5 forces the SOURCE, not the
+    // capacity, to be the binding number.
     const { world, buildings, haulers, step, stockpile } = await setup([
       { defId: 'mill', ...MILL, buffer: { flour: 4 }, crew: 1 },
       { defId: 'forester', ...FORESTER, buffer: { wood: 3 } },
-    ], 2, { camp: { wheat: 6 } });
+    ], 2, { camp: { wheat: 5 } });
     const [mill, forester] = buildings;
     // The two backlogs are tellable apart, and the mill's is the LARGER: an
     // unclaimed mill wins the collect ordering outright.
     expect(bufferOf(mill).total()).toBeGreaterThan(bufferOf(forester).total());
 
     await step(1);
-    expect(tripOf(haulers[0])).toMatchObject({ kind: 'supply', phase: 'fetching', targetId: idOf(mill), plannedAmount: 6 });
+    expect(tripOf(haulers[0])).toMatchObject({ kind: 'supply', phase: 'fetching', targetId: idOf(mill), plannedAmount: 5 });
     expect(tripOf(haulers[1])).toMatchObject({ kind: 'collect', phase: 'outbound', targetId: idOf(forester) });
 
     // And it really was a whole job, not merely a differently-labelled one:
@@ -695,8 +758,9 @@ describe('reservations', () => {
     await step(1 + legTicks(CAMP_TILE, CAMP_TILE) + legTicks(CAMP_TILE, MILL) + legTicks(MILL, CAMP_TILE));
     expect(stockpile.getAt(CAMP_SITE_ID, 'flour')).toBe(4);
     expect(stockpile.getAt(CAMP_SITE_ID, 'wood')).toBe(3);
-    expect(inputOf(mill).amounts.get('wheat')).toBe(6);
-    expect(colonyTotal(world, 'wheat')).toBe(6);
+    expect(colonyTotal(world, 'wood')).toBe(3); // a colony-wide total, not just the field just written
+    expect(inputOf(mill).amounts.get('wheat')).toBe(5);
+    expect(colonyTotal(world, 'wheat')).toBe(5);
     expect(colonyTotal(world, 'flour')).toBe(4);
   });
 });
@@ -801,13 +865,17 @@ describe('a target that moves under an outbound hauler', () => {
  * site id — and both chains end at the building id precisely so entity
  * iteration order cannot reach the decision.
  *
- * What is compared is the claim-bearing half of `HaulTrip` and nothing else,
- * because §2.6's invariant is that a hauler's intent IS those fields: two runs
- * that agree on them hold identical claims by construction.
+ * What is compared is the claim-bearing half of `HaulTrip` and nothing else:
+ * every field `claimsOf` reads (`resource` at :96, `amount` at :89/:93, plus
+ * `targetId`/`sourceSiteId`/`destSiteId`/`plannedAmount`), because §2.6's
+ * invariant is that a hauler's intent IS those fields — two runs that agree
+ * on them hold identical claims by construction. `phase` and `ticksLeft` ride
+ * along too: not claim-bearing themselves, but the surest sign the two runs
+ * really did reach the same tick in the same state.
  */
 const jobsOf = (fixture: Awaited<ReturnType<typeof setup>>) => fixture.haulers.map((hauler) => {
-  const { kind, phase, targetId, sourceSiteId, destSiteId, plannedAmount, ticksLeft } = tripOf(hauler);
-  return { kind, phase, targetId, sourceSiteId, destSiteId, plannedAmount, ticksLeft };
+  const { kind, phase, targetId, sourceSiteId, destSiteId, resource, amount, plannedAmount, ticksLeft } = tripOf(hauler);
+  return { kind, phase, targetId, sourceSiteId, destSiteId, resource, amount, plannedAmount, ticksLeft };
 });
 
 /** Every building id in the order this world's queries actually walk them. */

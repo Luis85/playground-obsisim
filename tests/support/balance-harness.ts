@@ -1,39 +1,82 @@
-import { createSystem, ReadResource } from 'sim-ecs';
 import type { IPreptimeWorld } from 'sim-ecs';
 import type { BuildingDefId, ResourceId } from '../../src/shared/content-types';
+import type { HaulPhase } from '../../src/shared/haul';
 import type { SaveGameV6 } from '../../src/shared/save';
+import type { ColonistSnapshot, Snapshot } from '../../src/shared/snapshot';
 import { haulTicks } from '../../src/shared/haul';
-import { autoPlacePosition, type TileRef, type WorldMapSize } from '../../src/shared/placement';
+import { autoPlacePosition, isTileBuildable, type TileRef, type WorldMapSize } from '../../src/shared/placement';
 import { BALANCE } from '../../src/engine/content/balance';
 import { BUILDINGS } from '../../src/engine/content/buildings';
 import { Building } from '../../src/engine/components';
 import { IdCounter, SimClock, SnapshotStore, Stockpile } from '../../src/engine/resources';
 import {
   ALL_SYSTEMS, applyRemovals, buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist,
-  type TColonySystemFactory,
 } from '../../src/engine/world';
-import { StatsSystem } from '../../src/engine/systems/stats-system';
 import { campAdjacentFreeTile, enqueue } from '../engine/fixtures';
+import { GoodsAudit, type GoodsAuditResult } from './goods-audit';
 
 /**
- * A balance experiment, reproducible from this descriptor alone: one building
- * at one tile, a fixed crew and hauler count, run for a fixed number of ticks.
+ * One building being measured: what it is, where it stands, and who works it.
+ *
+ * A `Scenario` is one of these plus the run's own settings, so the
+ * single-building form every increment-5 measurement is written in stays
+ * exactly what it was — the sweep is the control for spec §4's first question,
+ * and a control that had to be rewritten is not one.
+ */
+export interface ScenarioStage {
+  defId: BuildingDefId;
+  col: number;
+  row: number;
+  crew: number;
+  /** The output resource to measure for this stage. */
+  resource: ResourceId;
+  /**
+   * Put this stage's crew house at THIS tile instead of beside their building —
+   * the only way to vary commute while holding everything else fixed, which is
+   * what a "a distant house costs delivered goods" measurement needs. Task 12
+   * depends on `runScenario` actually reading it; a `Scenario` field the
+   * runner ignores makes the near and far worlds identical, so the test can
+   * never fail and proves nothing.
+   */
+  crewHouseAt?: TileRef;
+}
+
+/**
+ * A balance experiment, reproducible from this descriptor alone: one or two
+ * buildings at fixed tiles, a fixed crew and hauler count, run for a fixed
+ * number of ticks.
  *
  * The instrument exists because increment 4 documented three constants as
  * "starting points, tuned in increment 5" and nothing could check the claim —
  * the engine is headless and deterministic, but nothing ran it as an
  * experiment. See docs/superpowers/specs/2026-08-01-increment-5-validated-balance.md.
  */
-export interface Scenario {
-  defId: BuildingDefId;
-  col: number;
-  row: number;
-  crew: number;
+export interface Scenario extends ScenarioStage {
   haulers: number;
   ticks: number;
-  /** The output resource to measure. */
-  resource: ResourceId;
-  /** Optionally relocate the building mid-run, to measure what downtime costs. */
+  /**
+   * A SECOND building, fed by the first — a forester feeding a sawmill at a
+   * distance, which is the shape spec §4's first two questions are asked in.
+   * Increment 5's gradient describes raw producers only, because a raw
+   * producer was the only kind whose real cost the simulation charged.
+   *
+   * When present, the chain has to feed ITSELF: any resource a stage of this
+   * scenario produces is left out of the seeded stock (see
+   * `seededResourcesFor`), so the sawmill's wood comes from the forester by
+   * hauler rather than from an inexhaustible camp pile. Without that, a
+   * two-stage descriptor would measure two independent buildings that happen
+   * to be listed together.
+   */
+  second?: ScenarioStage;
+  /**
+   * Storehouses to place, at tiles the scenario chooses. Spec §4's second
+   * question is a crossover distance — the leg beyond which 20 wood and 10
+   * planks buys more throughput than another hauler does — and that is
+   * measured by running the same chain with and without a depot beside it.
+   */
+  storehouses?: TileRef[];
+  /** Optionally relocate the FIRST building mid-run, to measure what downtime
+   * costs. */
   moveTo?: { col: number; row: number; atTick: number };
   /**
    * House the crew beside their building and the haulers beside the camp, so
@@ -70,23 +113,27 @@ export interface Scenario {
    * the absolute number.
    */
   houseCrew?: boolean;
-  /**
-   * Put the crew's house at THIS tile instead of beside their building — the
-   * only way to vary commute while holding everything else fixed, which is
-   * what a "a distant house costs delivered goods" measurement needs. Task 12
-   * depends on `runScenario` actually reading it; a `Scenario` field the
-   * runner ignores makes the near and far worlds identical, so the test can
-   * never fail and proves nothing.
-   */
-  crewHouseAt?: TileRef;
 }
 
-export interface BalanceResult {
+/** Everything measured about ONE building of a scenario. */
+export interface StageResult {
+  defId: BuildingDefId;
+  resource: ResourceId;
   /**
-   * Gross production: units that reached the store, plus units still sitting
-   * in the building's buffer, plus units in a hauler's hands. A unit a hauler
-   * has picked up but not yet deposited has left the buffer and not arrived
-   * at the store, so it must be counted separately from both.
+   * GROSS production, read off `ProductionLedger` — every unit this stage's
+   * recipe banked into an output buffer, whatever became of it afterwards.
+   *
+   * Derived from the production record rather than reconstructed from where
+   * the goods are standing, and that is the whole point. Until increment 7
+   * this was `delivered + finalBuffer + everything in every hauler's hands`,
+   * on the reasoning that anything made had either reached the store, was
+   * still in the buffer, or was in a hauler's hands. That was sound while a
+   * hauler could only ever be carrying the measured building's OUTPUT.
+   * Two-way haul falsified the premise without touching the line: six wood
+   * walking TOWARD a sawmill read as six planks the sawmill had produced, and
+   * it inflated precisely in the scenarios this increment adds, since those
+   * are the ones with supply trips in flight. Every §4 figure that divides by
+   * `made` inherited it.
    */
   made: number;
   /**
@@ -99,15 +146,21 @@ export interface BalanceResult {
    * case: crew hunger eats the same resource the hut makes.
    */
   delivered: number;
-  /** Ticks the building spent in `outputFull`. */
+  /** Ticks this building spent in `outputFull`. */
   stalledTicks: number;
-  /** Ticks the building spent out of action after a move. */
-  relocatingTicks: number;
-  /** Hauler-ticks spent at the camp with no trip (over-provisioning). */
-  haulerIdleTicks: number;
-  /** Units still waiting at the building when the run ended. */
+  /**
+   * Ticks this building spent in `waitingForInput` — the headline diagnostic
+   * of the whole increment (spec §2.1), and 0 by construction for a raw
+   * producer, which is why §4 expects its gradient to be unchanged.
+   */
+  waitingForInputTicks: number;
+  /** Units still waiting in this building's OUTPUT buffer at the end. */
   finalBuffer: number;
-  /** One-way trip length in ticks from the scenario's STARTING tile, for reference. */
+  /** Units still waiting in its IN-tray at the end. */
+  finalInputBuffer: number;
+  /** One-way trip length in ticks from the CAMP to this stage's starting tile,
+   * for reference. A depot may make the walk a hauler actually takes shorter;
+   * this stays the camp-relative figure increment 5's gradient is indexed on. */
   legTicks: number;
   /**
    * Units the crew could produce with hauling never a constraint, assuming
@@ -116,9 +169,48 @@ export interface BalanceResult {
    * produce and deliver its own `tools`, which EfficiencySystem then spends
    * to grant its own crew the 1.5x tool multiplier — work power this figure
    * never counted. For that one case, `ceiling` is a lower bound, not a
-   * ceiling.
+   * ceiling. For a stage FED BY ANOTHER STAGE it is a ceiling in the strict
+   * sense and an unreachable one: the chain, not the crew, is the constraint.
    */
   ceiling: number;
+}
+
+/** How a run's hauler-ticks were spent. Spec §4's third question asks for the
+ * split between the two kinds of job and for the fetch leg's share — a supply
+ * trip is three legs where the discarded base model made it two, and the first
+ * buys nothing but position. */
+export interface HaulerTicks {
+  idle: number;
+  fetching: number;
+  outbound: number;
+  returning: number;
+  collect: number;
+  supply: number;
+}
+
+export interface BalanceResult extends StageResult {
+  /** Per-building figures, `stages[0]` first. The fields above alias
+   * `stages[0]`, so every single-building measurement written before this
+   * increment reads exactly what it always did. */
+  stages: StageResult[];
+  /** Ticks the FIRST building spent out of action after a move. */
+  relocatingTicks: number;
+  /** Hauler-ticks spent with no trip at all (over-provisioning). Aliases
+   * `haulerTicks.idle`. */
+  haulerIdleTicks: number;
+  haulerTicks: HaulerTicks;
+  /** Supply trips that turned for home, and how many of those turned for home
+   * LOADED — the round trip §2.5 is named for. Worth its complexity only if
+   * the second number is not near zero. */
+  supplyReturns: number;
+  supplyReturnsLoaded: number;
+  /** Units in haulers' hands when the run ended. Published because it is
+   * exactly the term the old `made` wrongly added to every stage's total. */
+  carriedAtEnd: number;
+  /** Units held by this scenario's storehouses at the end. 0 with no depot. */
+  storedAtEnd: number;
+  /** The conservation sentinel. `conservationError` must be 0. */
+  goods: GoodsAuditResult;
 }
 
 /**
@@ -160,34 +252,45 @@ const SEEDED_RESOURCE_IDS: readonly ResourceId[] = [
 ];
 
 /**
- * A harness-only stage, spliced into the pipeline immediately before
- * StatsSystem — the only point at which `Stockpile.producedThisTick` still
- * holds this tick's hauler deliveries. StatsSystem's own `resetTickFlows()`
- * clears that map before `world.step()` returns control to the tick loop
- * below (`tests/engine/systems/stats-system.test.ts` asserts
- * `producedThisTick.size` is 0 right after a step), so summing it from
- * outside `step()` would always see an empty map. Every system from
- * ALL_SYSTEMS keeps its place and relative order; this only adds an
- * observer — the same technique `stats-system.test.ts`'s DepositWoodSystem
- * uses for test-only wiring, applied here without displacing anything real.
+ * What this run seeds, at FED apiece.
+ *
+ * A ONE-STAGE scenario seeds everything in SEEDED_RESOURCE_IDS, exactly as it
+ * always has, so increment 5's sweep measures the world it was calibrated on.
+ *
+ * A CHAIN seeds neither of its own outputs. Leaving the sawmill's wood at FED
+ * would let it draw an inexhaustible pile from the camp and never notice the
+ * forester at all — two independent buildings that happen to be listed
+ * together, and no chain to measure. `berries` is never a stage output in any
+ * scenario §4 asks for, so hunger stays neutral either way; a scenario that
+ * measured a gatherer's hut in a chain would have to feed its crew from its
+ * own hut, which is a different experiment and would say so.
  */
-function captureDeliveredSystem(resource: ResourceId, onDeliver: (amount: number) => void): TColonySystemFactory {
-  return () => createSystem({ stockpile: ReadResource(Stockpile) })
-    .withName('CaptureDelivered')
-    .withRunFunction(({ stockpile }) => {
-      onDeliver(stockpile.producedThisTick.get(resource) ?? 0);
-    })
-    .build();
+function seededResourcesFor(stages: readonly ScenarioStage[]): ResourceId[] {
+  if (stages.length < 2) return [...SEEDED_RESOURCE_IDS];
+  const produced = new Set(stages.map((stage) => stage.resource));
+  return SEEDED_RESOURCE_IDS.filter((id) => !produced.has(id));
 }
 
 /**
- * A buildable tile adjacent to `col` — where the crew house goes. Adjacency is
- * the point: it lands inside BALANCE.commute.freeTiles, so commuteFactor is
- * exactly 1 and every increment-5 measurement is preserved by construction
- * rather than by luck.
+ * A buildable free tile inside BALANCE.commute.freeTiles of `at` — where a
+ * crew house goes. Proximity is the point: commuteFactor is exactly 1 there,
+ * so every increment-5 measurement is preserved by construction rather than by
+ * luck.
+ *
+ * The candidate order opens on `col + 1`, which is the tile the single-building
+ * form always used, so every existing measurement keeps the layout it was taken
+ * with. The alternatives exist for the second stage: two buildings a couple of
+ * tiles apart can want the same neighbouring plot, and `spawnBuilding` writes
+ * tiles directly without consulting `isTileBuildable`, so a collision would
+ * silently stack two buildings rather than fail.
  */
-function adjacentCol(map: WorldMapSize, col: number): number {
-  return col + 1 < map.cols ? col + 1 : col - 1;
+function commuteFreeTile(map: WorldMapSize, at: TileRef, occupied: readonly TileRef[]): TileRef {
+  const offsets = [[1, 0], [-1, 0], [0, 1], [0, -1], [2, 0], [-2, 0], [0, 2], [0, -2]];
+  for (const [dc, dr] of offsets) {
+    const tile = { col: at.col + dc, row: at.row + dr };
+    if (isTileBuildable(map, occupied, tile.col, tile.row)) return tile;
+  }
+  throw new Error(`balance harness: no free commute-neutral tile beside (${at.col},${at.row}) for a crew house`);
 }
 
 /**
@@ -238,55 +341,70 @@ function homeOf(homeIds: readonly number[], index: number): number | null {
   return homeIds[Math.floor(index / BALANCE.houseBeds)] ?? null;
 }
 
+
+/** The buildings this scenario measures, first stage first. */
+function stagesOf(scenario: Scenario): ScenarioStage[] {
+  return scenario.second === undefined ? [scenario] : [scenario, scenario.second];
+}
+
+/** One building on the map, with an empty batch and an empty buffer. Shared by
+ * the stages, the storehouses and (through spawnShelters) the houses, so no
+ * caller can forget a field `SavedBuilding` requires. */
+function placeBuilding(prep: IPreptimeWorld, ids: IdCounter, defId: BuildingDefId, at: TileRef): number {
+  const entity = spawnBuilding(prep, ids, {
+    defId, progress: 0, batchActive: false, col: at.col, row: at.row, relocatingTicks: 0,
+  });
+  return entity.getComponent(Building)!.id;
+}
+
 /**
- * Where each group sleeps: a commute-neutral house apiece, or nowhere for a
- * relocation scenario. Empty lists mean an unhoused group, which `homeOf`
- * turns into a null home for everyone in it.
+ * Where each group sleeps: a commute-neutral house apiece per stage, plus one
+ * for the haulers, or nowhere for a relocation scenario. Empty lists mean an
+ * unhoused group, which `homeOf` turns into a null home for everyone in it.
  *
  * Separate from `populateColony` below because these are two questions, not
  * one — where the houses go, and who gets spawned into them — and folding
  * them together put the pair over the CRAP gate at cyclomatic 10. Every
  * branch in this harness lives on this side of the split; the spawning side
  * has none.
+ *
+ * `occupied` arrives already holding every building tile this scenario has
+ * placed — both stages, any move destination, and every storehouse — because
+ * `spawnBuilding` writes tiles directly without consulting `isTileBuildable`
+ * and nothing else would catch a house stacked on a depot.
  */
 function shelterPlan(
-  prep: IPreptimeWorld, ids: IdCounter, map: WorldMapSize, scenario: Scenario,
-): { crew: number[]; haulers: number[] } {
-  const { col, row, crew, haulers, moveTo } = scenario;
+  prep: IPreptimeWorld, ids: IdCounter, map: WorldMapSize, scenario: Scenario, stages: readonly ScenarioStage[],
+  occupied: TileRef[],
+): { crew: number[][]; haulers: number[] } {
   // Commute-neutral by default — see Scenario.houseCrew for why this cannot
   // be keyed off moveTo: uniformity is a property of the comparison the
   // caller is building, not of this one scenario, so the caller (not this
   // default) must pass houseCrew explicitly to every run in a comparison
   // that needs uniform housing.
-  const housed = scenario.houseCrew ?? true;
-  if (!housed) return { crew: [], haulers: [] };
+  if (!(scenario.houseCrew ?? true)) return { crew: stages.map(() => []), haulers: [] };
   // One house holds BALANCE.houseBeds and the largest group this instrument
   // runs is 4, so a single commute-neutral house per group suffices. Asserted
   // rather than assumed: spawnShelters places any overflow house with
   // autoPlacePosition, i.e. outside the free radius, and that group would then
   // quietly start paying a commute that moves every measurement here.
-  if (Math.max(crew, haulers) > BALANCE.houseBeds) {
+  if (Math.max(scenario.haulers, ...stages.map((stage) => stage.crew)) > BALANCE.houseBeds) {
     throw new Error('balance harness: a group needs more beds than one house provides — place a second commute-neutral house before measuring');
   }
-  // Avoids the measured building's own tile and the move destination (if
-  // any) — see spawnShelters for why these groups need REAL houses rather
-  // than a sentinel homeId.
-  const occupied: TileRef[] = [{ col, row }];
-  if (moveTo) occupied.push({ col: moveTo.col, row: moveTo.row });
   // crewHouseAt wins when given; otherwise beside the building, which lands
-  // inside BALANCE.commute.freeTiles and scores exactly 1.0. The haulers'
-  // house is resolved AFTER the crew's is placed, so campAdjacentFreeTile sees
-  // it in `occupied` and cannot stack on it.
-  const crewTile = scenario.crewHouseAt ?? { col: adjacentCol(map, col), row };
-  return {
-    crew: spawnShelters(prep, ids, map, crew, occupied, crewTile),
-    haulers: spawnShelters(prep, ids, map, haulers, occupied, campAdjacentFreeTile(occupied)),
-  };
+  // inside BALANCE.commute.freeTiles and scores exactly 1.0. Stage by stage in
+  // order, and the haulers' house LAST, so each resolution sees every house
+  // already placed in `occupied` and cannot stack on one.
+  const crew = stages.map((stage) => spawnShelters(
+    prep, ids, map, stage.crew, occupied, stage.crewHouseAt ?? commuteFreeTile(map, stage, occupied),
+  ));
+  return { crew, haulers: spawnShelters(prep, ids, map, scenario.haulers, occupied, campAdjacentFreeTile(occupied)) };
 }
 
 /**
- * The colony this measurement runs on: the crew at their building, the
- * haulers at the camp, each in the home `shelterPlan` assigned them.
+ * The colony this measurement runs on: each stage's crew at their own
+ * building, the haulers at the camp, each in the home `shelterPlan` assigned
+ * them.
  *
  * Split out of `runScenario` for the reason `spawnShelters` was split out of
  * it in the previous task: housing is the third concern that function had
@@ -295,21 +413,85 @@ function shelterPlan(
  * claimOpening — extract the named thing, leave the baseline alone.
  */
 function populateColony(
-  prep: IPreptimeWorld, ids: IdCounter, map: WorldMapSize, scenario: Scenario, buildingId: number,
+  prep: IPreptimeWorld, ids: IdCounter, map: WorldMapSize, scenario: Scenario, stages: readonly ScenarioStage[],
+  buildingIds: readonly number[], occupied: TileRef[],
 ): void {
-  const homes = shelterPlan(prep, ids, map, scenario);
-  for (let i = 0; i < scenario.crew; i++) {
-    spawnColonist(prep, ids, { buildingId, homeId: homeOf(homes.crew, i) });
-  }
+  const homes = shelterPlan(prep, ids, map, scenario, stages, occupied);
+  stages.forEach((stage, index) => {
+    for (let i = 0; i < stage.crew; i++) {
+      spawnColonist(prep, ids, { buildingId: buildingIds[index], homeId: homeOf(homes.crew[index], i) });
+    }
+  });
   for (let i = 0; i < scenario.haulers; i++) {
     spawnColonist(prep, ids, { hauling: true, homeId: homeOf(homes.haulers, i) });
   }
 }
 
+/** Running per-building state counts. Named rather than inlined so the tick
+ * loop below stays a list of one-line readings. */
+interface StageTally { stalled: number; waiting: number }
+
+function tallyStates(snapshot: Snapshot, buildingIds: readonly number[], tallies: StageTally[]): void {
+  buildingIds.forEach((id, index) => {
+    const state = snapshot.buildings.find((b) => b.id === id)?.state;
+    if (state === 'outputFull') tallies[index].stalled++;
+    if (state === 'waitingForInput') tallies[index].waiting++;
+  });
+}
+
+/**
+ * One tick of hauler bookkeeping: which leg every hauler is walking, on which
+ * kind of job, and whether a supply trip that just turned for home turned
+ * loaded.
+ *
+ * `phases` carries each hauler's previous leg between ticks, because a trip is
+ * counted at the EDGE where it turns: counting ticks in `returning` would
+ * report the length of the walk home rather than the number of round trips
+ * that paid off, and those two numbers answer different questions.
+ */
+function tallyHaulers(
+  colonists: readonly ColonistSnapshot[], ticks: HaulerTicks, phases: Map<number, HaulPhase>,
+  returns: { total: number; loaded: number },
+): void {
+  for (const worker of colonists) {
+    if (!worker.hauling) continue;
+    ticks[worker.haulPhase]++;
+    if (worker.haulKind !== null && worker.haulPhase !== 'idle') ticks[worker.haulKind]++;
+    const turned = phases.get(worker.id) !== 'returning' && worker.haulPhase === 'returning';
+    if (turned && worker.haulKind === 'supply') {
+      returns.total++;
+      if (worker.haulPickedUp) returns.loaded++;
+    }
+    phases.set(worker.id, worker.haulPhase);
+  }
+}
+
+/** Everything measured about one stage, once the run is over. */
+function stageResultOf(
+  stage: ScenarioStage, buildingId: number, tally: StageTally, snapshot: Snapshot, audit: GoodsAudit, ticks: number,
+): StageResult {
+  const recipe = BUILDINGS[stage.defId].recipe;
+  if (recipe === null) throw new Error(`Scenario building ${stage.defId} has no recipe to measure`);
+  const perBatch = Object.values(recipe.outputs).reduce((sum, n) => sum + n, 0);
+  const building = snapshot.buildings.find((b) => b.id === buildingId);
+  return {
+    defId: stage.defId,
+    resource: stage.resource,
+    made: audit.madeOf(stage.resource),
+    delivered: audit.deliveredOf(stage.resource),
+    stalledTicks: tally.stalled,
+    waitingForInputTicks: tally.waiting,
+    finalBuffer: building?.buffered ?? 0,
+    finalInputBuffer: building?.inputBuffered ?? 0,
+    legTicks: haulTicks(stage.col, stage.row, BALANCE.haulTilesPerTick),
+    ceiling: (ticks * stage.crew * perBatch) / recipe.ticksPerBatch,
+  };
+}
+
 export async function runScenario(scenario: Scenario): Promise<BalanceResult> {
-  // `haulers` is not destructured here: populateColony owns every use of it.
-  const { defId, col, row, crew, ticks, resource, moveTo } = scenario;
-  const seededStockpile = Object.fromEntries(SEEDED_RESOURCE_IDS.map((id): [ResourceId, number] => [id, FED]));
+  const { ticks, moveTo } = scenario;
+  const stages = stagesOf(scenario);
+  const seededStockpile = Object.fromEntries(seededResourcesFor(stages).map((id): [ResourceId, number] => [id, FED]));
   const save: SaveGameV6 = {
     ...initialSave(),
     // Both, and for different reasons. `colonists` because v5 renamed the
@@ -325,24 +507,29 @@ export async function runScenario(scenario: Scenario): Promise<BalanceResult> {
     nextEntityId: 1,
   };
 
-  let delivered = 0;
-  // ALL_SYSTEMS with one observer stage spliced in — see captureDeliveredSystem.
-  const statsIndex = ALL_SYSTEMS.indexOf(StatsSystem);
-  const systems: TColonySystemFactory[] = [
-    ...ALL_SYSTEMS.slice(0, statsIndex),
-    captureDeliveredSystem(resource, (amount) => { delivered += amount; }),
-    ...ALL_SYSTEMS.slice(statsIndex),
-  ];
-  const prep = buildColonyPrepWorld({ save, systems });
+  // ALL_SYSTEMS with the sentinel's probes spliced in. Every system keeps its
+  // place and relative order; the probes only observe — the same technique
+  // stats-system.test.ts's DepositWoodSystem uses for test-only wiring.
+  const audit = new GoodsAudit();
+  const prep = buildColonyPrepWorld({ save, systems: audit.instrument(ALL_SYSTEMS) });
   const ids = getPrepResource(prep, IdCounter);
-  const entity = spawnBuilding(prep, ids, { defId, progress: 0, batchActive: false, col, row, relocatingTicks: 0 });
-  const buildingId = entity.getComponent(Building)!.id;
-  populateColony(prep, ids, save.map, scenario, buildingId);
+  // Seeded with every tile this scenario will build on BEFORE any house is
+  // placed, so no house can land on a stage, a move destination or a depot.
+  const occupied: TileRef[] = stages.map((stage) => ({ col: stage.col, row: stage.row }));
+  if (moveTo) occupied.push({ col: moveTo.col, row: moveTo.row });
+  for (const at of scenario.storehouses ?? []) occupied.push(at);
+  const buildingIds = stages.map((stage) => placeBuilding(prep, ids, stage.defId, stage));
+  for (const at of scenario.storehouses ?? []) placeBuilding(prep, ids, 'storehouse', at);
+  populateColony(prep, ids, save.map, scenario, stages, buildingIds, occupied);
   const world = await prep.prepareRun();
+  const stockpile = world.getResource(Stockpile);
+  audit.open(world.getResource(SnapshotStore).latest!, stockpile);
 
-  let stalledTicks = 0;
+  const tallies: StageTally[] = stages.map(() => ({ stalled: 0, waiting: 0 }));
+  const haulerTicks: HaulerTicks = { idle: 0, fetching: 0, outbound: 0, returning: 0, collect: 0, supply: 0 };
+  const phases = new Map<number, HaulPhase>();
+  const returns = { total: 0, loaded: 0 };
   let relocatingTicks = 0;
-  let haulerIdleTicks = 0;
   // Whether the PREVIOUS tick ended with the countdown still running — see the
   // downtime comment below for why this, not the snapshot's `relocating`
   // state, is what counting downtime requires.
@@ -362,7 +549,7 @@ export async function runScenario(scenario: Scenario): Promise<BalanceResult> {
     world.getResource(SimClock).tick++;
     const issuingMove = moveTo !== undefined && t === moveTo.atTick;
     if (issuingMove) {
-      enqueue(world, { type: 'moveBuilding', buildingId, to: { col: moveTo!.col, row: moveTo!.row } });
+      enqueue(world, { type: 'moveBuilding', buildingId: buildingIds[0], to: { col: moveTo!.col, row: moveTo!.row } });
     }
     await world.step();
     // Deaths and demolitions go onto RemovalLedger and come off it here and
@@ -384,9 +571,9 @@ export async function runScenario(scenario: Scenario): Promise<BalanceResult> {
     // command-system.test.ts's `ticker`: the drain is the one post-step step an
     // instrumented driver cannot do without.
     applyRemovals(world);
+    audit.closeTick();
     const snapshot = world.getResource(SnapshotStore).latest!;
-    const building = snapshot.buildings.find((b) => b.id === buildingId);
-    if (building?.state === 'outputFull') stalledTicks++;
+    tallyStates(snapshot, buildingIds, tallies);
     // Downtime is ticks the building could not WORK, which is not the same as
     // snapshots reporting `relocating`: ProductionSystem skips work and then
     // decrements, so the tick that lands the move and the tick the countdown
@@ -394,32 +581,25 @@ export async function runScenario(scenario: Scenario): Promise<BalanceResult> {
     // snapshot, the last already reads 0. Counting the skip itself makes this
     // match `relocationTicks()` exactly, including a 1-tick nudge.
     if (issuingMove || wasRelocating) relocatingTicks++;
-    wasRelocating = (building?.relocatingTicks ?? 0) > 0;
-    haulerIdleTicks += snapshot.colonists.filter((w) => w.hauling && w.haulPhase === 'idle').length;
+    wasRelocating = (snapshot.buildings.find((b) => b.id === buildingIds[0])?.relocatingTicks ?? 0) > 0;
+    tallyHaulers(snapshot.colonists, haulerTicks, phases, returns);
   }
 
   const snapshot = world.getResource(SnapshotStore).latest!;
-  const finalBuffer = snapshot.buildings.find((b) => b.id === buildingId)?.buffered ?? 0;
-  const inTransit = snapshot.colonists.reduce((sum, w) => sum + w.carrying, 0);
-  // Gross production, derived rather than sampled: madeRate is a rolling mean
-  // over statsWindowTicks and would understate a short run. Everything made
-  // either reached the store, is still in the buffer, or is in a hauler's
-  // hands — a unit a hauler has picked up but not yet deposited has left the
-  // buffer and not arrived at the store, so omitting it under-reports every
-  // run that ends mid-trip.
-  const made = delivered + finalBuffer + inTransit;
-
-  const recipe = BUILDINGS[defId].recipe;
-  if (recipe === null) throw new Error(`Scenario building ${defId} has no recipe to measure`);
-  const perBatch = Object.values(recipe.outputs).reduce((sum, n) => sum + n, 0);
+  const results = stages.map((stage, index) => stageResultOf(stage, buildingIds[index], tallies[index], snapshot, audit, ticks));
   return {
-    made,
-    delivered,
-    stalledTicks,
+    // The first stage's figures ARE the result's own, so every measurement
+    // written against the single-building form reads exactly what it did
+    // before this increment.
+    ...results[0],
+    stages: results,
     relocatingTicks,
-    haulerIdleTicks,
-    finalBuffer,
-    legTicks: haulTicks(col, row, BALANCE.haulTilesPerTick),
-    ceiling: (ticks * crew * perBatch) / recipe.ticksPerBatch,
+    haulerIdleTicks: haulerTicks.idle,
+    haulerTicks,
+    supplyReturns: returns.total,
+    supplyReturnsLoaded: returns.loaded,
+    carriedAtEnd: snapshot.colonists.reduce((sum, w) => sum + w.carrying, 0),
+    storedAtEnd: snapshot.buildings.reduce((sum, b) => sum + b.stored, 0),
+    goods: audit.close(snapshot, stockpile),
   };
 }

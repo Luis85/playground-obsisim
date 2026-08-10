@@ -12,6 +12,7 @@ import {
 } from '../../src/engine/world';
 import { StatsSystem } from '../../src/engine/systems/stats-system';
 import { stepTick } from '../engine/fixtures';
+import { GoodsAudit, type GoodsAuditResult } from './goods-audit';
 
 /**
  * A DEMOGRAPHIC experiment, reproducible from this descriptor alone — the
@@ -48,6 +49,23 @@ export interface PopulationScenario {
   /** Haulers to staff when `foodPerTick` is `'chain'`. Taken OUT of
    * `startingAdults`, never added on top. */
   haulers?: number;
+  /**
+   * Storehouses to place, laid down the same auto-placement sequence as the
+   * rest of the colony.
+   *
+   * This harness staffs but cannot BUILD, which increment 6 flagged as a
+   * conservative control and increment 7 turns into a distortion: a colony
+   * that cannot build a depot cannot play this increment at all, so the
+   * 12,000-tick chain run has to be repeatable with and without one (spec
+   * §4.1's fourth reading).
+   *
+   * Placed LAST, after the huts and the houses, and that order is the point:
+   * the placement sequence is shared, so anything laid down before the depots
+   * keeps its tiles whatever this number is — which is what makes a
+   * with-and-without pair differ in the depot alone rather than in the depot
+   * plus every haul leg in the colony.
+   */
+  storehouses?: number;
   ticks: number;
   sampleEvery: number;
 }
@@ -92,6 +110,11 @@ export interface PopulationResult {
    * every tick-indexed figure in a report is short by that much.
    */
   frozenSteps: number;
+  /** Units this colony's storehouses hold at the end. 0 with no depot, and
+   * evidence that a placed one is a live store site rather than scenery. */
+  storedAtEnd: number;
+  /** The conservation sentinel. `conservationError` must be 0. */
+  goods: GoodsAuditResult;
 }
 
 /**
@@ -229,7 +252,7 @@ function blankSave(): SaveGameV6 {
  */
 function placeColony(prep: IPreptimeWorld, ids: IdCounter, map: WorldMapSize, scenario: PopulationScenario): number[] {
   const spots = autoPlaceSequence(map);
-  const place = (defId: 'house' | 'gatherersHut') => {
+  const place = (defId: 'house' | 'gatherersHut' | 'storehouse') => {
     const at: TileRef | void = spots.next().value;
     if (at === undefined) throw new Error('population harness: the map ran out of tiles');
     // `relocatingTicks: 0` is not optional on the way in — `SavedBuilding`
@@ -240,6 +263,9 @@ function placeColony(prep: IPreptimeWorld, ids: IdCounter, map: WorldMapSize, sc
   for (let i = 0; i < huts; i++) place('gatherersHut');
   const houseIds: number[] = [];
   for (let i = 0; i < scenario.houses; i++) houseIds.push(place('house').getComponent(Building)!.id);
+  // Depots LAST — see PopulationScenario.storehouses for why the shared
+  // fixture has to be pinned before the variable under test is added.
+  for (let i = 0; i < (scenario.storehouses ?? 0); i++) place('storehouse');
   return houseIds;
 }
 
@@ -305,10 +331,15 @@ function tallyNotices(messages: readonly string[], counts: { births: number; old
  */
 export async function runPopulationScenario(scenario: PopulationScenario): Promise<PopulationResult> {
   const save = blankSave();
-  const prep = buildColonyPrepWorld({ save, systems: systemsFor(scenario) });
+  // The sentinel's probes are spliced into the pipeline beside the scenario's
+  // own food source, displacing nothing — see GoodsAudit.
+  const audit = new GoodsAudit();
+  const prep = buildColonyPrepWorld({ save, systems: audit.instrument(systemsFor(scenario)) });
   const ids = getPrepResource(prep, IdCounter);
   spawnFounders(prep, ids, scenario, placeColony(prep, ids, save.map, scenario));
   const world = await prep.prepareRun();
+  const stockpile = world.getResource(Stockpile);
+  audit.open(world.getResource(SnapshotStore).latest!, stockpile);
 
   const samples: PopulationSample[] = [];
   const counts = { births: 0, oldAge: 0, starved: 0 };
@@ -317,6 +348,11 @@ export async function runPopulationScenario(scenario: PopulationScenario): Promi
   let nextSample = scenario.sampleEvery;
   for (let step = 0; step < scenario.ticks; step++) {
     await stepTick(world);
+    // Unconditional, and before the frozen-step guard: a frozen step ran no
+    // system at all, so its probes never fired and the sentinel's windows
+    // would be read twice. That cannot happen while `frozenSteps` is 0, which
+    // is exactly what the guard below is there to keep true.
+    audit.closeTick();
     const snapshot = world.getResource(SnapshotStore).latest!;
     if (snapshot.tick === simulated) {
       frozenSteps++;
@@ -341,6 +377,7 @@ export async function runPopulationScenario(scenario: PopulationScenario): Promi
   }
 
   const last = samples.at(-1) ?? { children: 0, adults: 0, elders: 0 };
+  const snapshot = world.getResource(SnapshotStore).latest!;
   return {
     samples,
     births: counts.births,
@@ -348,5 +385,7 @@ export async function runPopulationScenario(scenario: PopulationScenario): Promi
     deathsByStarvation: counts.starved,
     dependencyRatio: last.adults === 0 ? Infinity : (last.children + last.elders) / last.adults,
     frozenSteps,
+    storedAtEnd: snapshot.buildings.reduce((sum, b) => sum + b.stored, 0),
+    goods: audit.close(snapshot, stockpile),
   };
 }

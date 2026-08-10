@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BALANCE } from '../../src/engine/content/balance';
 import { CAMP_TILE } from '../../src/shared/haul';
+import type { TileRef } from '../../src/shared/placement';
 import { runScenario } from '../support/balance-harness';
 import { runPopulationScenario, type PopulationResult } from '../support/population-harness';
 
@@ -386,4 +387,193 @@ describe('population report', () => {
       ' above quotable: a non-zero figure means the run simulated fewer ticks than it counted',
     ].join('\n'));
   }, 600000);
+});
+
+// The instruments spec section 4 needs, and the sentinels that keep their
+// numbers quotable. Every fixture below is a CHAIN — a forester feeding a
+// sawmill at a distance — because that is the shape both of section 4.1's
+// first two questions are asked in, and because two buildings' goods in flight
+// at once is exactly the condition under which a per-stage figure that read
+// the wrong stage would still look plausible.
+
+/**
+ * A chain hauled well enough that the raw producer never backs up: four
+ * haulers over a leg-4 forester and a leg-6 sawmill.
+ *
+ * The forester's crew is 2 and the sawmill's is 1, so no per-stage figure
+ * coincides with any other — different def, different resource, different
+ * tile, different ceiling. A harness that reported stage 0's numbers for both
+ * stages would pass a fixture whose stages agreed.
+ */
+const suppliedChain = (storehouses?: TileRef[]) => runScenario({
+  defId: 'forester', col: 8, row: 4, crew: 2, haulers: 4, ticks: TICKS, resource: 'wood',
+  second: { defId: 'sawmill', col: 11, row: 6, crew: 1, resource: 'planks' },
+  storehouses,
+});
+
+/** The same chain stretched out to leg 6 and leg 8 with one hauler fewer, so
+ * the forester spends most of the run stalled on a full buffer and the sawmill
+ * spends part of it waiting for input — the two diagnostics, one per stage. */
+const stretchedChain = (storehouses?: TileRef[]) => runScenario({
+  defId: 'forester', col: 12, row: 6, crew: 2, haulers: 3, ticks: TICKS, resource: 'wood',
+  second: { defId: 'sawmill', col: 15, row: 9, crew: 1, resource: 'planks' },
+  storehouses,
+});
+
+describe('the two-way haul instruments', () => {
+  it('gross production is what the ledger recorded, not what every hauler happens to be holding', async () => {
+    const r = await suppliedChain();
+
+    // Non-vacuity, and it is the whole point: goods really were in haulers'
+    // hands when the run ended. That total — every load, of every resource, in
+    // every direction — is precisely what the old `made` added to each stage,
+    // so a run ending with empty hands could not tell the two derivations
+    // apart.
+    expect(r.carriedAtEnd).toBeGreaterThan(0);
+
+    // The raw producer never stalled, so its gross output is a function of its
+    // crew and the clock alone: 600 ticks x 2 workers / 3 ticks per batch.
+    // EXACT, unlike this file's throughput assertions, because nothing about
+    // hauling enters it — which is what makes it able to catch a `made` that
+    // has hauled goods mixed into it.
+    expect(r.stages[0].stalledTicks).toBe(0);
+    expect(r.stages[0].made).toBe(r.stages[0].ceiling);
+
+    // And the processor's figure is its own production, strictly less than the
+    // where-are-the-goods-standing reconstruction it replaced. Six wood walking
+    // TOWARD this sawmill are not six planks it produced.
+    expect(r.stages[1].made).toBeLessThan(r.stages[1].delivered + r.stages[1].finalBuffer + r.carriedAtEnd);
+  }, 120000);
+
+  it('a two-stage chain reports each building separately, and feeds itself', async () => {
+    const r = await stretchedChain();
+
+    expect(r.stages).toHaveLength(2);
+    expect(r.stages.map((s) => s.defId)).toEqual(['forester', 'sawmill']);
+    expect(r.stages.map((s) => s.resource)).toEqual(['wood', 'planks']);
+    // Crew 2 against crew 1, and leg 6 against leg 8: no figure below is
+    // shared between the stages, so reading either one for the other fails.
+    expect(r.stages[0].ceiling).toBe(400);
+    expect(r.stages[1].ceiling).toBe(200);
+    expect(r.stages[0].legTicks).toBe(6);
+    expect(r.stages[1].legTicks).toBe(8);
+
+    // The chain fed ITSELF. `wood` is a seeded recipe input for a one-stage
+    // scenario, and would be an inexhaustible camp pile the sawmill could draw
+    // on without the forester existing; a scenario that PRODUCES a resource
+    // does not seed it, so every plank here came out of the forester by hauler.
+    expect(r.stages[1].made).toBeGreaterThan(0);
+
+    // One diagnostic per stage, and they are opposites: the far forester backs
+    // up on a full output buffer, while the sawmill — which never stalls,
+    // because its own output is collected on the way back — goes hungry for
+    // input. A raw producer can never wait for input, which is why section 4
+    // expects its gradient to be the control.
+    expect(r.stages[0].stalledTicks).toBeGreaterThan(0);
+    expect(r.stages[1].stalledTicks).toBe(0);
+    expect(r.stages[0].waitingForInputTicks).toBe(0);
+    expect(r.stages[1].waitingForInputTicks).toBeGreaterThan(0);
+
+    // The result's own fields ARE the first stage's, so every measurement
+    // written against the single-building form still reads what it always did.
+    expect(r.made).toBe(r.stages[0].made);
+    expect(r.delivered).toBe(r.stages[0].delivered);
+    expect(r.stalledTicks).toBe(r.stages[0].stalledTicks);
+  }, 120000);
+
+  it('a storehouse the scenario places is a live store site, not scenery', async () => {
+    // (13,8) sits between the two buildings and well away from the camp, so it
+    // is the nearest site with room for both of them — which is the only
+    // condition under which a depot is worth its 20 wood and 10 planks.
+    const withDepot = await stretchedChain([{ col: 13, row: 8 }]);
+    const without = await stretchedChain();
+
+    // The control is what makes the reading mean "the depot holds goods"
+    // rather than "some building somewhere reports stock": with no depot
+    // placed, nothing in the colony can hold any.
+    expect(without.storedAtEnd).toBe(0);
+    expect(withDepot.storedAtEnd).toBeGreaterThan(0);
+  }, 180000);
+
+  it('every unit of goods is accounted for, opening stock and recipe inputs included', async () => {
+    const r = await suppliedChain([{ col: 10, row: 5 }]);
+
+    // THE sentinel. Goods now live in four places plus a pair of hands, and a
+    // leak in any of them would surface in a section 4 figure as a balance
+    // problem rather than as the bug it is.
+    expect(r.goods.conservationError).toBe(0);
+
+    // Each correction term is non-vacuous in this fixture, which is what stops
+    // the equation above from being satisfied by terms that are all zero:
+    // the harness seeds recipe inputs before the run (opening), the sawmill
+    // spends wood to make planks (recipeInputs), and the crew eats (eaten).
+    expect(r.goods.opening).toBeGreaterThan(0);
+    expect(r.goods.recipeInputs).toBeGreaterThan(0);
+    expect(r.goods.eaten).toBeGreaterThan(0);
+    // Both stages are counted, not just the measured one.
+    expect(r.goods.made).toBeGreaterThan(r.stages[0].made);
+    // Nothing is built or demolished in a balance scenario, so no goods may
+    // appear or vanish outside production, hauling and hunger. This is where a
+    // demolished depot's lost stock would hide.
+    expect(r.goods.commandFlow).toBe(0);
+    expect(r.goods.removalFlow).toBe(0);
+
+    // And the round trip the increment is named for actually happens: a supply
+    // trip that comes home empty is half a job, and section 2.5's mechanic is
+    // only worth its complexity if this number is not near zero.
+    expect(r.supplyReturns).toBeGreaterThan(0);
+    expect(r.supplyReturnsLoaded / r.supplyReturns).toBeGreaterThan(0.5);
+
+    // Hauler-ticks split two ways — by job and by leg — over the same ticks,
+    // which is what section 4's third question asks to be reported. Asserted
+    // as an identity rather than as magnitudes: the two decompositions count
+    // the same working ticks, so a leg the phase split forgot (the fetch leg
+    // is the new one, and buys nothing but position) shows up here as a
+    // mismatch rather than as a plausible number nobody re-derives.
+    const { idle, fetching, outbound, returning, collect, supply } = r.haulerTicks;
+    expect(fetching).toBeGreaterThan(0);
+    expect(supply).toBeGreaterThan(0);
+    expect(collect + supply).toBe(fetching + outbound + returning);
+    expect(r.haulerIdleTicks).toBe(idle);
+  }, 120000);
+});
+
+describe('population instruments', () => {
+  it('a self-feeding colony keeps every unit it makes', async () => {
+    // Short beside the 12,000-tick curves above: conservation is a per-tick
+    // invariant summed over the run, so it either holds from the first tick or
+    // it does not, and 1,500 ticks of a growing colony exercises births,
+    // deaths, hauling and hunger alike.
+    const r = await runPopulationScenario({ ...chain, ticks: 1500, sampleEvery: 100, houses: ROOMY_HOUSES });
+
+    expect(r.goods.conservationError).toBe(0);
+    // Non-vacuity: this colony really did make and eat goods. It starts from
+    // an empty store, so `opening` is 0 here by construction and the term is
+    // exercised by the balance harness's seeded runs instead.
+    expect(r.goods.made).toBeGreaterThan(0);
+    expect(r.goods.eaten).toBeGreaterThan(0);
+    expect(r.goods.commandFlow).toBe(0);
+  }, 180000);
+
+  it('the frozen-step sentinel still reads zero at stress colony size', async () => {
+    // Roughly the size section 4's third question asks about dispatch cost at:
+    // 100 colonists and 100 buildings, eight of them depots. A sentinel only
+    // ever run on a three-colonist colony is not one — OBS-6-02's freeze was a
+    // function of how many entities left the world at once, and this is the
+    // colony shape where that is worth checking.
+    const stress = await runPopulationScenario({
+      foodPerTick: 'chain', huts: 20, haulers: 12, startingAdults: 100, houses: 72, storehouses: 8,
+      ticks: 500, sampleEvery: 100,
+    });
+
+    expect(stress.frozenSteps).toBe(0);
+    // The colony really is that size, rather than a small one wearing large
+    // numbers: a tick label is only quotable if the run it labels happened.
+    expect(populationOf(stress.samples.at(-1)!)).toBeGreaterThan(90);
+    // And the eight depots are live store sites. Unlike a small colony's — the
+    // auto-placement sequence gives the first huts the plots nearest the camp,
+    // so a two-hut colony's depot is never the nearest site to anything — these
+    // sit among huts that are genuinely far out, and take their stock.
+    expect(stress.storedAtEnd).toBeGreaterThan(0);
+  }, 180000);
 });

@@ -163,7 +163,14 @@ export interface ColonistSnapshot {
    */
   haulAtCol: number;
   haulAtRow: number;
-  /** Units in hand (0 unless carrying a load home). */
+  /**
+   * Units in hand, in EITHER direction: a supply leg carries goods OUT to a
+   * building just as a collect leg carries them home, so this stopped being
+   * the "0 unless carrying a load home" figure increment 4 published the
+   * moment two-way haul shipped. `haulPickedUp` says which way the load is
+   * going; this says only how much of it there is. 0 while walking empty,
+   * which is the whole of a fetch leg.
+   */
   carrying: number;
   /** Remaining ticks of this worker's tool coverage (0 = none). */
   toolTicks: number;

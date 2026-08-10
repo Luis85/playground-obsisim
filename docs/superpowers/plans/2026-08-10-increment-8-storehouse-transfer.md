@@ -304,6 +304,34 @@ Confirm `src/shared/save.ts` is untouched. If the compiler asked for a save chan
   → `plannedAmount + (phase === 'returning' ? amount : 0)`. The two terms are
   disjoint: `plannedAmount` is zeroed the moment `takeAt` returns a real figure,
   and `amount` is zero until then — the same disjointness `Claims.input` relies on.
+- **`heldAtOf` must also change**, and this is the easiest thing in the increment
+  to miss because the function looks like it already covers the case. It counts
+  only `phase === 'returning'`, so a transfer that reserved its destination at
+  dispatch contributes **nothing** to `heldAt` for the whole fetch leg — the leg
+  during which the reservation is the only thing standing between two haulers and
+  the same headroom. Add a second term, **gated on kind**:
+
+  ```ts
+  trip.kind === 'transfer' && trip.phase === 'fetching' && trip.destSiteId === siteId
+    ? trip.plannedAmount : 0
+  ```
+
+  The gate is not cosmetic. A *supply* trip's `destSiteId` is `CAMP_SITE_ID`
+  through its fetch leg (`beginTrip` sets it; `turnForHome` resolves it for real
+  on the return), so an ungated clause has every supply fetch reserving room at
+  the camp — harmless, because the camp is unbounded, and therefore precisely the
+  kind of wrong-but-invisible that survives to become load-bearing.
+
+  No signature change: `kind`, `phase`, `destSiteId` and `plannedAmount` are all
+  on `HaulTrip`, and `heldAtOf` already takes `TripRow[]`.
+- **`movable` is capped by destination room as well as by deficit**, and the two
+  are different quantities: a deficit is demand for one resource, room is total
+  occupancy across every resource. A depot holding 56 wood of 60 capacity with a
+  12-wheat demand has a deficit of 12 and a room of 4. Sizing on the deficit
+  alone sends a full hauler into four units of space and `bankWithSpill` forwards
+  the excess to the camp — free transport past a hauler standing at the depot,
+  which is the one thing this increment's constraints forbid outright and which
+  would flatter the depot exactly where §4.2 measures it.
 - `TransferCandidate { sourceSiteId, sourceCol, sourceRow, destSiteId, destCol, destRow, resource, movable, staging: boolean }`
 - `compareTransferCandidates(a, b, from)`: **staging before drain**, then `movable` descending, then whole hauler → source → destination route ascending, then source id, then destination id. Route measured from where the hauler stands, exactly as `supplyRouteDistance` does.
 - `transferCandidates(...)` builds both classes per §2.4.
@@ -346,6 +374,27 @@ it('a deficit already being walked toward is not offered twice', () => {
   // inboundAt. Two idle haulers, one deficit: the second gets no transfer.
 });
 
+it('a deficit larger than the depot has room for is sized to the room', () => {
+  // 56 wood in a 60-cap depot, 12-unit wheat demand, zero wheat: deficit 12,
+  // room 4. movable must be 4, not 6. DISCRIMINATING — a fixture where the
+  // deficit is already below both haulerCapacity and the room passes with the
+  // room term deleted entirely.
+});
+
+it('two transfers of DIFFERENT resources cannot overbook one depot', () => {
+  // The case inboundAt structurally cannot see, because it is per-resource and
+  // capacity is not. First hauler fetching wheat toward a depot with 6 units of
+  // room; the second must not be dispatched with flour for the same 6 units.
+  // Reddens if heldAtOf's fetching-transfer term is missing — and NOT if only
+  // inboundAt is present, which is the whole point of the fixture.
+});
+
+it('a fetching transfer reserves destination room; a fetching supply does not', () => {
+  // Both clauses of the new heldAtOf term, one fixture each. The kind gate is
+  // the untested half: with it removed, supply fetches reserve camp room, and
+  // because the camp is unbounded nothing else in the suite would ever notice.
+});
+
 it('candidate order does not depend on array order', () => {
   // Pass the same candidates shuffled; same winner. The guarantee every other
   // selection in this codebase commits to.
@@ -358,7 +407,7 @@ Watch the line budget — `haul-dispatch.ts` is at 273 and this is the largest s
 
 - [ ] **Step 3: Mutation-test**
 
-Each clause separately: remove the floor check; allow depot→depot drains; drop `inboundAt` from the deficit; swap staging/drain priority; lower `minTransferUnits` to 0.
+Each clause separately: remove the floor check; allow depot→depot drains; drop `inboundAt` from the deficit; swap staging/drain priority; lower `minTransferUnits` to 0; **drop the room term from `movable`**; **drop the fetching-transfer term from `heldAtOf`**; **remove the kind gate on that term**. The last three are the ones a whole-condition mutation would miss, because the deficit term and the returning-phase term both stay in place and keep the rest of the suite green.
 
 - [ ] **Step 4: Verify and commit**
 
@@ -380,6 +429,7 @@ The mechanic turns on. §2.5, §2.6, §2.7.
   - the `targetRowOf === undefined` cancel must admit a transfer *before* the building lookup, or **every transfer cancels on arrival at its source** (a transfer's `targetId` is null, so the lookup always misses);
   - the tail starts a `returning` leg to the **reserved** destination, not an `outbound` leg to a building — and **without going through `destinationFor`**, which would discard the reservation `heldAt` is built on;
   - a transfer whose `takeAt` returned **0** cancels where it stands. No load and no building to continue to — the one case with no counterpart in the supply path, where a zero fetch carries on and finishes as an ordinary collect run.
+- `depositArrival`'s "did not arrive at a live destination" branch widens to "**or the destination cannot take the whole load**", taking the same `turnForHome` exit. Reservation covers every hauler-driven way a site fills; it does not cover `spillTo` from a demolished storehouse. Bank-what-fits-and-forward-the-rest is `bankWithSpill`'s behaviour and it teleports the remainder to the camp past a hauler standing at the depot.
 
 - [ ] **Step 1: Write the failing tests, tick by tick**
 
@@ -414,6 +464,17 @@ it('a transfer whose destination vanished carries its load onward', async () => 
   // Demolish the destination depot mid-return. NOT banked remotely, NOT walked
   // back to source: nearest-with-room from where it stands. Assert the hauler
   // walks a fresh leg (phase still returning, new legTo) rather than teleporting.
+});
+
+it('a transfer whose destination filled below its reservation carries on', async () => {
+  // Reserved room consumed by a path with no trip behind it — demolish ANOTHER
+  // storehouse so spillTo fills this one. The transfer must turnForHome, not
+  // bank-what-fits-and-forward-the-rest.
+  //
+  // The assertion is the one a conservation sentinel CANNOT make: colony total
+  // is preserved either way, so assert that the camp's stock did NOT rise on
+  // the arrival tick and the hauler is walking a new leg. A test on the total
+  // alone stays green against exactly the bug this branch exists to prevent.
 });
 
 it('a transfer does not claim any building output buffer', async () => {

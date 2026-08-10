@@ -254,11 +254,25 @@ Two candidate classes, in this priority order.
 `D.deficit(r) > 0` and `S.surplus(r) > 0` and `S ≠ D`.
 
 ```
-movable = min(haulerCapacity, D.deficit(r), S.surplus(r), unclaimedAt(S, r))
+movable = min(haulerCapacity, D.deficit(r), S.surplus(r), unclaimedAt(S, r), roomAt(D))
 ```
 
 Terminating for the reason in §2.2: once `D` holds its target its deficit is 0,
 and it cannot have become a source for `r` on the way there.
+
+**`roomAt(D)` is a separate term from `D.deficit(r)` and neither implies the
+other.** A deficit is measured in *demand for one resource*; room is measured in
+*total occupancy across every resource*, which is what `StoreSite.capacity`
+bounds. A depot holding 56 wood in 60 units of capacity, with a wheat demand of
+12 and no wheat, has a deficit of 12 and a room of 4. Sizing a load on the
+deficit alone dispatches a full hauler into four units of space, and
+`bankWithSpill` then forwards the excess **to the camp** — a silent teleport of
+goods that had a hauler standing right there to walk them, which is precisely
+what §2.9 and the plan's "goods are carried, never teleported" constraint
+forbid, and which would flatter the depot exactly where §4.2 is measuring it.
+
+`roomAt` is the reservation-aware occupancy `heldAt` already computes, corrected
+per §2.7: `capacity − heldAt(D)`, unbounded for the camp.
 
 **2. Drain (push), bounded → unbounded only.** Source `S` is a **bounded** site
 whose free space has fallen below `BALANCE.storehouseFreeFloor`; destination is
@@ -269,6 +283,14 @@ of among those it has no demand for (ties by catalog order, mirroring
 ```
 movable = min(haulerCapacity, S.surplus(r), unclaimedAt(S, r))
 ```
+
+**No `roomAt` term here, and the absence is a consequence rather than an
+omission:** a drain's destination is always the camp, the camp is unbounded, and
+that is the same property §2.9's last resort and increment 7's
+`nearestSiteWithRoom` both terminate on. It is worth stating because the two
+formulas otherwise look inconsistent, and because the day a drain is allowed a
+bounded destination is the day it needs the term — which is one more reason
+§2.13 excludes depot → depot.
 
 **Never camp → anywhere as a push, and never depot → depot as a push.** The
 asymmetry is the termination proof: the camp has no free-space floor to breach
@@ -396,18 +418,43 @@ hauler-tick split measures whether it bit.
 Tie-breaks end at ids, so selection is independent of candidate order — the same
 guarantee `compareHaulCandidates` and `compareSupplyCandidates` give.
 
-### 2.7 Claims, and the four that already work
+### 2.7 Claims: three that already work, one that must change, one that is new
 
 Increment 7's claim invariant governs: claims are recomputed every tick from
 live components, so any intent a hauler holds must be reconstructible from its
-own components. Three of the four existing claims cover a transfer **unchanged**,
-and that is worth verifying rather than assuming:
+own components. Which of the existing claims survive contact with a third kind
+is worth verifying rather than assuming — and one of them does not:
 
 - **source stock** (`unclaimedAt`) counts `phase === 'fetching' && sourceSiteId === s && resource === r → plannedAmount`.
   A transfer's fetch leg is identical to a supply trip's. Works unchanged.
-- **destination room** (`heldAt`) counts `phase === 'returning' && destSiteId === s → amount`.
-  A transfer's return leg is identical. Works unchanged — and this is what makes
-  a transfer's load fit on arrival.
+- **destination room** (`heldAt`) counts `phase === 'returning' && destSiteId === s → amount`,
+  and **this one must change.** A transfer reserves its destination at *dispatch*
+  (§2.5), but for the whole fetch leg it is `phase === 'fetching'` with
+  `amount === 0`, so it contributes **nothing** to `heldAt` — the reservation the
+  design rests on does not exist for the leg during which it matters most. Two
+  transfers are then dispatched into the same headroom, and the second one's
+  overflow is forwarded to the camp on arrival.
+
+  `heldAtOf` gains a second term, gated on kind so supply is untouched:
+
+  ```ts
+  trip.kind === 'transfer' && trip.phase === 'fetching' && trip.destSiteId === s
+    ? trip.plannedAmount : 0
+  ```
+
+  The two terms are disjoint — `plannedAmount` is zeroed the moment `takeAt`
+  returns a real figure, and `amount` is zero until then. The kind gate matters:
+  a *supply* trip's `destSiteId` is `CAMP_SITE_ID` throughout its fetch leg
+  (`beginTrip` sets it and `turnForHome` resolves it for real only on the return),
+  so an ungated clause would have every supply fetch reserving room at the camp.
+  Harmless, because the camp is unbounded — and therefore exactly the kind of
+  wrong-but-invisible that survives to become load-bearing.
+
+  **`heldAt` and `inboundAt` do different jobs and neither substitutes for the
+  other.** `inboundAt` is per-resource and bounds *demand*: do not over-satisfy a
+  deficit. `heldAt` is resource-agnostic and bounds *room*: do not overbook a
+  capacity. Two concurrent transfers of *different* resources into one depot are
+  invisible to each other under `inboundAt` and must not be under `heldAt`.
 - **output** counts haulers `fetching` or `outbound` with `targetId === buildingId`.
   A transfer's `targetId` is `null`, so it never matches any building. Works
   unchanged **by accident of the null**, which is precisely why it needs an
@@ -442,13 +489,29 @@ conditions are enumerated here rather than left to the implementation:
 | source holds the stock | **rechecked**: `takeAt` returns what it actually got, never the claimed figure. `Stockpile.pay` spends camp-first across every site, so a build ordered mid-walk can legitimately have spent it |
 | no other hauler has claimed that stock | **reserved** via `unclaimedAt` |
 | destination site is live | **rechecked** in `depositArrival`, by tile |
-| destination has room | **reserved** via `heldAt` |
+| destination has room | **reserved** via the corrected `heldAt`, **and rechecked** in `depositArrival` — the one condition that gets both, for the reason below |
 | destination still has a deficit | **reserved** via `inboundAt`, and deliberately **not** rechecked — see below |
 | source is still in surplus | **neither**, and deliberately — see below |
 
-The last two are the ones an implementation would be tempted to recheck, so the
-reasoning is recorded rather than left implicit. If the deficit is filled or the
-surplus consumed while a hauler walks, the load simply arrives at a site that
+**Room is the one condition that is both reserved and rechecked**, which looks
+like belt and braces and is not. Reservation covers every *hauler*-driven way a
+site fills, because every one of them goes through a claim. It does not cover
+the paths that bank into a site with no trip behind them — chiefly `spillTo`,
+which empties a demolished storehouse into another site, and the load-time
+spill. Those can consume reserved room, and a transfer arriving to insufficient
+space would then have its overflow forwarded to the camp by `bankWithSpill`:
+free transport, from a hauler who is standing right there and could walk it.
+So `depositArrival` treats "cannot take the whole load" exactly as it already
+treats "destination is gone" — `turnForHome`, and walk it (§2.9).
+
+This branch is expected to be unreachable in ordinary play, and is specified
+anyway on increment 7's own precedent: `buildingArrival`'s demolished-target
+branch has no live caller either and is kept as defense-in-depth, because a
+vanished destination must never be able to silently drop or teleport a load.
+
+The remaining two are the ones an implementation would be tempted to recheck, so
+the reasoning is recorded rather than left implicit. If the deficit is filled or
+the surplus consumed while a hauler walks, the load simply arrives at a site that
 has room and is banked there. Conservation holds, no goods are lost, and the
 worst outcome is one trip's worth of goods positioned somewhere marginally less
 useful than intended. Cancelling instead would strand a load mid-map and require
@@ -501,6 +564,15 @@ The new kind's paths:
   banking remotely. With `remainderHome` gated off (§2.5), the transfer resolves
   nearest-with-room from where it stands. The camp is unbounded and cannot
   vanish, so the walk terminates.
+- **Destination filled below the reservation.** A site can gain stock without a
+  trip behind it (`spillTo` from a demolished storehouse), so reserved room can
+  be consumed. Same branch, same answer: bank nothing, `turnForHome`, walk it.
+  **Not** bank-what-fits-and-forward-the-rest — that is `bankWithSpill`'s
+  behaviour and it teleports the remainder to the camp past a hauler standing at
+  the depot. §2.7 has the full reasoning; it is repeated here because this is the
+  list an implementer reads when auditing conservation, and a path that loses the
+  *carrying* guarantee while preserving the *conservation* one is exactly the
+  kind that passes a total-based sentinel.
 - **Source demolished while fetching.** A demolished storehouse's contents spill
   to the camp (`spillTo`). The fetching hauler's tile recheck fails and it
   cancels empty-handed. No load, no loss.

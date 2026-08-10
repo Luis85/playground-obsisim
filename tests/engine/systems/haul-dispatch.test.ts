@@ -690,6 +690,38 @@ describe('reservations', () => {
     expect(colonyTotal(world, 'wood')).toBe(6);
   });
 
+  it('a depot holding less than the threshold still produces a candidate, because the whole site is movable', async () => {
+    // worthMoving's own comment: a depot holding a single unit could feed a
+    // staffed consumer forever if the threshold alone gated it, because one
+    // unit never reaches minSupplyUnits and a candidate would never be
+    // produced for it. Four numbers here are pairwise distinct so none of
+    // them can read a neighbour's value and still pass: what the depot holds
+    // (1), BALANCE.minSupplyUnits (2), the mill's room once capped by a
+    // hauler's carry (6), and the fetching leg's length below.
+    const SOURCE = { col: 6, row: 3 };
+    const held = 1;
+    const fetchLeg = legTicks(CAMP_TILE, SOURCE);
+    expect(new Set([held, BALANCE.minSupplyUnits, BALANCE.haulCarryCapacity, fetchLeg]).size).toBe(4);
+    expect(held).toBeLessThan(BALANCE.minSupplyUnits); // the threshold clause alone would refuse this
+
+    const { world, buildings, haulers, step, stockpile } = await setup(
+      [{ defId: 'storehouse', ...SOURCE, stored: { wheat: held } }, { defId: 'mill', ...MILL, crew: 1 }], 1,
+    );
+    const source = idOf(buildings[0]);
+    expect(colonyTotal(world, 'wheat')).toBe(held);
+
+    await step(1); // dispatched: a candidate WAS produced for a stock below the threshold
+    expect(tripOf(haulers[0])).toMatchObject({ phase: 'fetching', kind: 'supply', sourceSiteId: source, plannedAmount: held, amount: 0 });
+
+    await step(fetchLeg);
+    expect(tripOf(haulers[0])).toMatchObject({ phase: 'outbound', resource: 'wheat', amount: held });
+    expect(stockpile.getAt(source, 'wheat')).toBe(0); // the single unit did not strand at the depot
+
+    await step(legTicks(SOURCE, MILL));
+    expect(inputOf(buildings[1]).amounts.get('wheat')).toBe(held);
+    expect(colonyTotal(world, 'wheat')).toBe(held);
+  });
+
   it('three haulers and one depot holding a single load: exactly one goes for it', async () => {
     // The depot holds exactly one carry of wheat, and the mill has room for
     // two — so nothing but the SOURCE claim can keep the other two at home.

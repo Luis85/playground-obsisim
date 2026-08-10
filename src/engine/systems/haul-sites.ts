@@ -84,12 +84,20 @@ export function storeSitesOf(rows: readonly StoreSiteRow[], pending: PendingChan
  * through to the ordinary nearest-with-room search below, which is what makes
  * "bank into a storehouse that is not a live site" inexpressible rather than
  * merely avoided (§2.4 invariant 2).
+ *
+ * The room check is `nearestSiteWithRoom` itself, called against a single-site
+ * list rather than reimplemented here — a single-element list never reaches
+ * its `closer` tie-break, so this is exactly "does the source have room for
+ * the whole remainder", with no distance comparison able to change the
+ * answer. That is deliberate rather than incidental: an inline second copy of
+ * the identical `heldAt(id) + amount > capacity` boundary once shipped here
+ * without the exact-fit test `nearestSiteWithRoom`'s own suite carries — this
+ * call inherits that test instead of needing a second one.
  */
 function remainderHome(trip: HaulTrip, sites: readonly StoreSite[], heldAt: (siteId: number) => number): StoreSite | null {
   const source = sites.find((site) => site.id === trip.sourceSiteId);
   if (trip.pickedUp || trip.amount === 0 || source === undefined) return null;
-  const full = source.capacity !== null && heldAt(source.id) + trip.amount > source.capacity;
-  return full ? null : source;
+  return nearestSiteWithRoom(source.col, source.row, [source], heldAt, trip.amount);
 }
 
 /**

@@ -911,13 +911,23 @@ const NEAR: TileRef = { col: 12, row: 6 };
 const FAR: TileRef = { col: 15, row: 9 };
 
 describe('dispatch order under a drained ledger', () => {
-  it('collection resumes, but the farther consumer can be starved outright', async () => {
+  it('collection resumes, and the farther consumer is served late rather than never', async () => {
     // The two runs are the SAME two buildings with their tiles exchanged, and
-    // the measured quantity is the bakery's gross output. A dispatcher that
-    // shared haulers between the two would put both above zero and fail the
-    // first bound; one that starved the second stage whatever its position
-    // would put both at zero and fail the second. Only "the nearer consumer
-    // takes every trip" satisfies both.
+    // the measured quantity is the bakery's gross output.
+    //
+    // This case was the MEASUREMENT that found OBS-7-01: it asserted
+    // `made === 0` for the far bakery, because with no fairness term in
+    // `compareSupplyCandidates` the nearer consumer took every trip while it
+    // could still take a load. Increment 8 Task 1 put a starvation floor at
+    // the front of that ordering, and this is the same fixture read as the
+    // regression guard the issue asked it to become.
+    //
+    // It still discriminates, in both directions and by construction: a
+    // dispatcher that starved the second stage whatever its position puts both
+    // runs at zero and fails the first two bounds, and one that merely moved
+    // the starvation to the other layout fails the third — which is the bound
+    // doing the work, because it is the one that says the answer no longer
+    // depends on which of the two the player happened to put farther out.
     const bakeryFar = await millAndBakery(NEAR, FAR, 1);
     const bakeryNear = await millAndBakery(FAR, NEAR, 1);
 
@@ -928,15 +938,21 @@ describe('dispatch order under a drained ledger', () => {
     expect(bakeryFar.stages[0].made).toBeGreaterThan(0);
     expect(bakeryFar.goods.conservationError).toBe(0);
 
-    // And no thrash either — the opposite. `compareSupplyCandidates` ranks on
-    // movable stock and then on the whole route, with no fairness term and no
-    // ageing, so while the nearer building can still take a load it takes every
-    // one. `toBe(0)` is the strongest form available and is the finding: over
-    // 600 ticks with one hauler the far bakery produced nothing whatever.
-    expect(bakeryFar.stages[1].made).toBe(0);
-    expect(bakeryFar.stages[1].waitingForInputTicks).toBeGreaterThan(TICKS * 0.95);
-    // Swap the tiles and the same bakery is served. Measured 108 loaves.
+    // Measured after the floor landed: 108 loaves in BOTH layouts, against 0
+    // and 108 before it.
+    expect(bakeryFar.stages[1].made).toBeGreaterThan(50);
     expect(bakeryNear.stages[1].made).toBeGreaterThan(50);
+    // THE bound: exchanging the two tiles no longer changes who gets served.
+    expect(Math.abs(bakeryFar.stages[1].made - bakeryNear.stages[1].made)).toBeLessThan(10);
+    // Nor does the floor pin the hauler to the far bakery instead — it is
+    // extinguished by one delivery, so the mill keeps being fed: 115 flour in
+    // the far layout and 114 in the near one, against the 254 it made while it
+    // was taking every trip and piling up flour nobody could bake.
+    expect(bakeryFar.stages[0].made).toBeGreaterThan(50);
+    // And the far bakery is no longer pinned at 100% waiting. 474 of 600 ticks
+    // is the honest cost of one hauler serving two buildings, rather than a
+    // queue whose front it never reached.
+    expect(bakeryFar.stages[1].waitingForInputTicks).toBeLessThan(TICKS * 0.85);
   }, 180000);
 
   it('prints the hauler-tick split when BALANCE_REPORT is set', async () => {

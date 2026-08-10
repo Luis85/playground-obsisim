@@ -9,6 +9,7 @@ import { IdCounter, Stockpile } from '../../../src/engine/resources';
 import { CommandSystem } from '../../../src/engine/systems/command-system';
 import { ProductionSystem } from '../../../src/engine/systems/production-system';
 import { HaulSystem, haulerCapacity } from '../../../src/engine/systems/haul-system';
+import { isStarvingFor } from '../../../src/engine/systems/haul-dispatch';
 import { campAdjacentFreeTile, colonyTotal, enqueue } from '../fixtures';
 import {
   applyRemovals, buildColonyPrepWorld, createColonyWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist,
@@ -842,6 +843,65 @@ describe('reservations', () => {
     expect(inputOf(mill).amounts.get('wheat')).toBe(5);
     expect(colonyTotal(world, 'wheat')).toBe(5);
     expect(colonyTotal(world, 'flour')).toBe(4);
+  });
+});
+
+describe('the starvation floor', () => {
+  it('a building holding some of what it needs is not starving', async () => {
+    // Two bakeries, both staffed, both suppliable from the camp's flour, both
+    // with more room than a hauler can carry — so `movable` is 6 for each and
+    // the whole route is the only pre-existing term that can separate them.
+    // Neither in-tray is EMPTY, so neither is starving and the near bakery
+    // takes the trip.
+    //
+    // Discriminating in both directions, which is the point of the case:
+    // widening the band from `=== 0` to `<= 1` makes the far bakery starving
+    // and hands it the trip, while deleting the starving term altogether
+    // leaves this answer exactly as it stands. The far bakery also carries the
+    // LOWER building id, so the id tie-break cannot be producing the answer
+    // either.
+    const NEAR_BAKERY = { col: 6, row: 0 };
+    const FAR_BAKERY = MILL; // (12, 8) — no other building in this case stands there
+    const holdsOne = 1;
+    const holdsFive = 5;
+    // Four pairwise-distinct numbers, so no assertion here can be satisfied by
+    // a field that read a neighbour's value.
+    expect(new Set([holdsOne, holdsFive, BALANCE.haulCarryCapacity, BALANCE.inputBufferCap]).size).toBe(4);
+    // Both in-trays leave MORE room than one hauler can carry, so the two
+    // candidates really do tie on `movable` and the case turns on nothing else.
+    expect(BALANCE.inputBufferCap - holdsOne).toBeGreaterThan(BALANCE.haulCarryCapacity);
+    expect(BALANCE.inputBufferCap - holdsFive).toBeGreaterThan(BALANCE.haulCarryCapacity);
+
+    const { haulers, step, world } = await setup([
+      { id: 111, defId: 'bakery', ...FAR_BAKERY, inputBuffer: { flour: holdsOne }, crew: 1 },
+      { id: 222, defId: 'bakery', ...NEAR_BAKERY, inputBuffer: { flour: holdsFive }, crew: 1 },
+    ], 1, { camp: { flour: 20 } });
+    let systemErrors = 0;
+    world.eventBus.subscribe(SystemError, () => { systemErrors++; });
+
+    await step(1);
+    expect(tripOf(haulers[0])).toMatchObject({
+      kind: 'supply', phase: 'fetching', targetId: 222, plannedAmount: BALANCE.haulCarryCapacity,
+    });
+    expect(systemErrors).toBe(0);
+  });
+
+  it('starving is about the resource being delivered, not any input', () => {
+    // No shipped recipe has two inputs — every def in
+    // `src/engine/content/buildings.ts` has 0 or 1 — and `needOf` reads the
+    // module-level catalog by defId, so dispatch simply cannot be posed this
+    // question. The rule is exported and unit-tested directly instead, the way
+    // `cheapestHaulerToRelease` is: an `InputBuffer` is content-free, so a
+    // two-resource in-tray needs no def at all.
+    //
+    // What this pins is that the band is per-RESOURCE and not per-buffer.
+    // Today "holds none of the resource being delivered" and "in-tray empty"
+    // coincide exactly, so the per-buffer rule would ship silently and only
+    // become wrong the first time a recipe gains a second input.
+    const inTray = new InputBuffer();
+    inTray.add('flour', 9);
+    expect(isStarvingFor(inTray, 'wheat')).toBe(true);
+    expect(isStarvingFor(inTray, 'flour')).toBe(false);
   });
 });
 

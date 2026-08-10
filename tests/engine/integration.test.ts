@@ -110,7 +110,19 @@ describe('full colony integration', () => {
     await run(world, 400);
 
     const final = snapshot();
-    expect(final.stockpile.bread.stock).toBeGreaterThan(0);
+    // `madeRate`, not `stock`, and the change is a strengthening rather than a
+    // relaxation. Bread stock is a TRANSIENT in this colony and always has
+    // been: 18 colonists eat a six-loaf delivery inside three ticks, so it sat
+    // at 0 on 37 of the 40 ticks around 400 — measured, in both the world
+    // before increment 8 Task 1 and the world after it. `stock > 0` therefore
+    // asserted only that tick 400 happened to land in one of those three-tick
+    // windows, which is a coin flip and not a fact about the chain; Task 1's
+    // fairness floor (OBS-7-01) raised bread delivery from 0.17/t to 0.23/t and
+    // moved tick 400 off the window it used to land on. `madeRate` is the fact
+    // the line means to state — the bakery is baking — and it is the only line
+    // here that speaks about a MAKER rather than about the store, so nothing is
+    // lost: it held between 0.17 and 0.23 across every one of those 40 ticks.
+    expect(final.stockpile.bread.madeRate).toBeGreaterThan(0);
     expect(final.stockpile.tools.deliveredRate).toBeGreaterThan(0);
     expect(final.stockpile.bread.deliveredRate).toBeGreaterThan(0);
     // wheat must not accumulate unboundedly (2 farm workers vs 2 mill workers,

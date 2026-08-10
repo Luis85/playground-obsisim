@@ -187,6 +187,24 @@ function needOf(row: HaulBuildingRow, claims: Claims, capacity: number): { resou
 }
 
 /**
+ * `SupplyCandidate.starving`, on its own: this building holds NONE of the
+ * resource a candidate would deliver, so it is stopped rather than merely
+ * running low. Derived from the live `InputBuffer` on every call — an age or a
+ * wait counter would be memory between ticks, which §2.6 forbids.
+ *
+ * Per RESOURCE, not per buffer. Every shipped recipe has 0 or 1 inputs, so
+ * "holds none of this resource" and "the in-tray is empty" coincide exactly
+ * today and no catalog-driven fixture can tell them apart. Exported so the
+ * distinction can be unit-tested directly against a two-resource in-tray —
+ * the same escape `cheapestHaulerToRelease` is exported for — because the rule
+ * that only becomes wrong the first time a recipe gains a second input is the
+ * kind that ships silently.
+ */
+export function isStarvingFor(input: InputBuffer, resource: ResourceId): boolean {
+  return (input.amounts.get(resource) ?? 0) === 0;
+}
+
+/**
  * §2.6's delivery threshold: don't walk thirteen tiles to top a building up by
  * one unit — UNLESS that unit is everything the site has of it, because
  * otherwise the threshold strands the tail. Every recipe today consumes one
@@ -220,12 +238,15 @@ function supplyCandidates(
     const need = needOf(row, claims, capacity);
     if (need === null) continue;
     const unclaimedAt = (siteId: number) => claims.unclaimedAt(siteId, need.resource);
+    // Once per BUILDING rather than per site: it is a fact about the in-tray,
+    // so every candidate for this building must carry the same answer.
+    const starving = isStarvingFor(row.input, need.resource);
     for (const site of sitesHolding(sites, unclaimedAt)) {
       const movable = Math.min(need.room, unclaimedAt(site.id));
       if (!worthMoving(movable, unclaimedAt(site.id))) continue;
       candidates.push({
         buildingId: row.building.id, buildingCol: row.position.col, buildingRow: row.position.row,
-        siteId: site.id, siteCol: site.col, siteRow: site.row, resource: need.resource, movable,
+        siteId: site.id, siteCol: site.col, siteRow: site.row, resource: need.resource, movable, starving,
       });
     }
   }

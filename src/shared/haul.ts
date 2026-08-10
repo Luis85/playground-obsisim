@@ -262,6 +262,13 @@ export interface SupplyCandidate {
   siteRow: number;
   resource: ResourceId;
   movable: number;
+  /**
+   * The building holds NONE of `resource` — it is stopped, not merely running
+   * low. About the resource THIS candidate would deliver rather than the
+   * in-tray as a whole, so two candidates for the same building can never rank
+   * differently for a reason no player could see.
+   */
+  starving: boolean;
 }
 
 /** Hauler-to-site-to-building: the full trip a supply candidate costs,
@@ -273,14 +280,34 @@ function supplyRouteDistance(candidate: SupplyCandidate, from: TileRef): number 
 }
 
 /**
- * THE supply job-selection order: clear the most movable stock first, then
- * prefer the cheapest whole route (hauler to source to building — not the
- * building's distance alone, or two candidates for the same building from
- * different sites could not be told apart), then lowest building id, then
- * lowest site id. The final tie-break is what makes selection independent of
- * candidate order, the same guarantee `compareHaulCandidates` gives collect.
+ * THE supply job-selection order: serve a STOPPED building before a running
+ * one, then clear the most movable stock, then prefer the cheapest whole route
+ * (hauler to source to building — not the building's distance alone, or two
+ * candidates for the same building from different sites could not be told
+ * apart), then lowest building id, then lowest site id. The final tie-break is
+ * what makes selection independent of candidate order, the same guarantee
+ * `compareHaulCandidates` gives collect.
+ *
+ * `starving` is a FLOOR, not a rival priority, and the distinction is the whole
+ * reason it is safe to put at the front (OBS-7-01). The condition it ranks on
+ * is extinguished by serving the building ONCE: a single delivery leaves the
+ * in-tray holding some of that resource, the flag goes false, and the candidate
+ * rejoins the ordinary order for every trip after it. So a distant starving
+ * building gets one trip ahead of the queue and cannot pin a hauler to itself
+ * indefinitely — which a standing "rank on need" or "rank on distance from
+ * full" term could, because those stay true while the building is being served.
+ *
+ * What it fixes is a strict priority with no floor: while the nearer hungry
+ * building could still take a load it won every comparison and took every trip,
+ * so a bakery behind a mill made zero bread in 600 ticks. Nothing below this
+ * term moved — among equally starving (or equally fed) candidates the previous
+ * order decides in full, which is what stops the floor becoming the opposite
+ * failure, a hauler crossing the map past a building it could have served on
+ * the way.
  */
 export function compareSupplyCandidates(a: SupplyCandidate, b: SupplyCandidate, from: TileRef): number {
+  const byStarving = Number(b.starving) - Number(a.starving);
+  if (byStarving !== 0) return byStarving;
   const byMovable = b.movable - a.movable;
   if (byMovable !== 0) return byMovable;
   const byRoute = supplyRouteDistance(a, from) - supplyRouteDistance(b, from);

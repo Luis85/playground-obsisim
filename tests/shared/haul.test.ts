@@ -190,7 +190,7 @@ function supplyCandidate(overrides: Partial<SupplyCandidate> = {}): SupplyCandid
   return {
     buildingId: 1, buildingCol: 4, buildingRow: 1,
     siteId: CAMP_SITE_ID, siteCol: CAMP_TILE.col, siteRow: CAMP_TILE.row,
-    resource: 'wheat', movable: 4,
+    resource: 'wheat', movable: 4, starving: false,
     ...overrides,
   };
 }
@@ -277,5 +277,72 @@ describe('supply job selection', () => {
     ];
     const sorted = [...list].sort((a, b) => compareSupplyCandidates(a, b, from));
     expect(sorted.map((c) => c.buildingId)).toEqual([3, 2, 1]);
+  });
+});
+
+/**
+ * OBS-7-01's floor, unit-tested here rather than through dispatch because no
+ * integration fixture can separate the new term from the route term: a
+ * candidate's `starving` flag and its distance are both consequences of where
+ * the building stands and what it holds, and only a hand-built pair can hold
+ * one fixed while moving the other.
+ */
+describe('the starvation floor', () => {
+  it('a starving building outranks a topping-up one that is nearer', () => {
+    // DISCRIMINATING: the starving candidate loses on every pre-existing term
+    // — less movable stock (3 against 9), a route twenty tiles long against
+    // two, and the HIGHER building id — so the only thing that can lift it is
+    // the new one. Delete the starving term and the topping-up candidate wins.
+    const from: TileRef = { col: 2, row: 0 };
+    const toppingUp = supplyCandidate({ buildingId: 3, buildingCol: 4, buildingRow: 0, movable: 9 });
+    const starving = supplyCandidate({ buildingId: 8, buildingCol: 20, buildingRow: 10, movable: 3, starving: true });
+    expect(nextSupplyTarget([toppingUp, starving], from)?.buildingId).toBe(8);
+    expect(nextSupplyTarget([starving, toppingUp], from)?.buildingId).toBe(8);
+  });
+
+  it('among starving buildings the nearer is still served first', () => {
+    // The counter-direction the floor must not break: a term that swallowed
+    // the rest of the order would send a hauler across the map past a starving
+    // building it could have served on the way. Both are starving and both have
+    // the same movable stock, so route is the only live term — and the nearer
+    // one carries the HIGHER id, so the id tie-break cannot produce this answer.
+    const from: TileRef = { col: 2, row: 0 };
+    const far = supplyCandidate({ buildingId: 2, buildingCol: 20, buildingRow: 10, movable: 5, starving: true });
+    const near = supplyCandidate({ buildingId: 6, buildingCol: 4, buildingRow: 0, movable: 5, starving: true });
+    expect(nextSupplyTarget([far, near], from)?.buildingId).toBe(6);
+    expect(nextSupplyTarget([near, far], from)?.buildingId).toBe(6);
+  });
+
+  it('among topping-up buildings nothing has changed', () => {
+    // The regression guard: with nobody starving the order is exactly what it
+    // was — movable descending, then the whole route, then the building id.
+    // Building 9 and building 6 tie on both movable (8) and route (3), so only
+    // the id separates them; building 7 wins on movable alone despite the
+    // longest route of the four, and building 1 loses on movable alone despite
+    // the shortest.
+    const from: TileRef = { col: 2, row: 0 };
+    const list = [
+      supplyCandidate({ buildingId: 1, buildingCol: 4, buildingRow: 0, siteId: 2, movable: 2 }),
+      supplyCandidate({ buildingId: 9, buildingCol: 2, buildingRow: 3, siteId: 4, movable: 8 }),
+      supplyCandidate({ buildingId: 6, buildingCol: 5, buildingRow: 0, siteId: 5, movable: 8 }),
+      supplyCandidate({ buildingId: 7, buildingCol: 20, buildingRow: 10, siteId: 3, movable: 11 }),
+    ];
+    const sorted = [...list].sort((a, b) => compareSupplyCandidates(a, b, from));
+    expect(sorted.map((c) => c.buildingId)).toEqual([7, 6, 9, 1]);
+  });
+
+  it('the starving term does not disturb the id tie-breaks', () => {
+    // Two candidates for the SAME starving building, equally far, differing
+    // only in site id: the floor is a band, so it must leave a full tie a full
+    // tie rather than making selection depend on candidate order.
+    const from: TileRef = { col: 0, row: 0 };
+    const viaA = supplyCandidate({
+      buildingId: 1, buildingCol: 0, buildingRow: 0, siteId: 9, siteCol: 5, siteRow: 0, movable: 4, starving: true,
+    });
+    const viaB = supplyCandidate({
+      buildingId: 1, buildingCol: 0, buildingRow: 0, siteId: 3, siteCol: -5, siteRow: 0, movable: 4, starving: true,
+    });
+    expect(nextSupplyTarget([viaA, viaB], from)?.siteId).toBe(3);
+    expect(nextSupplyTarget([viaB, viaA], from)?.siteId).toBe(3);
   });
 });

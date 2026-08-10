@@ -258,7 +258,7 @@ function haulerSpot(tile: { col: number; row: number }): Spot {
  * game speed, and needs no notion of speed here at all.
  *
  * Both the leg's length (`haulLegTicks`) and a returning hauler's origin
- * (`haulPickupCol`/`haulPickupRow`) are read from the snapshot rather than
+ * (`haulLegFromCol`/`haulLegFromRow`) are read from the snapshot rather than
  * recomputed from the building's CURRENT tile. A returning trip is
  * deliberately left alone when its building moves — the goods are already in
  * hand, bound for a camp that did not move — so a recomputed
@@ -270,7 +270,7 @@ function haulerSpot(tile: { col: number; row: number }): Spot {
  */
 function haulSpot(w: ColonistSnapshot, cell: PlacedBuilding): Spot {
   const door = haulerSpot(cell);
-  const pickup = haulerSpot({ col: w.haulPickupCol, row: w.haulPickupRow });
+  const pickup = haulerSpot({ col: w.haulLegFromCol, row: w.haulLegFromRow });
   const travelled = legProgress(w.haulTicksLeft, w.haulLegTicks);
   const from = w.haulPhase === 'outbound' ? CAMP_ANCHOR : pickup;
   const to = w.haulPhase === 'outbound' ? door : CAMP_ANCHOR;

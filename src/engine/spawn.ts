@@ -103,12 +103,13 @@ export function clampedBuffer(saved: Partial<Record<ResourceId, number>>, cap: n
  * goes through, the same way `OutputBuffer` goes through `clampedBuffer`
  * directly with `BALANCE.outputBufferCap`.
  *
- * Its only caller is `buildingComponents` below, in this same file. Not
- * exported: nothing outside this file trims an in-tray today, and spec §2.9's
- * paused-snapshot bullet — the one that gives `initial-snapshot.ts` a reason to
- * — can export it when it lands.
+ * Exported for the reason `clampedRelocation` is: `buildInitialSnapshot` now
+ * publishes a restored in-tray (`BuildingSnapshot.inputBuffered`), and the
+ * seeded figure must be trimmed by the same rule `buildingComponents` below
+ * trims the live component by — or a paused colony shows an over-cap in-tray
+ * the first tick silently corrects.
  */
-function clampedInputBuffer(saved: Partial<Record<ResourceId, number>>): Map<ResourceId, number> {
+export function clampedInputBuffer(saved: Partial<Record<ResourceId, number>>): Map<ResourceId, number> {
   return clampedBuffer(saved, BALANCE.inputBufferCap);
 }
 

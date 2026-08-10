@@ -5,7 +5,7 @@ import type { EngineStatus, NoticeKind, Snapshot } from '../../shared/snapshot';
 // delegates to, and the alias keeps the two readable side by side.
 import { nomadBlocker as blockerForNomad, type PopulationBlocker } from '../../shared/population';
 import {
-  BALANCE, BUILDINGS, BUILDING_IDS, MEAL_WEIGHTS, RESOURCE_IDS, RESOURCES,
+  BALANCE, batchInputUnits, BUILDINGS, BUILDING_IDS, MEAL_WEIGHTS, RESOURCE_IDS, RESOURCES,
   type BuildingDefId, type ResourceId,
 } from '../../engine/content';
 
@@ -192,6 +192,37 @@ export const useGameStore = defineStore('game', {
     /** Buildings that have stopped because they cannot bank another batch. */
     stalledBuildings(state): number {
       return state.snapshot?.buildings.filter((b) => b.state === 'outputFull').length ?? 0;
+    },
+    /**
+     * Buildings stopped for want of inputs — the input-side twin of
+     * `stalledBuildings`, and half the answer to "why is my bakery stopped?".
+     *
+     * `waitingForInput` is the engine's own verdict, not a re-derivation from
+     * buffers: it already accounts for staffing and for an output stall, so a
+     * building counted here is genuinely one a delivery would restart.
+     */
+    buildingsWaitingForInput(state): number {
+      return state.snapshot?.buildings.filter((b) => b.state === 'waitingForInput').length ?? 0;
+    },
+    /**
+     * Units the colony still owes those buildings: for each one, what one batch
+     * of its recipe wants beyond what its in-tray already holds. The input
+     * backlog, symmetric with `unitsWaiting`'s output backlog (§2.10).
+     *
+     * Derived HERE rather than in each view, and gated on the same
+     * `waitingForInput` set as the count above, so the Economy view's two
+     * figures describe one set of buildings rather than two overlapping ones.
+     * A building mid-batch is not short of anything — it has already paid its
+     * inputs — and `waitingForInput` is precisely "staffed, unblocked, and no
+     * batch running".
+     */
+    unitsShort(state): number {
+      return (state.snapshot?.buildings ?? []).reduce(
+        (sum, b) => (b.state === 'waitingForInput'
+          ? sum + Math.max(0, batchInputUnits(BUILDINGS[b.defId].recipe) - b.inputBuffered)
+          : sum),
+        0,
+      );
     },
   },
   actions: {

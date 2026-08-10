@@ -181,7 +181,10 @@ export function buildEntitySections(
       return {
         id: w.id, hunger: w.hunger, starvingTicks: w.starvingTicks, efficiency: w.efficiency, buildingId: w.buildingId,
         hauling: w.hauling, haulTargetId: w.haulTargetId, haulPhase: w.haulPhase, haulTicksLeft: w.haulTicksLeft,
-        haulLegTicks: w.haulLegTicks, haulPickupCol: w.haulPickupCol, haulPickupRow: w.haulPickupRow,
+        haulKind: w.haulKind, haulPickedUp: w.haulPickedUp, haulLegTicks: w.haulLegTicks,
+        haulLegFromCol: w.haulLegFromCol, haulLegFromRow: w.haulLegFromRow,
+        haulLegToCol: w.haulLegToCol, haulLegToRow: w.haulLegToRow,
+        haulAtCol: w.haulAtCol, haulAtRow: w.haulAtRow,
         carrying: w.carrying, toolTicks: w.toolTicks, ageTicks: w.ageTicks, stage: w.stage, homeId: w.homeId,
         // Null tiles are the homeless case: there is no distance to report, and
         // the whole charge lands in the factor instead.
@@ -272,14 +275,29 @@ export function colonistFactsOf(
     haulTargetId: trip.targetId,
     haulPhase: trip.phase,
     haulTicksLeft: trip.ticksLeft,
-    // The leg total and the leg's frozen ORIGIN — published so the layout
-    // reads them instead of recomputing from the building's live tile, which
-    // desyncs once the building moves mid-leg (OBS-5-01). Named for the return
-    // leg's pickup because that is the only leg the app draws from it today;
-    // the component now freezes both endpoints of every leg.
+    // Null when there is no trip to have a job on. `trip.kind` keeps its last
+    // value through `clearTrip` (it resets to the 'collect' default), so
+    // reading it unguarded would label every idle hauler a collector.
+    haulKind: trip.phase === 'idle' ? null : trip.kind,
+    // The cargo's ORIGIN, which is what a direction marker must read — see
+    // ColonistSnapshot.haulPickedUp on why `haulKind` draws the round trip
+    // backwards.
+    haulPickedUp: trip.pickedUp,
+    // The leg total and BOTH its frozen endpoints, published so the layout
+    // reads them instead of recomputing from a building's live tile, which
+    // desyncs once that building moves mid-leg (OBS-5-01). Both ends, not one:
+    // neither end of a depot-to-building leg is the camp, so a lone endpoint
+    // plus a hardcoded anchor cannot describe one.
     haulLegTicks: trip.legTicks,
-    haulPickupCol: trip.legFromCol,
-    haulPickupRow: trip.legFromRow,
+    haulLegFromCol: trip.legFromCol,
+    haulLegFromRow: trip.legFromRow,
+    haulLegToCol: trip.legToCol,
+    haulLegToRow: trip.legToRow,
+    // Where a hauler with no leg running stands. Straight off the trip: `cancel`
+    // is the only writer, and it interpolates along the leg it is ending, so the
+    // resting tile the app draws is the one the sim priced the next leg from.
+    haulAtCol: trip.atCol,
+    haulAtRow: trip.atRow,
     carrying: trip.amount,
     carryingResource: trip.resource,
     toolTicks: coverage.remainingTicks,

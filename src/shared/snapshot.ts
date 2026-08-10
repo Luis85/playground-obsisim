@@ -1,5 +1,5 @@
 import type { BuildingDefId, ResourceId } from './content-types';
-import type { HaulPhase } from './haul';
+import type { HaulKind, HaulPhase } from './haul';
 import type { LifeStage } from './population';
 import type { WorldMapSize } from './placement';
 
@@ -40,6 +40,30 @@ export interface BuildingSnapshot {
   workPower: number;
   /** Units waiting in this building's output buffer for a hauler. */
   buffered: number;
+  /**
+   * Units in this building's own in-tray, waiting for its recipe to spend them
+   * — the input-side mirror of `buffered`, and the quantity the Buildings
+   * table's `In` column and the Economy view's input backlog are both read off.
+   * A different pile from `stored` below: these goods have already left the
+   * colony's ledger (consumption is recorded when a hauler unloads them), and
+   * only this building can use them.
+   */
+  inputBuffered: number;
+  /**
+   * Units this building holds AS A STORE: its share of the one colony ledger,
+   * standing at its tile instead of at the camp. Still colony goods — spendable
+   * on meals and construction from here, and drawable by any hauler — which is
+   * exactly what makes it neither `buffered` nor `inputBuffered`. 0 for
+   * everything that is not a storehouse.
+   */
+  stored: number;
+  /**
+   * What this building COULD hold as a store (`BuildingDef.storage`), 0 for a
+   * non-store. Published beside `stored` rather than looked up per view: the
+   * table's `held / capacity` and the world view's fill ring both need the
+   * denominator, and it is 0 even for a depot standing empty.
+   */
+  storage: number;
   /** Ticks until a moved building can work again (0 when not relocating). */
   relocatingTicks: number;
   /** Sleeping places this building provides (0 for a producer). */
@@ -68,6 +92,27 @@ export interface ColonistSnapshot {
   haulTargetId: number | null;
   /** Which leg of the round trip, or 'idle' when not on one. */
   haulPhase: HaulPhase;
+  /**
+   * The JOB this hauler was dispatched on, frozen at dispatch; null when not on
+   * a trip at all.
+   *
+   * Deliberately NOT what drives the carrying-in/carrying-out marker — see
+   * `haulPickedUp`. It stops describing the cargo the moment the round trip
+   * works as intended, and it is published for what it does still answer: which
+   * errand this dot is running.
+   */
+  haulKind: HaulKind | null;
+  /**
+   * Whether the load in hand came out of a building's OUTPUT buffer — i.e.
+   * whether this hauler is carrying goods *out* of a building or *in* to one.
+   *
+   * This, not `haulKind`, is the direction marker (§2.10). A `supply` trip that
+   * unloaded and then collected output is carrying goods out while still
+   * labelled `supply`, and a `supply` trip returning an undelivered remainder
+   * is carrying goods in — so the headline round trip this increment is named
+   * for is precisely the case a kind-driven marker draws backwards.
+   */
+  haulPickedUp: boolean;
   /** Ticks remaining on the current leg — the dot's position is derived from it. */
   haulTicksLeft: number;
   /**
@@ -80,14 +125,44 @@ export interface ColonistSnapshot {
    */
   haulLegTicks: number;
   /**
-   * The tile a returning hauler's current leg began from, frozen at pickup.
-   * Meaningful only while `haulPhase` is 'returning'. Published for the same
-   * reason as `haulLegTicks`: the building the hauler loaded at can move
-   * mid-leg, and re-asking it for its door would draw the walk to a point
-   * this hauler never actually stood at (OBS-5-01).
+   * BOTH endpoints of the leg currently being walked, frozen when it began
+   * (`HaulTrip.startLeg`). With `haulLegTicks` and `haulTicksLeft` these place
+   * the dot in ANY phase, which is what removes the last per-phase case from
+   * the layout.
+   *
+   * Two pairs, where increment 5 published one (`haulPickupCol`/`Row`, named
+   * for the return leg's pickup because that was the only leg the app drew from
+   * it). A single site-end pair cannot describe this increment's trips: a leg
+   * may begin from an ARBITRARY position — the fractional tile a cancellation
+   * or a mid-leg re-price leaves behind — and neither end of a depot-to-building
+   * leg is the camp, so nothing about it is re-derivable from a lone endpoint
+   * plus a hardcoded anchor.
+   *
+   * Published rather than recomputed, for the reason `haulLegTicks` is: the
+   * building (or depot) at either end can move mid-leg, and re-asking it for its
+   * tile would draw the walk to a point this hauler never stood at (OBS-5-01).
+   *
+   * Meaningless while `haulPhase` is 'idle' — a cleared trip has no leg, and
+   * these read 0. `haulAtCol`/`haulAtRow` below are what place an idle hauler.
    */
-  haulPickupCol: number;
-  haulPickupRow: number;
+  haulLegFromCol: number;
+  haulLegFromRow: number;
+  haulLegToCol: number;
+  haulLegToRow: number;
+  /**
+   * Where this hauler physically STANDS when no leg is running: the tile a
+   * cancelled trip left them on, or the camp for one who has never moved. A
+   * position rather than a site id, so a demolished storehouse leaves no
+   * membership dangling, and never a plain 0 — an idle hauler drawn at (0, 0)
+   * would stand in the map's corner rather than wherever their last trip ended.
+   *
+   * Only meaningful while `haulPhase` is 'idle'. It is the trip's own
+   * `atCol`/`atRow`, which `cancel` writes and a running leg does not touch, so
+   * mid-leg it still holds where the CURRENT trip started; the leg endpoints
+   * above are what place a moving dot.
+   */
+  haulAtCol: number;
+  haulAtRow: number;
   /** Units in hand (0 unless carrying a load home). */
   carrying: number;
   /** Remaining ticks of this worker's tool coverage (0 = none). */

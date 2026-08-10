@@ -1,4 +1,4 @@
-import type { BuildingDef, BuildingDefId, RecipeDef } from '../../shared/content-types';
+import type { BuildingDef, BuildingDefId, CostMap, RecipeDef } from '../../shared/content-types';
 import { BALANCE } from './balance';
 
 export const BUILDINGS: Record<BuildingDefId, BuildingDef> = {
@@ -42,10 +42,24 @@ export const BUILDINGS: Record<BuildingDefId, BuildingDef> = {
 
 export const BUILDING_IDS = Object.keys(BUILDINGS) as readonly BuildingDefId[];
 
+/**
+ * Units held in a resource map, summed across every resource. THE count for a
+ * pile of goods — a recipe's inputs or outputs, an in-tray, an out-tray, a
+ * depot's contents — so no two surfaces can total the same pile differently.
+ */
+export function unitsOf(amounts: CostMap): number {
+  let units = 0;
+  for (const amount of Object.values(amounts)) units += amount;
+  return units;
+}
+
 /** Units one batch of a recipe adds to a building's output buffer. */
 export function batchOutputUnits(recipe: RecipeDef | null): number {
-  if (recipe === null) return 0;
-  let units = 0;
-  for (const amount of Object.values(recipe.outputs)) units += amount;
-  return units;
+  return recipe === null ? 0 : unitsOf(recipe.outputs);
+}
+
+/** Units one batch of a recipe takes out of the building's own in-tray — the
+ * denominator "how short is this building" is measured against. */
+export function batchInputUnits(recipe: RecipeDef | null): number {
+  return recipe === null ? 0 : unitsOf(recipe.inputs);
 }

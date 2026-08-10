@@ -336,7 +336,7 @@ describe('hauler placement', () => {
     // "building moved mid-leg" test below is the one that overrides them.
     colonists: [makeWorker(20, {
       hauling: true, haulPhase: 'outbound', haulTicksLeft: 0,
-      haulLegTicks: LEG_TICKS, haulPickupCol: 8, haulPickupRow: 4,
+      haulLegTicks: LEG_TICKS, haulLegFromCol: 8, haulLegFromRow: 4,
       ...overrides,
     })],
   });
@@ -491,7 +491,7 @@ describe('hauler placement', () => {
       buildings: [makeBuilding(1, { defId: 'forester', col: 23, row: 15 })], // moved mid-leg, far corner
       colonists: [makeWorker(20, {
         hauling: true, haulTargetId: 1, haulPhase: 'returning', haulTicksLeft: 2, carrying: 6,
-        haulLegTicks: LEG_TICKS, haulPickupCol: 8, haulPickupRow: 4, // frozen at the ORIGINAL (8,4) pickup
+        haulLegTicks: LEG_TICKS, haulLegFromCol: 8, haulLegFromRow: 4, // frozen at the ORIGINAL (8,4) pickup
       })],
     });
     const hauler = layoutWorld(snapshot).colonists.find((w) => w.id === 20)!;

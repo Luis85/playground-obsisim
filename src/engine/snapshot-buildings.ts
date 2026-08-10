@@ -3,7 +3,7 @@ import type { SavedBuilding } from '../shared/save';
 import type { BuildingSnapshot, BuildingState } from '../shared/snapshot';
 import { isRelocating } from '../shared/placement';
 import { BALANCE } from './content/balance';
-import { batchOutputUnits, BUILDINGS } from './content/buildings';
+import { batchOutputUnits, BUILDINGS, unitsOf } from './content/buildings';
 import { Building, InputBuffer, OutputBuffer, Position, Production, Relocation, WorkerSlots } from './components';
 
 /**
@@ -27,11 +27,11 @@ export interface BuildingFacts {
   batchActive: boolean;
   buffered: number;
   buffer: Partial<Record<ResourceId, number>>;
-  /** This building's own in-tray, and its share of the colony ledger. Neither
-   * is published in a `BuildingSnapshot` today; both are here because
-   * `savedBuildingOf` below is fed from these facts and save v6 persists them,
-   * and a fact the save needs but the facts do not carry is precisely how a
-   * producer ends up writing `{}` for a depot full of goods. */
+  /** This building's own in-tray, and its share of the colony ledger. Both are
+   * published in a `BuildingSnapshot` (§2.10) and persisted by save v6 through
+   * `savedBuildingOf` below — and a fact the save needs but the facts do not
+   * carry is precisely how a producer ends up writing `{}` for a depot full of
+   * goods. */
   inputBuffer: Partial<Record<ResourceId, number>>;
   stored: Partial<Record<ResourceId, number>>;
   relocatingTicks: number;
@@ -115,6 +115,15 @@ export function buildingSnapshotsOf(buildings: readonly BuildingFacts[], tallies
         tooledWorkers: tallies.tooled.get(b.id) ?? 0,
         workPower: tallies.power.get(b.id) ?? 0,
         buffered: b.buffered,
+        // Two piles at one building, summed from their OWN maps: the in-tray
+        // only this building can spend, and its share of the colony ledger any
+        // hauler may draw on. Neither is the other, and neither is `buffered`.
+        inputBuffered: unitsOf(b.inputBuffer),
+        stored: unitsOf(b.stored),
+        // From the DEF, never from what is standing there: a depot's fill ring
+        // and the table's `held / capacity` both need the denominator, and an
+        // empty depot still has one.
+        storage: def.storage,
         relocatingTicks: b.relocatingTicks,
         beds: def.beds,
         occupants: tallies.occupants.get(b.id) ?? 0,

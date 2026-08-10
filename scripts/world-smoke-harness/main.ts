@@ -4,6 +4,7 @@
 // This file is a declared fallow entry point (.fallowrc.json `entry`) — it is
 // loaded by the built harness page, never imported by app or test code.
 import type { BuildingSnapshot, ColonistSnapshot, Snapshot } from '../../src/shared/snapshot';
+import { CAMP_TILE } from '../../src/shared/haul';
 import { createExcaliburWorldRenderer } from '../../src/app/world/renderer';
 
 declare global {
@@ -22,23 +23,29 @@ window.addEventListener('unhandledrejection', (event) => window.__errors.push(St
 function building(id: number, defId: BuildingSnapshot['defId'], col: number, row: number, overrides: Partial<BuildingSnapshot> = {}): BuildingSnapshot {
   return {
     id, defId, col, row, workers: 0, workerSlots: 2, state: 'unstaffed',
-    progress: 0, batchActive: false, progressPct: 0, tooledWorkers: 0, workPower: 0, buffered: 0, relocatingTicks: 0,
+    progress: 0, batchActive: false, progressPct: 0, tooledWorkers: 0, workPower: 0, buffered: 0,
+    inputBuffered: 0, stored: 0, storage: 0, relocatingTicks: 0,
     beds: 0, occupants: 0,
     ...overrides,
   };
 }
 
+/**
+ * Grouped by what the RENDERER does with each field, not by the order they
+ * happen to sit in on `ColonistSnapshot`: the first block is everything the
+ * world view actually draws from and every scene below overrides out of, the
+ * second is the fields it never reads at all and that stay static here for the
+ * same reason the empty stockpile below is cast rather than filled in.
+ */
 function worker(id: number, overrides: Partial<ColonistSnapshot> = {}): ColonistSnapshot {
   return {
-    id, hunger: 0, starvingTicks: 0, efficiency: 1, buildingId: null, hauling: false,
-    haulTargetId: null, haulPhase: 'idle', haulTicksLeft: 0,
-    haulLegTicks: 0, haulPickupCol: 0, haulPickupRow: 0,
-    carrying: 0, toolTicks: 0, ageTicks: 0, stage: 'adult', homeId: null,
-    // The world renderer never reads the commute either — static zeros, same
-    // reason as `homeless` and the empty stockpile cast below.
-    commuteTiles: 0, commuteFactor: 1,
-    // Nor deliveredWorkPower — same reason.
-    deliveredWorkPower: null,
+    id, hauling: false, carrying: 0, toolTicks: 0, stage: 'adult', homeId: null, efficiency: 1,
+    haulTargetId: null, haulPhase: 'idle', haulTicksLeft: 0, haulLegTicks: 0,
+    haulLegFromCol: 0, haulLegFromRow: 0, haulLegToCol: 0, haulLegToRow: 0,
+    haulKind: null, haulPickedUp: false,
+    haulAtCol: CAMP_TILE.col, haulAtRow: CAMP_TILE.row,
+    hunger: 0, starvingTicks: 0, buildingId: null, ageTicks: 0,
+    commuteTiles: 0, commuteFactor: 1, deliveredWorkPower: null,
     ...overrides,
   };
 }
@@ -92,7 +99,7 @@ const growWorkers = () => [worker(10, { buildingId: 1, toolTicks: 100 }), worker
 const haulScene = (tick: number, hauler: Partial<ColonistSnapshot>, forester: Partial<BuildingSnapshot> = {}) => snap(tick,
   [building(1, 'forester', 4, 1, { buffered: 12, state: 'outputFull', ...forester }), building(2, 'farm', 6, 1)],
   [worker(10, { buildingId: 1 }), worker(11, { buildingId: 1 }), worker(12, {
-    toolTicks: 100, haulLegTicks: 2, haulPickupCol: 4, haulPickupRow: 1, ...hauler,
+    toolTicks: 100, haulLegTicks: 2, haulLegFromCol: 4, haulLegFromRow: 1, ...hauler,
   })]);
 
 /**

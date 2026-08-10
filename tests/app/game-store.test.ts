@@ -7,6 +7,7 @@ import { makeSnapshot, stockedWith, makeBuilding, makeWorker } from './fixtures'
 // gate's signed one are asserted against each other rather than described.
 import { spareBeds } from '../../src/engine/systems/population-handlers';
 import { PendingChanges } from '../../src/engine/resources';
+import { batchInputUnits, BUILDINGS } from '../../src/engine/content';
 
 // wheat is edible ONLY in this mock: the hardcoded getter ignores it (test
 // fails), the catalog-driven getter counts it (test passes). Without this the
@@ -136,7 +137,8 @@ describe('useGameStore', () => {
     const store = useGameStore();
     const base = {
       col: 0, row: 0, workers: 0, workerSlots: 2, progress: 0, batchActive: false,
-      progressPct: 0, tooledWorkers: 0, workPower: 0, buffered: 0, relocatingTicks: 0, beds: 0, occupants: 0,
+      progressPct: 0, tooledWorkers: 0, workPower: 0, buffered: 0, inputBuffered: 0, stored: 0, storage: 0,
+      relocatingTicks: 0, beds: 0, occupants: 0,
     };
     store.ingest(makeSnapshot({
       buildings: [
@@ -188,6 +190,61 @@ describe('useGameStore', () => {
     expect(store.haulerCount).toBe(0);
     expect(store.unitsWaiting).toBe(0);
     expect(store.stalledBuildings).toBe(0);
+  });
+
+  // The input backlog, symmetric with unitsWaiting's output backlog (§2.10):
+  // units the colony still owes the buildings that have stopped for want of
+  // them, and how many those are.
+  //
+  // Why this fixture discriminates. The six rows put every rival derivation on
+  // a different number: `unitsShort` is 2, `buildingsWaitingForInput` is 4,
+  // `stalledBuildings` is 1 and `unitsWaiting` is 12, so no two of the four can
+  // be swapped. Within `unitsShort`, summing the in-trays gives 5; dropping the
+  // Math.max(0, …) floor gives -2 (row 3 holds more than a batch wants);
+  // dropping the state filter gives 3 (row 5 is mid-batch, its inputs already
+  // paid); charging every waiting building its full recipe demand regardless of
+  // what it holds gives 3. Only the intended derivation gives 2.
+  const shortOf = (defId: 'mill' | 'bakery') => batchInputUnits(BUILDINGS[defId].recipe);
+
+  it('unitsShort and buildingsWaitingForInput describe the same starved set', () => {
+    const store = useGameStore();
+    store.ingest(makeSnapshot({
+      buildings: [
+        makeBuilding(1, { defId: 'mill', state: 'waitingForInput', inputBuffered: 0 }),
+        makeBuilding(2, { defId: 'bakery', state: 'waitingForInput', inputBuffered: 0 }),
+        // Waiting, but NOT for want of goods: a crew at zero work power never
+        // reaches startBatch, so a building can sit in this state with a full
+        // in-tray. Holding more than a batch wants is what exercises the floor.
+        makeBuilding(3, { defId: 'mill', state: 'waitingForInput', inputBuffered: 5 }),
+        // Waiting with no inputs in its recipe at all — a raw producer is never
+        // short of anything, and it must not be charged a phantom unit.
+        makeBuilding(4, { defId: 'forester', state: 'waitingForInput', inputBuffered: 0 }),
+        // Mid-batch: its inputs are already paid, so it is short of nothing
+        // however empty its in-tray now reads.
+        makeBuilding(5, { defId: 'bakery', state: 'producing', inputBuffered: 0 }),
+        // Stalled on the OTHER side: nothing about its in-tray is the problem.
+        makeBuilding(6, { defId: 'forester', state: 'outputFull', buffered: 12 }),
+      ],
+    }), status);
+
+    // Read off the catalog, so a recipe retune moves the fixture and the getter
+    // together rather than turning this into a stale literal.
+    expect(store.unitsShort).toBe(shortOf('mill') + shortOf('bakery'));
+    expect(store.unitsShort).toBeGreaterThan(0); // non-vacuous: the catalog really does want inputs
+    expect(store.buildingsWaitingForInput).toBe(4);
+    // The four aggregates are four different numbers on this one colony, so
+    // none of them can be quietly reading another's source.
+    expect(store.unitsShort).not.toBe(store.buildingsWaitingForInput);
+    expect(store.unitsShort).not.toBe(store.unitsWaiting);
+    expect(store.buildingsWaitingForInput).not.toBe(store.stalledBuildings);
+    expect(store.unitsWaiting).toBe(12);
+    expect(store.stalledBuildings).toBe(1);
+  });
+
+  it('unitsShort and buildingsWaitingForInput are zero before the first snapshot', () => {
+    const store = useGameStore();
+    expect(store.unitsShort).toBe(0);
+    expect(store.buildingsWaitingForInput).toBe(0);
   });
 
   // A colony that clears every nomad gate: a spare bed, food far past

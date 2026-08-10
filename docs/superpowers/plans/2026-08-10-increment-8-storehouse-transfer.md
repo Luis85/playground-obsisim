@@ -286,11 +286,16 @@ export interface DemandSource {
 
 /** Per-site, per-resource demand, keyed siteId → resource → units. */
 export function siteDemandOf(
-  sites: readonly StoreSite[], sources: readonly DemandSource[], targetPerSource: number,
+  sites: readonly StoreSite[], sources: readonly DemandSource[],
+  targetPerSource: number, reserveFreeSpace: number,
 ): Map<number, Map<ResourceId, number>>;
 ```
 
-`targetPerSource` is a parameter, not `BALANCE.siteStagingTarget`, for the reason `haulTicks` takes `tilesPerTick`: `src/shared/**` imports nothing outside itself.
+`targetPerSource` and `reserveFreeSpace` are parameters, not `BALANCE.siteStagingTarget` and `BALANCE.storehouseFreeFloor`, for the reason `haulTicks` takes `tilesPerTick`: `src/shared/**` imports nothing outside itself.
+
+**`reserveFreeSpace` is the demand cap, and it is not optional (§2.2).** A bounded site's TOTAL demand across every resource is capped at `capacity − reserveFreeSpace`. Without it, five staffed mills nearest one 60-unit depot demand 60, collect fills the depot to 60 — collect does not consult demand at all — and then `surplus = unclaimedAt(60) − demand(60) = 0`, so the drain cannot fire and the free floor is unreachable by any rule. That is the §4.3 silting-up defect the whole increment exists to remove, reappearing through the door demand cannot see.
+
+When the summed demand exceeds the cap, **scale each resource's share proportionally and floor it to an integer.** Deterministic, independent of iteration order, and under-allocating by a unit or two is the safe direction — an unallocated unit is simply not demanded by anyone. The camp is unbounded (`capacity === null`) and is never capped.
 
 Resolution is `nearestSite(col, row, sites)` — already exported, currently unused by dispatch, and already "nearest, then id" so the answer never depends on array order.
 
@@ -319,6 +324,29 @@ it('the camp is an ordinary site here', () => {
 
 it('demand is per-resource', () => {
   // A mill nearest to a depot creates wheat demand there and no flour demand.
+});
+
+it('a bounded site never demands more than it can hold above its floor', () => {
+  // FIVE mills nearest one 60-unit depot at a target of 12 would demand 60.
+  // Capped at capacity - reserveFreeSpace = 48. Without this the drain can
+  // never fire (surplus is zero when everything held is demanded) and the free
+  // floor is unreachable by any rule.
+  //
+  // DISCRIMINATING: use five sources, not two. At two the uncapped total is 24
+  // and the cap never binds, so the test passes with the cap deleted.
+});
+
+it('an over-subscribed cap is split proportionally and floored', () => {
+  // The same five mills: 48 / 5 = 9.6 -> 9 each, total 45. Deterministic, and
+  // under-allocating is the safe direction. Assert the SPLIT, not just the
+  // total, or an implementation that gives the first mill 48 and the rest 0
+  // passes.
+});
+
+it('the camp is never capped', () => {
+  // Unbounded capacity, so no floor to reserve and no cap to apply. The pair to
+  // the test above — with the null-capacity branch deleted, the camp's demand
+  // would be clamped against a capacity it does not have.
 });
 ```
 

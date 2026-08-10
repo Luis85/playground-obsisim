@@ -353,20 +353,40 @@ Three properties worth stating because each is a place this could go wrong:
   unreachable by any rule. That is the §4.3 silting-up defect again, arriving
   through the staging door this time.
 
-  **Staging therefore may not consume the free floor**: for a bounded
-  destination the staging term is `capacity − storehouseFreeFloor − heldAt(D)`,
-  floored at zero, rather than `capacity − heldAt(D)`. The camp is unbounded and
-  keeps no floor, so it is unaffected.
+  **Two bounds are required, and neither is sufficient alone.** A first
+  correction bounded only staging, on the argument that demand is an honest
+  statement of what the consumers around a site want and should not be clamped.
+  That closes one door: it stops *staging* from filling the depot past its
+  floor. It does not stop the depot getting there, because **collect does not
+  consult demand at all** — a producer's output goes to the nearest site with
+  room, so the depot still reaches 60 of 60, and at that point
+  `surplus(wheat) = unclaimedAt(60) − demand(60) = 0` and the drain is as stuck
+  as before. Same dead end, reached through the other door.
 
-  This is the right place for the bound, and capping demand itself would have
-  been the wrong one. Demand says what the consumers around a site want; it is
-  an honest number and clamping it would need a rule for splitting the clamp
-  between competing resources, which is machinery in service of a
-  misattribution. **The floor is the room a depot keeps for its inbound
-  short hops — its outbound job — and staging is its other job.** One job may
-  not eat the other's reserve. Collect can still fill that reserve, because
-  collect does not consult demand at all, and the drain exists for exactly the
-  stock that arrives that way.
+  So:
+
+  - **A bounded site's total demand is capped at `capacity − storehouseFreeFloor`.**
+    This is what guarantees a positive surplus exists whenever the site is above
+    its floor, and therefore that the drain can always restore it. When the
+    summed demand exceeds the cap, each resource's share is scaled proportionally
+    and floored to an integer — deterministic, independent of iteration order,
+    and under-allocating by a unit or two is the safe direction, since an
+    unallocated unit is simply not demanded by anyone.
+  - **Staging may not consume the free floor**: for a bounded destination the
+    staging term is `capacity − storehouseFreeFloor − heldAt(D)`, floored at
+    zero, rather than `capacity − heldAt(D)`.
+
+  **The pair is not redundant and the difference is worth stating, because
+  otherwise someone deletes one of them.** The demand cap makes the drain always
+  *able* to restore the floor. The staging cap makes staging never the *cause* of
+  the floor being breached. The first is about whether a remedy exists; the
+  second is about not needing it. The camp is unbounded and keeps no floor, so
+  neither bound touches it.
+
+  **The floor is the room a depot keeps for the short-hop collect deposits that
+  are its outbound value**, and staging is its other job. One job may not eat the
+  other's reserve, and the drain exists for exactly the stock that arrives by the
+  door demand cannot see.
 
 ### 2.3 The transfer trip: the supply trip minus the building
 
@@ -511,7 +531,7 @@ would stage it back, so the dead band of §2.4's closing paragraph still holds
 and no drained unit can be pulled straight back in.
 
 ```
-occupancyAt(S) = totalAt(S) − plannedOutAt(S)        ← every resource, not one
+occupancyAt(S) = heldAt(S) − plannedOutAt(S)         ← every resource, not one
 drainNeed(S)   = max(0, storehouseFreeFloor − (S.capacity − occupancyAt(S)))
 movable        = min(haulerCapacity, S.surplus(r), drainNeed(S))
 ```
@@ -535,11 +555,26 @@ third finds `drainNeed` at 0 and no candidate at all.
 headroom is measured across every resource, so a per-resource claim cannot bound
 it. §2.7 specifies it; the two share one traversal.
 
-**Inbound staging is deliberately not subtracted from `occupancyAt`.** A depot
-that is simultaneously below its floor and receiving staged goods is a placement
-problem, and having the drain chase inbound traffic couples the two rules in the
-one direction that could oscillate. The drain answers only for the removals it
-has itself scheduled.
+**`occupancyAt` is `heldAt`, not `totalAt`, and the distinction is the whole
+point of calling this reservation-aware.** An earlier draft wrote `totalAt`,
+which counts the removal a drain has scheduled but not the arrival a returning
+hauler has already reserved — reservation-aware in one direction only. A depot
+at 54 of 60 with a six-unit fetch leaving and a six-unit collect return inbound
+then reads occupancy 48, free space 12, and `drainNeed` 0; but once both land it
+is back at 54 with six units of headroom, below the floor. The drain waits a
+full trip for a condition that was already determined at dispatch. `heldAt`
+already counts returning loads (§2.7), so future occupancy needs no new claim:
+`60 − 6 = 54`, free 6, `drainNeed` 6, and the drain goes out on the tick the
+answer is knowable.
+
+**Inbound *staging* is a different quantity and is still deliberately excluded.**
+`heldAt` counts a returning transfer's `amount`, which is what makes the
+paragraph above work, but the drain does not subtract a *fetching* transfer's
+reservation toward this site — `inboundAt`. A depot simultaneously below its
+floor and being staged into is a placement problem, and having the drain chase
+inbound staging couples the two rules in the one direction that could oscillate.
+The drain answers for removals it has scheduled and for loads already in a
+hauler's hands, not for intentions aimed at it.
 
 **No `roomAt` term here, and the absence is a consequence rather than an
 omission:** a drain's destination is always the camp, the camp is unbounded, and

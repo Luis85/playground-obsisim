@@ -13,7 +13,7 @@ import type { BuildingState, BuildingSnapshot } from '../../src/shared/snapshot'
 // drive the construct-button's affordable/disabled state) and the building's
 // reported state (to drive the humanized-label assertions below).
 function mountView(
-  stock: { wood?: number } = {},
+  stock: { wood?: number; planks?: number } = {},
   state: BuildingState = 'producing',
   building: Partial<BuildingSnapshot> = {},
 ) {
@@ -29,6 +29,7 @@ function mountView(
     idleAdults: 2,
   });
   snapshot.stockpile.wood.stock = stock.wood ?? 0;
+  snapshot.stockpile.planks.stock = stock.planks ?? 0;
   useGameStore().ingest(snapshot, { paused: true, speed: 1, error: null });
   return { engine, wrapper };
 }
@@ -51,7 +52,7 @@ describe('BuildingsView', () => {
 
     useGameStore().ingest(makeSnapshot({ buildings: [] }), { paused: true, speed: 1, error: null });
     await waiting.wrapper.vm.$nextTick();
-    const cell = waiting.wrapper.get('td[colspan="10"]');
+    const cell = waiting.wrapper.get('td[colspan="11"]');
     expect(cell.text()).toContain('Forester');
     expect(cell.text()).toMatch(/Gatherer.?s Hut/);
     expect(cell.text()).toContain('10 wood each');
@@ -87,6 +88,54 @@ describe('BuildingsView', () => {
     const poor = mountView({ wood: 0 });
     await poor.wrapper.vm.$nextTick();
     expect((poor.wrapper.find('[data-test="construct-forester"]').element as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  // Task 4 added the storehouse def and left recipeLabel treating every
+  // recipe-less def as housing, so the shed rendered "Shelters 0" at exactly
+  // the moment a player is deciding what to build. BALANCE.storehouseCapacity
+  // (60) is asserted directly rather than a literal, so a retune doesn't
+  // desync this test from the def.
+  it('names the storehouse\'s role as storage, not shelter', async () => {
+    const { wrapper } = mountView();
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).toContain(`Stores ${BALANCE.storehouseCapacity}`);
+    expect(wrapper.text()).not.toContain('Shelters 0');
+  });
+
+  // The fallback path must be able to build the building this increment
+  // adds, or table/canvas parity is a claim rather than a property. Wood and
+  // planks are both funded since the storehouse costs both.
+  it('constructs a storehouse from the table', async () => {
+    const { engine, wrapper } = mountView({ wood: 100, planks: 100 });
+    await wrapper.vm.$nextTick();
+    const button = wrapper.find('[data-test="construct-storehouse"]');
+    expect(button.exists()).toBe(true);
+    expect((button.element as HTMLButtonElement).disabled).toBe(false);
+    await button.trigger('click');
+    expect(engine.dispatch).toHaveBeenCalledWith({ type: 'constructBuilding', buildingDefId: 'storehouse' });
+  });
+
+  // Waiting (5), In (3), held (41) and capacity (60) are mutually distinct —
+  // a column bound to the wrong field, or the storehouse row falling back to
+  // the plain `buffered` cell, changes one of these assertions rather than
+  // coinciding with the others.
+  it('adds an In column beside Waiting, and a storehouse row shows held over capacity', async () => {
+    const wrapper = mount(BuildingsView, {
+      global: {
+        plugins: [createTestingPinia({ createSpy: vi.fn, stubActions: false })],
+        provide: { [ENGINE_KEY as symbol]: { dispatch: vi.fn() } },
+      },
+    });
+    useGameStore().ingest(makeSnapshot({
+      buildings: [
+        makeBuilding(7, { defId: 'mill', state: 'producing', buffered: 5, inputBuffered: 3 }),
+        makeBuilding(8, { defId: 'storehouse', state: 'storing', stored: 41, storage: 60 }),
+      ],
+    }), { paused: true, speed: 1, error: null });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-test="waiting-7"]').text()).toBe('5');
+    expect(wrapper.find('[data-test="in-7"]').text()).toBe('3');
+    expect(wrapper.find('[data-test="waiting-8"]').text()).toBe('41 / 60');
   });
 
   it('shows each building\'s tile and demolishes after the two-step confirm', async () => {

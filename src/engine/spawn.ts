@@ -3,8 +3,8 @@ import { BALANCE, MAX_AGE_TICKS } from './content/balance';
 import { BUILDINGS } from './content/buildings';
 import { RESOURCE_IDS } from './content/resources';
 import {
-  Age, Building, Efficiency, HaulTrip, Home, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Colonist,
-  WorkerSlots,
+  Age, Building, Efficiency, HaulTrip, Home, Hunger, InputBuffer, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage,
+  Colonist, WorkerSlots,
 } from './components';
 
 /**
@@ -73,22 +73,44 @@ export function clampedAge(ticks: number): number {
 }
 
 /**
- * A saved buffer trimmed to the CURRENT cap, counted across all resources in
- * catalog order. An over-cap buffer loads and trims rather than being refused.
+ * A saved buffer trimmed to `cap`, counted across all resources in catalog
+ * order. An over-cap buffer loads and trims rather than being refused.
+ *
+ * Takes the cap as an argument rather than reading one off the caller (e.g. a
+ * component-typed parameter): `OutputBuffer` and `InputBuffer` have separate
+ * caps that can retune independently, and a second copy of this trim loop is
+ * how the input side would end up silently trimming to the output cap after
+ * one of them moves.
  */
-export function clampedBuffer(saved: Partial<Record<ResourceId, number>>): Map<ResourceId, number> {
+export function clampedBuffer(saved: Partial<Record<ResourceId, number>>, cap: number): Map<ResourceId, number> {
   const buffer = new Map<ResourceId, number>();
   let total = 0;
   for (const id of RESOURCE_IDS) {
     const amount = saved[id] ?? 0;
     if (amount <= 0) continue;
-    const room = BALANCE.outputBufferCap - total;
+    const room = cap - total;
     if (room <= 0) break;
     const kept = Math.min(amount, room);
     buffer.set(id, kept);
     total += kept;
   }
   return buffer;
+}
+
+/**
+ * `clampedBuffer` against `BALANCE.inputBufferCap` — the input-side counterpart
+ * every `InputBuffer` seed (save restore, live construct, or a test fixture)
+ * goes through, the same way `OutputBuffer` goes through `clampedBuffer`
+ * directly with `BALANCE.outputBufferCap`.
+ *
+ * Exported for the reason `clampedRelocation` is: `buildInitialSnapshot` now
+ * publishes a restored in-tray (`BuildingSnapshot.inputBuffered`), and the
+ * seeded figure must be trimmed by the same rule `buildingComponents` below
+ * trims the live component by — or a paused colony shows an over-cap in-tray
+ * the first tick silently corrects.
+ */
+export function clampedInputBuffer(saved: Partial<Record<ResourceId, number>>): Map<ResourceId, number> {
+  return clampedBuffer(saved, BALANCE.inputBufferCap);
 }
 
 /** Initial values for a building, from a save record or from a build command. */
@@ -100,6 +122,10 @@ export interface BuildingSpec {
   progress?: number;
   batchActive?: boolean;
   buffer?: Partial<Record<ResourceId, number>>;
+  // Persisted since save v6 (`SavedBuilding.inputBuffer`), so a reload no
+  // longer empties a building's in-tray. Optional here because the live
+  // construct path has nothing to put in one yet, and a fixture may not care.
+  inputBuffer?: Partial<Record<ResourceId, number>>;
   relocatingTicks?: number;
 }
 
@@ -110,7 +136,8 @@ export function buildingComponents(spec: BuildingSpec): object[] {
     new WorkerSlots(BUILDINGS[spec.defId].workerSlots),
     new Production(clampedProgress(spec.defId, spec.progress ?? 0), spec.batchActive ?? false),
     new Position(spec.col, spec.row),
-    new OutputBuffer(clampedBuffer(spec.buffer ?? {})),
+    new OutputBuffer(clampedBuffer(spec.buffer ?? {}, BALANCE.outputBufferCap)),
+    new InputBuffer(clampedInputBuffer(spec.inputBuffer ?? {})),
     new Relocation(clampedRelocation(spec.relocatingTicks ?? 0)),
   ];
 }

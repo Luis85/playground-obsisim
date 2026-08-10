@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SystemError, type IEntity } from 'sim-ecs';
-import { Building, OutputBuffer, Production } from '../../../src/engine/components';
+import { Building, InputBuffer, OutputBuffer, Production } from '../../../src/engine/components';
 import { IdCounter, SnapshotStore, Stockpile } from '../../../src/engine/resources';
 import { ProductionSystem } from '../../../src/engine/systems/production-system';
 import { SnapshotSystem } from '../../../src/engine/systems/snapshot-system';
@@ -13,14 +13,27 @@ import { BALANCE } from '../../../src/engine/content/balance';
 import { BUILDINGS } from '../../../src/engine/content/buildings';
 import { stepTick } from '../fixtures';
 
-async function setup(defId: BuildingDefId, stock: Partial<Record<ResourceId, number>>, workerCount = 1, workerToolTicks = 0) {
+async function setup(
+  defId: BuildingDefId,
+  stock: Partial<Record<ResourceId, number>>,
+  workerCount = 1,
+  workerToolTicks = 0,
+  // The building's OWN input buffer (Task 3): a recipe's inputs are paid
+  // from here, never from `stock` any more. `stock` stays a separate
+  // parameter rather than being folded into this one — tests that seed the
+  // colony stockpile for a reason unrelated to this building's own recipe
+  // (e.g. asserting it is never touched) still need to say so explicitly.
+  inputBuffer: Partial<Record<ResourceId, number>> = {},
+) {
   const save = initialSave();
   save.colonists = [];
   save.buildings = [];   // no starter house: this fixture builds its own world
   save.stockpile = stock;
   const prep = buildColonyPrepWorld({ save, systems: [ProductionSystem] });
   const ids = getPrepResource(prep, IdCounter);
-  const building: IEntity = spawnBuilding(prep, ids, { defId, progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 0 });
+  const building: IEntity = spawnBuilding(prep, ids, {
+    defId, progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 0, inputBuffer,
+  });
   const buildingId = building.getComponent(Building)!.id;
   // Housed at the same building it works: this file is exercising batch
   // arithmetic in isolation (systems: [ProductionSystem], no PopulationSystem
@@ -33,6 +46,63 @@ async function setup(defId: BuildingDefId, stock: Partial<Record<ResourceId, num
 }
 
 describe('ProductionSystem', () => {
+  it('a staffed mill with an empty input buffer produces nothing, however full the colony store', async () => {
+    // DISCRIMINATING FIXTURE: 10,000 wheat in the stockpile. Before Task 3
+    // that mill produced flour every 3 ticks. A pass here cannot come from
+    // "there was no wheat" — there is more wheat than the mill could eat in a
+    // session, and it is simply in the wrong place: the colony store, not the
+    // mill's own input buffer.
+    const save = { ...initialSave(), colonists: [], buildings: [], stockpile: { wheat: 10_000 }, nextEntityId: 100 };
+    const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
+    const ids = getPrepResource(prep, IdCounter);
+    const mill = spawnBuilding(prep, ids, { defId: 'mill', progress: 0, batchActive: false, col: 5, row: 3, relocatingTicks: 0 });
+    const millId = mill.getComponent(Building)!.id;
+    // No homeId (see the 'a house never produces' fixture below on the same
+    // pattern): a mill has no beds, so this colonist stays homeless for the
+    // whole run regardless — full ALL_SYSTEMS is what exercises the real
+    // per-tick sequence, not an isolated ProductionSystem-only world.
+    spawnColonist(prep, ids, { id: 1, ageTicks: BALANCE.lifeBands.matureTicks, buildingId: millId });
+    const world = await prep.prepareRun();
+    const stockpile = world.getResource(Stockpile);
+    for (let i = 0; i < 20; i++) await stepTick(world);
+
+    const snap = world.getResource(SnapshotStore).latest!.buildings.find((b) => b.id === millId)!;
+    expect(snap.state).toBe('waitingForInput');
+    expect(snap.buffered).toBe(0);
+    expect(stockpile.get('wheat')).toBe(10_000); // and nothing was quietly eaten
+  });
+
+  it('the same mill produces once wheat is in its own input buffer', async () => {
+    // The other half of the pair above: without this, "produces nothing"
+    // would also pass with ProductionSystem deleted entirely.
+    const save = { ...initialSave(), colonists: [], buildings: [], stockpile: { wheat: 10_000 }, nextEntityId: 100 };
+    const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
+    const ids = getPrepResource(prep, IdCounter);
+    // SIX wheat would not survive the 20-tick horizon: a mill is one wheat per
+    // three-tick batch, so six run out around tick 18 and the mill correctly
+    // returns to `waitingForInput` — the assertions below would then reject
+    // the implementation they are meant to accept. Seed the cap instead.
+    const mill = spawnBuilding(prep, ids, {
+      defId: 'mill', progress: 0, batchActive: false, col: 5, row: 3, relocatingTicks: 0,
+      inputBuffer: { wheat: BALANCE.inputBufferCap },
+    });
+    const millId = mill.getComponent(Building)!.id;
+    spawnColonist(prep, ids, { id: 1, ageTicks: BALANCE.lifeBands.matureTicks, buildingId: millId });
+    const world = await prep.prepareRun();
+    const stockpile = world.getResource(Stockpile);
+    for (let i = 0; i < 20; i++) await stepTick(world);
+
+    const snap = world.getResource(SnapshotStore).latest!.buildings.find((b) => b.id === millId)!;
+    const inputBuffer = mill.getComponent(InputBuffer)!;
+    // Assert what the feature DOES, not the state it happens to be in at a
+    // chosen tick: a momentary `producing` is hostage to `ticksPerBatch` and
+    // the crew's work power, both tunable. Output banked and local input
+    // drawn down is the claim.
+    expect(snap.buffered).toBeGreaterThan(0);
+    expect(inputBuffer.total()).toBeLessThan(BALANCE.inputBufferCap);
+    expect(stockpile.get('wheat')).toBe(10_000); // still not touched
+  });
+
   it('produces raw output after ticksPerBatch worker-ticks (forester: 3)', async () => {
     const { world, building } = await setup('forester', {});
     await world.step();
@@ -43,9 +113,11 @@ describe('ProductionSystem', () => {
   });
 
   it('consumes inputs at batch start, all-or-nothing (mill)', async () => {
-    const { world, building, stockpile } = await setup('mill', { wheat: 1 });
+    // Task 3: the wheat comes from the mill's OWN input buffer, not the
+    // colony stockpile (left empty here on purpose).
+    const { world, building } = await setup('mill', {}, 1, 0, { wheat: 1 });
     await world.step();
-    expect(stockpile.get('wheat')).toBe(0); // consumed at start
+    expect(building.getComponent(InputBuffer)!.total()).toBe(0); // consumed at start
     expect(building.getComponent(Production)!.batchActive).toBe(true);
     await world.step();
     await world.step(); // 3 worker-ticks done
@@ -239,13 +311,15 @@ describe('ProductionSystem', () => {
   });
 
   it('does not consume inputs it cannot bank the output of', async () => {
-    // A mill with a full buffer must not eat wheat it can do nothing with:
-    // the room check runs BEFORE pay(), so not a single grain is taken.
-    const { world, building, stockpile } = await setup('mill', { wheat: 20 });
+    // A mill with a full OUTPUT buffer must not eat wheat it can do nothing
+    // with: the room check runs BEFORE payFrom(), so not a single grain is
+    // taken from its own input buffer (Task 3: never from the stockpile at
+    // all any more).
+    const { world, building } = await setup('mill', {}, 1, 0, { wheat: 5 });
     const buffer = building.getComponent(OutputBuffer)!;
     buffer.add('flour', BALANCE.outputBufferCap);
     for (let i = 0; i < 6; i++) await world.step();
-    expect(stockpile.get('wheat')).toBe(20);
+    expect(building.getComponent(InputBuffer)!.total()).toBe(5);
     expect(buffer.total()).toBe(BALANCE.outputBufferCap);
   });
 
@@ -255,13 +329,14 @@ describe('ProductionSystem', () => {
     // - Start buffer at 11 flour: room = 12 - 11 = 1 unit (exactly room for 1 batch)
     // - 1 worker contributes 1.0 work power per tick
     // - Mill recipe needs 3 ticks per batch (ticksPerBatch)
-    // - Tick 1-3: consume 1 wheat (line 31), produce 1 flour per tick, bank at tick 3
-    // - At tick 3: bank 1 flour (buffer = 12) and consume 1 more wheat for next batch (line 53)
-    // - Total: 2 wheat consumed, 1 batch banked, 1 batch in flight
-    // - Tick 4+: room check (line 30) prevents new batches
+    // - Tick 1-3: consume 1 wheat (startBatch's payFrom), produce 1 flour per tick, bank at tick 3
+    // - At tick 3: bank 1 flour (buffer = 12) and consume 1 more wheat for the next batch (completeBatches' chained payFrom)
+    // - Total: 2 wheat consumed FROM THE MILL'S OWN INPUT BUFFER, 1 batch banked, 1 batch in flight
+    // - Tick 4+: room check (buffer.room(...) < perBatch) prevents new batches
     // Expected: exactly one batch's worth of inputs held in flight, no more consumed
-    const { world, building, stockpile } = await setup('mill', { wheat: 2 });
+    const { world, building } = await setup('mill', {}, 1, 0, { wheat: 2 });
     const buffer = building.getComponent(OutputBuffer)!;
+    const input = building.getComponent(InputBuffer)!;
     const production = building.getComponent(Production)!;
 
     // Fill buffer to 11 flour (leaving room for exactly 1 more batch)
@@ -271,14 +346,14 @@ describe('ProductionSystem', () => {
     for (let i = 0; i < 3; i++) await world.step();
 
     // Exactly 2 wheat consumed: 1 for the batch that completed, 1 for the batch in flight
-    expect(stockpile.get('wheat')).toBe(0); // 2 - 2 = 0
+    expect(input.total()).toBe(0); // 2 - 2 = 0
     expect(buffer.total()).toBe(12); // 11 + 1 = 12 (full)
     expect(production.batchActive).toBe(true); // One batch in flight (inputs paid, waiting to bank)
     expect(production.progress).toBe(0); // Progress reset after banking
 
     // Run many more ticks: no further wheat consumed (can't start new batch due to full buffer)
     for (let i = 0; i < 50; i++) await world.step();
-    expect(stockpile.get('wheat')).toBe(0);
+    expect(input.total()).toBe(0);
     expect(buffer.total()).toBe(12);
   });
 

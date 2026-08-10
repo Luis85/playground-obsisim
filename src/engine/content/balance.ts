@@ -51,11 +51,25 @@ export const BALANCE = {
   statsWindowTicks: 100,
   /** Units a building may hold before it stalls (total across resources). */
   outputBufferCap: 12,
+  /** Units a building may hold of its own recipe's inputs (total across
+   * resources, like outputBufferCap). Mirrors the output cap so a building's
+   * in-tray and out-tray are the same size and a hauler's round trip is
+   * symmetric. At one input per batch this is 12 batches of runway — ~36 ticks
+   * for a mill, comfortably longer than the 13-tick worst-case one-way walk. */
+  inputBufferCap: 12,
   /** Units one hauler carries per trip: two trips clear a full buffer. */
   haulCarryCapacity: 6,
   /** Hauler walking speed. A building beside the camp is a 1-tick walk; the far
    * corner of the default map is 13, so distance is a real investment. */
   haulTilesPerTick: 2,
+  /** Units a storehouse can hold. Five full output buffers, so one depot
+   * serves a cluster of four or five producers for several trips before it
+   * backs up. */
+  storehouseCapacity: 60,
+  /** The smallest supply delivery worth a trip — don't walk thirteen tiles to
+   * deliver one unit. Low enough that a small colony is never locked out of
+   * supply entirely, which a higher floor would do. */
+  minSupplyUnits: 2,
   relocationTilesPerTick: RELOCATION_TILES_PER_TICK,
   yearTicks: YEAR_TICKS,
   /** Age bands in ticks (spec 2.2): child 0-9, adult 10-54, elder 55+,

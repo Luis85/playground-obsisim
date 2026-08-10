@@ -18,6 +18,17 @@ const haulPressure = computed(() => {
   return `${store.unitsWaiting} units waiting for collection — ${stalled} — ${haulers} on duty.`;
 });
 
+// The input-side twin of haulPressure above — the answer to "why is my
+// bakery stopped?" (§2.10). Both figures come from the store's own
+// waitingForInput-gated getters, never recomputed here, so this line and the
+// Buildings table's In column cannot disagree about which buildings are short.
+const inputPressure = computed(() => {
+  if (store.buildingsWaitingForInput === 0) return 'Input delivery is keeping up: no building is waiting.';
+  const count = store.buildingsWaitingForInput;
+  const buildings = `${count} building${count === 1 ? '' : 's'}`;
+  return `${store.unitsShort} units short — ${buildings} waiting for input.`;
+});
+
 const chains = computed(() => {
   const snapshot = store.snapshot;
   if (!snapshot) return [];
@@ -63,6 +74,13 @@ const chains = computed(() => {
       :class="{ 'obsisim-negative': store.stalledBuildings > 0 }"
     >
       {{ haulPressure }}
+    </p>
+    <p
+      class="obsisim-haul-pressure"
+      data-test="input-pressure"
+      :class="{ 'obsisim-negative': store.buildingsWaitingForInput > 0 }"
+    >
+      {{ inputPressure }}
     </p>
     <section v-for="chain in chains" :key="chain.name">
       <h3>{{ chain.name }} chain</h3>

@@ -3,7 +3,7 @@ import { SnapshotStore } from '../../src/engine/resources';
 import { createColonyWorld, initialSave } from '../../src/engine/world';
 import { BALANCE } from '../../src/engine/content/balance';
 import { enqueue as dispatch, stepTick } from './fixtures';
-import type { SaveGameV5 } from '../../src/shared/save';
+import type { SaveGameV6 } from '../../src/shared/save';
 
 /**
  * `stepTick`, not a bare `world.step()` with the clock nudged by hand, which
@@ -21,9 +21,15 @@ async function run(world: Awaited<ReturnType<typeof createColonyWorld>>, ticks: 
  * Rich fixture: enough stock + idle workers to build the full economy at
  * once. 13 staff the two production chains below; the remaining 5 haul —
  * without them the chain stalls at each building's OutputBuffer exactly as
- * tests/engine/systems/haul-system.test.ts pins in isolation, since a
- * downstream building's input is paid from the Stockpile, never straight
- * from an upstream building's buffer.
+ * tests/engine/systems/haul-system.test.ts pins in isolation.
+ *
+ * Since increment 7 Task 6 those 5 haulers do BOTH halves of the job: they
+ * collect finished goods out of each building's `OutputBuffer` and they
+ * supply each downstream building's `InputBuffer` from the store. The chain
+ * below is the end-to-end proof that the two halves compose — a mill that is
+ * never delivered wheat produces no flour, and a bakery with no flour bakes
+ * no bread, so the two `deliveredRate` assertions at the bottom cannot pass
+ * without a working supply leg.
  *
  * It also houses all 18, because since increment 6 a colony that houses
  * nobody is a colony working at half power (BALANCE.homelessFactor) and
@@ -39,7 +45,7 @@ async function run(world: Awaited<ReturnType<typeof createColonyWorld>>, ticks: 
  */
 const HOUSE_TILES = [{ col: 5, row: 1 }, { col: 7, row: 1 }, { col: 9, row: 1 }, { col: 11, row: 1 }, { col: 5, row: 3 }];
 
-function richSave(): SaveGameV5 {
+function richSave(): SaveGameV6 {
   const save = initialSave();
   save.stockpile = { wood: 500, planks: 200, berries: 200 };
   // 5 houses x BALANCE.houseBeds is 20 beds for 18 colonists, so nobody is
@@ -47,7 +53,7 @@ function richSave(): SaveGameV5 {
   // These REPLACE initialSave()'s starter house: the tiles below are chosen to
   // dodge the plot sequence, and keeping the starter house would put a sixth
   // house on the first plot tile the seven constructions below expect.
-  save.buildings = HOUSE_TILES.map((tile, i) => ({
+  save.buildings = HOUSE_TILES.map((tile, i) => ({ inputBuffer: {}, stored: {},
     id: 19 + i, defId: 'house' as const, col: tile.col, row: tile.row,
     progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0,
   }));

@@ -1,22 +1,35 @@
 import { createSystem, queryComponents, Read, ReadResource, Write, WriteResource } from 'sim-ecs';
-import type { RecipeDef, ResourceId } from '../../shared/content-types';
-import type { TileRef } from '../../shared/placement';
+import type { CostMap, RecipeDef, ResourceId } from '../../shared/content-types';
+import { relocatingIdsOf, type TileRef } from '../../shared/placement';
 import { commuteFactor } from '../../shared/population';
 import { BALANCE, workerWorkPower } from '../content/balance';
 import { batchOutputUnits, BUILDINGS } from '../content/buildings';
 import { commuteTiles } from '../snapshot-builder';
-import { Building, Efficiency, Home, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage } from '../components';
-import { PendingChanges, ProductionLedger, Stockpile } from '../resources';
+import { Building, Efficiency, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage } from '../components';
+import { PendingChanges, ProductionLedger } from '../resources';
+
+/**
+ * All-or-nothing draw against the building's OWN input buffer — never the
+ * colony Stockpile. Since Task 3 that is the whole point: a recipe's inputs
+ * have to physically be in THIS building before a batch can start, which is
+ * what makes a hauler's delivery run meaningful instead of decorative.
+ */
+function payFrom(input: InputBuffer, cost: CostMap): boolean {
+  const canAfford = Object.entries(cost).every(([id, amount]) => (input.amounts.get(id as ResourceId) ?? 0) >= amount);
+  if (!canAfford) return false;
+  for (const [id, amount] of Object.entries(cost)) input.take(id as ResourceId, amount);
+  return true;
+}
 
 /**
  * Try to start a new batch when idle. Checked BEFORE paying inputs: a
  * building that could not bank the result must not eat the wheat it can do
  * nothing with.
  */
-function startBatch(production: Production, buffer: OutputBuffer, stockpile: Stockpile, recipe: RecipeDef, perBatch: number): void {
+function startBatch(production: Production, input: InputBuffer, buffer: OutputBuffer, recipe: RecipeDef, perBatch: number): void {
   if (production.batchActive) return;
   if (buffer.room(BALANCE.outputBufferCap) < perBatch) return;
-  if (stockpile.pay(recipe.inputs)) {
+  if (payFrom(input, recipe.inputs)) {
     production.batchActive = true;
     production.progress = 0;
   }
@@ -27,7 +40,7 @@ function startBatch(production: Production, buffer: OutputBuffer, stockpile: Sto
  * straight into the next one when inputs and buffer room allow.
  */
 function completeBatches(
-  production: Production, buffer: OutputBuffer, stockpile: Stockpile, recipe: RecipeDef, perBatch: number, ledger: ProductionLedger,
+  production: Production, input: InputBuffer, buffer: OutputBuffer, recipe: RecipeDef, perBatch: number, ledger: ProductionLedger,
 ): void {
   while (production.batchActive && production.progress >= recipe.ticksPerBatch) {
     // A batch completes only with room for ALL of its outputs. Otherwise the
@@ -43,9 +56,12 @@ function completeBatches(
       ledger.add(id as ResourceId, amount); // gross production, before any hauling
     }
     // carry the remainder into the next batch (no throughput loss for
-    // high-power buildings); chain by paying the next batch's inputs
+    // high-power buildings); chain by paying the next batch's inputs out of
+    // the SAME local buffer. This is the second of the two payment sites —
+    // miss it and a building produces exactly one batch per delivery, which
+    // looks like a balance problem and is not.
     production.progress -= recipe.ticksPerBatch;
-    production.batchActive = stockpile.pay(recipe.inputs);
+    production.batchActive = payFrom(input, recipe.inputs);
   }
   if (!production.batchActive) production.progress = 0; // stalled: don't bank effort
 }
@@ -76,14 +92,23 @@ function placementFactorOf(homeId: number | null, buildingId: number, tileById: 
  * Haulers never reach the accumulation: their `buildingId` is null, and their
  * commute is charged against carry capacity in HaulSystem instead, because
  * their output is goods moved rather than batches produced.
+ *
+ * Neither does a crew whose building is mid-move (OBS-6-08). Their zero used to
+ * be reached by control flow instead: a real contribution was computed and
+ * stored here, then never read, because the loop below `continue`s past a
+ * relocating building before it looks work power up. That answered correctly
+ * while agreeing with the snapshot's own zero only by coincidence — both now
+ * read `relocatingIdsOf`, so there is one membership question rather than two
+ * differently-shaped tests of the same fact.
  */
 function sumWorkPower(
   workers: Iterable<{ job: JobAssignment; efficiency: Efficiency; coverage: ToolCoverage; home: Home }>,
   tileById: ReadonlyMap<number, TileRef>,
+  relocating: ReadonlySet<number>,
 ): Map<number, number> {
   const powerByBuilding = new Map<number, number>();
   for (const { job, efficiency, coverage, home } of workers) {
-    if (job.buildingId === null) continue;
+    if (job.buildingId === null || relocating.has(job.buildingId)) continue;
     const factor = placementFactorOf(home.buildingId, job.buildingId, tileById);
     const contribution = workerWorkPower(efficiency.value, coverage.remainingTicks, factor);
     powerByBuilding.set(job.buildingId, (powerByBuilding.get(job.buildingId) ?? 0) + contribution);
@@ -92,17 +117,16 @@ function sumWorkPower(
 }
 
 export const ProductionSystem = () => createSystem({
-  stockpile: WriteResource(Stockpile),
   ledger: WriteResource(ProductionLedger),
   buildings: queryComponents({
-    building: Read(Building), position: Read(Position), production: Write(Production), buffer: Write(OutputBuffer),
-    relocation: Write(Relocation),
+    building: Read(Building), position: Read(Position), production: Write(Production), input: Write(InputBuffer),
+    buffer: Write(OutputBuffer), relocation: Write(Relocation),
   }),
   workers: queryComponents({ job: Read(JobAssignment), efficiency: Read(Efficiency), coverage: Read(ToolCoverage), home: Read(Home) }),
   pending: ReadResource(PendingChanges),
 })
   .withName('ProductionSystem')
-  .withRunFunction(({ stockpile, ledger, buildings, workers, pending }) => {
+  .withRunFunction(({ ledger, buildings, workers, pending }) => {
     // Materialized because the rows are needed twice: once to map every
     // building's tile (a worker's commute is measured against their HOUSE's
     // tile, which is another row in this same query) and once to advance them.
@@ -116,27 +140,31 @@ export const ProductionSystem = () => createSystem({
     // tile and a workplace tile, and neither has any business knowing which
     // side of the sync its building came from.
     for (const built of pending.constructed) tileById.set(built.id, { col: built.col, row: built.row });
-    const powerByBuilding = sumWorkPower(workers.iter(), tileById);
+    // Read BEFORE the loop below, which decrements: this is therefore the
+    // PRE-decrement answer, the same one `relocation.ticksLeft > 0` gave when
+    // asked inside the loop, since each building is visited exactly once.
+    const relocating = relocatingIdsOf(buildingRows.map((row) => ({ id: row.building.id, relocatingTicks: row.relocation.ticksLeft })));
+    const powerByBuilding = sumWorkPower(workers.iter(), tileById, relocating);
 
     // Isolated so the run function itself stays a flat dispatch loop.
-    const advanceBatches = (building: Building, production: Production, buffer: OutputBuffer, workPower: number) => {
+    const advanceBatches = (building: Building, production: Production, input: InputBuffer, buffer: OutputBuffer, workPower: number) => {
       // Non-null: this is only ever reached from the building loop below,
       // whose recipe-null `continue` guard runs before advanceBatches is
       // called, so no building without a recipe ever gets here. Keep that
       // guard in place — remove it and this assertion becomes a crash.
       const recipe = BUILDINGS[building.defId].recipe!;
       const perBatch = batchOutputUnits(recipe);
-      startBatch(production, buffer, stockpile, recipe, perBatch);
+      startBatch(production, input, buffer, recipe, perBatch);
       if (!production.batchActive) return;
       production.progress += workPower;
-      completeBatches(production, buffer, stockpile, recipe, perBatch, ledger);
+      completeBatches(production, input, buffer, recipe, perBatch, ledger);
     };
 
-    for (const { building, production, buffer, relocation } of buildingRows) {
+    for (const { building, production, input, buffer, relocation } of buildingRows) {
       // A relocating building is out of action: its crew are carrying it, not
       // working. Haulers still collect from its buffer — goods already made
       // exist regardless of whether the crew is working.
-      if (relocation.ticksLeft > 0) {
+      if (relocating.has(building.id)) {
         relocation.ticksLeft--;
         // Decrementing here means the tick that brings this to 0 is
         // worked-through-zero: this tick's work is still skipped (continue,
@@ -154,7 +182,7 @@ export const ProductionSystem = () => createSystem({
       if (BUILDINGS[building.defId].recipe === null) continue;
       const workPower = powerByBuilding.get(building.id) ?? 0;
       if (workPower === 0) continue;
-      advanceBatches(building, production, buffer, workPower);
+      advanceBatches(building, production, input, buffer, workPower);
     }
   })
   .build();

@@ -1,9 +1,32 @@
 import type { IRuntimeWorld } from 'sim-ecs';
-import { CommandQueue, IdCounter, SimClock } from '../../src/engine/resources';
+import { CommandQueue, IdCounter, SimClock, Stockpile } from '../../src/engine/resources';
+import { HaulTrip, InputBuffer, OutputBuffer } from '../../src/engine/components';
 import { applyRemovals, refreshEntitySections } from '../../src/engine/world';
 import { CAMP_TILE } from '../../src/shared/haul';
+import type { ResourceId } from '../../src/shared/content-types';
 import type { TileRef } from '../../src/shared/placement';
 import type { Command } from '../../src/shared/commands';
+
+/**
+ * Every unit of one resource the colony owns, wherever it is standing: banked
+ * at any site, waiting in any building's in-tray or out-tray, or in a hauler's
+ * hands. THE assertion for conservation — the field a handler just wrote can be
+ * made to agree with itself, a colony-wide total cannot.
+ *
+ * Shared rather than copied into each suite that needs it: goods now live in
+ * four places plus a pair of hands, and a second copy of this walk is exactly
+ * how one of them stops being counted.
+ */
+export function colonyTotal(world: IRuntimeWorld, resource: ResourceId): number {
+  let total = world.getResource(Stockpile).get(resource);
+  for (const entity of world.getEntities()) {
+    total += entity.getComponent(InputBuffer)?.amounts.get(resource) ?? 0;
+    total += entity.getComponent(OutputBuffer)?.amounts.get(resource) ?? 0;
+    const trip = entity.getComponent(HaulTrip);
+    if (trip !== undefined && trip.resource === resource) total += trip.amount;
+  }
+  return total;
+}
 
 /**
  * A commute-neutral tile for a hauler's house that nothing else is standing on.

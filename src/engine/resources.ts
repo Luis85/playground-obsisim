@@ -1,5 +1,5 @@
 import type { IEntity } from 'sim-ecs';
-import type { BuildingDefId, CostMap, ResourceId } from '../shared/content-types';
+import type { BuildingDefId, ResourceId } from '../shared/content-types';
 import type { Command } from '../shared/commands';
 import type { NoticeMessage, Snapshot } from '../shared/snapshot';
 import type { TileRef, WorldMapSize } from '../shared/placement';
@@ -7,87 +7,7 @@ import { MAX_SAVED_COUNTER } from '../shared/save';
 import { BALANCE } from './content/balance';
 import type { Home } from './components';
 
-export class Stockpile {
-  private readonly amounts = new Map<ResourceId, number>();
-  readonly producedThisTick = new Map<ResourceId, number>();
-  readonly consumedThisTick = new Map<ResourceId, number>();
-
-  constructor(initial: Partial<Record<ResourceId, number>> = {}) {
-    for (const [id, amount] of Object.entries(initial)) {
-      this.amounts.set(id as ResourceId, amount);
-    }
-  }
-
-  get(id: ResourceId): number {
-    return this.amounts.get(id) ?? 0;
-  }
-
-  /**
-   * Saturates at MAX_SAVED_COUNTER (like IdCounter): banking onto a stock
-   * sitting at the save-format ceiling must not write an amount the load
-   * guard would reject on the next reopen. Organically unreachable (~9e15).
-   * Shared by `add` and `refund` — the two differ only in whether the bank
-   * counts as a delivery, never in how the amount is clamped.
-   */
-  private bank(id: ResourceId, amount: number): number {
-    const banked = Math.min(amount, MAX_SAVED_COUNTER - this.get(id));
-    this.amounts.set(id, this.get(id) + banked);
-    return banked;
-  }
-
-  /**
-   * Banks resources a hauler actually carried in, recording into
-   * `producedThisTick` — stats record only what was actually banked, never
-   * the pre-saturation amount.
-   */
-  add(id: ResourceId, amount: number): void {
-    const banked = this.bank(id, amount);
-    this.producedThisTick.set(id, (this.producedThisTick.get(id) ?? 0) + banked);
-  }
-
-  /**
-   * Banks resources without recording a delivery. `producedThisTick` is what
-   * `StatsSystem` publishes as `deliveredRate`, so anything banked that a
-   * hauler did not carry — a demolition's construction-cost refund, for
-   * instance — must go through here rather than through `add`, or it
-   * inflates the Economy view's Delivered/t for a resource nobody hauled.
-   */
-  refund(id: ResourceId, amount: number): void {
-    this.bank(id, amount);
-  }
-
-  canAfford(cost: CostMap): boolean {
-    return Object.entries(cost).every(([id, amount]) => this.get(id as ResourceId) >= amount);
-  }
-
-  /** All-or-nothing across the whole cost map. Returns success. */
-  pay(cost: CostMap): boolean {
-    if (!this.canAfford(cost)) return false;
-    for (const [id, amount] of Object.entries(cost)) this.remove(id as ResourceId, amount);
-    return true;
-  }
-
-  /** Take a quantity of one resource if fully available. Returns success. */
-  take(id: ResourceId, amount: number): boolean {
-    if (this.get(id) < amount) return false;
-    this.remove(id, amount);
-    return true;
-  }
-
-  resetTickFlows(): void {
-    this.producedThisTick.clear();
-    this.consumedThisTick.clear();
-  }
-
-  toJSON(): Partial<Record<ResourceId, number>> {
-    return Object.fromEntries(this.amounts) as Partial<Record<ResourceId, number>>;
-  }
-
-  private remove(id: ResourceId, amount: number): void {
-    this.amounts.set(id, this.get(id) - amount);
-    this.consumedThisTick.set(id, (this.consumedThisTick.get(id) ?? 0) + amount);
-  }
-}
+export { Stockpile } from './stockpile';
 
 /**
  * Units banked into output buffers this tick — gross production, as opposed to

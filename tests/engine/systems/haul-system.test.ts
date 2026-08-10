@@ -8,6 +8,7 @@ import { BUILDINGS } from '../../../src/engine/content/buildings';
 import { HaulSystem, haulerCapacity } from '../../../src/engine/systems/haul-system';
 import { CommandSystem } from '../../../src/engine/systems/command-system';
 import { PopulationSystem } from '../../../src/engine/systems/population-system';
+import { CAMP_TILE } from '../../../src/shared/haul';
 import { campAdjacentFreeTile, enqueue } from '../fixtures';
 import {
   applyRemovals, buildColonyPrepWorld, createColonyWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist,
@@ -134,23 +135,71 @@ describe('HaulSystem', () => {
     expect(tripOf(haulers[0]).phase).toBe('idle');
   });
 
-  // OBS-5-01: legTicks and the pickup tile are frozen at the two sites that
-  // begin a leg (dispatch, and load/turn-for-home) and must survive exactly
-  // as long as the leg they describe — cleared only once the trip resets.
-  it('freezes the leg total and the return-leg pickup tile when each leg begins, and clears both on reset', async () => {
-    // Same (5,4) trip as the test above: 3 ticks each way.
+  // OBS-5-01: legTicks and BOTH leg endpoints are frozen at every site that
+  // begins a leg (dispatch, and load/turn-for-home) and must survive exactly
+  // as long as the leg they describe — cleared only once the trip ends.
+  it('freezes the leg total and both leg endpoints when each leg begins, and clears them when the trip ends', async () => {
+    // Same (5,4) trip as the test above: 3 ticks each way. Every number below
+    // is distinct from every other — the camp is (2,0), the building (5,4),
+    // the leg 3 ticks — so no field can read a neighbour's value and pass.
     const { haulers, step, stockpile } = await setup([{ col: 5, row: 4, wood: 9 }], 1);
-    await step(1); // dispatched: outbound leg begins
-    expect(tripOf(haulers[0])).toMatchObject({ phase: 'outbound', ticksLeft: 3, legTicks: 3 });
+    await step(1); // dispatched: the outbound leg begins AT THE CAMP TILE
+    expect(tripOf(haulers[0])).toMatchObject({
+      phase: 'outbound', ticksLeft: 3, legTicks: 3,
+      legFromCol: CAMP_TILE.col, legFromRow: CAMP_TILE.row, legToCol: 5, legToRow: 4,
+    });
 
     await step(3); // arrives, loads, turns for home: the return leg begins here
     expect(tripOf(haulers[0])).toMatchObject({
-      phase: 'returning', ticksLeft: 3, legTicks: 3, pickupCol: 5, pickupRow: 4,
+      phase: 'returning', ticksLeft: 3, legTicks: 3,
+      legFromCol: 5, legFromRow: 4, legToCol: CAMP_TILE.col, legToRow: CAMP_TILE.row,
     });
 
     await step(3); // delivered
     expect(stockpile.get('wood')).toBe(BALANCE.haulCarryCapacity);
-    expect(tripOf(haulers[0])).toMatchObject({ phase: 'idle', legTicks: 0, pickupCol: 0, pickupRow: 0 });
+    // No atCol/atRow here: this trip ends AT the camp, which is also the field's
+    // constructor default, so an assertion on it could not tell "stood where the
+    // leg ended" from "never moved". Where a finished leg leaves a hauler is
+    // pinned by the depot cases in haul-dispatch.test.ts, and where an
+    // interrupted one leaves them by the release case below.
+    expect(tripOf(haulers[0])).toMatchObject({
+      phase: 'idle', legTicks: 0, legFromCol: 0, legFromRow: 0, legToCol: 0, legToRow: 0,
+    });
+  });
+
+  it('a hauler released part-way along a leg stops where it had actually walked', async () => {
+    // The interpolation in `cancel()`, at the only place it can be SEEN: every
+    // other cancellation in the suite fires with the leg fully walked, where
+    // legProgress is 1 and "interpolate" and "snap to the destination" agree.
+    //
+    // (23,15) is the map's far corner — 13 ticks from the camp at (2,0) — and
+    // the release lands with 9 of those ticks left, so the hauler is 4/13 of
+    // the way along. That fraction is not a whole tile, not either endpoint,
+    // and not any other number in this fixture.
+    const { world, haulers, step } = await setup([{ col: 23, row: 15, wood: 9 }], 1, [CommandSystem]);
+    await step(1);
+    expect(tripOf(haulers[0])).toMatchObject({
+      phase: 'outbound', ticksLeft: 13, legTicks: 13,
+      legFromCol: CAMP_TILE.col, legFromRow: CAMP_TILE.row, legToCol: 23, legToRow: 15,
+    });
+
+    await step(4); // four ticks of walking, nine still to go
+    expect(tripOf(haulers[0]).ticksLeft).toBe(9);
+    enqueue(world, { type: 'unassignHauler' });
+    await step(1); // CommandSystem runs first, so the release sees ticksLeft 9
+
+    const trip = tripOf(haulers[0]);
+    const travelled = 4 / 13;
+    expect(trip.phase).toBe('idle');
+    expect(trip.atCol).toBeCloseTo(CAMP_TILE.col + (23 - CAMP_TILE.col) * travelled, 10);
+    expect(trip.atRow).toBeCloseTo(CAMP_TILE.row + (15 - CAMP_TILE.row) * travelled, 10);
+    // Strictly BETWEEN the two endpoints, stated on its own: pinning the value
+    // alone would still pass if the fixture ever made the midpoint coincide
+    // with one of them.
+    expect(trip.atCol).toBeGreaterThan(CAMP_TILE.col);
+    expect(trip.atCol).toBeLessThan(23);
+    expect(trip.atRow).toBeGreaterThan(CAMP_TILE.row);
+    expect(trip.atRow).toBeLessThan(15);
   });
 
   it('charges a tick each way even beside the camp — no trip is free', async () => {
@@ -203,6 +252,12 @@ describe('HaulSystem', () => {
   });
 
   it('dispatches identically regardless of entity order — same world, same claim', async () => {
+    // COLLECT only, which was the whole of dispatch in increment 4. The same
+    // property across BOTH kinds — supply's route and site-id links included —
+    // is haul-dispatch.test.ts's 'the same world decides the same way whichever
+    // order it is walked in', which needs a supply-capable fixture this
+    // forester-only harness cannot build.
+    //
     // both 3 tiles from camp, both holding 4: the lowest id must win either way
     const forward = await setup([{ id: 10, col: 5, row: 0, wood: 4 }, { id: 11, col: 2, row: 3, wood: 4 }], 1);
     const reversed = await setup([{ id: 11, col: 2, row: 3, wood: 4 }, { id: 10, col: 5, row: 0, wood: 4 }], 1);
@@ -533,7 +588,7 @@ describe('HaulSystem lifecycle', () => {
     // restore that carried one across timelines, fails here.
     const save = initialSave();
     save.colonists = save.colonists.map((worker) => ({ ...worker, hauling: true }));
-    save.buildings = [{ id: 10, defId: 'forester', progress: 0, batchActive: false, col: 5, row: 4, buffer: { wood: 9 }, relocatingTicks: 0 }];
+    save.buildings = [{ inputBuffer: {}, stored: {}, id: 10, defId: 'forester', progress: 0, batchActive: false, col: 5, row: 4, buffer: { wood: 9 }, relocatingTicks: 0 }];
     save.nextEntityId = 11;
     const world = await createColonyWorld(save);
 

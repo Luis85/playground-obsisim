@@ -6,7 +6,7 @@
 // relocationTicks (the relocation-downtime law) and ticksForDistance (the
 // floor-and-ceiling arithmetic it shares with haulTicks in haul.ts) live
 // here too, but are a separate law with a single caller
-// (command-handlers.ts) — not part of the three-consumer contract above.
+// (placement-handlers.ts) — not part of the three-consumer contract above.
 // Imports nothing, so src/shared/ siblings (save.ts, save-migration.ts,
 // haul.ts) can import from it without cycles.
 
@@ -166,4 +166,38 @@ export function ticksForDistance(distance: number, tilesPerTick: number): number
  */
 export function relocationTicks(tilesMoved: number, tilesPerTick: number): number {
   return ticksForDistance(tilesMoved, tilesPerTick);
+}
+
+/**
+ * THE relocation boundary: is this building mid-move, and therefore providing
+ * none of its service right now — no production, no beds, no storage?
+ *
+ * One function rather than a `ticksLeft > 0` written out at each reader, and
+ * that is OBS-6-08's whole point. This project has already spent two rounds on
+ * this exact comparison (`> 0` vs `> 1`, task 6), and increment 7 was about to
+ * add a third reader — a relocating storehouse is not a store site — beside the
+ * two that already drew it independently in `ProductionSystem` and the
+ * snapshot. The value it takes is the POST-decrement countdown wherever the
+ * snapshot is the source, which is the forward-looking "will the next
+ * production pass skip this building" the published `relocatingTicks` is
+ * documented as; see `relocatingIdsOf` below.
+ */
+export function isRelocating(ticksLeft: number): boolean {
+  return ticksLeft > 0;
+}
+
+/**
+ * The buildings out of action right now, by id — the ONE derivation of a
+ * relocating crew's zero work power (OBS-6-08).
+ *
+ * `ProductionSystem` used to compute every relocating worker's real
+ * contribution into `powerByBuilding` and then discard it by `continue`ing
+ * past the building before the map was ever read, while the snapshot reached
+ * the same zero by testing set membership before computing anything. Two
+ * shapes of the same boundary, agreeing only because two tests happened to
+ * exercise both systems from one fixture. Both now skip on this set, so there
+ * is a single membership question and a single place to get it wrong.
+ */
+export function relocatingIdsOf(buildings: readonly { id: number; relocatingTicks: number }[]): ReadonlySet<number> {
+  return new Set(buildings.filter((b) => isRelocating(b.relocatingTicks)).map((b) => b.id));
 }

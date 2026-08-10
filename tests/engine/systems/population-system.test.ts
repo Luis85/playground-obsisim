@@ -895,6 +895,49 @@ describe('PopulationSystem — births and the nomad gate', () => {
     expect(count()).toBe(4);                    // beds full now: noBed, not cooldown
   });
 
+  /**
+   * `fedColony` with its food SPLIT: `bread` at the camp and `depotBread` in a
+   * storehouse. The gate must count both, because the meals it is deciding
+   * about are paid through `pay`, which draws across every site — so this is
+   * the only fixture shape that can tell a colony-wide read from a camp-only
+   * one on the VALUE rather than on a total that merely differs.
+   */
+  async function splitFoodColony(bread: number, depotBread: number) {
+    const save = { ...initialSave(), colonists: [], buildings: [], stockpile: { bread }, nextEntityId: 100 };
+    const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
+    const ids = getPrepResource(prep, IdCounter);
+    const spots = autoPlaceSequence(save.map);
+    const houseAt = spots.next().value!;
+    const house = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, ...houseAt, relocatingTicks: 0 });
+    const depotAt = spots.next().value!;
+    const depot = spawnBuilding(prep, ids, { defId: 'storehouse', progress: 0, batchActive: false, ...depotAt, relocatingTicks: 0 });
+    for (let i = 0; i < 2; i++) {
+      spawnColonist(prep, ids, { id: i + 1, ageTicks: BALANCE.lifeBands.matureTicks, homeId: house.getComponent(Building)!.id });
+    }
+    const world = await prep.prepareRun();
+    world.getResource(SimClock).tick = 1000; // both cooldowns long expired
+    world.getResource(Stockpile).refundAt(
+      { id: depot.getComponent(Building)!.id, ...depotAt, capacity: BALANCE.storehouseCapacity }, 'bread', depotBread,
+    );
+    return { world, snap: () => world.getResource(SnapshotStore).latest! };
+  }
+
+  it('births on food the camp alone could not feed the child with', async () => {
+    // Two adults, so the gate needs 12 meals x 3 heads = 36. The camp holds 15
+    // and the storehouse 27: neither clears it, their sum does.
+    const { world, snap } = await splitFoodColony(15, 27);
+    await stepTick(world);
+    expect(snap().colonists).toHaveLength(3);
+  });
+
+  it('holds off when the depot half of that same food is not there', async () => {
+    // The discriminating half: identical colony, identical camp stock, empty
+    // storehouse. Without it the case above passes for a colony simply well fed.
+    const { world, snap } = await splitFoodColony(15, 0);
+    await stepTick(world);
+    expect(snap().colonists).toHaveLength(2);
+  });
+
   it('will not birth into a colony that cannot feed the child', async () => {
     // Beds and parents both fine; only the store is short. Discriminating
     // against the test above, which differs in this one input.

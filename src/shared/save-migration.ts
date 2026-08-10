@@ -1,6 +1,8 @@
-import type { SaveGameV1, SaveGameV2, SaveGameV3, SaveGameV4, SaveGameV5, SavedColonist, SavedColonistV4 } from './save';
+import type {
+  SaveGameV1, SaveGameV2, SaveGameV3, SaveGameV4, SaveGameV5, SaveGameV6, SavedColonist, SavedColonistV4,
+} from './save';
 import {
-  isSaveGameV1, isSaveGameV2, isSaveGameV3, isSaveGameV4, isSaveGameV5, LATEST_SAVE_VERSION, MAX_SAVED_ENTITIES,
+  isSaveGameV1, isSaveGameV2, isSaveGameV3, isSaveGameV4, isSaveGameV5, isSaveGameV6, LATEST_SAVE_VERSION, MAX_SAVED_ENTITIES,
 } from './save';
 import type { WorldMapSize } from './placement';
 import { autoPlacePosition, autoPlaceSequence, CAMP_COLS, MAX_MAP, mapThatFits } from './placement';
@@ -32,7 +34,7 @@ export interface MigrationStep {
 export type SaveGuards = Partial<Record<number, (data: unknown) => boolean>>;
 
 const SAVE_GUARDS: SaveGuards = {
-  1: isSaveGameV1, 2: isSaveGameV2, 3: isSaveGameV3, 4: isSaveGameV4, 5: isSaveGameV5,
+  1: isSaveGameV1, 2: isSaveGameV2, 3: isSaveGameV3, 4: isSaveGameV4, 5: isSaveGameV5, 6: isSaveGameV6,
 };
 
 /**
@@ -309,10 +311,32 @@ const migrateV4toV5: MigrationStep = {
   },
 };
 
+/**
+ * v5 -> v6: goods gain places to be. A v5 colony was exactly a v6 colony with
+ * no storehouses and every recipe input already paid out of the flat ledger, so
+ * every building starts with an empty in-tray and stores nothing — and
+ * `stockpile`, which v6 redefines as the camp's contents, needs no touch at
+ * all, because the camp is the only place a v5 colony could keep anything.
+ */
+const migrateV5toV6: MigrationStep = {
+  from: 5,
+  to: 6,
+  migrate: (save) => {
+    const v5 = save as SaveGameV5; // the runner guard-validated this shape
+    return {
+      ...v5,
+      version: 6,
+      buildings: v5.buildings.map((b) => ({ ...b, inputBuffer: {}, stored: {} })),
+    };
+  },
+};
+
 /** The registration tables this module owns, edited in place when a version
  * lands. Deliberately not exported: tests inject fakes through
  * migrateSaveToLatest's parameters instead. */
-const SAVE_MIGRATIONS: readonly MigrationStep[] = [migrateV1toV2, migrateV2toV3, migrateV3toV4, migrateV4toV5];
+const SAVE_MIGRATIONS: readonly MigrationStep[] = [
+  migrateV1toV2, migrateV2toV3, migrateV3toV4, migrateV4toV5, migrateV5toV6,
+];
 
 export function readSaveVersion(data: unknown): number | null {
   if (typeof data !== 'object' || data === null) return null;
@@ -394,7 +418,7 @@ export function migrateSaveToLatest(
   guards: SaveGuards = SAVE_GUARDS,
   steps: readonly MigrationStep[] = SAVE_MIGRATIONS,
   target: number = LATEST_SAVE_VERSION,
-): SaveGameV5 | null {
+): SaveGameV6 | null {
   const version = readSaveVersion(data);
   if (version === null || version > target) return null; // a save from a NEWER build is not downgradable
   if (!passesGuard(guards[version], data)) return null;  // validate at the version it claims
@@ -407,5 +431,5 @@ export function migrateSaveToLatest(
   // same value. Kept so a future change to runSteps or to the early-return
   // above doesn't silently stop being caught here.
   if (migrated === null || !passesGuard(guards[target], migrated)) return null;
-  return migrated as SaveGameV5;
+  return migrated as SaveGameV6;
 }

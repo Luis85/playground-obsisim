@@ -5,13 +5,15 @@ import { BALANCE } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
 import { MEAL_WEIGHTS } from '../content/resources';
 import { spareBeds } from './population-handlers';
-import { Age, Building, HaulTrip, Home, JobAssignment, OutputBuffer, Position, Relocation, WorkerSlots } from '../components';
+import { isRelocating } from '../../shared/placement';
+import { Age, Building, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Relocation, WorkerSlots } from '../components';
+import { storeSitesFrom } from './haul-dispatch';
 import { CommandQueue, IdCounter, NoticeBoard, PendingChanges, RemovalLedger, SimClock, Stockpile, WorldMap } from '../resources';
 import {
   type CommandContext,
-  handleAssignHauler, handleAssignWorker, handleConstructBuilding, handleDemolishBuilding, handleMoveBuilding, handleRecruitWorker,
-  handleUnassignHauler, handleUnassignWorker,
+  handleAssignHauler, handleAssignWorker, handleRecruitWorker, handleUnassignHauler, handleUnassignWorker,
 } from './command-handlers';
+import { handleConstructBuilding, handleDemolishBuilding, handleMoveBuilding } from './placement-handlers';
 
 /** One command, one handler — the mapping the drain loop dispatches every
  * queued command through. */
@@ -40,16 +42,16 @@ export const CommandSystem = () => createSystem({
   map: ReadResource(WorldMap),
   buildings: queryComponents({
     entity: ReadEntity(), building: Read(Building), slots: Read(WorkerSlots), position: Write(Position), buffer: Write(OutputBuffer),
-    relocation: Write(Relocation),
+    input: Write(InputBuffer), relocation: Write(Relocation),
   }),
   // JobAssignment alone identifies a worker entity — the Colonist component
   // added nothing the handlers read.
   workers: queryComponents({ job: Write(JobAssignment), trip: Write(HaulTrip), age: Read(Age), home: Write(Home) }),
 })
   .withName('CommandSystem')
-  // Handlers live in command-handlers.ts, one small function per command
-  // type; this run function only materializes the query rows into a context
-  // and drains the queue through dispatchCommand.
+  // Handlers live in command-handlers.ts and placement-handlers.ts, one small
+  // function per command type; this run function only materializes the query
+  // rows into a context and drains the queue through dispatchCommand.
   .withRunFunction(({ actions, queue, clock, stockpile, ids, notices, removals, pending, map, buildings, workers }) => {
     // Discard the PREVIOUS tick's pending changes, before anything populates
     // this tick's. It used to happen at the end of PopulationSystem, on the
@@ -67,7 +69,8 @@ export const CommandSystem = () => createSystem({
     pending.clear();
     const ctx: CommandContext = {
       clock, stockpile, ids, notices, map,
-      buildings: [...buildings.iter()].map(({ entity, building, slots, position, buffer, relocation }) => ({ entity, building, slots, position, buffer, relocation })),
+      buildings: [...buildings.iter()].map(({ entity, building, slots, position, buffer, input, relocation }) =>
+        ({ entity, building, slots, position, buffer, input, relocation })),
       workers: [...workers.iter()].map(({ job, trip, age, home }) => ({ job, trip, home, stage: stageOf(age.ticks, BALANCE.lifeBands) })),
       spawn: (...components) => {
         let entity = actions.commands.buildEntity();
@@ -99,12 +102,19 @@ export const CommandSystem = () => createSystem({
             beds: BUILDINGS[building.defId].beds,
             col: position.col,
             row: position.row,
-            relocating: relocation.ticksLeft > 0,
+            relocating: isRelocating(relocation.ticksLeft),
           })),
         ...pending.constructed
           .filter((c) => BUILDINGS[c.defId].beds > 0)
           .map((c) => ({ id: c.id, beds: BUILDINGS[c.defId].beds, col: c.col, row: c.row, relocating: false })),
       ],
+      // A function, for the reason `shelters` is one and one sharper: a
+      // storehouse demolished earlier in this same drain must stop being a
+      // destination immediately, or a later unassignHauler banks into a ledger
+      // site with no building behind it (§2.4 invariant 2). Built from
+      // ctx.buildings, so a relocation written by an earlier moveBuilding in
+      // this drain is already reflected.
+      sites: () => storeSitesFrom(ctx.buildings, pending),
       occupancy: () => {
         const byHouse = new Map<number, number>();
         for (const { home } of ctx.workers) {
@@ -115,7 +125,10 @@ export const CommandSystem = () => createSystem({
       // Derives freeBeds through the SAME helper tryBirth uses, so the two
       // arrival paths cannot disagree about how many beds are spare.
       nomadGate: () => ({
-        stock: stockpile.toJSON(),
+        // colonyStock, not toJSON: a nomad's meals are paid through `pay`,
+        // which draws across every site, so food in a storehouse is food this
+        // gate must count. toJSON is the camp alone (the save's shape).
+        stock: stockpile.colonyStock(),
         weights: MEAL_WEIGHTS,
         population: ctx.workers.length + pending.arrivals.length,
         freeBeds: spareBeds(ctx.shelters(), ctx.workers.length, pending),

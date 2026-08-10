@@ -28,8 +28,11 @@ onMounted(() => {
       <span><i class="obsisim-chip is-ghost" :style="{ background: theme.danger }" /> ghost: blocked</span>
       <span><i class="obsisim-chip" :style="{ borderColor: theme.stateRing.outputFull }" /> output full</span>
       <span><i class="obsisim-chip" :style="{ borderColor: theme.stateRing.relocating }" /> relocating</span>
-      <span><i class="obsisim-chip is-round" :style="{ background: theme.carriedLoad }" /> carrying</span>
+      <span><i class="obsisim-chip is-round" :style="{ background: theme.carriedLoad }" /> carrying out</span>
+      <span><i class="obsisim-chip is-round" :style="{ background: theme.carriedInput }" /> carrying in</span>
       <span><i class="obsisim-chip" :style="{ borderColor: theme.stateRing.housing }" /> housing</span>
+      <span><i class="obsisim-chip" :style="{ borderColor: theme.stateRing.storing }" /> storing</span>
+      <span><i class="obsisim-chip is-round" :style="{ borderColor: theme.progressFill }" /> store fill</span>
       <span><i class="obsisim-chip is-round" :style="{ background: theme.stageMark.child }" /> child</span>
       <span><i class="obsisim-chip is-round" :style="{ background: theme.stageMark.elder }" /> elder</span>
       <span><i class="obsisim-chip is-round" :style="{ background: theme.homelessMark }" /> homeless</span>

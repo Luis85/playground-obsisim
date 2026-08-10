@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { BALANCE, MAX_AGE_TICKS } from '../../src/engine/content/balance';
 import { lifespanFor } from '../../src/shared/population';
 import { RESOURCE_IDS } from '../../src/engine/content/resources';
-import { Building, Hunger, JobAssignment, Relocation, ToolCoverage, Colonist } from '../../src/engine/components';
+import { Building, HaulTrip, Hunger, InputBuffer, JobAssignment, Relocation, ToolCoverage, Colonist } from '../../src/engine/components';
 import { IdCounter, RemovalLedger, SimClock, SnapshotStore, Stockpile } from '../../src/engine/resources';
 import type { IRuntimeWorld } from 'sim-ecs';
 import { GameEngine } from '../../src/engine/game-engine';
@@ -14,9 +14,10 @@ import { buildSaveFromWorld } from '../../src/engine/game-engine';
 import { CommandSystem } from '../../src/engine/systems/command-system';
 import { HaulSystem } from '../../src/engine/systems/haul-system';
 import { SnapshotSystem } from '../../src/engine/systems/snapshot-system';
-import type { SavedColonist, SaveGameV5 } from '../../src/shared/save';
+import type { SavedColonist, SaveGameV6 } from '../../src/shared/save';
 import { isSaveGameV4, MAX_SAVED_ENTITIES } from '../../src/shared/save';
 import { autoPlaceSequence, DEFAULT_MAP, MAX_MAP, relocationTicks, type TileRef } from '../../src/shared/placement';
+import { CAMP_SITE_ID, CAMP_TILE } from '../../src/shared/haul';
 import type { Command } from '../../src/shared/commands';
 import type { Snapshot } from '../../src/shared/snapshot';
 import { stepTick } from './fixtures';
@@ -69,10 +70,10 @@ const MIXED_FORESTER_ID = 7;
  * still left for the nomad), a producer to staff, food past the nomad gate and
  * materials for a house.
  */
-function colonyWithRoomToDoEverything(): SaveGameV5 {
+function colonyWithRoomToDoEverything(): SaveGameV6 {
   const save = initialSave();
   const plot = (id: number, defId: 'house' | 'forester', col: number) =>
-    ({ id, defId, progress: 0, batchActive: false, col, row: 1, buffer: {}, relocatingTicks: 0 }) as const;
+    ({ id, defId, progress: 0, batchActive: false, col, row: 1, buffer: {}, inputBuffer: {}, stored: {}, relocatingTicks: 0 }) as const;
   save.buildings.push(plot(5, 'house', 6), plot(6, 'house', 8), plot(MIXED_FORESTER_ID, 'forester', 10));
   save.stockpile = { wood: 500, planks: 500, bread: 5000 };
   save.nextEntityId = MIXED_FORESTER_ID + 1;
@@ -126,7 +127,7 @@ describe('isLoadableSave', () => {
 
   it('rejects unknown building def ids', () => {
     const save = initialSave();
-    save.buildings.push({ id: 5, defId: 'castle' as never, progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0 });
+    save.buildings.push({ inputBuffer: {}, stored: {}, id: 5, defId: 'castle' as never, progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0 });
     expect(isLoadableSave(save)).toBe(false);
   });
 
@@ -148,7 +149,7 @@ describe('isLoadableSave', () => {
     /** initialSave() plus one producer, off the starter house's tile. */
     function withForester() {
       const save = initialSave();
-      save.buildings.push({
+      save.buildings.push({ inputBuffer: {}, stored: {},
         id: 5, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0,
       });
       save.nextEntityId = 6;
@@ -250,7 +251,7 @@ describe('isLoadableSave', () => {
 
   it('rejects a worker holding both a valid buildingId and hauling: true (one worker, two jobs)', () => {
     const save = initialSave();
-    const building = { id: 5, defId: 'forester' as const, progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0 };
+    const building = { id: 5, defId: 'forester' as const, progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, inputBuffer: {}, stored: {}, relocatingTicks: 0 };
     save.buildings.push(building);
     save.nextEntityId = 6;
     save.colonists[0].buildingId = building.id; // a real building — the membership check alone would accept this
@@ -370,20 +371,20 @@ describe('isLoadableSave', () => {
     // an active batch's progress above the CURRENT recipe's ticksPerBatch (3) is
     // grandfathered: the production while-loop deterministically absorbs it.
     const overworked = initialSave();
-    overworked.buildings.push({ id: 5, defId: 'forester', progress: 99, batchActive: true, col: 6, row: 1, buffer: {}, relocatingTicks: 0 });
+    overworked.buildings.push({ inputBuffer: {}, stored: {}, id: 5, defId: 'forester', progress: 99, batchActive: true, col: 6, row: 1, buffer: {}, relocatingTicks: 0 });
     overworked.nextEntityId = 6;
     expect(isLoadableSave(overworked)).toBe(true);
     // magnitude is harmless: spawnBuilding clamps active progress to the
     // CURRENT batch size, so even absurd values load without loop hazards.
     const astronomical = initialSave();
-    astronomical.buildings.push({ id: 5, defId: 'forester', progress: 1e308, batchActive: true, col: 6, row: 1, buffer: {}, relocatingTicks: 0 });
+    astronomical.buildings.push({ inputBuffer: {}, stored: {}, id: 5, defId: 'forester', progress: 1e308, batchActive: true, col: 6, row: 1, buffer: {}, relocatingTicks: 0 });
     astronomical.nextEntityId = 6;
     expect(isLoadableSave(astronomical)).toBe(true);
   });
 
   it('clamps oversized active progress to the current batch size on load', async () => {
     const save = initialSave();
-    save.buildings.push({ id: 5, defId: 'forester', progress: 1e308, batchActive: true, col: 6, row: 1, buffer: {}, relocatingTicks: 0 });
+    save.buildings.push({ inputBuffer: {}, stored: {}, id: 5, defId: 'forester', progress: 1e308, batchActive: true, col: 6, row: 1, buffer: {}, relocatingTicks: 0 });
     save.nextEntityId = 6;
     const world = await createColonyWorld(save);
     const seeded = world.getResource(SnapshotStore).latest!;
@@ -394,7 +395,7 @@ describe('isLoadableSave', () => {
     // slots retuned down after this save was written must not orphan it; assign
     // commands already validate against current slots, so this self-corrects.
     const save = initialSave();
-    const building = { id: 5, defId: 'forester' as const, progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0 }; // 2 slots
+    const building = { id: 5, defId: 'forester' as const, progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, inputBuffer: {}, stored: {}, relocatingTicks: 0 }; // 2 slots
     save.buildings.push(building);
     save.nextEntityId = 6;
     save.colonists = [2, 3, 4].map((id) => ({
@@ -410,12 +411,12 @@ describe('isLoadableSave', () => {
     // or fractional values are impossible for any version of ProductionSystem's
     // decrementing loop to have produced, so the load guard rejects them outright.
     const negative = initialSave();
-    negative.buildings.push({ id: 5, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: -1 });
+    negative.buildings.push({ inputBuffer: {}, stored: {}, id: 5, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: -1 });
     negative.nextEntityId = 6;
     expect(isLoadableSave(negative)).toBe(false);
 
     const fractional = initialSave();
-    fractional.buildings.push({ id: 5, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 1.5 });
+    fractional.buildings.push({ inputBuffer: {}, stored: {}, id: 5, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 1.5 });
     fractional.nextEntityId = 6;
     expect(isLoadableSave(fractional)).toBe(false);
   });
@@ -517,7 +518,7 @@ describe('isLoadableSave', () => {
     fractional.tick = 0.5; // would desync the autosave modulo forever
     expect(isLoadableSave(fractional)).toBe(false);
     const inherited = initialSave();
-    inherited.buildings.push({ id: 5, defId: 'toString' as never, progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0 });
+    inherited.buildings.push({ inputBuffer: {}, stored: {}, id: 5, defId: 'toString' as never, progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0 });
     expect(isLoadableSave(inherited)).toBe(false); // must return false, not throw
   });
 
@@ -526,26 +527,26 @@ describe('isLoadableSave', () => {
     // smaller after this save was written must not orphan it (production
     // deterministically absorbs the overshoot on the next tick).
     const completed = initialSave();
-    completed.buildings.push({ id: 5, defId: 'forester', progress: 3, batchActive: true, col: 6, row: 1, buffer: {}, relocatingTicks: 0 }); // == ticksPerBatch
+    completed.buildings.push({ inputBuffer: {}, stored: {}, id: 5, defId: 'forester', progress: 3, batchActive: true, col: 6, row: 1, buffer: {}, relocatingTicks: 0 }); // == ticksPerBatch
     completed.nextEntityId = 6;
     expect(isLoadableSave(completed)).toBe(true);
     // stalled/idle buildings never bank progress: this is a balance-independent
     // engine invariant, so it's still rejected.
     const banked = initialSave();
-    banked.buildings.push({ id: 5, defId: 'forester', progress: 1, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0 }); // inactive with progress
+    banked.buildings.push({ inputBuffer: {}, stored: {}, id: 5, defId: 'forester', progress: 1, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0 }); // inactive with progress
     expect(isLoadableSave(banked)).toBe(false);
   });
 
   it('rejects duplicate ids shared across buildings and workers', () => {
     const save = initialSave();
-    save.buildings.push({ id: 3, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0 }); // collides with worker 3
+    save.buildings.push({ inputBuffer: {}, stored: {}, id: 3, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0 }); // collides with worker 3
     save.nextEntityId = 6;
     expect(isLoadableSave(save)).toBe(false);
   });
 
   it('rejects nextEntityId that does not exceed every saved id', () => {
     const save = initialSave();
-    save.buildings.push({ id: 5, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0 });
+    save.buildings.push({ inputBuffer: {}, stored: {}, id: 5, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0 });
     save.nextEntityId = 5; // must be strictly greater than the max id (5)
     expect(isLoadableSave(save)).toBe(false);
   });
@@ -568,19 +569,19 @@ describe('isLoadableSave', () => {
 
   it('rejects positions off the map, on the camp band, or stacked on one tile', () => {
     const outOfBounds = initialSave();
-    outOfBounds.buildings.push({ id: 5, defId: 'forester', progress: 0, batchActive: false, col: 24, row: 1, buffer: {}, relocatingTicks: 0 });
+    outOfBounds.buildings.push({ inputBuffer: {}, stored: {}, id: 5, defId: 'forester', progress: 0, batchActive: false, col: 24, row: 1, buffer: {}, relocatingTicks: 0 });
     outOfBounds.nextEntityId = 6;
     expect(isLoadableSave(outOfBounds)).toBe(false);
 
     const onCamp = initialSave();
-    onCamp.buildings.push({ id: 5, defId: 'forester', progress: 0, batchActive: false, col: 2, row: 1, buffer: {}, relocatingTicks: 0 });
+    onCamp.buildings.push({ inputBuffer: {}, stored: {}, id: 5, defId: 'forester', progress: 0, batchActive: false, col: 2, row: 1, buffer: {}, relocatingTicks: 0 });
     onCamp.nextEntityId = 6;
     expect(isLoadableSave(onCamp)).toBe(false);
 
     const stacked = initialSave();
     stacked.buildings.push(
-      { id: 5, defId: 'forester', progress: 0, batchActive: false, col: 5, row: 5, buffer: {}, relocatingTicks: 0 },
-      { id: 6, defId: 'farm', progress: 0, batchActive: false, col: 5, row: 5, buffer: {}, relocatingTicks: 0 },
+      { inputBuffer: {}, stored: {}, id: 5, defId: 'forester', progress: 0, batchActive: false, col: 5, row: 5, buffer: {}, relocatingTicks: 0 },
+      { inputBuffer: {}, stored: {}, id: 6, defId: 'farm', progress: 0, batchActive: false, col: 5, row: 5, buffer: {}, relocatingTicks: 0 },
     );
     stacked.nextEntityId = 7;
     expect(isLoadableSave(stacked)).toBe(false);
@@ -605,7 +606,7 @@ describe('isLoadableSave', () => {
   // instead of the guard refusing the save (see clampedBuffer in world.ts).
   it('clamps a buffer holding more than the cap at load, instead of rejecting the save', async () => {
     const save = initialSave();
-    save.buildings.push({
+    save.buildings.push({ inputBuffer: {}, stored: {},
       id: 5, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1,
       buffer: { wood: BALANCE.outputBufferCap + 1 }, relocatingTicks: 0,
     });
@@ -619,7 +620,7 @@ describe('isLoadableSave', () => {
 
   it('rejects a buffer naming a resource the catalog does not have', () => {
     const save = initialSave();
-    save.buildings.push({
+    save.buildings.push({ inputBuffer: {}, stored: {},
       id: 5, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1,
       buffer: { unobtainium: 1 } as never, relocatingTicks: 0,
     });
@@ -638,7 +639,7 @@ describe('isLoadableSave', () => {
     const buffer: Record<string, number> = {};
     for (let i = 0; i < 1000; i++) buffer[`filler${i}`] = 1; // every amount structurally valid
     const save = initialSave();
-    save.buildings.push({
+    save.buildings.push({ inputBuffer: {}, stored: {},
       id: 5, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1,
       buffer: buffer as never, relocatingTicks: 0,
     });
@@ -653,7 +654,7 @@ describe('isLoadableSave', () => {
   // catches this one.
   it('rejects a buffer holding a negative amount', () => {
     const save = initialSave();
-    save.buildings.push({
+    save.buildings.push({ inputBuffer: {}, stored: {},
       id: 5, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1,
       buffer: { wood: -5 }, relocatingTicks: 0,
     });
@@ -663,7 +664,7 @@ describe('isLoadableSave', () => {
 
   it('restores buffered goods into the building that held them', async () => {
     const save = initialSave();
-    save.buildings.push({
+    save.buildings.push({ inputBuffer: {}, stored: {},
       id: 5, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1, buffer: { wood: 5 }, relocatingTicks: 0,
     });
     save.nextEntityId = 6;
@@ -675,7 +676,7 @@ describe('isLoadableSave', () => {
     const cap = BALANCE.outputBufferCap;
     const [first, second, third] = RESOURCE_IDS;
     const save = initialSave();
-    save.buildings.push({
+    save.buildings.push({ inputBuffer: {}, stored: {},
       id: 5, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1,
       // `first` fits whole; `second` only partially (whatever room is left);
       // `third` has no room at all left and must be dropped entirely.
@@ -701,7 +702,7 @@ describe('isLoadableSave', () => {
 
   it('re-serializing a clamped over-cap load produces a save isLoadableSave still accepts (no ping-pong)', async () => {
     const save = initialSave();
-    save.buildings.push({
+    save.buildings.push({ inputBuffer: {}, stored: {},
       id: 5, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1,
       buffer: { wood: BALANCE.outputBufferCap + 5 }, relocatingTicks: 0,
     });
@@ -712,6 +713,70 @@ describe('isLoadableSave', () => {
     const written = engine.serialize();
     expect(written.buildings.find((b) => b.id === 5)!.buffer.wood).toBe(BALANCE.outputBufferCap); // clamped, not the original over-cap amount
     expect(isLoadableSave(written)).toBe(true);
+  });
+
+  // The two maps save v6 adds. Their load rules are deliberately DIFFERENT and
+  // the difference is the point: an over-cap in-tray is TRIMMED, exactly as an
+  // over-cap out-tray is, because those goods were never in the ledger; an
+  // over-capacity `stored` SPILLS, because those goods are the colony's and the
+  // camp is unbounded, so no retune may confiscate them. Neither is ever a
+  // rejection — the guard says "well-formed", the restore says "and here is
+  // where they end up under current balance".
+  it('an over-cap input buffer trims, and the save still loads', async () => {
+    const save = initialSave();
+    // cap + 9, so a restore that dropped the in-tray (0) and one that failed to
+    // clamp it (21) both fail on the value, not merely on a total that differs.
+    save.buildings.push({
+      id: 5, defId: 'mill', progress: 0, batchActive: false, col: 6, row: 1,
+      buffer: {}, inputBuffer: { wheat: BALANCE.inputBufferCap + 9 }, stored: {}, relocatingTicks: 0,
+    });
+    save.nextEntityId = 6;
+    expect(isLoadableSave(save)).toBe(true); // clamped, never rejected
+
+    const world = await createColonyWorld(save);
+    const mill = [...world.getEntities()].find((e) => e.getComponent(Building)?.id === 5)!;
+    expect(mill.getComponent(InputBuffer)!.amounts.get('wheat')).toBe(BALANCE.inputBufferCap);
+  });
+
+  it('stored goods a building cannot legally hold spill to the camp', async () => {
+    // Two ways to arrive here, both covered: a `stored` map on a def with
+    // storage 0 — a hand-edited save, or a storehouse retuned down to nothing —
+    // and a depot holding more than its capacity.
+    const save = initialSave();
+    save.stockpile = { wood: 7 };
+    save.buildings[0].stored = { planks: 13 }; // the starter house: a shelter, storage 0
+    save.buildings.push({
+      id: 5, defId: 'storehouse', progress: 0, batchActive: false, col: 6, row: 1,
+      buffer: {}, inputBuffer: {}, stored: { wheat: BALANCE.storehouseCapacity + 23 }, relocatingTicks: 0,
+    });
+    save.nextEntityId = 6;
+    expect(isLoadableSave(save)).toBe(true); // clamped, never rejected
+
+    const stockpile = (await createColonyWorld(save)).getResource(Stockpile);
+    // The ASSERTION is that the aggregate is conserved, not that the field
+    // survived: the camp is unbounded, so conservation is exact and nothing is
+    // refused. 7, 13, 23 and 60 are pairwise distinct and no subset sums to
+    // another, so a spill that lost or double-counted a pile fails on a value.
+    expect(stockpile.get('planks')).toBe(13);
+    expect(stockpile.get('wheat')).toBe(BALANCE.storehouseCapacity + 23);
+    expect(stockpile.get('wood')).toBe(7);
+    // and each pile landed where the rule says, not merely somewhere
+    expect(stockpile.getAt(CAMP_SITE_ID, 'planks')).toBe(13);
+    expect(stockpile.totalAt(1)).toBe(0); // the house holds nothing, ever
+    expect(stockpile.totalAt(5)).toBe(BALANCE.storehouseCapacity);
+    expect(stockpile.getAt(CAMP_SITE_ID, 'wheat')).toBe(23);
+  });
+
+  it('rejects an unknown resource id in an input buffer or a stored map', () => {
+    // The catalog check `buffer` has always had, extended to both new maps —
+    // a cross-field truth, so it lives in isLoadableSave rather than the
+    // structural guard. Each map is broken on its own, so no single check can
+    // stand in for the other.
+    for (const key of ['inputBuffer', 'stored'] as const) {
+      const save = initialSave();
+      save.buildings[0][key] = { unobtanium: 1 } as never;
+      expect(isLoadableSave(save), key).toBe(false);
+    }
   });
 });
 
@@ -727,9 +792,9 @@ describe('balance-coupled states a save is repaired into, not rejected for', () 
   const FORESTER_ID = 50;
 
   /** initialSave() plus a producer, and exactly the roster the caller names. */
-  function saveWith(colonists: Partial<SavedColonist>[]): SaveGameV5 {
+  function saveWith(colonists: Partial<SavedColonist>[]): SaveGameV6 {
     const save = initialSave();
-    save.buildings.push({
+    save.buildings.push({ inputBuffer: {}, stored: {},
       id: FORESTER_ID, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0,
     });
     save.colonists = colonists.map((overrides, index) => ({
@@ -972,12 +1037,12 @@ describe('the load repair fills as well as evicts, in rehome\'s own order', () =
    * moves `homeless`, `beds.occupied` and the roster all at once and would
    * fail every equality below for a reason having nothing to do with homing.
    */
-  function colonyOf(houseIds: readonly number[], colonists: Partial<SavedColonist>[]): SaveGameV5 {
+  function colonyOf(houseIds: readonly number[], colonists: Partial<SavedColonist>[]): SaveGameV6 {
     const base = initialSave();
     return {
       ...base,
       stockpile: {},
-      buildings: houseIds.map((id, index) => ({
+      buildings: houseIds.map((id, index) => ({ inputBuffer: {}, stored: {},
         id, defId: 'house' as const, col: 5 + index * 2, row: 3,
         progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0,
       })),
@@ -1000,7 +1065,7 @@ describe('the load repair fills as well as evicts, in rehome\'s own order', () =
   }
 
   /** Load the save paused, read the seed, run exactly one tick, read again. */
-  async function seedAndTick(save: SaveGameV5) {
+  async function seedAndTick(save: SaveGameV6) {
     const world = await createColonyWorld(save);
     const seeded = housing(world.getResource(SnapshotStore).latest!);
     await stepTick(world);
@@ -1105,6 +1170,124 @@ describe('the load repair fills as well as evicts, in rehome\'s own order', () =
   });
 });
 
+/**
+ * The seeded snapshot's LEDGER, which is not a transient: a restored engine
+ * starts PAUSED, so this is what the player looks at for as long as they leave
+ * it paused. `save.stockpile` has been the CAMP alone since v6 (Stockpile.toJSON
+ * — the reading that makes the v5 migration a no-op), and a storehouse's stock
+ * is serialized off its own building record, so a projection reading the
+ * stockpile alone shows a colony reopened with its food in a depot a short
+ * wealth figure, a meals-per-head the birth gate disagrees with, and a build
+ * palette refusing buildings it can afford.
+ *
+ * Every assertion below is made against the LIVE world `createColonyWorld`
+ * built beside the snapshot — the ledger `seedStoredGoods` actually seeded, the
+ * components `buildingComponents` actually spawned, the `HaulTrip` a hauler
+ * actually carries — rather than against a second copy of the arithmetic. The
+ * property is "the seed IS the world", and no tick is needed to check it.
+ */
+describe('the seeded snapshot aggregates every site, under the restore path\'s own clamps', () => {
+  const DEPOT_ID = 60;
+  const MILL_ID = 61;
+  /** Over the 60-unit `storehouseCapacity`, so the restore must keep 60 at the
+   * depot and spill 10 to the camp. */
+  const DEPOT_BREAD = 70;
+  /** Distinct from the depot's balance, and from the total the two sum to, so
+   * a projection ignoring either side lands on neither figure. */
+  const CAMP_BREAD = 3;
+  const CAMP_WOOD = 5;
+
+  /** initialSave() plus a stocked-over-capacity depot, an over-cap in-tray, and
+   * one of the founders promoted to hauling. */
+  function ledgerSave(): SaveGameV6 {
+    const save = initialSave();
+    save.stockpile = { wood: CAMP_WOOD, bread: CAMP_BREAD };
+    save.buildings.push(
+      { id: DEPOT_ID, defId: 'storehouse', col: 6, row: 1, progress: 0, batchActive: false,
+        buffer: {}, inputBuffer: {}, stored: { bread: DEPOT_BREAD }, relocatingTicks: 0 },
+      { id: MILL_ID, defId: 'mill', col: 8, row: 1, progress: 0, batchActive: false,
+        buffer: {}, inputBuffer: { wheat: BALANCE.inputBufferCap + 8 }, stored: {}, relocatingTicks: 0 },
+    );
+    save.colonists = save.colonists.map((c, i) => (i === 0 ? { ...c, hauling: true } : c));
+    save.nextEntityId = MILL_ID + 1;
+    return save;
+  }
+
+  it('counts the depot\'s stock in stock, wealth and meals per head, before the first tick', async () => {
+    const save = ledgerSave();
+    expect(isLoadableSave(save)).toBe(true);
+    const world = await createColonyWorld(save);
+    const seeded = world.getResource(SnapshotStore).latest!;
+    const ledger = world.getResource(Stockpile);
+
+    // The ledger the world was actually seeded with, reached by a wholly
+    // different path (seedStoredGoods + Stockpile) than the snapshot's.
+    expect(seeded.stockpile.bread.stock).toBe(ledger.get('bread'));
+    expect(seeded.stockpile.wood.stock).toBe(ledger.get('wood'));
+    // ...and the concrete figures, so both sides being wrong together fails.
+    // 3 at the camp + 70 written on the depot: the total is neither balance.
+    expect(seeded.stockpile.bread.stock).toBe(CAMP_BREAD + DEPOT_BREAD);
+    expect(seeded.colonyWealth).toBe(CAMP_WOOD * 1 + (CAMP_BREAD + DEPOT_BREAD) * 8); // wood@1 + bread@8
+    // Three founders, so meals per head counts a fourth: 73 / 4. The camp
+    // alone would publish 3 / 4 — a figure the birth gate, which spends
+    // through `pay` across every site, would flatly disagree with.
+    expect(seeded.population).toBe(3);
+    expect(seeded.mealsPerHead).toBeCloseTo((CAMP_BREAD + DEPOT_BREAD) / 4, 5);
+    expect(seeded.mealsPerHead).not.toBeCloseTo(CAMP_BREAD / 4, 5);
+  });
+
+  it('publishes the depot at what it can legally hold, with the overflow at the camp', async () => {
+    // A `storehouseCapacity` retuned DOWN under an existing save. A straight
+    // aggregation shows 70 of 60 and the first tick silently corrects it; the
+    // restore spills the excess to the camp, so the honest reading is 60 of 60
+    // with 10 more standing at the camp — and the colony total is unchanged
+    // either way, which is the conservation seedStoredGoods promises.
+    const world = await createColonyWorld(ledgerSave());
+    const seeded = world.getResource(SnapshotStore).latest!;
+    const ledger = world.getResource(Stockpile);
+    const depot = seeded.buildings.find((b) => b.id === DEPOT_ID)!;
+
+    expect(depot.stored).toBe(BALANCE.storehouseCapacity);
+    expect(depot.storage).toBe(BALANCE.storehouseCapacity);
+    expect(depot.stored).toBe(ledger.totalAt(DEPOT_ID));       // the site really was seeded at 60
+    expect(depot.stored).not.toBe(DEPOT_BREAD);                // ...not at what the save wrote
+    expect(ledger.getAt(CAMP_SITE_ID, 'bread')).toBe(CAMP_BREAD + (DEPOT_BREAD - BALANCE.storehouseCapacity));
+    expect(seeded.stockpile.bread.stock).toBe(CAMP_BREAD + DEPOT_BREAD); // nothing was lost to the trim
+  });
+
+  it('trims a restored in-tray to the cap the spawned building holds', async () => {
+    const world = await createColonyWorld(ledgerSave());
+    const seeded = world.getResource(SnapshotStore).latest!;
+    const live = [...world.getEntities()].find((e) => e.getComponent(Building)?.id === MILL_ID)!;
+
+    expect(seeded.buildings.find((b) => b.id === MILL_ID)!.inputBuffered).toBe(BALANCE.inputBufferCap);
+    // The entity beside it, trimmed by buildingComponents — the figure the
+    // paused player is shown and the goods the mill actually has to spend.
+    expect(live.getComponent(InputBuffer)!.total()).toBe(BALANCE.inputBufferCap);
+    // Non-vacuous: the save wrote more than the cap, so an untrimmed
+    // projection would read a different number.
+    expect(BALANCE.inputBufferCap + 8).toBeGreaterThan(BALANCE.inputBufferCap);
+  });
+
+  it('stands a restored hauler at the camp tile, not in the map\'s corner', async () => {
+    // The other producer's version of the defect HaulTrip's own `atCol`/`atRow`
+    // defaults exist to prevent. This projection never touches that component —
+    // it maps the SAVED colonist directly — so a numeric zero here parks every
+    // idle hauler's dot at (0, 0) until the first tick, which a paused colony
+    // may never reach.
+    const world = await createColonyWorld(ledgerSave());
+    const seeded = world.getResource(SnapshotStore).latest!;
+    const hauler = seeded.colonists.find((c) => c.hauling)!;
+    const liveTrip = [...world.getEntities()]
+      .find((e) => e.getComponent(JobAssignment)?.hauling === true)!.getComponent(HaulTrip)!;
+
+    expect([hauler.haulAtCol, hauler.haulAtRow]).toEqual([CAMP_TILE.col, CAMP_TILE.row]);
+    expect([hauler.haulAtCol, hauler.haulAtRow]).toEqual([liveTrip.atCol, liveTrip.atRow]);
+    expect([hauler.haulAtCol, hauler.haulAtRow]).not.toEqual([0, 0]); // non-vacuous: the camp is not the origin
+    expect(hauler.haulKind).toBeNull(); // on no trip at all: HaulTrip never enters the save
+  });
+});
+
 describe('createColonyWorld', () => {
   it('builds a runnable world with resources initialized from the save', async () => {
     const world = await createColonyWorld();
@@ -1150,7 +1333,7 @@ describe('createColonyWorld', () => {
     // one: a save written under a larger maxRelocationTicks must still load
     // and clamp rather than being structurally rejected.
     const save = initialSave();
-    save.buildings.push({
+    save.buildings.push({ inputBuffer: {}, stored: {},
       id: 5, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1, buffer: {},
       relocatingTicks: BALANCE.maxRelocationTicks + 500,
     });
@@ -1179,12 +1362,36 @@ describe('createColonyWorld', () => {
 
   it('a building mid-relocation survives save -> restore with its countdown', async () => {
     const save = initialSave();
-    save.buildings.push({ id: 5, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 3, buffer: {}, relocatingTicks: 9 });
+    save.buildings.push({ inputBuffer: {}, stored: {}, id: 5, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 3, buffer: {}, relocatingTicks: 9 });
     save.nextEntityId = 6;
     const world = await createColonyWorld(save);
     const written = buildSaveFromWorld(world);
     expect(written.buildings.find((b) => b.id === 5)!.relocatingTicks).toBe(9);
     expect(isLoadableSave(written)).toBe(true);
+  });
+
+  it('a STOCKED storehouse saved mid-relocation comes back holding exactly what it held', async () => {
+    // The case `seedSite` exists for, and the one a restore built on `addAt`
+    // could not express at all: §2.3 keeps a store in transit OUT of the site
+    // list, so there is no `StoreSite` to bank 19 wheat against — while the
+    // wheat is unambiguously still the colony's, and the save says where it is.
+    const save = initialSave();
+    save.buildings.push({
+      id: 5, defId: 'storehouse', progress: 0, batchActive: false, col: 6, row: 3,
+      buffer: {}, inputBuffer: {}, stored: { wheat: 19 }, relocatingTicks: 4,
+    });
+    save.nextEntityId = 6;
+
+    const world = await createColonyWorld(save);
+    expect(world.getResource(Stockpile).getAt(5, 'wheat')).toBe(19);
+
+    const written = buildSaveFromWorld(world);
+    expect(written.buildings.find((b) => b.id === 5)).toMatchObject({ stored: { wheat: 19 }, relocatingTicks: 4 });
+    expect(written.stockpile.wheat).toBeUndefined(); // at the depot, NOT teleported to the camp by the move
+
+    const again = (await createColonyWorld(written)).getResource(Stockpile);
+    expect(again.getAt(5, 'wheat')).toBe(19);
+    expect(again.get('wheat')).toBe(19); // banked once, not once per projection
   });
 
   it('a relocation countdown legal on the largest map survives save/load unchanged', async () => {
@@ -1197,7 +1404,7 @@ describe('createColonyWorld', () => {
     const save = initialSave();
     save.map = { ...MAX_MAP };
     const legalTicks = relocationTicks(Math.hypot(MAX_MAP.cols, MAX_MAP.rows), BALANCE.relocationTilesPerTick);
-    save.buildings.push({
+    save.buildings.push({ inputBuffer: {}, stored: {},
       id: 5, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1, buffer: {},
       relocatingTicks: legalTicks,
     });
@@ -1241,7 +1448,7 @@ describe('createColonyWorld', () => {
   it('round-trips a mid-starvation, mid-cooldown colony', async () => {
     // Both are penalties already incurred: dropping either would let
     // save-and-reload cancel it.
-    const save: SaveGameV5 = { ...initialSave(), tick: 910, lastBirthTick: 900 };
+    const save: SaveGameV6 = { ...initialSave(), tick: 910, lastBirthTick: 900 };
     save.colonists = save.colonists.map((c, i) => (i === 0 ? { ...c, starvingTicks: 40 } : c));
     const world = await createColonyWorld(save);
     const round = buildSaveFromWorld(world);
@@ -1267,7 +1474,7 @@ describe('createColonyWorld', () => {
     // precisely what homing from scratch produces, so that arrangement would
     // pass with homeId dropped entirely.
     const save = initialSave();
-    save.buildings.push({
+    save.buildings.push({ inputBuffer: {}, stored: {},
       id: 5, defId: 'house', progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0,
     });
     const homes: (number | null)[] = [1, 1, 1, 1, null, 5, 5, 5, 5];
@@ -1290,7 +1497,7 @@ describe('createColonyWorld', () => {
 
   it('grandfathers overstaffed buildings from a save (spec 4.5: slots retuned down must not orphan saves)', async () => {
     const save = initialSave();
-    const building = { id: 5, defId: 'forester' as const, progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0 }; // 2 slots
+    const building = { id: 5, defId: 'forester' as const, progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, inputBuffer: {}, stored: {}, relocatingTicks: 0 }; // 2 slots
     save.buildings.push(building);
     save.nextEntityId = 6;
     save.colonists = [2, 3, 4].map((id) => ({
@@ -1329,7 +1536,7 @@ describe('createColonyWorld', () => {
 
   it('carries building positions from components into snapshots', async () => {
     const save = initialSave();
-    save.buildings.push({ id: 5, defId: 'forester', progress: 0, batchActive: false, col: 9, row: 7, buffer: {}, relocatingTicks: 0 });
+    save.buildings.push({ inputBuffer: {}, stored: {}, id: 5, defId: 'forester', progress: 0, batchActive: false, col: 9, row: 7, buffer: {}, relocatingTicks: 0 });
     save.nextEntityId = 6;
     const world = await createColonyWorld(save);
     const b = world.getResource(SnapshotStore).latest!.buildings.find((x) => x.id === 5)!;
@@ -1345,13 +1552,13 @@ describe('prepareLoadedSave', () => {
 
   it('still applies the catalog checks after migration', () => {
     const save = initialSave();
-    save.buildings = [{ id: 99, defId: 'notABuilding' as never, progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0 }];
+    save.buildings = [{ inputBuffer: {}, stored: {}, id: 99, defId: 'notABuilding' as never, progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0 }];
     save.nextEntityId = 100;
     expect(prepareLoadedSave(save)).toBeNull();
   });
 
   it('rejects a version this build does not know', () => {
-    expect(prepareLoadedSave({ ...initialSave(), version: 6 })).toBeNull();
+    expect(prepareLoadedSave({ ...initialSave(), version: 7 })).toBeNull();
     expect(prepareLoadedSave({ ...initialSave(), version: 99 })).toBeNull();
   });
 
@@ -1374,11 +1581,17 @@ describe('live-world projections agree', () => {
   // (Task 6), so the trip itself never has a save-record counterpart to agree
   // with. `haulPhase`/`haulTicksLeft` joined the snapshot in increment 5 to
   // drive the dot's position from the trip's real duration (OBS-4-09) — same
-  // component, same runtime-only status. `haulLegTicks`/`haulPickupCol`/
-  // `haulPickupRow` joined the same way for the same reason: they stop the
-  // layout re-deriving a leg's length and a returning hauler's origin from the
-  // building's LIVE tile, which desyncs once the building moves mid-leg
-  // (OBS-5-01) — still HaulTrip, still never saved.
+  // component, same runtime-only status. `haulLegTicks` and the leg's two
+  // frozen endpoints (`haulLegFromCol`/`Row`, `haulLegToCol`/`Row`) joined the
+  // same way for the same reason: they stop the layout re-deriving a leg's
+  // length and either of its ends from a building's LIVE tile, which desyncs
+  // once that building moves mid-leg (OBS-5-01) — still HaulTrip, still never
+  // saved. `haulKind`, `haulPickedUp` and `haulAtCol`/`haulAtRow` are the rest
+  // of the same component (increment 7 §2.10): the job a hauler was dispatched
+  // on, whether the load in hand came out of a building, and where a hauler with
+  // no leg running stands. A hauler caught mid-trip still banks its load into
+  // the saved stockpile, so none of them has a save-record counterpart to agree
+  // with — a restored hauler is on no trip at all, standing at the camp.
   // `starvingTicks` used to sit in this list too: real persistent state, just
   // not yet saved. SavedColonist now carries it (mirroring ageTicks), so it is
   // covered by default like everything else — see the dedicated round-trip
@@ -1397,7 +1610,8 @@ describe('live-world projections agree', () => {
   // anything that makes `efficiency` or `commuteFactor` unpersistable makes
   // this one too — there is no independent state in it to save.
   const DERIVED = [
-    'efficiency', 'stage', 'haulTargetId', 'haulPhase', 'haulTicksLeft', 'haulLegTicks', 'haulPickupCol', 'haulPickupRow',
+    'efficiency', 'stage', 'haulTargetId', 'haulPhase', 'haulTicksLeft', 'haulKind', 'haulPickedUp', 'haulLegTicks',
+    'haulLegFromCol', 'haulLegFromRow', 'haulLegToCol', 'haulLegToRow', 'haulAtCol', 'haulAtRow',
     'carrying', 'commuteTiles', 'commuteFactor', 'deliveredWorkPower',
   ] as const;
 
@@ -1454,6 +1668,40 @@ describe('live-world projections agree', () => {
     expect(persisted(fromQueryPath)).toEqual(saved.map((w) => ({ ...w })));
   });
 
+  it('the walk path publishes colony-wide mealsPerHead, not the camp-only figure, on a refreshing tick', async () => {
+    // Exactly what two storehouses cost, so the camp is fully drained and can
+    // never itself hold food: a camp-only read has nothing to fall back on
+    // but 0, so a wrong read is caught on the VALUE, not merely a total that
+    // happens to differ from the right one.
+    const save = initialSave();
+    save.stockpile = { wood: 40, planks: 20 };
+    const engine = await GameEngine.create(save);
+
+    engine.dispatch({ type: 'constructBuilding', buildingDefId: 'storehouse' });
+    await engine.stepOnce(); // an entity-creating tick, but no food banked yet
+    const depot = engine.snapshot!.buildings.find((b) => b.defId === 'storehouse')!;
+
+    // Bank bread straight into the depot, bypassing HaulSystem for
+    // determinism: 33 units, weight 1, never touching the camp.
+    const world = (engine as unknown as { world: IRuntimeWorld }).world;
+    world.getResource(Stockpile).addAt(
+      { id: depot.id, col: depot.col, row: depot.row, capacity: BALANCE.storehouseCapacity }, 'bread', 33,
+    );
+
+    // A second entity-creating tick: it consumes an id, so GameEngine.runStep's
+    // post-step gate fires refreshEntitySections THIS tick, overwriting the
+    // mealsPerHead SnapshotSystem already published with buildEntitySections'
+    // own recomputation from the walk path — the seam this test pins.
+    engine.dispatch({ type: 'constructBuilding', buildingDefId: 'storehouse' });
+    await engine.stepOnce();
+
+    // Sanity: population is unchanged at the 3 founders, so the assertion
+    // below is on the stock read, not a denominator surprise.
+    expect(engine.snapshot!.population).toBe(3);
+    // 33 bread / 4 heads = 8.25 -- a camp-only read sees 0 bread and publishes 0.
+    expect(engine.snapshot!.mealsPerHead).toBeCloseTo(8.25);
+  });
+
   it('every non-derived worker fact is represented in the save record', async () => {
     const engine = await busyColony();
     const factKeys = Object.keys(engine.snapshot!.colonists[0])
@@ -1502,8 +1750,20 @@ describe('live-world projections agree', () => {
     // derived like buffered, but from a live pointer rather than a stored map
     // — it counts colonists whose home points here (Task 6), so it has no
     // save slot of its own either.
+    // inputBuffered joined for exactly the reason `buffered` did: it is the SUM
+    // of this building's inputBuffer map, and that map is the thing that
+    // persists (SavedBuilding.inputBuffer, save v6). `stored` is NOT in this
+    // list, but only by coincidence: BuildingSnapshot.stored is a number and
+    // SavedBuilding.stored is a map that merely share a name, so this check
+    // passes via the wrong route — a rename of the published field would
+    // silently start demanding a `derivedBuilding` entry with no explanation.
+    // storage joined for the reason `beds` did: a catalog constant looked up by
+    // defId (BUILDINGS[b.defId].storage), never a per-building save fact, so a
+    // retuned storehouseCapacity moves every existing depot rather than
+    // grandfathering the one it was built under.
     const derivedBuilding = [
-      'workers', 'workerSlots', 'state', 'progressPct', 'tooledWorkers', 'workPower', 'buffered', 'beds', 'occupants',
+      'workers', 'workerSlots', 'state', 'progressPct', 'tooledWorkers', 'workPower', 'buffered', 'inputBuffered',
+      'storage', 'beds', 'occupants',
     ];
     const factKeys = Object.keys(foresterOf(engine)).filter((k) => !derivedBuilding.includes(k));
     const savedKeys = Object.keys(engine.serialize().buildings[0]);

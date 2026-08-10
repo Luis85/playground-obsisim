@@ -1,17 +1,19 @@
 import type { IRuntimeWorld } from 'sim-ecs';
-import type { BuildingDefId, RecipeDef, ResourceId } from '../shared/content-types';
-import type { SavedBuilding, SavedColonist } from '../shared/save';
-import type { BuildingSnapshot, BuildingState, ColonistSnapshot } from '../shared/snapshot';
-import type { TileRef } from '../shared/placement';
+import type { ResourceId } from '../shared/content-types';
+import type { SavedColonist } from '../shared/save';
+import type { BuildingSnapshot, ColonistSnapshot } from '../shared/snapshot';
+import { relocatingIdsOf, type TileRef } from '../shared/placement';
 import { CAMP_TILE } from '../shared/haul';
 import { commuteFactor, mealsPerHead, stageOf } from '../shared/population';
 import { BALANCE, workerWorkPower } from './content/balance';
 import { MEAL_WEIGHTS } from './content/resources';
-import { batchOutputUnits, BUILDINGS } from './content/buildings';
 import {
-  Age, Building, Efficiency, HaulTrip, Home, Hunger, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage, Colonist,
-  WorkerSlots,
+  Age, Building, Efficiency, HaulTrip, Home, Hunger, InputBuffer, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage,
+  Colonist, WorkerSlots,
 } from './components';
+import type { BuildingFacts } from './snapshot-buildings';
+import { buildingFactsOf, buildingSnapshotsOf } from './snapshot-buildings';
+import { Stockpile } from './resources';
 
 /**
  * Plain per-entity facts, decoupled from sim-ecs and from where they came
@@ -42,19 +44,6 @@ export interface ColonistFacts extends Omit<ColonistSnapshot, 'commuteTiles' | '
   carryingResource: ResourceId | null;
 }
 
-export interface BuildingFacts {
-  id: number;
-  defId: BuildingDefId;
-  col: number;
-  row: number;
-  workerSlots: number;
-  progress: number;
-  batchActive: boolean;
-  buffered: number;
-  buffer: Partial<Record<ResourceId, number>>;
-  relocatingTicks: number;
-}
-
 export interface EntitySections {
   colonists: ColonistSnapshot[];
   buildings: BuildingSnapshot[];
@@ -64,43 +53,6 @@ export interface EntitySections {
   beds: { total: number; occupied: number };
   demographics: { children: number; adults: number; elders: number };
   mealsPerHead: number;
-}
-
-/**
- * A staffed building that cannot bank another batch is stalled on output,
- * whether or not its current batch has finished — the player's remedy is the
- * same either way: send a hauler. A shelter has no batch to stall on, so it
- * is never output-blocked.
- */
-function isOutputBlocked(recipe: RecipeDef | null, buffered: number): boolean {
-  return recipe !== null && BALANCE.outputBufferCap - buffered < batchOutputUnits(recipe);
-}
-
-/**
- * The state ladder for one building. Relocating dominates everything: it is
- * the reason nothing is happening, and it is also why a relocating house
- * shelters nobody. A shelter has no other state to be in — it is never
- * unstaffed (no slots) and never producing.
- *
- * Extracted (rather than one inline nested ternary in buildEntitySections)
- * purely to keep that function's own branch count — and CRAP score — down as
- * this ladder grows. Same principle as save-guard.ts's isValidAgeTicks /
- * isValidStarvingTicks / isValidHunger / isValidToolTicks splitting out of
- * isColonistRecordValid.
- */
-function buildingState(
-  recipe: RecipeDef | null, relocatingTicks: number, staffed: number, outputBlocked: boolean, batchActive: boolean,
-): BuildingState {
-  if (relocatingTicks > 0) return 'relocating';
-  if (recipe === null) return 'housing';
-  if (staffed === 0) return 'unstaffed';
-  if (outputBlocked) return 'outputFull';
-  return batchActive ? 'producing' : 'waitingForInput';
-}
-
-/** 0-100 display progress; a shelter has no batch to show progress on. */
-function progressPercent(recipe: RecipeDef | null, progress: number): number {
-  return recipe === null ? 0 : Math.min(100, Math.round((progress / recipe.ticksPerBatch) * 100));
 }
 
 /**
@@ -160,34 +112,6 @@ function deliveredWorkPowerOf(w: ColonistFacts, factor: number, relocatingIds: R
   return workerWorkPower(w.efficiency, w.toolTicks, factor);
 }
 
-/**
- * Buildings whose next production pass banks nothing.
- *
- * THE BOUNDARY, and this project has already spent two rounds on this exact
- * one (task 6's `> 0` vs `> 1`): the `relocatingTicks` reaching this module is
- * the POST-decrement value. ProductionSystem skips the building and decrements
- * in the same arm, and the snapshot is published afterwards. So a published
- * `> 0` means "the next production pass will skip this building" — which is
- * precisely the forward-looking quantity `BuildingSnapshot.relocatingTicks` is
- * already documented as ("ticks until a moved building can work again"), and
- * precisely the boundary `buildingState` and `beds.total` in this same file
- * already draw.
- *
- * Read BACKWARDS it overstates by exactly one tick: on the landing tick this
- * returns full power for a tick whose work was genuinely skipped — the tick
- * production-system.ts's own comment names as "the one genuinely-charged tick
- * nothing ever displays as in-flight", where `state` reads 'producing' and the
- * Buildings view's Downtime column reads '—' for the same reason. That is
- * accepted rather than special-cased: the pre-decrement value is not in the
- * snapshot at all, and `buildEntitySections` also serves the save seed and the
- * post-step refresh, neither of which has a "this tick" to ask about. Putting
- * work power alone on some other boundary would leave it the only figure on
- * screen disagreeing with the other three about whether the building is moving.
- */
-function relocatingBuildingIds(buildings: readonly BuildingFacts[]): ReadonlySet<number> {
-  return new Set(buildings.filter((b) => b.relocatingTicks > 0).map((b) => b.id));
-}
-
 /** Pure aggregation shared by SnapshotSystem, the initial-snapshot seed, and the post-step refresh. */
 export function buildEntitySections(
   workers: readonly ColonistFacts[],
@@ -214,7 +138,31 @@ export function buildEntitySections(
   // by inspection.) Mirrors ProductionSystem's own commute read, both going
   // through commuteTiles above, so neither disagrees with the power the
   // simulation actually spent.
-  const relocatingIds = relocatingBuildingIds(buildings);
+  // `relocatingIdsOf`, the same derivation ProductionSystem's own skip reads
+  // (OBS-6-08) — one boundary rather than two independently-maintained tests of
+  // the same fact.
+  //
+  // THE BOUNDARY, and this project has already spent two rounds on this exact
+  // one (task 6's `> 0` vs `> 1`): the `relocatingTicks` reaching this module is
+  // the POST-decrement value. ProductionSystem skips the building and decrements
+  // in the same arm, and the snapshot is published afterwards. So a published
+  // `> 0` means "the next production pass will skip this building" — which is
+  // precisely the forward-looking quantity `BuildingSnapshot.relocatingTicks` is
+  // already documented as ("ticks until a moved building can work again"), and
+  // precisely the boundary `buildingState` and `beds.total` in this same file
+  // already draw.
+  //
+  // Read BACKWARDS it overstates by exactly one tick: on the landing tick this
+  // returns full power for a tick whose work was genuinely skipped — the tick
+  // production-system.ts's own comment names as "the one genuinely-charged tick
+  // nothing ever displays as in-flight", where `state` reads 'producing' and the
+  // Buildings view's Downtime column reads '—' for the same reason. That is
+  // accepted rather than special-cased: the pre-decrement value is not in the
+  // snapshot at all, and `buildEntitySections` also serves the save seed and the
+  // post-step refresh, neither of which has a "this tick" to ask about. Putting
+  // work power alone on some other boundary would leave it the only figure on
+  // screen disagreeing with the other three about whether the building is moving.
+  const relocatingIds = relocatingIdsOf(buildings);
   const deliveredById = new Map(workers.map((w): [number, number | null] => [
     w.id, deliveredWorkPowerOf(w, factorOf(w.id), relocatingIds),
   ]));
@@ -233,7 +181,10 @@ export function buildEntitySections(
       return {
         id: w.id, hunger: w.hunger, starvingTicks: w.starvingTicks, efficiency: w.efficiency, buildingId: w.buildingId,
         hauling: w.hauling, haulTargetId: w.haulTargetId, haulPhase: w.haulPhase, haulTicksLeft: w.haulTicksLeft,
-        haulLegTicks: w.haulLegTicks, haulPickupCol: w.haulPickupCol, haulPickupRow: w.haulPickupRow,
+        haulKind: w.haulKind, haulPickedUp: w.haulPickedUp, haulLegTicks: w.haulLegTicks,
+        haulLegFromCol: w.haulLegFromCol, haulLegFromRow: w.haulLegFromRow,
+        haulLegToCol: w.haulLegToCol, haulLegToRow: w.haulLegToRow,
+        haulAtCol: w.haulAtCol, haulAtRow: w.haulAtRow,
         carrying: w.carrying, toolTicks: w.toolTicks, ageTicks: w.ageTicks, stage: w.stage, homeId: w.homeId,
         // Null tiles are the homeless case: there is no distance to report, and
         // the whole charge lands in the factor instead.
@@ -250,31 +201,9 @@ export function buildEntitySections(
     if (c.homeId !== null) occupantsByHouse.set(c.homeId, (occupantsByHouse.get(c.homeId) ?? 0) + 1);
   }
 
-  const buildingSnaps: BuildingSnapshot[] = buildings
-    .map((b) => {
-      const def = BUILDINGS[b.defId];
-      const staffed = staffCount.get(b.id) ?? 0;
-      const outputBlocked = isOutputBlocked(def.recipe, b.buffered);
-      const state = buildingState(def.recipe, b.relocatingTicks, staffed, outputBlocked, b.batchActive);
-      return {
-        id: b.id,
-        defId: b.defId,
-        col: b.col, row: b.row,
-        workers: staffed,
-        workerSlots: b.workerSlots,
-        state,
-        progress: b.progress,
-        batchActive: b.batchActive,
-        progressPct: progressPercent(def.recipe, b.progress),
-        tooledWorkers: tooledByBuilding.get(b.id) ?? 0,
-        workPower: powerByBuilding.get(b.id) ?? 0,
-        buffered: b.buffered,
-        relocatingTicks: b.relocatingTicks,
-        beds: def.beds,
-        occupants: occupantsByHouse.get(b.id) ?? 0,
-      };
-    })
-    .sort((a, b) => a.id - b.id);
+  const buildingSnaps: BuildingSnapshot[] = buildingSnapshotsOf(buildings, {
+    staffed: staffCount, tooled: tooledByBuilding, power: powerByBuilding, occupants: occupantsByHouse,
+  });
 
   return {
     colonists: workerSnaps,
@@ -342,37 +271,36 @@ export function colonistFactsOf(
     // Published on BOTH legs now: the layout interpolates the dot along the
     // camp<->building line, so a returning hauler still needs to know which
     // building it is walking back from (OBS-4-09). `trip.targetId` survives the
-    // phase flip and is cleared only by trip.reset().
+    // phase flip and is cleared only when the trip ends.
     haulTargetId: trip.targetId,
     haulPhase: trip.phase,
     haulTicksLeft: trip.ticksLeft,
-    // The leg total and the return leg's origin, frozen by HaulTrip when the
-    // leg began — published so the layout reads them instead of recomputing
-    // from the building's live tile, which desyncs once the building moves
-    // mid-leg (OBS-5-01).
+    // Null when there is no trip to have a job on. `trip.kind` keeps its last
+    // value through `clearTrip` (it resets to the 'collect' default), so
+    // reading it unguarded would label every idle hauler a collector.
+    haulKind: trip.phase === 'idle' ? null : trip.kind,
+    // The cargo's ORIGIN, which is what a direction marker must read — see
+    // ColonistSnapshot.haulPickedUp on why `haulKind` draws the round trip
+    // backwards.
+    haulPickedUp: trip.pickedUp,
+    // The leg total and BOTH its frozen endpoints, published so the layout
+    // reads them instead of recomputing from a building's live tile, which
+    // desyncs once that building moves mid-leg (OBS-5-01). Both ends, not one:
+    // neither end of a depot-to-building leg is the camp, so a lone endpoint
+    // plus a hardcoded anchor cannot describe one.
     haulLegTicks: trip.legTicks,
-    haulPickupCol: trip.pickupCol,
-    haulPickupRow: trip.pickupRow,
+    haulLegFromCol: trip.legFromCol,
+    haulLegFromRow: trip.legFromRow,
+    haulLegToCol: trip.legToCol,
+    haulLegToRow: trip.legToRow,
+    // Where a hauler with no leg running stands. Straight off the trip: `cancel`
+    // is the only writer, and it interpolates along the leg it is ending, so the
+    // resting tile the app draws is the one the sim priced the next leg from.
+    haulAtCol: trip.atCol,
+    haulAtRow: trip.atRow,
     carrying: trip.amount,
     carryingResource: trip.resource,
     toolTicks: coverage.remainingTicks,
-  };
-}
-
-export function buildingFactsOf(
-  building: Building, slots: WorkerSlots, production: Production, position: Position, buffer: OutputBuffer, relocation: Relocation,
-): BuildingFacts {
-  return {
-    id: building.id,
-    defId: building.defId,
-    col: position.col,
-    row: position.row,
-    workerSlots: slots.max,
-    progress: production.progress,
-    batchActive: production.batchActive,
-    buffered: buffer.total(),
-    buffer: Object.fromEntries(buffer.amounts) as Partial<Record<ResourceId, number>>,
-    relocatingTicks: relocation.ticksLeft,
   };
 }
 
@@ -409,14 +337,6 @@ export function savedColonistOf(facts: ColonistFacts): SavedColonist {
   };
 }
 
-export function savedBuildingOf(facts: BuildingFacts): SavedBuilding {
-  return {
-    id: facts.id, defId: facts.defId, col: facts.col, row: facts.row,
-    progress: facts.progress, batchActive: facts.batchActive, buffer: facts.buffer,
-    relocatingTicks: facts.relocatingTicks,
-  };
-}
-
 export interface EntityFacts {
   workers: ColonistFacts[];
   buildings: BuildingFacts[];
@@ -430,6 +350,7 @@ export interface EntityFacts {
 export function gatherEntityFacts(world: IRuntimeWorld): EntityFacts {
   const workers: ColonistFacts[] = [];
   const buildings: BuildingFacts[] = [];
+  const stockpile = world.getResource(Stockpile);
   for (const entity of world.getEntities()) {
     const building = entity.getComponent(Building);
     if (building) {
@@ -440,6 +361,8 @@ export function gatherEntityFacts(world: IRuntimeWorld): EntityFacts {
         entity.getComponent(Position)!,
         entity.getComponent(OutputBuffer)!,
         entity.getComponent(Relocation)!,
+        entity.getComponent(InputBuffer)!,
+        stockpile.siteJSON(building.id),
       ));
       continue;
     }

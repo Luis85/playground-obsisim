@@ -45,14 +45,14 @@ export const MAX_SAVED_COUNTER = Number.MAX_SAFE_INTEGER - 2 ** 32;
  *
  * Both producers (`buildSaveFromWorld`, `initialSave`) use this constant rather
  * than a literal, which makes the bump self-policing: because
- * `SaveGameV5.version` is the literal type `5`, raising this to 6 fails
- * typecheck AT those producers (`Type '6' is not assignable to type '5'`) until
+ * `SaveGameV6.version` is the literal type `6`, raising this to 7 fails
+ * typecheck AT those producers (`Type '7' is not assignable to type '6'`) until
  * the save type is updated too. That is deliberate — with hardcoded literals,
- * bumping the constant would have pointed the loader at v6 while autosaves and
- * fresh colonies kept claiming v5, and a v5-labelled save carrying v6 fields
+ * bumping the constant would have pointed the loader at v7 while autosaves and
+ * fresh colonies kept claiming v6, and a v6-labelled save carrying v7 fields
  * would then be migrated a second time on load.
  */
-export const LATEST_SAVE_VERSION = 5;
+export const LATEST_SAVE_VERSION = 6;
 
 /** The v1 building record — frozen legacy shape, pre-spatial. */
 export interface SavedBuildingV1 {
@@ -74,10 +74,33 @@ export interface SavedBuildingV3 extends SavedBuildingV2 {
   buffer: Partial<Record<ResourceId, number>>;
 }
 
-/** The current building record: v3 plus the relocation countdown (save v4). */
-export interface SavedBuilding extends SavedBuildingV3 {
+/** The v4 building record — frozen legacy shape, pre-two-way-haul: v3 plus the
+ * relocation countdown. */
+export interface SavedBuildingV4 extends SavedBuildingV3 {
   /** Ticks the building is still out of action after a move; 0 normally. */
   relocatingTicks: number;
+}
+
+/**
+ * The current building record (save v6): goods are hauled BOTH ways now, so a
+ * building holds two piles the colony would otherwise lose on every reload.
+ *
+ * Frozen as `SavedBuildingV4` above rather than extended in place, for the
+ * reason `SavedBuildingV1`-`V3` are frozen: `SaveGameV4.buildings` is typed by
+ * that record and `SaveGameV5` inherits it, so adding fields here would make
+ * v4 and v5 statically REQUIRE v6 fields — every legacy fixture and every
+ * migration input would have to carry them or stop compiling, and v6 would
+ * have no distinct shape left to migrate towards.
+ */
+export interface SavedBuilding extends SavedBuildingV4 {
+  /** Raw goods waiting in this building's own in-tray for its next batch;
+   * `{}` when empty. Uniform shape, like `buffer` — a single unconditional
+   * guard check rather than an optional one. */
+  inputBuffer: Partial<Record<ResourceId, number>>;
+  /** This building's share of the colony ledger — a storehouse's stock, `{}`
+   * for everything else. Serialized off the building record because a ledger
+   * site may not outlive the building behind it (spec §2.4 invariant 2). */
+  stored: Partial<Record<ResourceId, number>>;
 }
 
 /** The pre-v3 worker record — frozen legacy shape, before hauling existed. */
@@ -167,14 +190,14 @@ export interface SaveGameV4 {
   lastRecruitTick: number;
   stockpile: Partial<Record<ResourceId, number>>;
   map: WorldMapSize;
-  buildings: SavedBuilding[];
+  buildings: SavedBuildingV4[];
   workers: SavedColonistV4[];
   nextEntityId: number;
 }
 
 /**
- * The current save (v5): demographics arrive. The roster is renamed from
- * `workers` to `colonists` — a v4 colony was a workforce, a v5 one is a
+ * The v5 save — frozen legacy shape: demographics arrive. The roster is renamed
+ * from `workers` to `colonists` — a v4 colony was a workforce, a v5 one is a
  * population that ages, sleeps somewhere and can starve — and the birth clock
  * joins the recruit clock as persisted state.
  */
@@ -185,6 +208,24 @@ export interface SaveGameV5 extends Omit<SaveGameV4, 'version' | 'workers'> {
    * cooldown. */
   lastBirthTick: number;
   colonists: SavedColonist[];
+}
+
+/**
+ * The current save (v6): goods stop living in one flat ledger. A building now
+ * carries its own in-tray and its own share of the colony's stock, and
+ * `stockpile` narrows to THE CAMP's contents — which for a v5 colony is
+ * exactly what it already was, since a v5 colony had nowhere else to put
+ * anything. That is what makes the v5 -> v6 migration a shape fill.
+ *
+ * `buildings` is redeclared rather than inherited: it is the one field whose
+ * record type moves, and the version literal has to move with it.
+ */
+export interface SaveGameV6 extends Omit<SaveGameV5, 'version' | 'buildings'> {
+  version: 6;
+  /** What the CAMP holds. Every other site's contents live on the building
+   * that is that site (`SavedBuilding.stored`). */
+  stockpile: Partial<Record<ResourceId, number>>;
+  buildings: SavedBuilding[];
 }
 
 function isSavedBuildingV1Shape(b: unknown): boolean {
@@ -346,14 +387,25 @@ function everyRecordHauls(roster: unknown): boolean {
   return (roster as unknown[]).every((w) => typeof (w as SavedColonistV4).hauling === 'boolean');
 }
 
-/** The v4-and-later building record: positioned, buffered, and carrying a
+/** The v4-and-v5 building record: positioned, buffered, and carrying a
  * relocation countdown. Shared by both guards rather than repeated, so the two
- * cannot drift about what a current building record is. */
+ * cannot drift about what a legacy building record is. */
 function isSavedBuildingV4Shape(b: unknown): boolean {
   return (
     hasSavedPosition(b) &&
-    isBufferShape((b as SavedBuilding).buffer) &&
-    Number.isFinite((b as SavedBuilding).relocatingTicks)
+    isBufferShape((b as SavedBuildingV4).buffer) &&
+    Number.isFinite((b as SavedBuildingV4).relocatingTicks)
+  );
+}
+
+/** The v6 building record: a v4 one plus the two maps v6 adds, each validated
+ * by the same buffer-shape check `buffer` goes through — one rule for "a map
+ * of non-negative safe-integer amounts", never a second copy per field. */
+function isSavedBuildingV6Shape(b: unknown): boolean {
+  return (
+    isSavedBuildingV4Shape(b) &&
+    isBufferShape((b as SavedBuilding).inputBuffer) &&
+    isBufferShape((b as SavedBuilding).stored)
   );
 }
 
@@ -382,20 +434,40 @@ export function isSaveGameV4(data: unknown): data is SaveGameV4 {
 }
 
 /**
- * The current structural guard. Same building rules as v4; the roster moves to
- * `colonists` and carries the three fields v5 requires, and `lastBirthTick`
- * gets exactly the treatment `lastRecruitTick` gets (finite here, safe-integer
- * and not-ahead-of-`tick` in isLoadableSave, which can see the whole save).
+ * What v5 and v6 share: the `colonists` roster carrying the three fields v5
+ * requires, and `lastBirthTick` getting exactly the treatment `lastRecruitTick`
+ * gets (finite here, safe-integer and not-ahead-of-`tick` in isLoadableSave,
+ * which can see the whole save).
+ *
+ * The version and the building record arrive as PARAMETERS because they are
+ * the only two things v6 changed. Written once rather than mirrored: a v5 guard
+ * and a near-copy v6 guard would be one edit away from disagreeing about what a
+ * roster is, and the v4->v5 rename is already on record as the failure mode
+ * (`isValidSaveArrays`' own comment) of a guard that copied its predecessor.
  */
-export function isSaveGameV5(data: unknown): data is SaveGameV5 {
-  if (typeof data !== 'object' || data === null) return false;
-  const save = data as Record<string, unknown>;
+function isColonistRosterSave(
+  save: Record<string, unknown>, version: number, isBuilding: (b: unknown) => boolean,
+): boolean {
   return (
-    save.version === 5 &&
+    save.version === version &&
     isCommonSaveShape(save, 'colonists', isSavedColonistShape) &&
     Number.isFinite(save.lastBirthTick) &&
     isMapShape(save.map) &&
-    (save.buildings as unknown[]).every(isSavedBuildingV4Shape) &&
+    (save.buildings as unknown[]).every(isBuilding) &&
     everyRecordHauls(save.colonists)
   );
+}
+
+/** The v5 structural guard — frozen, and still live: it is what the v5->v6
+ * migration's input is validated against. */
+export function isSaveGameV5(data: unknown): data is SaveGameV5 {
+  if (typeof data !== 'object' || data === null) return false;
+  return isColonistRosterSave(data as Record<string, unknown>, 5, isSavedBuildingV4Shape);
+}
+
+/** The current structural guard: v5's roster rules, with every building
+ * carrying an input buffer and a stored map. */
+export function isSaveGameV6(data: unknown): data is SaveGameV6 {
+  if (typeof data !== 'object' || data === null) return false;
+  return isColonistRosterSave(data as Record<string, unknown>, 6, isSavedBuildingV6Shape);
 }

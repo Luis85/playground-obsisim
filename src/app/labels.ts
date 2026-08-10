@@ -9,6 +9,7 @@ export const BUILDING_STATE_LABELS: Record<BuildingState, string> = {
   outputFull: 'Output full',
   relocating: 'Relocating',
   housing: 'Housing',
+  storing: 'Storing',
 };
 
 /** "10 Wood, 5 Planks" — shared by the construct table and the build palette. */
@@ -30,15 +31,22 @@ export function downtimeLabel(relocatingTicks: number): string {
   return relocatingTicks > 0 ? `${relocatingTicks}t` : '—';
 }
 
-/** "1 Wheat → 1 Flour (3wt)" for a producer, "Shelters 4" for a def with no
- * recipe — the Construct table's Recipe column. Extracted for the same reason
- * downtimeLabel is: presentation lives in labels.ts, not the table's
- * `<template>`, and a plain function sidesteps narrowing a dynamically
- * indexed `BUILDINGS[id]` access inside the template itself. */
+/** "1 Wheat → 1 Flour (3wt)" for a producer, "Shelters 4" for a house, "Stores
+ * 60" for a storehouse — the Construct table's Recipe column, naming all
+ * three roles a def can have. A def with no recipe used to default straight
+ * to "Shelters", which read the storehouse as "Shelters 0" at exactly the
+ * moment a player is deciding what to build; `storage` (0 for everything that
+ * is not a store) is what tells the two apart, the same way `recipe` already
+ * decides the first branch. Extracted for the same reason downtimeLabel is:
+ * presentation lives in labels.ts, not the table's `<template>`, and a plain
+ * function sidesteps narrowing a dynamically indexed `BUILDINGS[id]` access
+ * inside the template itself. */
 export function recipeLabel(def: BuildingDef): string {
-  if (def.recipe === null) return `Shelters ${def.beds}`;
-  const { inputs, outputs, ticksPerBatch } = def.recipe;
-  return `${costLabel(inputs) || '—'} → ${costLabel(outputs)} (${ticksPerBatch}wt)`;
+  if (def.recipe !== null) {
+    const { inputs, outputs, ticksPerBatch } = def.recipe;
+    return `${costLabel(inputs) || '—'} → ${costLabel(outputs)} (${ticksPerBatch}wt)`;
+  }
+  return def.storage > 0 ? `Stores ${def.storage}` : `Shelters ${def.beds}`;
 }
 
 /** Keyed by the LifeStage union for exactly the reason BUILDING_STATE_LABELS is
@@ -76,6 +84,19 @@ export function commuteLabel(homeId: number | null, tiles: number, factor: numbe
   const pct = `${(factor * 100).toFixed(0)}%`;
   if (homeId === null) return `Homeless · ${pct}`;
   return `#${homeId} · ${tiles.toFixed(1)} tiles · ${pct}`;
+}
+
+/**
+ * "12" for a producer's buffered output, "41 / 60" for a storehouse's held
+ * goods against its capacity — the Buildings table's Waiting column serves
+ * both, the same way `batchLabel`'s Batch/Beds column already serves a
+ * producer and a house. Branches on `storage`, not on defId, for the same
+ * reason `batchLabel` branches on `beds`: `BuildingSnapshot` already carries
+ * the number that decides it, so a second def gaining storage needs no edit
+ * here.
+ */
+export function waitingLabel(storage: number, stored: number, buffered: number): string {
+  return storage > 0 ? `${stored} / ${storage}` : `${buffered}`;
 }
 
 /**

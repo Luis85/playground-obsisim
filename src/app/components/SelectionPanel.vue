@@ -24,6 +24,8 @@ const building = computed(
     <span>({{ building.col }}, {{ building.row }})</span>
     <span>{{ building.workers }}/{{ building.workerSlots }} workers — {{ BUILDING_STATE_LABELS[building.state] }}</span>
     <span data-test="selection-waiting">Waiting: {{ building.buffered }}</span>
+    <span data-test="selection-input">In: {{ building.inputBuffered }}</span>
+    <span v-if="building.storage > 0" data-test="selection-storage">Stored: {{ building.stored }} / {{ building.storage }}</span>
     <span v-if="building.relocatingTicks > 0" data-test="selection-relocating">Relocating: {{ building.relocatingTicks }}t left</span>
     <button data-test="selection-move" @click="emit('move')">Move</button>
     <TwoStepButton label="Demolish" confirm-label="Confirm demolish?" data-test="selection-demolish" @confirm="emit('demolish')" />

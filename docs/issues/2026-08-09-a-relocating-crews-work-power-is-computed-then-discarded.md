@@ -1,13 +1,15 @@
 ---
 id: OBS-6-08
 title: A relocating crew's work power is computed and discarded on the engine side, and reaches zero a different way on the snapshot side
-status: Open
+status: Done
 severity: minor
 area: engine
 increment: 6
 created: 2026-08-09
+resolved: 2026-08-09
 source: increment-6 OBS-6-06 fix pass (`4a338ce`) — noticed while making the snapshot's relocating-crew zero explicit and measured; left standing because the engine already reaches the correct answer, just not through anything the snapshot's fix could reuse
 affects:
+  - src/shared/placement.ts
   - src/engine/systems/production-system.ts
   - src/engine/snapshot-builder.ts
   - tests/engine/systems/snapshot-system.test.ts
@@ -141,6 +143,40 @@ is a bigger change than this finding justifies on its own, and touches the
 same `ColonistFacts`/`buildEntitySections` boundary `OBS-6-06` already spent a
 resolution pass on this branch. Left standing rather than folded into that
 work.
+
+## Resolution: fixed in increment 7, task 8 (`effa639`)
+
+Both halves of the suggested fix below were taken, and one step further than
+the "smallest honest version" it offered — the duplication is gone rather than
+merely made to *read* alike.
+
+`src/shared/placement.ts` now owns the boundary outright:
+
+- `isRelocating(ticksLeft)` is THE `> 0` comparison. Every reader goes through
+  it — `ProductionSystem`'s own skip, `buildingState`, the shelter lists in
+  `CommandSystem` and `PopulationSystem`, `needOf`'s supply filter, and the
+  store-site list increment 7 added (a relocating storehouse stores nothing).
+  That last one is why this was fixed here rather than left standing: it would
+  have been a *third* independently-written copy of the same comparison.
+- `relocatingIdsOf(buildings)` is THE derivation of a relocating crew's zero
+  work power, built on `isRelocating`. `ProductionSystem` derives it from its
+  own building rows before `sumWorkPower` and passes it in, so a relocating
+  worker's contribution is never computed; the building loop then skips on the
+  same set rather than on a second `relocation.ticksLeft > 0`. `snapshot-builder.ts`
+  reads the same function in place of its private `relocatingBuildingIds`.
+
+Re-running this note's own mutation table, as it asked:
+
+| mutation | result |
+| --- | --- |
+| the two independent `> 0` filters, moved one at a time | **now inexpressible** — there is one boundary left to move |
+| `isRelocating`'s `> 0` -> `> 1` (the single boundary) | 7 tests fail across 4 files, on BOTH sides at once: `SnapshotSystem`'s two work-power cases, `CommandSystem`'s downtime case, and the homing pair. That the engine and the snapshot now redden together is the signal the two were genuinely unified rather than relocated |
+| `sumWorkPower`'s new `relocating.has(job.buildingId)` skip, removed | **nothing fails**, which is the honest result and was predicted here: the building loop's `continue` still discards the value, so removing the compute-then-discard is a code-shape change with no observable behaviour. The behaviour is pinned by the row above |
+
+The fuller fix this note gestured at — the engine publishing `deliveredWorkPower`
+as a per-worker fact for the snapshot to read rather than recompute — was still
+not taken, and is still not needed: with one exported derivation there is no
+longer a second boundary for a future edit to move independently.
 
 ## Suggested fix
 

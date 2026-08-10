@@ -15,9 +15,9 @@ const hasProducer = (res: string) =>
   BUILDING_IDS.some((b) => (BUILDINGS[b].recipe?.outputs[res as ResourceId] ?? 0) > 0);
 
 describe('content catalog', () => {
-  it('has 7 resources and 8 buildings', () => {
+  it('has 7 resources and 9 buildings', () => {
     expect(RESOURCE_IDS).toHaveLength(7);
-    expect(BUILDING_IDS).toHaveLength(8);
+    expect(BUILDING_IDS).toHaveLength(9);
   });
 
   describe.each(BUILDING_IDS)('%s', (id) => {
@@ -77,14 +77,32 @@ describe('content catalog', () => {
     expect(colonistEfficiency(100)).toBeCloseTo(0.2);
   });
 
-  it('every building def has exactly one of a recipe or beds', () => {
-    // The rule that keeps `recipe: RecipeDef | null` honest: a def with neither
-    // does nothing at all, and a def with both is two mechanics in one entry.
+  it('every building def fills exactly one role: produces, shelters, or stores', () => {
+    // Increment 6 pinned "exactly one of a recipe or beds". This is that same
+    // rule generalised, not replaced, to a third role: a def with none does
+    // nothing at all, and a def with two is two mechanics in one entry. If it
+    // ever needs a fourth arm, that is the moment to ask whether roles want to
+    // be data rather than three fields.
     for (const def of Object.values(BUILDINGS)) {
-      const produces = def.recipe !== null;
-      const shelters = def.beds > 0;
-      expect(produces !== shelters, `${def.id} must produce or shelter, not neither or both`).toBe(true);
+      const roles = [def.recipe !== null, def.beds > 0, def.storage > 0].filter(Boolean).length;
+      expect(roles, `${def.id} fills ${roles} roles`).toBe(1);
     }
+  });
+
+  it('the storehouse stores and does nothing else', () => {
+    expect(BUILDINGS.storehouse.storage).toBe(BALANCE.storehouseCapacity);
+    expect(BUILDINGS.storehouse.workerSlots).toBe(0); // a shed, not a job
+    expect(BUILDINGS.storehouse.recipe).toBeNull();
+    expect(BUILDINGS.storehouse.beds).toBe(0);
+  });
+
+  it('minSupplyUnits is small enough that a short trip is still worth it', () => {
+    // Nothing spends this constant yet — HaulSystem's supply leg is Task 6's.
+    // Written and tested now anyway, per this increment's suppression policy:
+    // an exported symbol with no caller yet gets a test, not a lint escape.
+    // Value from spec §4: low enough a small colony is never locked out of
+    // supply, high enough a hauler is never sent thirteen tiles for one unit.
+    expect(BALANCE.minSupplyUnits).toBe(2);
   });
 
   it('every edible has a meal weight, and nothing else does', () => {

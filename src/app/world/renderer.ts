@@ -1,14 +1,14 @@
-import {
-  Actor, BaseAlign, Color, DisplayMode, Engine, Font,
-  Rectangle, Text, TextAlign, TileMap, vec, type Vector,
-} from 'excalibur';
+import { Actor, Color, DisplayMode, Engine, TileMap, vec, type Vector } from 'excalibur';
 import type { Snapshot } from '../../shared/snapshot';
 import type { GhostPreview, WorldRendererFactory } from './renderer-key';
 import {
   layoutWorld, pickBuildingAt, TILE,
   type PlacedBuilding, type PlacedColonist, type WorldLayout, type WorldPick,
 } from './layout';
-import { BUILDING_SIZE, COLONIST_RADIUS, GraphicCache, MARK_RADIUS } from './graphics-cache';
+import { COLONIST_RADIUS, GraphicCache, MARK_RADIUS } from './graphics-cache';
+import {
+  campTent, groundTints, progressGauge, satelliteDot, selectionRing, storeGauge, type Gauge,
+} from './glyphs';
 import { efficiencyBucket, resolveWorldTheme, type WorldTheme } from './theme';
 
 // The Excalibur end of the renderer seam: the only module that imports
@@ -34,13 +34,11 @@ const DEFAULT_TICK_MS = 500;
 // for an effectively infinite pace.
 const MIN_TICK_MS = 50;
 const MAX_TICK_MS = 1000;
-const BAR_WIDTH = TILE * 0.8;
-const BAR_HEIGHT = 5;
 
 // Draw order, back to front: ground tilemap (default z 0), building tiles and
-// the camp tent (z 1), progress bars and the selection ring (z 2), colonists
+// the camp tent (z 1), the two gauges and the selection ring (z 2), colonists
 // (z 3), the placement ghost on top of everything (z 4).
-interface BuildingBundle { root: Actor; bar: Actor; track: Actor; }
+interface BuildingBundle { root: Actor; batch: Gauge; store: Gauge; }
 // The three satellite marks hang off three sides of the dot — see
 // spawnColonist for the geometry that keeps them apart.
 interface ColonistBundle { actor: Actor; target: Vector; load: Actor; stage: Actor; homeless: Actor; }
@@ -162,11 +160,7 @@ class WorldScene {
   /** Lazily (re)creates the ring actor, mirroring the ghost/building caches. */
   private ensureSelectionRing(): Actor {
     if (this.selectionRing === null || this.selectionRing.isKilled()) {
-      this.selectionRing = new Actor({ z: 2 });
-      this.selectionRing.graphics.use(new Rectangle({
-        width: TILE, height: TILE, color: Color.Transparent,
-        strokeColor: Color.fromHex(this.theme.accent), lineWidth: 3,
-      }));
+      this.selectionRing = selectionRing(this.theme);
       this.engine.currentScene.add(this.selectionRing);
     }
     return this.selectionRing;
@@ -205,10 +199,7 @@ class WorldScene {
     this.groundKey = key;
     this.ground?.kill();
     this.ground = new TileMap({ tileWidth: TILE, tileHeight: TILE, columns: layout.cols, rows: layout.rows });
-    const tints: Rectangle[] = [];
-    for (const hex of this.theme.ground) {
-      tints.push(new Rectangle({ width: TILE, height: TILE, color: Color.fromHex(hex) }));
-    }
+    const tints = groundTints(this.theme);
     for (const tile of this.ground.tiles) {
       tile.addGraphic(tints[(tile.x + tile.y) % 2]);
     }
@@ -218,11 +209,7 @@ class WorldScene {
   /** A tent marks the idle camp as a place; it never moves. */
   private syncCamp(layout: WorldLayout): void {
     if (this.camp) return;
-    this.camp = new Actor({ pos: vec(layout.camp.x * TILE, layout.camp.y * TILE), z: 1 });
-    this.camp.graphics.use(new Text({
-      text: '⛺',
-      font: new Font({ family: 'sans-serif', size: 30, textAlign: TextAlign.Center, baseAlign: BaseAlign.Middle }),
-    }));
+    this.camp = campTent(layout.camp.x, layout.camp.y);
     this.engine.currentScene.add(this.camp);
   }
 
@@ -231,26 +218,21 @@ class WorldScene {
     bundle.root.pos = vec((b.col + 0.5) * TILE, (b.row + 0.5) * TILE); // moves snap to the new tile
     // graphics are cached per (def, state): re-using the current one is trivial
     bundle.root.graphics.use(this.cache.building(b));
-    bundle.track.graphics.isVisible = b.batchActive;
-    bundle.bar.graphics.isVisible = b.batchActive;
-    bundle.bar.scale = vec(Math.max(b.progressPct / 100, 0.001), 1);
+    bundle.batch.set(b.batchActive, b.progressPct / 100);
+    // `storage` is 0 for everything that is not a store, so it is both the
+    // denominator and the test for whether there is a gauge to draw at all.
+    bundle.store.set(b.storage > 0, b.stored / Math.max(b.storage, 1));
   }
 
   private spawnBuilding(b: PlacedBuilding): BuildingBundle {
     const root = new Actor({ pos: vec((b.col + 0.5) * TILE, (b.row + 0.5) * TILE), z: 1 });
     root.graphics.use(this.cache.building(b));
-    // batch progress: a dark track with a left-anchored fill bar on top,
-    // the fill's x-scale being the percent (same z — insertion order wins)
-    const barShape = {
-      pos: vec(-BAR_WIDTH / 2, BUILDING_SIZE / 2 - BAR_HEIGHT),
-      anchor: vec(0, 0.5), width: BAR_WIDTH, height: BAR_HEIGHT, z: 2,
-    };
-    const track = new Actor({ ...barShape, color: new Color(15, 18, 15, 0.55) });
-    const bar = new Actor({ ...barShape, color: Color.fromHex(this.theme.progressFill) });
-    root.addChild(track);
-    root.addChild(bar);
+    const bundle = { root, batch: progressGauge(this.theme), store: storeGauge(this.theme) };
+    // The store ring goes on first so the batch bar is never hidden behind it.
+    for (const part of [bundle.store.track, bundle.store.fill, bundle.batch.track, bundle.batch.fill]) {
+      root.addChild(part);
+    }
     this.engine.currentScene.add(root);
-    const bundle = { root, bar, track };
     this.buildings.set(b.id, bundle);
     return bundle;
   }
@@ -259,8 +241,14 @@ class WorldScene {
     const target = vec(w.x * TILE, w.y * TILE);
     const bundle = this.colonists.get(w.id) ?? this.spawnColonist(w.id, target);
     bundle.actor.graphics.use(this.cache.colonist(efficiencyBucket(w.efficiency), w.tooled));
-    // A carrying hauler reads as "loaded" at a glance, which is what makes the
-    // flow direction legible: dots going out are empty, dots coming back are not.
+    // A carrying hauler reads as "loaded" at a glance, and its hue says which
+    // WAY the goods are moving: out of a building, or in from a store. Read
+    // off `carryingOut` (the snapshot's `haulPickedUp`) and never off the job
+    // kind, which is frozen at dispatch and describes the errand, not the
+    // cargo — a supply trip carrying collected output home would be drawn
+    // backwards (spec §2.10). Re-applied per sync, not just revealed, because
+    // one hauler carries both ways within a single round trip.
+    bundle.load.graphics.use(this.cache.mark(w.carryingOut ? this.theme.carriedLoad : this.theme.carriedInput));
     bundle.load.graphics.visible = w.carrying;
     // Adults wear no stage mark: they are the baseline the other two are read
     // against, and a mark on every dot would be noise rather than information.
@@ -282,7 +270,9 @@ class WorldScene {
     // which two of them would touch — so a tooled elder carrying a load with
     // nowhere to live still reads as four separate facts.
     const orbit = COLONIST_RADIUS + MARK_RADIUS;
-    const load = this.satellite(actor, vec(0, -orbit), this.theme.carriedLoad);
+    // The load mark carries no colour yet: upsertColonist supplies the hue for
+    // the direction the goods are moving, and an empty hauler never reveals it.
+    const load = this.satellite(actor, vec(0, -orbit), null);
     // The stage mark carries no colour yet: upsertColonist supplies the band's
     // own hue, and an adult never reveals it at all.
     const stage = this.satellite(actor, vec(orbit, 0), null);
@@ -292,13 +282,9 @@ class WorldScene {
     return bundle;
   }
 
-  /** One hidden satellite dot pinned to a colonist. A fixed-hue mark takes its
-   * graphic here once; a mark whose hue varies passes null and gets it per
-   * sync. */
+  /** A satellite dot from `glyphs`, parented to the colonist it marks. */
   private satellite(parent: Actor, offset: Vector, color: string | null): Actor {
-    const dot = new Actor({ pos: offset, z: 3 });
-    if (color !== null) dot.graphics.use(this.cache.mark(color));
-    dot.graphics.visible = false;
+    const dot = satelliteDot(offset, color === null ? null : this.cache.mark(color));
     parent.addChild(dot);
     return dot;
   }

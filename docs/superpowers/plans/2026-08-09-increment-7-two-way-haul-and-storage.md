@@ -961,22 +961,13 @@ Conservation (§2.7) plus OBS-6-08 (§2.12); OBS-5-03 is settled without code (S
 
 - [ ] **Step 1: Move the handlers, green suite, commit that alone.** A move and a behaviour change in one commit is two mistakes waiting to be attributed to each other.
 
-  **Then read what you moved, rather than assuming a verbatim move is finished.** `handleMoveBuilding` retargets an outbound hauler with `haulTicks(to.col, to.row, BALANCE.haulTilesPerTick)` — camp-relative, and correct only while the camp was the only origin a trip could start from. Task 6 dispatches from wherever the hauler is standing, so one that started its leg at a remote depot now gets charged a camp-to-target walk it is not walking, and the renderer derives the dot's position from that same `legTicks`. That is OBS-5-01 exactly — a leg length disagreeing with the leg the sim is running — reintroduced by a task that only moved code:
+  **~~Then read what you moved…~~ — ALREADY DONE, in Task 6's third fix wave (commit `30d5fce`).** This step used to carry the `handleMoveBuilding` correction below: the retarget was camp-relative (`haulTicks(to.col, to.row, …)`), correct only while the camp was the only origin a trip could begin from, and it left `legFrom*`/`legTo*` pointing at the building's old tile. Two independent reviewers flagged it as live-broken once Task 6 started dispatching from wherever a hauler stands, so it was fixed there rather than left violating an invariant Task 6 itself created. It now reads `startLeg(trip, 'outbound', legPositionOf(trip), to)`, and `tests/engine/systems/command-system.test.ts`'s *"a move retargets the haulers already walking"* was retuned from (5,1) to (5,5) because its old asserted numbers **encoded the camp-relative charge** — it had pinned the bug, not merely missed it.
 
-```ts
-// Resolve the hauler's live base and measure from it, not from the camp.
-// From where the hauler IS, not where its leg began. Measuring from the old
-// origin restarts the journey: the dot jumps backward and the walk already
-// covered is charged a second time. The cancellation rule in Task 6 already
-// derives the current position; reuse it, freeze THAT as the new leg origin,
-// and price only the remaining walk.
-const at = positionAlong(trip);                 // legFrom + (legTo - legFrom) * legProgress
-trip.legFromCol = at.col; trip.legFromRow = at.row;
-trip.legToCol = to.col;   trip.legToRow = to.row;
-const ticks = haulTicksBetween(at, to, BALANCE.haulTilesPerTick);
-```
+  **What is left for this step is the move alone.** Do not re-derive the fix; do not "restore" the camp-relative call. Verify after moving that the retarget still reads from `legPositionOf`, and that the existing test still reddens when you revert it.
 
-  The test needs a fixture where the two figures **differ** — a depot in the far corner and a target moved near the camp — or it passes against the camp-relative version it exists to rule out.
+  **Watch for this the moment you move code, though — it is why the fix landed in `components.ts` and not where it looks like it belongs.** `src/engine/systems/command-handlers.ts` and `src/engine/systems/haul-dispatch.ts` **both export `BuildingRow` and `WorkerRow`, under identical names with different shapes.** Fallow reports them as `duplicate_exports` the moment an import edge joins the two modules into one API surface, which fails `check:quality` with `deadCodeIssues: 0 -> 2` — and a baseline may not be loosened, nor an `ignoreExports` entry added. Task 6 dodged it by putting `startLeg` on `HaulTrip` instead of importing it.
+
+  **You cannot dodge it.** Step 2 requires `handleUnassignHauler` and `standDown` to bank through `nearestSiteWithRoom(…, heldAt, amount)` with the **reservation-aware** `heldAt`, and that `heldAt` comes from `haul-dispatch.ts`'s `Claims` — so this task is the first that genuinely needs `command-handlers.ts → haul-dispatch.ts`. **Rename `haul-dispatch.ts`'s pair to `HaulBuildingRow`/`HaulWorkerRow` as part of this step's restructure commit**, before adding the edge, so the collision is resolved rather than routed around a second time.
 
 - [ ] **Step 2: Demolition, three rules with one test each**
 
@@ -991,6 +982,34 @@ it('demolishing a producer loses both its buffers, and says so', async () => {
   // OBS-4-07's decision, extended to the input buffer for the same reason:
   // neither is in the ledger, and a building left full of goods should be
   // expensive to bulldoze.
+  //
+  // "AND SAYS SO" IS HALF THE TEST. handleDemolishBuilding computes its loss
+  // notice from `found.buffer.amounts` alone and CommandSystem never queries
+  // InputBuffer, so a mill holding only delivered wheat currently reports that
+  // its cost was refunded while silently deleting the wheat. Assert the notice
+  // TEXT names both losses, or this passes with the input buffer still unread.
+});
+
+it('a hauler fetching for a building demolished this tick does not set off', async () => {
+  // THE SAME RULE TASK 5 ALREADY ESTABLISHED FOR STORE SITES, unapplied to a
+  // second lookup — CommandSystem runs before HaulSystem and entity removal is
+  // deferred, so `ctx.byId` still answers for a demolished building.
+  //
+  // handleDemolishBuilding cancels only `phase === 'outbound'` trips, so a
+  // FETCHING hauler bound for that building survives the command; fetchArrival's
+  // `ctx.byId.get(trip.targetId)` then returns the stale row, the hauler passes
+  // its recheck, `takeAt`s the goods, and walks a full outbound leg to a
+  // building that is already gone.
+  //
+  // Conservation HOLDS — buildingArrival's `row === undefined && amount > 0`
+  // branch turns it for home — so this is wasted work, not lost goods. Fix it
+  // anyway, because fetchArrival's own doc comment PROMISES "either recheck
+  // failing is a clean cancel: no load, no disposal, no remainder", and a false
+  // guarantee beside a recheck is what the next person builds on.
+  //
+  // Filter `pending.demolished` from the target lookup. Assert the hauler is
+  // idle and the source's stock UNTOUCHED — asserting only on colonyTotal
+  // passes either way, since the round trip conserves.
 });
 
 it('a cancelled trip disposes of its load by whether a hauler is left to walk', async () => {
@@ -1255,6 +1274,8 @@ No-WebGL parity — the promise made in increment 3 §1.1 and kept ever since (�
 
 - [ ] **Step 1: Extract the glyph drawing first.** `renderer.ts` is at 445 of 500 with nothing baselined and this task adds a storehouse glyph, a fill ring and a carrying-in marker. Extract, confirm `npm run smoke:world` is unchanged, commit that alone.
 - [ ] **Step 2:** Storehouse glyph with a fill ring; `storing` and `waitingForInput` state colours; a hauler carrying **in** drawn distinguishably from one carrying **out**, so flow direction reads at a glance. **Read `haulPickedUp`, not `haulKind`** — the job kind is frozen at dispatch and stops describing the cargo exactly when §2.5's round trip works: a `supply` trip carrying collected output home would be drawn backwards, and that is the headline case in acceptance criterion 2. Also draw the `fetching` phase — and note it needs no per-phase geometry at all: every leg freezes `legFrom` and `legTo` (Task 6), so one interpolation over `legProgress` places a dot in any phase. That is strictly less code than the `CAMP_ANCHOR` special-casing it replaces.
+
+  **Two comments in `src/app/world/layout.ts` are already false and must go with the code they describe.** `:266-269` claims "the engine DOES retarget an outbound trip's ticks on a move, so that endpoint and the leg total the snapshot publishes always agree" — untrue since Task 6's third fix wave, which measures a retargeted leg from the hauler's interpolated position while `haulSpot` still draws it from `CAMP_ANCHOR`. And `:274-278` holds a **third** copy of the leg interpolation, in pixel space; `legPositionOf`'s own doc comment in `src/shared/haul.ts` reads as though the duplication were closed, so correct that comment too once this step deletes the pixel-space copy. Deleting code and leaving its justification standing is how the next reader inherits a rule that stopped being true two tasks ago.
 - [ ] **Step 3:** A legend entry for each of the three. The legend explains every encoding — true since increment 2, and this increment is not the exception.
 - [ ] **Step 4: Smoke checks, one change per fixture phase.** A supply leg: a dot leaves a site **carrying**, reaches a building, returns. This depends on Task 10 Step 3 having published both leg endpoints — without them `haulSpot` draws every leg to and from the camp anchor, and a depot phase would look identical to a camp one, which is the kind of check that stays green with the feature absent. Nearly every smoke check has the shape `!after.equals(before)`, so a phase that moves five things at once stays true for reasons unrelated to its name (OBS-4-04). Mutation-test by disabling the feature in `renderer.ts` or `layout.ts` and confirming that named check — and only it — goes red.
 - [ ] **Step 5:** `grep -cve '^\s*$' src/app/world/renderer.ts src/app/world/glyphs.ts` — both under 500. Gates, commit.

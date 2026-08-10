@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import type { ResourceId } from '../../src/shared/content-types';
 import type { TileRef } from '../../src/shared/placement';
 import {
   CAMP_SITE_ID, CAMP_TILE, claimableAt, compareHaulCandidates, compareSupplyCandidates,
   haulDistance, haulTicks, haulTicksBetween, nearestSite, nearestSiteWithRoom, nextHaulTarget,
-  nextSupplyTarget, sitesHolding,
-  type HaulCandidate, type HaulKind, type HaulPhase, type StoreSite, type SupplyCandidate,
+  nextSupplyTarget, siteDemandOf, sitesHolding,
+  type DemandSource, type HaulCandidate, type HaulKind, type HaulPhase, type StoreSite,
+  type SupplyCandidate,
 } from '../../src/shared/haul';
 
 function candidate(overrides: Partial<HaulCandidate> = {}): HaulCandidate {
@@ -344,5 +346,153 @@ describe('the starvation floor', () => {
     });
     expect(nextSupplyTarget([viaA, viaB], from)?.siteId).toBe(3);
     expect(nextSupplyTarget([viaB, viaA], from)?.siteId).toBe(3);
+  });
+});
+
+/**
+ * §2.2's demand law. Absence is zero: a site nobody is nearest to gets no entry
+ * at all, so every assertion below reads through this rather than through
+ * `.get()?.get()`, and "no demand" and "zero demand" cannot drift apart.
+ */
+function demandFor(
+  demand: Map<number, Map<ResourceId, number>>, siteId: number, resource: ResourceId,
+): number {
+  return demand.get(siteId)?.get(resource) ?? 0;
+}
+
+describe('siteDemandOf', () => {
+  const camp: StoreSite = { id: CAMP_SITE_ID, col: 2, row: 0, capacity: null };
+
+  it('a building pulls on the site nearest to it, and on no other', () => {
+    // DISCRIMINATING: the mill stands beside the DEPOT, twenty tiles from the
+    // camp. A resolution hard-wired to the camp — the tempting shortcut, since
+    // the camp is the one site guaranteed to exist — banks all twelve units at
+    // site 0 and leaves site 3 empty, which is this assertion inverted.
+    const depot: StoreSite = { id: 3, col: 20, row: 14, capacity: 60 };
+    const mill: DemandSource = { col: 21, row: 14, inputs: ['wheat'] };
+    const demand = siteDemandOf([camp, depot], [mill], 12, 12);
+    expect(demandFor(demand, 3, 'wheat')).toBe(12);
+    expect(demandFor(demand, CAMP_SITE_ID, 'wheat')).toBe(0);
+  });
+
+  it('two buildings nearest the same site add their demand', () => {
+    // 2 x 7, not 7: an implementation that assigns instead of summing (or takes
+    // a max) reports the target itself, so 14 and 7 must not coincide with any
+    // other number in the fixture.
+    const near: StoreSite = { id: 5, col: 2, row: 1, capacity: 60 };
+    const far: StoreSite = { id: 3, col: 20, row: 14, capacity: 60 };
+    const mills: DemandSource[] = [
+      { col: 2, row: 2, inputs: ['wheat'] },
+      { col: 3, row: 1, inputs: ['wheat'] },
+    ];
+    const demand = siteDemandOf([near, far], mills, 7, 12);
+    expect(demandFor(demand, 5, 'wheat')).toBe(14);
+    expect(demandFor(demand, 3, 'wheat')).toBe(0);
+  });
+
+  it('a building equidistant from two sites pulls on the lower id', () => {
+    // The `closer` tie-break, inherited rather than reimplemented — so the
+    // answer must not depend on the order the sites arrive in.
+    const higher: StoreSite = { id: 9, col: 4, row: 0, capacity: 60 };
+    const lower: StoreSite = { id: 3, col: 0, row: 0, capacity: 60 };
+    const mill: DemandSource = { col: 2, row: 4, inputs: ['wheat'] }; // hypot(2, 4) from both
+    for (const sites of [[higher, lower], [lower, higher]]) {
+      const demand = siteDemandOf(sites, [mill], 5, 12);
+      expect(demandFor(demand, 3, 'wheat')).toBe(5);
+      expect(demandFor(demand, 9, 'wheat')).toBe(0);
+    }
+  });
+
+  it('a site nearest to nothing has no demand for anything', () => {
+    // The corner-chain depot in §4.3, and the case the push rule exists for.
+    const near: StoreSite = { id: 5, col: 2, row: 1, capacity: 60 };
+    const cornerDepot: StoreSite = { id: 8, col: 20, row: 14, capacity: 60 };
+    const mill: DemandSource = { col: 3, row: 1, inputs: ['wheat'] };
+    const demand = siteDemandOf([near, cornerDepot], [mill], 9, 12);
+    expect(demandFor(demand, 5, 'wheat')).toBe(9);
+    expect(demandFor(demand, 8, 'wheat')).toBe(0);
+    expect(demand.get(8)).toBeUndefined();
+  });
+
+  it('the camp is an ordinary site here', () => {
+    // A building beside the camp pulls on the camp, by the same nearest-site
+    // rule as everything else. The camp is special in the push rule (§2.4) and
+    // in being unbounded — never here.
+    const depot: StoreSite = { id: 7, col: 20, row: 14, capacity: 60 };
+    const mill: DemandSource = { col: 3, row: 0, inputs: ['wheat'] };
+    const demand = siteDemandOf([camp, depot], [mill], 12, 12);
+    expect(demandFor(demand, CAMP_SITE_ID, 'wheat')).toBe(12);
+    expect(demandFor(demand, 7, 'wheat')).toBe(0);
+  });
+
+  it('demand is per-resource', () => {
+    // Two inputs on ONE consumer, so a site's demand cannot be a single number
+    // shared across resources, and the second input cannot be dropped in favour
+    // of the first. `tools` is the workshop's OUTPUT: nobody demands it.
+    const depot: StoreSite = { id: 4, col: 2, row: 1, capacity: 60 };
+    const far: StoreSite = { id: 8, col: 20, row: 14, capacity: 60 };
+    const workshop: DemandSource = { col: 2, row: 2, inputs: ['wheat', 'planks'] };
+    const demand = siteDemandOf([depot, far], [workshop], 11, 12);
+    expect(demandFor(demand, 4, 'wheat')).toBe(11);
+    expect(demandFor(demand, 4, 'planks')).toBe(11);
+    expect(demandFor(demand, 4, 'tools')).toBe(0);
+  });
+
+  it('a bounded site never demands more than it can hold above its floor', () => {
+    // FIVE mills nearest one 60-unit depot at a target of 12 would demand 60.
+    // Capped at capacity - reserveFreeSpace = 48. Without this the drain can
+    // never fire — collect does not consult demand at all, so the depot still
+    // reaches 60 of 60, and there `surplus = unclaimedAt - demand` is zero —
+    // and the free floor is unreachable by any rule.
+    //
+    // DISCRIMINATING: five sources, not two. At two the uncapped total is 24
+    // and the cap never binds, so the test would pass with the cap deleted.
+    const depot: StoreSite = { id: 6, col: 2, row: 1, capacity: 60 };
+    const far: StoreSite = { id: 9, col: 20, row: 14, capacity: 60 };
+    const mills: DemandSource[] = [
+      { col: 1, row: 1, inputs: ['wheat'] }, { col: 3, row: 1, inputs: ['wheat'] },
+      { col: 2, row: 2, inputs: ['wheat'] }, { col: 1, row: 2, inputs: ['wheat'] },
+      { col: 3, row: 2, inputs: ['wheat'] },
+    ];
+    const demand = siteDemandOf([depot, far], mills, 12, 12);
+    expect(demandFor(demand, 6, 'wheat')).toBe(48);
+  });
+
+  it('an over-subscribed cap is split proportionally and floored', () => {
+    // UNEQUAL shares on purpose: three wheat consumers to one flour consumer.
+    // Raw wheat 36, flour 12, total 48; cap 50 - 20 = 30. Proportional gives
+    // floor(36 * 30 / 48) = 22 and floor(12 * 30 / 48) = 7, total 29 — under
+    // the cap, which is the safe direction. Every wrong rule lands elsewhere:
+    // no cap 36/12, an equal split of the cap 15/15, first-takes-everything
+    // 30/0, and unfloored 22.5/7.5. An all-equal fixture could not separate
+    // "scale proportionally" from "divide the cap between the resources".
+    const depot: StoreSite = { id: 6, col: 2, row: 1, capacity: 50 };
+    const far: StoreSite = { id: 9, col: 20, row: 14, capacity: 60 };
+    const consumers: DemandSource[] = [
+      { col: 1, row: 1, inputs: ['wheat'] }, { col: 3, row: 1, inputs: ['wheat'] },
+      { col: 2, row: 2, inputs: ['wheat'] },
+      { col: 1, row: 2, inputs: ['flour'] },
+    ];
+    const demand = siteDemandOf([depot, far], consumers, 12, 20);
+    expect(demandFor(demand, 6, 'wheat')).toBe(22);
+    expect(demandFor(demand, 6, 'flour')).toBe(7);
+  });
+
+  it('the camp is never capped', () => {
+    // Unbounded capacity, so no floor to reserve and no cap to apply. The pair
+    // to the two tests above: with the null-capacity branch deleted the camp is
+    // clamped against a capacity it does not have, which reads as zero and
+    // silences the camp's demand entirely. ONE source with ONE input, so only
+    // the missing branch can move this number.
+    const mill: DemandSource = { col: 3, row: 0, inputs: ['wheat'] };
+    const demand = siteDemandOf([camp], [mill], 30, 12);
+    expect(demandFor(demand, CAMP_SITE_ID, 'wheat')).toBe(30);
+  });
+
+  it('demands nothing when there are no sites to demand it', () => {
+    // `nearestSite` returns null only for an empty list. Real callers always
+    // pass the camp, but the branch exists and would otherwise be unexercised.
+    const mill: DemandSource = { col: 3, row: 0, inputs: ['wheat'] };
+    expect(siteDemandOf([], [mill], 12, 12).size).toBe(0);
   });
 });

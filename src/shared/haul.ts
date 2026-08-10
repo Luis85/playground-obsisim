@@ -236,6 +236,93 @@ export function nearestSiteWithRoom(
   return best;
 }
 
+/**
+ * One building's pull on whatever site is nearest to it. `inputs` is the
+ * recipe's input ids — the engine resolves the catalog, because this module
+ * may not import it.
+ *
+ * THE ENGINE, NOT THIS FUNCTION, FILTERS THESE. A source is a building that is
+ * staffed and not relocating; both are engine conditions (`StaffedSet`,
+ * `Relocation`) and passing an already-filtered list is what keeps this law
+ * free of both.
+ */
+export interface DemandSource {
+  col: number;
+  row: number;
+  inputs: readonly ResourceId[];
+}
+
+/**
+ * Scale a site's demand down to what it may hold above its free floor, sharing
+ * the cap between resources in proportion to what each was asking for and
+ * flooring every share to an integer.
+ *
+ * Proportional-and-floored rather than first-come: the answer must not depend
+ * on the order the resources were inserted in, and under-allocating by a unit
+ * or two is the safe direction, since an unallocated unit is simply not
+ * demanded by anyone. A total of zero can never exceed a cap of at least zero,
+ * so the division below cannot be reached with a zero divisor.
+ */
+function capTotalDemand(atSite: Map<ResourceId, number>, cap: number): void {
+  let total = 0;
+  for (const units of atSite.values()) total += units;
+  if (total <= cap) return;
+  for (const [resource, units] of atSite) atSite.set(resource, Math.floor((units * cap) / total));
+}
+
+/**
+ * Per-site, per-resource demand: what each site needs, derived from the
+ * buildings it is the nearest live site to (§2.2). A site has no recipe, so it
+ * cannot be asked what it needs — this is the generalisation of `needOf` from
+ * a building to a place.
+ *
+ * `targetPerSource` and `reserveFreeSpace` arrive as arguments rather than as
+ * `BALANCE.siteStagingTarget` and `BALANCE.storehouseFreeFloor`, for the reason
+ * `haulTicksBetween` takes `tilesPerTick`: src/shared/ imports nothing outside
+ * itself.
+ *
+ * ABSENCE IS ZERO. A site nobody is nearest to gets no entry, which is exactly
+ * the corner depot §4.3 measures and exactly the case the push rule exists for.
+ *
+ * `reserveFreeSpace` IS THE DEMAND CAP, AND IT IS NOT OPTIONAL. A bounded
+ * site's TOTAL demand across every resource is capped at
+ * `capacity - reserveFreeSpace`. Without it, five staffed mills nearest one
+ * 60-unit depot demand 60; collect then fills the depot to 60 — collect does
+ * not consult demand at all, it just banks a producer's output at the nearest
+ * site with room — and there the site's surplus is `held - demand = 0`, so the
+ * drain can never fire and the free-space floor is unreachable by any rule.
+ * The depot silts up permanently, which is the §4.3 defect this increment
+ * exists to remove, arriving through the door demand cannot see.
+ *
+ * The camp is unbounded (`capacity === null`), keeps no floor, and is never
+ * capped. It is otherwise an ORDINARY site here: a building beside the camp
+ * pulls on the camp, and the camp is special only in the push rule (§2.4).
+ */
+export function siteDemandOf(
+  sites: readonly StoreSite[], sources: readonly DemandSource[],
+  targetPerSource: number, reserveFreeSpace: number,
+): Map<number, Map<ResourceId, number>> {
+  const demand = new Map<number, Map<ResourceId, number>>();
+  for (const source of sources) {
+    const site = nearestSite(source.col, source.row, sites);
+    if (site === null) continue;
+    let atSite = demand.get(site.id);
+    if (atSite === undefined) {
+      atSite = new Map<ResourceId, number>();
+      demand.set(site.id, atSite);
+    }
+    for (const resource of source.inputs) {
+      atSite.set(resource, (atSite.get(resource) ?? 0) + targetPerSource);
+    }
+  }
+  for (const site of sites) {
+    const atSite = demand.get(site.id);
+    if (atSite === undefined || site.capacity === null) continue;
+    capTotalDemand(atSite, Math.max(0, site.capacity - reserveFreeSpace));
+  }
+  return demand;
+}
+
 /** Every site holding unclaimed stock of some resource — the pool §2.6's
  * supply dispatch draws candidates from. `unclaimedAt` closes over the
  * resource, the same way `heldAt` closes over nothing but the site. */

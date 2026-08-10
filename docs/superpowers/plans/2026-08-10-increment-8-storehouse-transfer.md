@@ -29,6 +29,7 @@ One softer window worth knowing: between Tasks 4 and 6 the `'transfer'` member e
 - **No new component and no new system.** Nothing to add to `buildingComponents`/`colonistComponents` in `src/engine/spawn.ts`, nothing to append to `COMPONENT_TYPES` in `src/engine/world.ts`, nothing to insert into `ALL_SYSTEMS`. OBS-4-02's two-spawn-site trap does not apply this increment — if a task finds itself adding a component, stop and re-read §2.3, because the design says it does not need one.
 - **The save is not touched.** `LATEST_SAVE_VERSION` stays 6. No `MigrationStep`, no `SAVE_GUARDS` entry, no `SaveGameV7`. Trip state is not serialized (`buildSaveFromWorld` banks a mid-trip load into the camp and writes no trip), so a third `HaulKind` cannot reach a save file. **If any task finds itself editing `src/shared/save.ts`, it has misread the design** — raise it rather than bumping the version.
 - **Mutation-test every test:** break the feature, confirm the named test fails, restore. Fixture values must *discriminate* — if the wrong field holds the same value, the assertion proves nothing.
+- **Any quantity a dispatch spends must be tested with MORE HAULERS THAN ONE.** This increment's own spec shipped the same bug four times, in four different terms, and every one of them passes a single-hauler fixture: dispatch runs many haulers per tick while physical stock does not move until a hauler *arrives*, so a bound computed from `getAt`/`totalAt` is identical for every hauler that tick and gets spent as many times as there are idle haulers. The check, applied to any bound: **if ten idle haulers were dispatched on the same tick, would this have stopped the tenth?** Task 12 adds this to `docs/process/agent-workflow.md` as a fourth recurring failure mode, beside the three already there.
 - **Every clause of a compound boolean needs its own fixture.** This increment adds a clause to `remainderHome` and to `fetchArrival`'s cancel guard, and both sit inside conditions whose *other* clauses are already gated — the exact configuration where a whole-condition mutation reddens the gated path and looks like coverage while the new clause is untested. Increment 7's whole-branch review found ten defects of this one shape. Test each clause with a fixture where the other clauses are false.
 - **A mutation that makes a system THROW does not fail a test by default.** sim-ecs catches a system's exception and publishes it as a `SystemError` event, so the run completes and the assertion reads pre-crash state:
 
@@ -324,14 +325,28 @@ Confirm `src/shared/save.ts` is untouched. If the compiler asked for a save chan
 
   No signature change: `kind`, `phase`, `destSiteId` and `plannedAmount` are all
   on `HaulTrip`, and `heldAtOf` already takes `TripRow[]`.
-- **`movable` is capped by destination room as well as by deficit**, and the two
-  are different quantities: a deficit is demand for one resource, room is total
-  occupancy across every resource. A depot holding 56 wood of 60 capacity with a
-  12-wheat demand has a deficit of 12 and a room of 4. Sizing on the deficit
-  alone sends a full hauler into four units of space and `bankWithSpill` forwards
-  the excess to the camp — free transport past a hauler standing at the depot,
-  which is the one thing this increment's constraints forbid outright and which
-  would flatter the depot exactly where §4.2 measures it.
+- `Claims` gains a **second** lookup, `plannedOutAt(siteId): number` — the
+  resource-agnostic twin of `unclaimedAt`, summing `phase === 'fetching' && sourceSiteId === siteId → plannedAmount`
+  across every resource and every kind. Share one traversal with `unclaimedAt`.
+- **Read §2.4's opening rule before writing a single term of `movable`.** Every
+  term must be reservation-aware. Three drafts of that section shipped the same
+  bug in three different terms, each time because a neighbouring term *was*
+  reservation-aware and looked like it composed. It does not: a claim on one
+  quantity bounds that quantity and no other. The check to apply to any term:
+  **if ten idle haulers were dispatched on the same tick, would this term have
+  stopped the tenth?**
+
+  The three corrected terms, all of which look right and are not:
+
+  | term | wrong | right |
+  | --- | --- | --- |
+  | destination room | `capacity − totalAt(D)` | `capacity − heldAt(D)` |
+  | source surplus | `held(r) − demand(r)` | `unclaimedAt(S, r) − demand(r)` |
+  | drain size | "below the floor" as a bare trigger | `drainNeed(S)`, computed net of `plannedOutAt(S)` |
+
+  Note the middle row **removes** the separate `unclaimedAt` term from the
+  staging `min`: once surplus is defined through it, `surplus ≤ unclaimedAt`
+  always, so listing both is redundant and listing only the second is the bug.
 - `TransferCandidate { sourceSiteId, sourceCol, sourceRow, destSiteId, destCol, destRow, resource, movable, staging: boolean }`
 - `compareTransferCandidates(a, b, from)`: **staging before drain**, then `movable` descending, then whole hauler → source → destination route ascending, then source id, then destination id. Route measured from where the hauler stands, exactly as `supplyRouteDistance` does.
 - `transferCandidates(...)` builds both classes per §2.4.
@@ -395,6 +410,37 @@ it('a fetching transfer reserves destination room; a fetching supply does not', 
   // because the camp is unbounded nothing else in the suite would ever notice.
 });
 
+// ── The over-claim family. Every one of these dispatches SEVERAL haulers on one
+// ── tick against a quantity that does not move until a hauler arrives. A
+// ── single-hauler fixture passes against every bug below.
+
+it('two haulers staging from one source cannot exceed its surplus', () => {
+  // 20 wheat, demand 12, surplus 8, capacity 6. First takes 6, second must take
+  // 2 — NOT 6. Then assert the thing that actually matters: the source is left
+  // AT its demand and has NOT become a sink. A test that only checks the second
+  // load's size passes an implementation that is off by one in the other
+  // direction; assert the invariant, not just the arithmetic.
+});
+
+it('a source over-committed into deficit would reverse-transfer', () => {
+  // The consequence, as its own test: run the fixture above to completion and
+  // assert no transfer is ever dispatched BACK to the source. This is §2.2's
+  // termination property, and it is the reason the previous test exists.
+});
+
+it('concurrent drains stop once the floor is scheduled to be restored', () => {
+  // 60/60 depot, floor 12, capacity 6, THREE idle haulers. Exactly two drains
+  // dispatch and the third gets nothing. A two-hauler fixture cannot see this:
+  // the bug is that drainNeed never falls, so it needs a hauler that must be
+  // REFUSED.
+});
+
+it('a supply fetch from a depot counts toward its drain headroom', () => {
+  // plannedOutAt counts every fetching trip, not only transfers. Fixture: a
+  // supply hauler already fetching from a depot that is one unit below its
+  // floor; no drain should be dispatched, because the room is already coming.
+});
+
 it('candidate order does not depend on array order', () => {
   // Pass the same candidates shuffled; same winner. The guarantee every other
   // selection in this codebase commits to.
@@ -407,7 +453,16 @@ Watch the line budget — `haul-dispatch.ts` is at 273 and this is the largest s
 
 - [ ] **Step 3: Mutation-test**
 
-Each clause separately: remove the floor check; allow depot→depot drains; drop `inboundAt` from the deficit; swap staging/drain priority; lower `minTransferUnits` to 0; **drop the room term from `movable`**; **drop the fetching-transfer term from `heldAtOf`**; **remove the kind gate on that term**. The last three are the ones a whole-condition mutation would miss, because the deficit term and the returning-phase term both stay in place and keep the rest of the suite green.
+Each clause separately: remove the floor check; allow depot→depot drains; drop `inboundAt` from the deficit; swap staging/drain priority; lower `minTransferUnits` to 0.
+
+Then the **over-claim family**, which is where this task's real risk is. Each of these reverts one term to its physical-state form — the form that looks correct and passes every single-hauler test:
+
+- `roomAt`: `capacity − heldAt(D)` → `capacity − totalAt(D)`
+- `heldAtOf`: drop the fetching-transfer term; separately, remove its kind gate
+- `surplus`: `unclaimedAt(S, r) − demand(r)` → `held(r) − demand(r)`
+- `drainNeed`: drop `plannedOutAt(S)`; separately, restrict it to transfers only
+
+**None of these is caught by a whole-condition mutation**, because the neighbouring term survives and keeps the rest of the suite green — which is exactly what made all four ship in the spec. Each must redden its own multi-hauler fixture and nothing else.
 
 - [ ] **Step 4: Verify and commit**
 
@@ -699,6 +754,7 @@ If the advantage is still flat, record a second disagreement with §1 and descri
 
 **Files:**
 - Modify: `docs/issues/2026-08-10-the-farther-consumer-starves-outright.md` (OBS-7-01 → Done, **and correct the `waitingForInputTicks` claim** in its Suggested resolution — Task 1's brief depends on that correction and the next reader should not inherit the error), `docs/issues/2026-08-10-a-far-processor-is-capped-by-its-in-tray…` (OBS-7-02, per Task 11 Step 5), `docs/issues/…-a-with-without-depot-comparison…` (OBS-7-05, partial — the guard landed, the structural fix did not), `docs/requirements/Storehouse-to-Storehouse Transfer.md` (status, `finished`), `docs/requirements/Storehouses - a Second Place to Put Things.md` (the §1.1 reframing — a pipeline stage, not a second place to put things), `docs/README_PRODUCT_BACKLOG.md` if statuses roll up there
+- Modify: `docs/process/agent-workflow.md` — add the **multi-hauler over-claim** failure mode as a fourth entry beside the three under "Tests". It is the same shape as the other three (a fixture that cannot distinguish the bug from the fix) and it cost four review rounds on this increment's spec alone, so it belongs in the shared list rather than in one plan's constraints.
 - Create: any new issue Task 11 found
 
 - [ ] **Step 1: Close what closed, carry what did not**

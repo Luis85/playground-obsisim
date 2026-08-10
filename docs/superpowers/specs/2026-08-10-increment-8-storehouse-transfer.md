@@ -188,12 +188,19 @@ Concretely, per tick and from live components only:
   `BALANCE.siteStagingTarget` units.
 - Every other site's demand for that resource is 0 from that building.
 
-A site's **deficit** of a resource is `max(0, demand − held − inbound)`, where
-`inbound` is the new claim in §2.7. Its **surplus** is `max(0, held − demand)`.
+A site's **deficit** of a resource is `max(0, demand − held − inbound)` and its
+**surplus** is `max(0, held − outbound − demand)`, where `inbound` and `outbound`
+are the claims in §2.7 — the units already walking toward the site on a transfer,
+and the units already spoken for by haulers fetching from it. **Both are net of
+claims, and §2.4 explains what goes wrong when one of them is not.**
 
 **A site can never be both a source and a sink for the same resource**, because
-deficit and surplus are computed from one comparison of `held` against `demand`,
-and at most one of them is positive. This is the whole termination argument for
+deficit and surplus are computed from one comparison of the site's *claimed-net*
+holding against its demand, and at most one of them is positive. The claimed-net
+part is load-bearing rather than a refinement: compare physical `held` against
+demand and a site's surplus can be over-committed within a single tick until it
+lands below its own demand — a source that has just made itself a sink, which is
+this property failing rather than being approximated. This is the whole termination argument for
 the pull half, and it makes circles *inexpressible* rather than merely
 unattractive — which is what the backlog Feature asks for when it says "every
 ranking that makes a transfer attractive also makes the reverse transfer
@@ -248,14 +255,48 @@ writes no trip, so haulers restart idle on load and a third `HaulKind` needs
 
 ### 2.4 Which transfers are legal: pull, and exactly one push
 
+**Every term in a `movable` formula must be reservation-aware, and this rule is
+stated before the formulas because it is the one this spec kept getting wrong.**
+
+Dispatch runs many haulers within a single tick, and physical stock does not
+move until a hauler *arrives* — several legs later. So any term computed from raw
+`getAt`/`totalAt` is identical for every hauler dispatched in that tick, and the
+quantity it bounds is silently spent as many times as there are idle haulers.
+Three separate drafts of §2.4 shipped that bug in three different terms
+(destination room, source surplus, drain headroom), each time because a *neighbouring*
+term happened to be reservation-aware and looked like it composed. **It does not
+compose: a claim on one quantity bounds that quantity and no other.**
+
+The test to apply to any term added later: *if ten idle haulers were dispatched
+on the same tick, would this term have stopped the tenth?* If it is computed
+from physical state, it would not.
+
 Two candidate classes, in this priority order.
 
 **1. Staging (pull).** Source `S`, destination `D`, resource `r`, where
 `D.deficit(r) > 0` and `S.surplus(r) > 0` and `S ≠ D`.
 
 ```
-movable = min(haulerCapacity, D.deficit(r), S.surplus(r), unclaimedAt(S, r), roomAt(D))
+S.surplus(r) = max(0, unclaimedAt(S, r) − S.demand(r))     ← NOT held(r) − demand(r)
+movable      = min(haulerCapacity, D.deficit(r), S.surplus(r), roomAt(D))
 ```
+
+**Surplus is defined *through* `unclaimedAt`, not beside it.** Sizing it from
+physical `held` while listing `unclaimedAt` as a separate term in the `min` is
+the shape that fails: the two bound different quantities and neither constrains
+the other. A site holding 20 wheat against a demand of 12 has a surplus of 8. At
+capacity 6, the first hauler claims 6 and `unclaimedAt` drops to 14 — but surplus
+recomputed from `held` is *still 8*, so a second hauler claims 6 more. Twelve
+units leave against a surplus of 8, the source lands on 8 against a demand of 12,
+and it is now a **sink for the resource it was just a source of** — which is
+precisely the state §2.2 calls inexpressible and rests its whole termination
+argument on. Defining surplus through `unclaimedAt` gives the second hauler a
+surplus of 2 and a load of 2, and the source lands exactly on its demand.
+
+The redefinition also **removes** the separate `unclaimedAt` term, which is now
+redundant: `surplus ≤ unclaimedAt` always. One fewer term to remember, and the
+composition is correct by construction rather than by a fourth bound someone has
+to keep in step.
 
 Terminating for the reason in §2.2: once `D` holds its target its deficit is 0,
 and it cannot have become a source for `r` on the way there.
@@ -281,8 +322,35 @@ of among those it has no demand for (ties by catalog order, mirroring
 `fullestResource`).
 
 ```
-movable = min(haulerCapacity, S.surplus(r), unclaimedAt(S, r))
+occupancyAt(S) = totalAt(S) − plannedOutAt(S)        ← every resource, not one
+drainNeed(S)   = max(0, storehouseFreeFloor − (S.capacity − occupancyAt(S)))
+movable        = min(haulerCapacity, S.surplus(r), drainNeed(S))
 ```
+
+**`drainNeed` is both the trigger and the cap**, and it has to be, because
+occupancy does not fall until a fetching hauler *arrives*. Without it every idle
+hauler in the colony reads the same "below the floor" condition and dispatches
+independently: a full 60-unit depot with a 12-unit floor and ten haulers
+schedules **all 60 units** for removal instead of the 12 that restore its
+headroom — emptying the pipeline stage the whole feature exists to build, and
+then obliging staging to refill it. That is the goods-in-circles machine the
+backlog Feature warns about, arriving through the push door rather than the pull
+one. `unclaimedAt` does not prevent it: it stops two haulers claiming the *same*
+units, not ten haulers claiming *all* the units.
+
+With `plannedOutAt` folded in, the sequence self-limits: at 60/60 with a floor of
+12, `drainNeed` is 12, the first hauler takes 6, the second takes 6, and the
+third finds `drainNeed` at 0 and no candidate at all.
+
+**`plannedOutAt(siteId)` is the resource-agnostic twin of `unclaimedAt`** —
+headroom is measured across every resource, so a per-resource claim cannot bound
+it. §2.7 specifies it; the two share one traversal.
+
+**Inbound staging is deliberately not subtracted from `occupancyAt`.** A depot
+that is simultaneously below its floor and receiving staged goods is a placement
+problem, and having the drain chase inbound traffic couples the two rules in the
+one direction that could oscillate. The drain answers only for the removals it
+has itself scheduled.
 
 **No `roomAt` term here, and the absence is a consequence rather than an
 omission:** a drain's destination is always the camp, the camp is unbounded, and
@@ -455,6 +523,12 @@ is worth verifying rather than assuming — and one of them does not:
   deficit. `heldAt` is resource-agnostic and bounds *room*: do not overbook a
   capacity. Two concurrent transfers of *different* resources into one depot are
   invisible to each other under `inboundAt` and must not be under `heldAt`.
+
+  The same split exists on the outgoing side, and for the same reason:
+  `unclaimedAt` is per-resource and bounds *stock*, while `plannedOutAt` is
+  resource-agnostic and bounds *headroom*. **Four claims, four quantities, in two
+  mirrored pairs** — inbound/outbound × per-resource/whole-site. A term sized
+  against any one of them is bounded in that quantity alone.
 - **output** counts haulers `fetching` or `outbound` with `targetId === buildingId`.
   A transfer's `targetId` is `null`, so it never matches any building. Works
   unchanged **by accident of the null**, which is precisely why it needs an
@@ -463,20 +537,32 @@ is worth verifying rather than assuming — and one of them does not:
 - **input** counts supply trips against a building's in-tray room. A transfer
   targets no building. Works unchanged.
 
-**One new claim is required.** A site's deficit must subtract transfers already
-walking toward it, or every idle hauler in the colony transfers into the same
-deficit on the same tick — the identical failure `Claims.input` exists to
-prevent for buildings, and it takes the identical shape:
+**Two new claims are required.**
 
 ```ts
 inboundAt(siteId: number, resource: ResourceId): number
 // sum over trips: kind === 'transfer' && destSiteId === siteId && resource matches
 //   → plannedAmount + (phase === 'returning' ? amount : 0)
+
+plannedOutAt(siteId: number): number
+// sum over trips: phase === 'fetching' && sourceSiteId === siteId → plannedAmount
+//   ACROSS EVERY RESOURCE — this is `unclaimedAt` with the resource filter removed
 ```
 
-The two terms are disjoint by construction: `plannedAmount` is zeroed the moment
-`takeAt` returns a real figure, and `amount` is zero until then — the same
-disjointness `Claims.input` relies on.
+`inboundAt` exists because a site's deficit must subtract transfers already
+walking toward it, or every idle hauler in the colony transfers into the same
+deficit on the same tick — the identical failure `Claims.input` exists to prevent
+for buildings, and it takes the identical shape. Its two terms are disjoint by
+construction: `plannedAmount` is zeroed the moment `takeAt` returns a real figure,
+and `amount` is zero until then.
+
+`plannedOutAt` exists because **headroom is measured across every resource and
+`unclaimedAt` is per-resource**, so no per-resource claim can bound it. It is what
+makes §2.4's `drainNeed` fall as drains are scheduled instead of staying pinned at
+the value it had when the first hauler read it. It counts *all* fetching trips, not
+only transfers: a supply hauler fetching from a depot removes exactly as much
+occupancy as a transfer does, and a drain that ignored it would schedule removals
+for room that is already on its way to being freed.
 
 **The dispatch/arrival rule, applied to the new kind.** Every condition a
 dispatch rests on must be either *reserved* or *rechecked* on arrival. This was

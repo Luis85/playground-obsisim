@@ -1312,6 +1312,90 @@ describe('CommandSystem', () => {
     expect(systemErrors).toBe(0);
   });
 
+  it('a fetching hauler whose TARGET processor is demolished releases its source claim', async () => {
+    // The third face of §2.7's rule, missed by the other two: neither the
+    // outbound `targetId` clause nor the fetching `sourceSiteId` clause
+    // matches a hauler still WALKING TO FETCH whose destination processor is
+    // demolished while its source is a different, still-live site. Unlike the
+    // other two, this trip's own recheck (`fetchArrival`) resolves it cleanly
+    // eventually — NOTHING IS LOST. What is lost, for up to a whole leg, is
+    // the CLAIM: the trip stays 'fetching' with `sourceSiteId`/`plannedAmount`
+    // pointed at a live depot, so `unclaimedAt` keeps subtracting a
+    // reservation for a delivery that can never land — blocking every OTHER
+    // hauler, not just this one. The proof has to be that release, not merely
+    // "the hauler goes idle": a hand-rolled reset that moves `phase` without
+    // clearing `sourceSiteId`/`plannedAmount` would still pass a phase-only
+    // assertion, so this test ends by showing a SECOND hauler served from the
+    // freed stock, not just the first one's own fields.
+    const OTHER_MILL_TILE = { col: 4, row: 14 };
+    const OTHER_MILL_ID = 180;
+    // Equal to a homeless hauler's carry capacity ON PURPOSE — this case only
+    // exists when the source is FULLY claimed, so the depot's whole stock and
+    // the dispatched hauler's plannedAmount must coincide. Every other number
+    // here (both mill tiles, the depot tile) is the pairwise-distinct set the
+    // rest of this file already established.
+    const FULL_CLAIM_WHEAT = ONE_LOAD;
+
+    const { world, dispatch } = await setup(
+      withBuildings(
+        storeSpec(MILL_ID, MILL_TILE, 'mill'),
+        storeSpec(DEPOT_ID, DEPOT_TILE, 'storehouse'),
+        storeSpec(OTHER_MILL_ID, OTHER_MILL_TILE, 'mill'),
+      ),
+    );
+    const stockpile = world.getResource(Stockpile);
+    stockpile.refundAt(DEPOT_SITE, 'wheat', FULL_CLAIM_WHEAT);
+    let systemErrors = 0;
+    world.eventBus.subscribe(SystemError, () => { systemErrors++; });
+
+    // One worker at the mill under test, two haulers — the second stays idle
+    // once the first has claimed the depot's whole stock for the first mill.
+    await dispatch({ type: 'assignWorker', buildingId: MILL_ID });
+    await dispatch({ type: 'assignHauler' });
+    await dispatch({ type: 'assignHauler' });
+
+    const haulerEntities = [...world.getEntities()].filter((e) => e.getComponent(JobAssignment)?.hauling === true);
+    expect(haulerEntities).toHaveLength(2);
+    const [first, second] = haulerEntities;
+    const [claimant, bystander] = first.getComponent(HaulTrip)!.phase === 'fetching' ? [first, second] : [second, first];
+    expect(claimant.getComponent(HaulTrip)).toMatchObject({
+      phase: 'fetching', sourceSiteId: DEPOT_ID, targetId: MILL_ID, plannedAmount: FULL_CLAIM_WHEAT,
+    });
+    // Fully claimed, per the case's own name: nothing left for the bystander.
+    expect(bystander.getComponent(HaulTrip)!.phase).toBe('idle');
+    expect(colonyTotal(world, 'wheat')).toBe(FULL_CLAIM_WHEAT);
+
+    await dispatch({ type: 'demolishBuilding', buildingId: MILL_ID });
+    // THE fix: cancelled and fully cleared on the demolish tick, not merely
+    // moved to 'idle' with the claim fields left standing.
+    expect(claimant.getComponent(HaulTrip)).toMatchObject({
+      phase: 'idle', targetId: null, sourceSiteId: CAMP_SITE_ID, amount: 0, plannedAmount: 0,
+    });
+    // Untouched: a fetching hauler had taken nothing, so nothing left the
+    // ledger and nothing was destroyed along with the mill.
+    expect(colonyTotal(world, 'wheat')).toBe(FULL_CLAIM_WHEAT);
+    expect(systemErrors).toBe(0);
+
+    // Take the claimant off duty so the next dispatch cannot be answered by
+    // the SAME hauler recovering on its own — the point is that a DIFFERENT
+    // hauler was unblocked, not that this one could simply retry itself.
+    await dispatch({ type: 'unassignHauler' });
+    expect(claimant.getComponent(JobAssignment)!.hauling).toBe(false);
+    expect(bystander.getComponent(JobAssignment)!.hauling).toBe(true);
+
+    // The freed worker restaffs the second mill — the only building left that
+    // wants wheat, and the only dispatch this claim's release can answer.
+    await dispatch({ type: 'assignWorker', buildingId: OTHER_MILL_ID });
+    // THE assertion: the bystander — a hauler that was never anywhere near the
+    // demolished building — is now dispatched against the depot's full stock.
+    // Without the fix, the claimant's phantom claim would still be subtracting
+    // FULL_CLAIM_WHEAT from `unclaimedAt`, leaving nothing for anyone to take.
+    expect(bystander.getComponent(HaulTrip)).toMatchObject({
+      phase: 'fetching', sourceSiteId: DEPOT_ID, targetId: OTHER_MILL_ID, plannedAmount: FULL_CLAIM_WHEAT,
+    });
+    expect(colonyTotal(world, 'wheat')).toBe(FULL_CLAIM_WHEAT);
+  });
+
   it('a cancelled trip disposes of its load by whether a hauler is left to walk', async () => {
     // §2.7's split, both sides from one fixture. A FETCHING hauler has taken
     // nothing yet, so every path cancels it clean; a loaded one splits on

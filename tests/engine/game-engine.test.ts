@@ -236,9 +236,7 @@ describe('GameEngine', () => {
     expect(save.buildings.find((b) => b.id === FORESTER_ID))
       .toEqual({
         id: FORESTER_ID, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1,
-        // Both empty, and both asserted rather than omitted: `toEqual` on the
-        // whole record is what makes a producer that stopped writing either
-        // field fail here as well as in the round-trip cases.
+        // Same reasoning as the autosave case above: both empty, both asserted.
         buffer: {}, inputBuffer: {}, stored: {}, relocatingTicks: 0,
       });
     expect(save.stockpile.wood).toBe(20); // cost paid AND building present
@@ -499,9 +497,12 @@ describe('buildSaveFromWorld writes all four places goods can be', () => {
    * LIVE ledger rather than a save's own account of itself. */
   const worldOf = (engine: GameEngine) => (engine as unknown as { world: IRuntimeWorld }).world;
 
-  /** initialSave() plus a depot holding `stored` and a mill beside it. */
+  /** initialSave() plus a depot holding `stored` and a mill beside it, the
+   * mill's own in-tray holding `millInput` — {} for every caller that does not
+   * pass one, so this stays a no-op addition for the other two tests below. */
   function colonyWithADepot(
     stored: Partial<Record<ResourceId, number>>, camp: Partial<Record<ResourceId, number>>,
+    millInput: Partial<Record<ResourceId, number>> = {},
   ): SaveGameV6 {
     const save = initialSave();
     save.stockpile = { ...camp };
@@ -512,7 +513,7 @@ describe('buildSaveFromWorld writes all four places goods can be', () => {
       },
       {
         id: MILL_ID, defId: 'mill', ...MILL_TILE,
-        progress: 0, batchActive: false, buffer: {}, inputBuffer: {}, stored: {}, relocatingTicks: 0,
+        progress: 0, batchActive: false, buffer: {}, inputBuffer: millInput, stored: {}, relocatingTicks: 0,
       },
     );
     save.nextEntityId = MILL_ID + 1;
@@ -587,11 +588,18 @@ describe('buildSaveFromWorld writes all four places goods can be', () => {
     // that wrote `colonyStock()` into `stockpile` would double-count the depot
     // and read 34 planks. A fixture with an empty camp would pass with the site
     // half deleted.
-    const engine = await GameEngine.create(colonyWithADepot({ planks: 17 }, { wood: 30 }));
+    const engine = await GameEngine.create(colonyWithADepot({ planks: 17 }, { wood: 30 }, { wheat: 9 }));
     const save = engine.serialize();
 
     expect(save.stockpile).toEqual({ wood: 30 }); // the CAMP alone, never the aggregate
     expect(save.buildings.find((b) => b.id === DEPOT_ID)!.stored).toEqual({ planks: 17 });
+    // The parallel case for the OTHER site-shaped record: a building's own
+    // in-tray, localized the same way `stored` is above rather than folded
+    // into a colony-wide total — 9 is distinct from both 17 and 30, so a
+    // producer that swapped this field for `stored`, or for the camp, fails
+    // on its VALUE rather than surviving because the two totals happened to
+    // agree.
+    expect(save.buildings.find((b) => b.id === MILL_ID)!.inputBuffer).toEqual({ wheat: 9 });
 
     const stockpile = worldOf(await GameEngine.create(save)).getResource(Stockpile);
     expect(stockpile.getAt(CAMP_SITE_ID, 'wood')).toBe(30);

@@ -205,9 +205,22 @@ export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Com
   // resolves a destination through `ctx.sites()`, and this building must already
   // be off that list — otherwise a hauler bound for a demolished storehouse
   // would be sent to bank into it.
+  //
+  // A third case besides the two above: a hauler still FETCHING whose TARGET
+  // (the processor it means to deliver to) is this building, with its SOURCE
+  // a different, still-live site. Neither clause above matches it — it is not
+  // yet `outbound`, and its `sourceSiteId` names a depot that is not being
+  // demolished. Left alone it resolves on its own (`fetchArrival` filters
+  // `pending.demolished` from its target lookup and cancels cleanly), so
+  // nothing is ever LOST — but for as long as it keeps walking, its
+  // `sourceSiteId`/`plannedAmount` still reserve real stock at that live
+  // depot for a delivery that can never happen, which blocks every OTHER
+  // hauler from that stock, not merely this one. `trip.cancel()`, same as the
+  // other two: nothing has been taken yet, so there is nothing to dispose of.
   for (const { trip } of ctx.workers) {
     if (trip.phase === 'outbound' && trip.targetId === command.buildingId) turnBackOrCancel(ctx, trip);
     else if (trip.phase === 'fetching' && trip.sourceSiteId === command.buildingId) trip.cancel();
+    else if (trip.phase === 'fetching' && trip.targetId === command.buildingId) trip.cancel();
   }
   // Colonists spawned EARLIER THIS TICK are not in ctx.workers — the query
   // cannot see them until the post-step sync — so a nomad welcomed before this

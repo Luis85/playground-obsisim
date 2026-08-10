@@ -1753,7 +1753,10 @@ describe('live-world projections agree', () => {
     // inputBuffered joined for exactly the reason `buffered` did: it is the SUM
     // of this building's inputBuffer map, and that map is the thing that
     // persists (SavedBuilding.inputBuffer, save v6). `stored` is NOT in this
-    // list and does not need to be — its map persists under the same name.
+    // list, but only by coincidence: BuildingSnapshot.stored is a number and
+    // SavedBuilding.stored is a map that merely share a name, so this check
+    // passes via the wrong route — a rename of the published field would
+    // silently start demanding a `derivedBuilding` entry with no explanation.
     // storage joined for the reason `beds` did: a catalog constant looked up by
     // defId (BUILDINGS[b.defId].storage), never a per-building save fact, so a
     // retuned storehouseCapacity moves every existing depot rather than

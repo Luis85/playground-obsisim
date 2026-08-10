@@ -215,6 +215,11 @@ export const useGameStore = defineStore('game', {
      * A building mid-batch is not short of anything — it has already paid its
      * inputs — and `waitingForInput` is precisely "staffed, unblocked, and no
      * batch running".
+     *
+     * Every recipe takes one input resource today, so `inputBuffered`'s
+     * TOTAL and the per-resource amount coincide; a two-input recipe would
+     * read "not short" while starved of one of them, because
+     * `BuildingSnapshot` publishes only the total.
      */
     unitsShort(state): number {
       return (state.snapshot?.buildings ?? []).reduce(

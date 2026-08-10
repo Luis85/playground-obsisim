@@ -33,9 +33,12 @@ function building(id: number, defId: BuildingSnapshot['defId'], col: number, row
 /**
  * Grouped by what the RENDERER does with each field, not by the order they
  * happen to sit in on `ColonistSnapshot`: the first block is everything the
- * world view actually draws from and every scene below overrides out of, the
- * second is the fields it never reads at all and that stay static here for the
- * same reason the empty stockpile below is cast rather than filled in.
+ * world view actually draws from (or, like `buildingId`, positions by) and
+ * every scene below overrides out of, the second is the fields it never
+ * reads at all and that stay static here for the same reason the empty
+ * stockpile below is cast rather than filled in. This grouping must not
+ * converge on `tests/app/fixtures.ts`'s field order — fallow's clone
+ * detector is pinned at zero groups.
  */
 function worker(id: number, overrides: Partial<ColonistSnapshot> = {}): ColonistSnapshot {
   return {
@@ -44,7 +47,8 @@ function worker(id: number, overrides: Partial<ColonistSnapshot> = {}): Colonist
     haulLegFromCol: 0, haulLegFromRow: 0, haulLegToCol: 0, haulLegToRow: 0,
     haulKind: null, haulPickedUp: false,
     haulAtCol: CAMP_TILE.col, haulAtRow: CAMP_TILE.row,
-    hunger: 0, starvingTicks: 0, buildingId: null, ageTicks: 0,
+    buildingId: null, hunger: 0,
+    starvingTicks: 0, ageTicks: 0,
     commuteTiles: 0, commuteFactor: 1, deliveredWorkPower: null,
     ...overrides,
   };

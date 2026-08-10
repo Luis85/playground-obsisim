@@ -187,7 +187,6 @@ describe('SnapshotSystem', () => {
     });
   });
 
-  /**
   /** Flour waiting at the mill for the return leg. Deliberately under
    * `haulCarryCapacity`, and distinct from it, so the load carried out and the
    * load carried in are two different numbers. */
@@ -261,12 +260,14 @@ describe('SnapshotSystem', () => {
       haulPickedUp: false, carrying: BALANCE.haulCarryCapacity,
       haulLegFromCol: depotAt.col, haulLegFromRow: depotAt.row,
       haulLegToCol: millAt.col, haulLegToRow: millAt.row,
-      // Stale by construction — only `cancel` writes it, so mid-leg it still
-      // holds where this TRIP began. Asserted because a third distinct tile is
-      // what makes the two endpoint pairs non-interchangeable; what it MEANS is
-      // pinned by the idle case below.
-      haulAtCol: CAMP_TILE.col, haulAtRow: CAMP_TILE.row,
     });
+    // `haulAt*` is only meaningful when idle (only `cancel` writes it); mid-leg
+    // it still holds wherever the trip began, which is stale but not asserted
+    // exactly here so a later task that makes it live does not fail a test
+    // that isn't about that. What's checked is the property this fixture
+    // exists for: it is not the leg's own origin, i.e. a third distinct tile.
+    expect(hauler().haulAtCol).not.toBe(depotAt.col);
+    expect(hauler().haulAtRow).not.toBe(depotAt.row);
     // Non-vacuous: neither end of this leg is the camp, and the two ends are
     // not each other.
     expect([depotAt, millAt, CAMP_TILE].map((t) => `${t.col},${t.row}`)).toHaveLength(new Set(

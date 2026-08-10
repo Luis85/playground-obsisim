@@ -884,9 +884,24 @@ it('hauler-tick shares still sum to the total', async () => {
 - [ ] **Step 2: Add OBS-7-05's cheap guard**
 
 ```ts
-it('a with/without-depot pair is identical below the first old-age death', async () => {
+it('a with/without-depot pair is identical below the turnover horizon', async () => {
   // The issue's own suggested assertion. Pins the harness's determinism without
   // pinning the lifespan jitter. Does NOT touch lifespanFor — out of scope (§2.13).
+  //
+  // "Below the turnover horizon" means BELOW TICK 3,000, not below 5,700.
+  // 5,700 is an AGE; founders spawn at 2,500, so retirement lands at tick 3,000
+  // and the earliest death at 3,200. Getting this backwards is what put an
+  // invalid 4,800-tick reading in §4.2.
+});
+
+it('a run reports the deaths and retirements inside its own window', async () => {
+  // The instrument that makes the horizon arithmetic unnecessary. §4.2 asserts
+  // both are zero at every measured horizon rather than trusting a prose claim
+  // about which horizons are safe.
+  //
+  // DISCRIMINATING: it must report NON-ZERO on a run long enough to cross tick
+  // 3,000, or it is not measuring anything. Assert both directions — a counter
+  // that is always zero looks identical to a clean run.
 });
 ```
 
@@ -905,7 +920,13 @@ The increment's central claim (§1.1) is either confirmed or contradicted here. 
 
 - [ ] **Step 1: The headline reading**
 
-The corner chain, with and without a depot, at **600 / 1,200 / 2,400 / 4,800** ticks (all below the first old-age death, so OBS-7-05 cannot reach them). Report **absolute advantage per horizon**, not only percentages — §4.3 of increment 7 found flatness that a percentage was hiding, and 26 / 24 / 28 is what a buffer looks like.
+The corner chain, with and without a depot, at **600 / 1,200 / 2,400** ticks, plus a fourth point at **4,000 with an explicit young workforce**. Report **absolute advantage per horizon**, not only percentages — §4.3 of increment 7 found flatness that a percentage was hiding, and 26 / 24 / 28 is what a buffer looks like.
+
+**The horizons were wrong and the corrected arithmetic is load-bearing.** This step said 600 / 1,200 / 2,400 / 4,800, "all below the first old-age death". They are not. `lifespanTicks − spreadTicks` is 5,700 but that is an **age**, and founders spawn at `BALANCE.startingAgeTicks` = 2,500. In elapsed ticks: retirement at **3,000**, earliest death at **3,200**, last founder dead by **4,800**. So a 4,800-tick run measures retirement and replacement, and — because adding a depot shifts colonist ids while `lifespanFor` derives its jitter from the id — the with/without pair would differ for reasons unrelated to transfer. That is OBS-7-05's confound, invited in by the very step that claimed to be avoiding it.
+
+2,400 is the longest clean horizon at the default starting age. The fourth point takes `ageTicks: BALANCE.lifeBands.matureTicks` (1,000), which moves retirement to 4,500 and the earliest death to 4,700; `spawnColonist` already honours a per-colonist `ageTicks` (`spec.ageTicks ?? BALANCE.startingAgeTicks`), so this is a scenario passthrough, not new machinery. **Both arms use the same override** so the pair stays comparable, and the row is labelled as not comparable digit-for-digit with the three above it.
+
+**Assert the control; do not compute it.** Every horizon reports deaths and retirements inside its measured window and the test requires both to be zero. The 4,800 error came from doing this arithmetic by hand in prose — a computed bound fails silently the next time a constant moves, an asserted one fails loudly.
 
 Acceptance criterion 3: the advantage at 2,400 must exceed the advantage at 600.
 

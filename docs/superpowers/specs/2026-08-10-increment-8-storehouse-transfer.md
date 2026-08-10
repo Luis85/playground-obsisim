@@ -943,11 +943,25 @@ extracting `initialSave`.
   measures the transfer mechanic rather than a compensator bolted beside it.
   If §4 shows the loss worsening, that is the finding and the successor.
 - **The structural fix to OBS-7-05** (lifespan jitter derived from entity id).
-  The confound bites only above the first old-age death at ~5,700 ticks, and
-  every reading this increment needs sits below it. The issue's own cheap guard
-  — run a with/without pair below that horizon and require them identical — is
-  in scope; changing `lifespanFor` is not, because it would redefine every
-  existing population figure.
+  The issue's own cheap guard — run a with/without pair below the turnover
+  horizon and require them identical — is in scope; changing `lifespanFor` is
+  not, because it would redefine every existing population figure.
+
+  **The turnover horizon is tick 3,000, not tick 5,700, and an earlier draft of
+  this bullet had it wrong.** 5,700 is an *age* — `lifespanTicks − spreadTicks`,
+  the youngest a colonist can die. Founders are spawned at
+  `BALANCE.startingAgeTicks`, which is 2,500, so the elapsed-tick figures are:
+
+  | event | age | tick in a `runScenario` run |
+  | --- | ---: | ---: |
+  | retirement (`retireTicks`) | 5,500 | **3,000** |
+  | earliest old-age death (`lifespanTicks − spreadTicks`) | 5,700 | **3,200** |
+  | latest old-age death (`lifespanTicks + spreadTicks`) | 7,300 | 4,800 |
+
+  So **2,400 is the longest horizon a default-aged fixture can measure
+  cleanly**, and it is comfortably clean. Conflating an age with an elapsed
+  tick count is what put a 4,800-tick reading in §4.2 as "still below the first
+  old-age death", where in fact every founder has retired and died by then.
 - **OBS-7-03, OBS-7-04, OBS-7-06.** Carried forward untouched.
 - **Construction as work.** Still the named successor from increment 7 §1.1,
   and still deferred: it needs a construction-site entity and a builder role,
@@ -1026,10 +1040,26 @@ one variable each. Recorded in §4 as its own table.
 
 ### 4.2 The transfer mechanic
 
-- **The corner chain**, with and without a depot, at 600 / 1,200 / 2,400 and one
-  horizon beyond (4,800, still below the first old-age death). Acceptance
+- **The corner chain**, with and without a depot, at 600 / 1,200 / 2,400 — every
+  one of them below the tick-3,000 retirement horizon (§2.13). Acceptance
   criteria 3 and 4. Reported as absolute advantage per horizon, not only as a
   percentage — flatness is the finding and a percentage hides it.
+- **A fourth horizon at 4,000, and only with a young workforce.** §1.1's
+  prediction is about *growth*, so a fourth point genuinely strengthens it — but
+  4,800 on a default fixture is past retirement AND past every founder's death,
+  which measures replacement rather than transfer. The scenario therefore takes
+  an explicit starting age of `lifeBands.matureTicks`, moving retirement to tick
+  4,500 and the earliest death to 4,700; `spawnColonist` already honours a
+  per-colonist `ageTicks`, so this is a scenario passthrough rather than new
+  machinery. Both arms of the with/without pair use the same override, so the
+  pair stays comparable; the young-workforce row is **not** comparable digit for
+  digit with the three above it, and the table must say so.
+- **Every horizon asserts its own control rather than trusting this
+  arithmetic.** The run reports deaths and retirements inside the measured
+  window and the test requires both to be zero. That is the durable fix: the
+  4,800 error came from computing "below the first old-age death" by hand and
+  conflating an age with an elapsed tick, and a computed bound fails silently
+  the next time a constant moves while an asserted one fails loudly.
 - **`stalledTicks` and `waitingForInputTicks` per stage**, so the *mechanism* in
   §1.1 is confirmed or denied separately from the throughput it is supposed to
   explain.
@@ -1061,6 +1091,17 @@ sharper statement of what a retune would have to buy.
 
 The balance harness runs no births and no deaths inside the horizons above, so
 OBS-7-05's lifespan-jitter confound cannot reach these readings. The cheap guard
-(a with/without pair below the first old-age death, required identical) is added
-so that stays true rather than remaining a fact about the chosen horizons. Any
+(a with/without pair below the turnover horizon, required identical) is added so
+that stays true rather than remaining a fact about the chosen horizons. Any
 future reading at generation length inherits the confound and must say so.
+
+**This sentence was false for one of the horizons it covered, which is the
+argument for asserting it rather than stating it.** §4.2 originally called for a
+4,800-tick run "still below the first old-age death"; founders spawn at age
+2,500, retire at tick 3,000 and die between ticks 3,200 and 4,800, so that run
+sat entirely inside the turnover it claimed to avoid — and because adding a
+depot shifts colonist ids and `lifespanFor` derives jitter from the id, the
+with/without pair would have differed for reasons having nothing to do with
+transfer. §4.2 now requires each horizon to report deaths and retirements in
+window and assert both are zero. A prose claim about a horizon is exactly the
+kind of thing that is true when written and false after a constant moves.

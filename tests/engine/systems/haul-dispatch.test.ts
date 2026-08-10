@@ -9,7 +9,7 @@ import { IdCounter, Stockpile } from '../../../src/engine/resources';
 import { CommandSystem } from '../../../src/engine/systems/command-system';
 import { ProductionSystem } from '../../../src/engine/systems/production-system';
 import { HaulSystem, haulerCapacity } from '../../../src/engine/systems/haul-system';
-import { isStarvingFor } from '../../../src/engine/systems/haul-dispatch';
+import { holdsNoneOf } from '../../../src/engine/systems/haul-dispatch';
 import { campAdjacentFreeTile, colonyTotal, enqueue } from '../fixtures';
 import {
   applyRemovals, buildColonyPrepWorld, createColonyWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist,
@@ -949,6 +949,28 @@ describe('the starvation floor', () => {
     expect(systemErrors).toBe(0);
   });
 
+  it('a processor blocked on a full output buffer is not starving', async () => {
+    // The other three clauses all read true here — the far bakery's tray is
+    // empty of flour, no batch is running, and nothing is claimed inbound —
+    // but its out-tray already holds `BALANCE.outputBufferCap` bread, so a
+    // delivery could not start a batch even if one landed immediately:
+    // `startBatch` (production-system.ts) returns before it ever reaches
+    // `payFrom`. That building is blocked on COLLECTION, not on input, so the
+    // near rival — blocked on nothing — takes the trip instead.
+    const { haulers, step, world } = await setup([
+      { id: FAR_ID, defId: 'bakery', ...FAR_BAKERY, crew: 1, buffer: { bread: BALANCE.outputBufferCap } },
+      nearRival,
+    ], 1, { camp: { flour: 20 } });
+    let systemErrors = 0;
+    world.eventBus.subscribe(SystemError, () => { systemErrors++; });
+
+    await step(1);
+    expect(tripOf(haulers[0])).toMatchObject({
+      kind: 'supply', phase: 'fetching', targetId: NEAR_ID, plannedAmount: BALANCE.haulCarryCapacity,
+    });
+    expect(systemErrors).toBe(0);
+  });
+
   it('a second hauler is not promoted to a building already being served', async () => {
     // The multi-hauler check this increment applies to everything else, turned
     // on the floor itself: if ten idle haulers were dispatched on the same
@@ -1007,8 +1029,8 @@ describe('the starvation floor', () => {
     // become wrong the first time a recipe gains a second input.
     const inTray = new InputBuffer();
     inTray.add('flour', 9);
-    expect(isStarvingFor(inTray, 'wheat')).toBe(true);
-    expect(isStarvingFor(inTray, 'flour')).toBe(false);
+    expect(holdsNoneOf(inTray, 'wheat')).toBe(true);
+    expect(holdsNoneOf(inTray, 'flour')).toBe(false);
   });
 });
 

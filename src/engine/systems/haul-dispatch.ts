@@ -3,7 +3,7 @@ import type { HaulCandidate, StoreSite, SupplyCandidate } from '../../shared/hau
 import { CAMP_SITE_ID, nextHaulTarget, nextSupplyTarget, sitesHolding } from '../../shared/haul';
 import { isRelocating, type TileRef } from '../../shared/placement';
 import { BALANCE } from '../content/balance';
-import { BUILDINGS } from '../content/buildings';
+import { batchOutputUnits, BUILDINGS } from '../content/buildings';
 import { RESOURCE_IDS } from '../content/resources';
 import type { HaulKind } from '../components';
 import { Building, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Production, Relocation } from '../components';
@@ -175,19 +175,29 @@ function collectCandidates(buildings: readonly HaulBuildingRow[], claims: Claims
 
 /**
  * What one building would take delivery of right now: the input it is
- * proportionally shortest of, and how much of it will still fit once the
- * deliveries already walking toward it have landed. Null when this building
- * is not a supply target at all — no recipe inputs, mid-relocation, or its
- * in-tray is already spoken for.
+ * proportionally shortest of, how much of it will still fit once the
+ * deliveries already walking toward it have landed, and whether a finished
+ * batch would actually have somewhere to go. Null when this building is not
+ * a supply target at all — no recipe inputs, mid-relocation, or its in-tray
+ * is already spoken for.
+ *
+ * `couldStartBatch` is computed here, alongside `resource` and `room`,
+ * because `recipe` is already in hand at this point and the caller (
+ * `supplyCandidates`) has no other reason to re-derive it — see the
+ * `starving` derivation there for what the field means.
  */
-function needOf(row: HaulBuildingRow, claims: Claims, capacity: number): { resource: ResourceId; room: number } | null {
+function needOf(
+  row: HaulBuildingRow, claimedIn: number, capacity: number,
+): { resource: ResourceId; room: number; couldStartBatch: boolean } | null {
   const { recipe } = BUILDINGS[row.building.defId];
   if (recipe === null || Object.keys(recipe.inputs).length === 0) return null;
   if (isRelocating(row.relocation.ticksLeft)) return null;
   const resource = row.input.shortestOf(recipe, RESOURCE_IDS);
   if (resource === null) return null;
-  const room = row.input.room(BALANCE.inputBufferCap) - claims.input(row.building.id);
-  return room <= 0 ? null : { resource, room: Math.min(room, capacity) };
+  const room = row.input.room(BALANCE.inputBufferCap) - claimedIn;
+  if (room <= 0) return null;
+  const couldStartBatch = row.buffer.room(BALANCE.outputBufferCap) >= batchOutputUnits(recipe);
+  return { resource, room: Math.min(room, capacity), couldStartBatch };
 }
 
 /**
@@ -205,7 +215,7 @@ function needOf(row: HaulBuildingRow, claims: Claims, capacity: number): { resou
  * and it matters here because a rule that only becomes wrong the first time a
  * recipe gains a second input is the kind that ships silently.
  */
-export function isStarvingFor(input: InputBuffer, resource: ResourceId): boolean {
+export function holdsNoneOf(input: InputBuffer, resource: ResourceId): boolean {
   return (input.amounts.get(resource) ?? 0) === 0;
 }
 
@@ -240,15 +250,31 @@ function supplyCandidates(
   const candidates: SupplyCandidate[] = [];
   for (const row of buildings) {
     if (!staffed.has(row.building.id)) continue;
-    const need = needOf(row, claims, capacity);
+    // Computed once per building rather than once inside `needOf` and again at
+    // `starving` below: `chooseJob` rebuilds this whole candidate list per
+    // idle hauler, so a second traversal here would be O(haulers² x
+    // buildings) instead of O(haulers x buildings).
+    const claimedIn = claims.input(row.building.id);
+    const need = needOf(row, claimedIn, capacity);
     if (need === null) continue;
     const unclaimedAt = (siteId: number) => claims.unclaimedAt(siteId, need.resource);
-    // Nothing in hand, nothing in progress, nothing on the way. Derived once
-    // per BUILDING rather than per site: it is a fact about the building, so
-    // every candidate for it must carry the same answer.
+    // Nothing in hand, nothing in progress, nothing on the way, and a batch
+    // that would actually have somewhere to go. Derived once per BUILDING
+    // rather than per site: it is a fact about the building, so every
+    // candidate for it must carry the same answer.
     //
-    // All three clauses are load-bearing, each against a different way the
-    // floor would stop being one:
+    // This is ONE question, not four independent ones: would a load land here
+    // and IMMEDIATELY make `startBatch` (production-system.ts) start a batch?
+    // Three of these four clauses are exactly `startBatch`'s own early
+    // returns, in the order it checks them — batch already active, no room
+    // for the batch's output, inputs absent — and the fourth (`claims.input`)
+    // is the reservation, because `startBatch` cannot see a hauler that has
+    // not arrived yet. Anything `startBatch` checks belongs here BY
+    // CONSTRUCTION; anything it does not check does not. This floor has now
+    // been corrected three times because each draft asked its own
+    // approximation of `startBatch`'s question instead of asking
+    // `startBatch`'s question directly — so before adding a fifth clause,
+    // check `startBatch` first.
     //
     // - `batchActive`, because `payFrom` (production-system.ts) draws a batch's
     //   inputs out of the in-tray at batch START. An empty tray is therefore
@@ -256,16 +282,41 @@ function supplyCandidates(
     //   three-tick batch holds no wheat for three ticks out of three — and
     //   without this clause that healthy producer outranks a consumer blocked
     //   for six hundred ticks, on the tick after every delivery it receives.
-    // - `claims.input`, because the other two read PHYSICAL state and neither
-    //   moves when a hauler is DISPATCHED, only when one ARRIVES several legs
-    //   later. Dispatch runs every idle hauler inside one tick, so without this
-    //   clause the promotion is not extinguished until a load LANDS and every
-    //   hauler idle on that tick is sent to the same building. `needOf`
-    //   bounds the pile-up at the tray's room, which is not the same as
-    //   intending it.
-    const starving = isStarvingFor(row.input, need.resource)
-      && !row.production.batchActive
-      && claims.input(row.building.id) === 0;
+    // - `need.couldStartBatch`, because `startBatch` returns BEFORE `payFrom`
+    //   when `buffer.room(...) < batchOutputUnits(recipe)`. A processor that
+    //   finishes a batch into a FULL output tray leaves `batchActive` false
+    //   with an empty in-tray too — the other three clauses all read true —
+    //   but no delivery can start a batch there until a hauler CLEARS the
+    //   output. That building is blocked on COLLECTION, not on input, and
+    //   promoting it spends a supply trip it cannot use. This is the far-
+    //   processor `outputFull` stall `StageResult.stalledTicks` counts: the
+    //   common case, not a corner one.
+    // - `holdsNoneOf` (below) supplies only THIS clause — the per-resource
+    //   "nothing in hand" test — and nothing more. It is exported and named
+    //   for exactly what it computes, on purpose: a caller that finds it by
+    //   name and treats it as the whole starvation rule reintroduces the
+    //   one-clause defect this floor was corrected twice to remove.
+    // - `claims.input`, because the other clauses above read PHYSICAL state
+    //   and none of them moves when a hauler is DISPATCHED, only when one
+    //   ARRIVES several legs later. Dispatch runs every idle hauler inside one
+    //   tick, so without this clause the promotion is not extinguished until a
+    //   load LANDS and every hauler idle on that tick is sent to the same
+    //   building. `needOf` bounds the pile-up at the tray's room, which is not
+    //   the same as intending it.
+    //
+    //   `claims.input` also sums a building's claims across EVERY resource,
+    //   not just `need.resource` — unlike `holdsNoneOf`, which is deliberately
+    //   per-resource. On a recipe with two inputs, a claimed delivery of
+    //   resource B would wrongly suppress `starving` for resource A. This is
+    //   unreachable today for the same reason `holdsNoneOf`'s per-resource
+    //   case is (see its test): no shipped recipe has two inputs. A future
+    //   one would need a per-resource `claims.input` — `HaulTrip.resource` is
+    //   already there for it — but that change is out of scope here, since it
+    //   would alter dispatch behaviour rather than just naming it correctly.
+    const starving = !row.production.batchActive
+      && need.couldStartBatch
+      && holdsNoneOf(row.input, need.resource)
+      && claimedIn === 0;
     for (const site of sitesHolding(sites, unclaimedAt)) {
       const movable = Math.min(need.room, unclaimedAt(site.id));
       if (!worthMoving(movable, unclaimedAt(site.id))) continue;

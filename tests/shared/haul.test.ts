@@ -414,6 +414,24 @@ describe('siteDemandOf', () => {
     expect(demand.get(8)).toBeUndefined();
   });
 
+  it('a source with no inputs leaves its nearest site absent from the map, not present with empty demand', () => {
+    // DISCRIMINATING: a SECOND source, with real inputs, nearest a DIFFERENT
+    // site — proving the map is populated at all, so an implementation that
+    // (accidentally) never creates any entry cannot pass this by omission.
+    // The forager's own site, id 5, must be entirely absent: `demand.get(5)`
+    // undefined, not present holding an empty Map — the distinction collect's
+    // "is anybody staging here" check (§2.2) relies on, since
+    // `demand.get(siteId)?.get(resource) ?? 0` reads 0 either way and cannot
+    // tell the two apart itself.
+    const foragerSite: StoreSite = { id: 5, col: 2, row: 1, capacity: 60 };
+    const millSite: StoreSite = { id: 3, col: 20, row: 14, capacity: 60 };
+    const forager: DemandSource = { col: 2, row: 2, inputs: [] };
+    const mill: DemandSource = { col: 21, row: 14, inputs: ['wheat'] };
+    const demand = siteDemandOf([foragerSite, millSite], [forager, mill], 12, 12);
+    expect(demandFor(demand, 3, 'wheat')).toBe(12);
+    expect(demand.get(5)).toBeUndefined();
+  });
+
   it('the camp is an ordinary site here', () => {
     // A building beside the camp pulls on the camp, by the same nearest-site
     // rule as everything else. The camp is special in the push rule (§2.4) and

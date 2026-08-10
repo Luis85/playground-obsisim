@@ -283,6 +283,10 @@ function capTotalDemand(atSite: Map<ResourceId, number>, cap: number): void {
  *
  * ABSENCE IS ZERO. A site nobody is nearest to gets no entry, which is exactly
  * the corner depot §4.3 measures and exactly the case the push rule exists for.
+ * The same holds when a site IS the nearest to a source that itself demands
+ * nothing (`inputs: []`, e.g. a forager or farm): the inner map is created
+ * lazily, inside the `inputs` loop, so a source contributing no resources
+ * creates no entry either.
  *
  * `reserveFreeSpace` IS THE DEMAND CAP, AND IT IS NOT OPTIONAL. A bounded
  * site's TOTAL demand across every resource is capped at
@@ -306,12 +310,12 @@ export function siteDemandOf(
   for (const source of sources) {
     const site = nearestSite(source.col, source.row, sites);
     if (site === null) continue;
-    let atSite = demand.get(site.id);
-    if (atSite === undefined) {
-      atSite = new Map<ResourceId, number>();
-      demand.set(site.id, atSite);
-    }
     for (const resource of source.inputs) {
+      let atSite = demand.get(site.id);
+      if (atSite === undefined) {
+        atSite = new Map<ResourceId, number>();
+        demand.set(site.id, atSite);
+      }
       atSite.set(resource, (atSite.get(resource) ?? 0) + targetPerSource);
     }
   }

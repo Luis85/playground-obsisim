@@ -417,7 +417,9 @@ Confirm `src/shared/save.ts` is untouched. If the compiler asked for a save chan
   staging `min`: once surplus is defined through it, `surplus ≤ unclaimedAt`
   always, so listing both is redundant and listing only the second is the bug.
 - `TransferCandidate { sourceSiteId, sourceCol, sourceRow, destSiteId, destCol, destRow, resource, movable, staging: boolean }`
-- `compareTransferCandidates(a, b, from)`: **staging before drain**, then `movable` descending, then whole hauler → source → destination route ascending, then source id, then destination id. Route measured from where the hauler stands, exactly as `supplyRouteDistance` does.
+- `compareTransferCandidates(a, b, from)`: **staging before drain**, then `movable` descending, then whole hauler → source → destination route ascending, then source id, then destination id, **then resource by catalog order**. Route measured from where the hauler stands, exactly as `supplyRouteDistance` does.
+
+  **The resource term is not optional padding, and this comparator is the only one in the codebase that needs it.** `supplyCandidates` calls `needOf` once per building, which picks a single resource, so a (building, site) pair yields exactly one supply candidate and the chain can safely end at a site id. `transferCandidates` iterates resources, so ONE source and ONE destination can produce several candidates that differ only in what is being moved — and with equal `movable` they tie on class, route, source id and destination id alike. The comparator returns 0, `nextTransferTarget` takes whichever the builder happened to emit first, and §2.6's guarantee that selection is independent of candidate order is silently false. Catalog order is the tie-break `fullestResource` and `shortestOf` already use for exactly this reason; the comparator lives engine-side, so `RESOURCE_IDS` is in scope.
 - `transferCandidates(...)` builds both classes per §2.4.
 
 - [ ] **Step 1: Write the failing tests**
@@ -529,6 +531,17 @@ it('a supply fetch from a depot counts toward its drain headroom', () => {
 it('candidate order does not depend on array order', () => {
   // Pass the same candidates shuffled; same winner. The guarantee every other
   // selection in this codebase commits to.
+});
+
+it('two resources moving the same route are ordered by catalog, not by array', () => {
+  // The case the id tie-breaks CANNOT reach, and the reason the chain does not
+  // end at a destination id. Same source, same destination, same `movable`,
+  // different resource — every term above resource ties. Shuffle them and
+  // assert the same winner.
+  //
+  // DISCRIMINATING against the shuffle test above, which passes with the
+  // resource term absent because its candidates differ on an id. Delete the
+  // resource term and this test must go red on its own.
 });
 ```
 

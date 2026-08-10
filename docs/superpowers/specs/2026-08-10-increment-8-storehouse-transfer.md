@@ -550,9 +550,24 @@ hauler-tick split measures whether it bit.
    hauler is standing, exactly as `supplyRouteDistance` does
 4. source site id
 5. destination site id
+6. resource, by catalog order
 
-Tie-breaks end at ids, so selection is independent of candidate order — the same
-guarantee `compareHaulCandidates` and `compareSupplyCandidates` give.
+Selection is independent of candidate order — the same guarantee
+`compareHaulCandidates` and `compareSupplyCandidates` give.
+
+**Unlike those two, this chain cannot end at an id, and the difference is not
+stylistic.** `needOf` picks one resource per building, so a (building, site)
+pair yields exactly one supply candidate and a site id fully distinguishes them.
+`transferCandidates` iterates resources: one source and one destination can
+produce several candidates differing only in *what is being moved*, and with
+equal `movable` those tie on class, route, source id and destination id
+together. A chain ending at a destination id returns 0 for a real pair of
+distinct candidates, and the winner becomes whichever the builder emitted first
+— the array-order dependence this list exists to rule out, reintroduced by an
+omission rather than by a decision. Catalog order is the tie-break
+`fullestResource` and `shortestOf` already use for the same reason, and it is
+available because the comparator lives engine-side rather than in
+`src/shared/**`.
 
 ### 2.7 Claims: three that already work, one that must change, one that is new
 

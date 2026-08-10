@@ -284,6 +284,21 @@ describe('layoutWorld', () => {
     expect(lines.join(' ')).not.toContain('batch');
   });
 
+  it('describes a storehouse by what it holds, not by a batch it can never run', () => {
+    // A storehouse has no recipe and no worker slots either, so it fell
+    // through to the same producer wording a house used to: "0/0 workers —
+    // storing" and "no active batch" — neither line about the only thing a
+    // storehouse does.
+    const snapshot = makeSnapshot({
+      buildings: [makeBuilding(1, { defId: 'storehouse', stored: 24, storage: 60, state: 'storing', workerSlots: 0 })],
+    });
+    const lines = describePick(snapshot, { kind: 'building', id: 1 });
+    expect(lines[0]).toBe('Storehouse');
+    expect(lines.join(' ')).toContain('24/60 stored');
+    expect(lines.join(' ')).not.toContain('workers');
+    expect(lines.join(' ')).not.toContain('batch');
+  });
+
   it('still describes a producer by its crew and its batch', () => {
     // The control: a house must not have rewritten every building's tooltip.
     const snapshot = makeSnapshot({

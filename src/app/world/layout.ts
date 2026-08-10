@@ -194,15 +194,19 @@ export interface WorldPick {
  * Tooltip lines for one building. A shelter answers a different question from
  * a producer: it has no recipe and no slots, so the producer wording rendered
  * as "0/0 workers — housing" and "no active batch" — three lines, not one of
- * them about the only thing a house does.
+ * them about the only thing a house does. A storehouse has neither beds nor a
+ * recipe either, and fell through the same way: "0/0 workers — storing" and
+ * "no active batch" for the one building whose only job is holding stock.
  *
- * Split on `beds > 0`, the same test every shelter rule in the engine uses,
- * rather than on `state === 'housing'`: a house being MOVED publishes
- * 'relocating', and who lives there is still the fact worth reporting.
+ * Split on `beds > 0` and `storage > 0`, the same tests every shelter and
+ * store rule in the engine uses, rather than on `state === 'housing'` /
+ * `'storing'`: a building being MOVED publishes 'relocating', and what it
+ * holds is still the fact worth reporting.
  */
 function describeBuilding(b: BuildingSnapshot): string[] {
   const name = BUILDINGS[b.defId].name;
   if (b.beds > 0) return [name, `${b.occupants}/${b.beds} residents — ${b.state}`];
+  if (b.storage > 0) return [name, `${b.stored}/${b.storage} stored — ${b.state}`];
   return [
     name,
     `${b.workers}/${b.workerSlots} workers — ${b.state}`,

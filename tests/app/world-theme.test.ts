@@ -95,6 +95,28 @@ describe('resolveWorldTheme', () => {
     expect(minChannelDistance(theme.carriedLoad, theme.progressFill)).toBeGreaterThan(3);
   });
 
+  it('gives a load carried IN its own colour, well clear of every other mark a dot can wear', () => {
+    const theme = resolveWorldTheme(none);
+    // The pair is the whole encoding: if the two loads shared a hue, flow
+    // direction would be unreadable and `haulPickedUp` pointless (§2.10).
+    expect(minChannelDistance(theme.carriedInput, theme.carriedLoad)).toBeGreaterThan(3);
+    // A single colonist can wear the load mark beside a stage mark, the
+    // homeless mark and the tool ring at the same time, so the gap has to hold
+    // against all of them — the vault orange was rejected for exactly this: it
+    // is one RGB unit off the child mark's yellow.
+    for (const other of [theme.stageMark.child, theme.stageMark.elder, theme.homelessMark, theme.workerToolRing]) {
+      expect(minChannelDistance(theme.carriedInput, other)).toBeGreaterThan(3);
+    }
+  });
+
+  // Deliberate, the same way carriedLoad matches stateRing.relocating above:
+  // goods sitting in a depot and goods walking out of one are the same goods.
+  // Pinned as equality so a palette edit cannot quietly split them apart.
+  it('gives a load carried in from a store the storehouse\'s own colour, on purpose', () => {
+    const theme = resolveWorldTheme(none);
+    expect(theme.carriedInput).toBe(theme.stateRing.storing);
+  });
+
   it('resolves the demographic tokens to concrete colours', () => {
     const theme = resolveWorldTheme(() => '');   // no vault variables: fallbacks
     expect(theme.buildingGlyph.house).toBe('🏠');

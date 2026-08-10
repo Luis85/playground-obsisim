@@ -2,7 +2,7 @@ import type { Snapshot, BuildingSnapshot, BuildingState, ColonistSnapshot } from
 import type { LifeStage } from '../../shared/population';
 import type { BuildingDefId } from '../../shared/content-types';
 import { BUILDINGS } from '../../engine/content';
-import { legProgress } from '../../shared/haul';
+import { CAMP_TILE, legPositionOf } from '../../shared/haul';
 
 export const TILE = 48;
 
@@ -21,6 +21,12 @@ export interface PlacedBuilding {
   state: BuildingState;
   progressPct: number;
   batchActive: boolean;
+  /** Units this building holds as a store, against what it could hold — the
+   * two numbers the fill gauge is drawn from. `storage` is 0 for everything
+   * that is not a storehouse, which is also how the renderer knows there is
+   * no gauge to draw. */
+  stored: number;
+  storage: number;
 }
 
 export interface PlacedColonist {
@@ -36,6 +42,15 @@ export interface PlacedColonist {
   tooled: boolean;
   carrying: boolean;
   /**
+   * Whether the load in hand came OUT of a building's output buffer, rather
+   * than in from a store. Read off the snapshot's `haulPickedUp` and never
+   * off `haulKind`: the job kind is frozen at dispatch and stops describing
+   * the cargo exactly when the round trip works — a `supply` trip that
+   * unloaded and then collected output carries goods out while still
+   * labelled `supply` (spec §2.10). Meaningless unless `carrying`.
+   */
+  carryingOut: boolean;
+  /**
    * Copied off the snapshot, never re-derived from `ageTicks`: `stageOf` needs
    * BALANCE.lifeBands, and a second derivation on the view side is a second
    * opinion about where a band starts — the renderer would mark someone a
@@ -47,10 +62,11 @@ export interface PlacedColonist {
    * from a 14 px dot. */
   homeless: boolean;
   /**
-   * True while this colonist is mid-haul. The renderer walks these at whatever
-   * speed reaches the next point before the next snapshot, instead of the fixed
-   * pixel rate it uses for a cosmetic reassignment walk — the trip has a
-   * simulated duration and the dot must respect it (OBS-4-09).
+   * True when this dot was placed by a haul trip rather than by the slot
+   * machinery. The renderer walks these at whatever speed reaches the next
+   * point before the next snapshot, instead of the fixed pixel rate it uses
+   * for a cosmetic reassignment walk — a trip's steps have a simulated
+   * duration and the dot must respect it (OBS-4-09).
    */
   travelling: boolean;
 }
@@ -83,6 +99,7 @@ function placeBuildings(snapshot: Snapshot): Map<number, PlacedBuilding> {
     cellById.set(b.id, {
       id: b.id, defId: b.defId, col: b.col, row: b.row,
       state: b.state, progressPct: b.progressPct, batchActive: b.batchActive,
+      stored: b.stored, storage: b.storage,
     });
   }
   return cellById;
@@ -237,17 +254,19 @@ function campSpot(slot: number, rows: number): Spot {
  * spots. Deliberately outside the slot machinery — a hauler is a visitor, not
  * staff, and must never displace a colonist's remembered slot.
  *
- * Takes a bare tile rather than a PlacedBuilding so `haulSpot` can also use it
- * for a returning hauler's frozen pickup point, which is a remembered tile,
- * not a building that is necessarily still standing there.
+ * Takes a bare tile rather than a PlacedBuilding because a hauler's position
+ * is a remembered or interpolated tile, not a building that is necessarily
+ * still standing there: a leg endpoint, a fractional point between two of
+ * them, or the tile a cancelled trip left the hauler resting on.
  */
 function haulerSpot(tile: { col: number; row: number }): Spot {
   return { x: tile.col + 0.5, y: tile.row + 1.05 };
 }
 
 /**
- * Where a hauler's dot is RIGHT NOW: interpolated along its leg from the
- * ticks the engine says remain, against the leg total the engine charged.
+ * Where a hauler's dot is RIGHT NOW: `legPositionOf` along the leg it is
+ * walking, from the ticks the engine says remain against the total it
+ * charged.
  *
  * Increment 4 placed an outbound hauler at its target and let the renderer walk
  * there at a fixed 90 px/s. That is 1.875 tiles/s against a simulation moving
@@ -257,40 +276,60 @@ function haulerSpot(tile: { col: number; row: number }): Spot {
  * from `haulTicksLeft` makes the two clocks identical by construction, at every
  * game speed, and needs no notion of speed here at all.
  *
- * Both the leg's length (`haulLegTicks`) and a returning hauler's origin
- * (`haulLegFromCol`/`haulLegFromRow`) are read from the snapshot rather than
- * recomputed from the building's CURRENT tile. A returning trip is
- * deliberately left alone when its building moves — the goods are already in
- * hand, bound for a camp that did not move — so a recomputed
- * `haulTicks(cell.col, cell.row, …)` can silently disagree with the leg the
- * sim is actually running once that happens (OBS-5-01). An outbound leg's
- * `to` endpoint is still the building's live door: the engine DOES retarget an
- * outbound trip's ticks on a move (handleMoveBuilding), so that endpoint and
- * the leg total the snapshot publishes always agree.
+ * No phase has a case of its own, and neither end is the camp. Every leg
+ * freezes BOTH its endpoints when it begins (§2.10), so 'fetching', 'outbound'
+ * and 'returning' are one interpolation between two published tiles — which is
+ * the only shape that can draw this increment's trips at all. A depot-to-
+ * building leg touches the camp at neither end, and a leg may begin from an
+ * arbitrary fractional tile a cancellation or a mid-leg re-price left behind.
+ * The endpoints are read from the snapshot rather than re-asked of the
+ * building, for the reason `haulLegTicks` is: either end can move mid-leg, and
+ * re-deriving it would draw the walk to a point this hauler never stood at
+ * (OBS-5-01).
  */
-function haulSpot(w: ColonistSnapshot, cell: PlacedBuilding): Spot {
-  const door = haulerSpot(cell);
-  const pickup = haulerSpot({ col: w.haulLegFromCol, row: w.haulLegFromRow });
-  const travelled = legProgress(w.haulTicksLeft, w.haulLegTicks);
-  const from = w.haulPhase === 'outbound' ? CAMP_ANCHOR : pickup;
-  const to = w.haulPhase === 'outbound' ? door : CAMP_ANCHOR;
-  return { x: from.x + (to.x - from.x) * travelled, y: from.y + (to.y - from.y) * travelled };
+function haulSpot(w: ColonistSnapshot): Spot {
+  return haulerSpot(legPositionOf({
+    ticksLeft: w.haulTicksLeft, legTicks: w.haulLegTicks,
+    legFromCol: w.haulLegFromCol, legFromRow: w.haulLegFromRow,
+    legToCol: w.haulLegToCol, legToRow: w.haulLegToRow,
+  }));
 }
 
 /**
- * Haulers on a leg sit on the line between camp and building; idle ones fall
- * through to the camp allocation below, which is also where a hauler whose
- * target was demolished mid-trip ends up.
+ * Where a hauler with no leg running rests — its own `haulAtCol`/`haulAtRow`,
+ * the only fields that mean anything while `haulPhase` is 'idle'. Null when
+ * that tile is the camp: the camp band owns slot machinery that spreads its
+ * crowd, and a hauler standing there is one of that crowd, whereas a depot has
+ * no slots and one dot on its doorstep is the whole answer.
+ *
+ * Read ONLY from here, never beside a running leg. Mid-leg these still hold
+ * the tile the current trip started from — a plausible tile, not a sentinel —
+ * so a reader that forgets the guard draws a dot somewhere real and looks
+ * fine.
+ */
+function restSpot(w: ColonistSnapshot): Spot | null {
+  if (w.haulAtCol === CAMP_TILE.col && w.haulAtRow === CAMP_TILE.row) return null;
+  return haulerSpot({ col: w.haulAtCol, row: w.haulAtRow });
+}
+
+/**
+ * Haulers stand on their leg, or at the depot a finished or cancelled trip
+ * left them at. Everyone else falls through to the camp allocation below,
+ * which is also where a hauler whose target was demolished mid-trip ends up.
  *
  * Its own function (not inlined in layoutWorld) purely to keep that
  * orchestrator's complexity within the project's gate.
  */
 function placeHaulers(sorted: ColonistSnapshot[], cellById: Map<number, PlacedBuilding>, placements: Map<number, Placement>): void {
   for (const w of sorted) {
-    if (!w.hauling || w.haulTargetId === null || w.haulPhase === 'idle') continue;
-    const cell = cellById.get(w.haulTargetId);
-    if (cell === undefined) continue; // target demolished: the camp claims them
-    placements.set(w.id, { at: w.haulTargetId, slot: HAULER_SLOT, spot: haulSpot(w, cell) });
+    if (!w.hauling) continue;
+    if (w.haulPhase === 'idle') {
+      const rest = restSpot(w);
+      if (rest !== null) placements.set(w.id, { at: null, slot: HAULER_SLOT, spot: rest });
+      continue;
+    }
+    if (w.haulTargetId === null || !cellById.has(w.haulTargetId)) continue; // target demolished: the camp claims them
+    placements.set(w.id, { at: w.haulTargetId, slot: HAULER_SLOT, spot: haulSpot(w) });
   }
 }
 
@@ -328,7 +367,8 @@ export function layoutWorld(snapshot: Snapshot, previous?: WorldLayout): WorldLa
     const p = placements.get(w.id)!;
     return {
       id: w.id, x: p.spot.x, y: p.spot.y, at: p.at, slot: p.slot,
-      efficiency: w.efficiency, tooled: w.toolTicks > 0, carrying: w.carrying > 0,
+      efficiency: w.efficiency, tooled: w.toolTicks > 0,
+      carrying: w.carrying > 0, carryingOut: w.haulPickedUp,
       stage: w.stage, homeless: w.homeId === null,
       travelling: p.slot === HAULER_SLOT,
     };

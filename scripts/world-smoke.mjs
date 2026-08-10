@@ -213,7 +213,66 @@ check(
   !withElder.equals(withChild) && !withElder.equals(housed),
 );
 
-await step(20); // dispose()
+// Storage and two-way haulage. One change per phase (see storeScene in the
+// harness): the scene is a bakery, one hauler, and — from phase 21 — a depot,
+// and each phase below moves exactly one field on one of them.
+await step(20); // the store scene replaces the home scene: settle before measuring
+await wait(4500); // the hauler walks back to the camp band at the cosmetic pace
+await step(21); // a storehouse appears, drawn in the shared `unstaffed` grey
+await wait(400);
+const depotUnstaffed = await shot();
+
+await step(22); // ONLY change: the depot's state, unstaffed -> storing
+await wait(400);
+const depotStoring = await shot();
+// The `storing` ring is the one state colour this increment adds, and the
+// depot's tile, glyph, fill and gauge are identical in both frames — so a
+// `storing` that resolved to a colour already on screen leaves them equal.
+check('the storing state has a ring colour of its own (only the depot\'s state differs)', !depotStoring.equals(depotUnstaffed));
+
+await step(23); // ONLY change: the depot's `stored`, 15 of 60 -> 45 of 60
+await wait(400);
+const fuller = await shot();
+// `storage` is 60 in both frames and `buffered`/`inputBuffered` are 0 in both,
+// so a gauge reading any of those — or no gauge at all — leaves this pair
+// identical. Only one wired to `stored` can tell them apart.
+check('the storehouse fill gauge tracks `stored` (only that field differs)', !fuller.equals(depotStoring));
+
+await step(24); // the hauler takes a supply leg out of the camp
+await wait(1500);
+const fromCamp = await shot();
+
+await step(25); // ONLY change: the leg's `from` end, camp (2,0) -> depot (10,5)
+await wait(1500);
+const fromDepot = await shot();
+// The check this whole increment turns on. Both frames are the same phase, the
+// same leg length, the same ticks left and the same load; only the endpoint the
+// leg began at differs. The camp-anchored geometry this replaces drew every
+// outbound leg from the camp tent, so it produced the SAME frame twice.
+check('a leg that began at a depot is drawn on the depot\'s line, not the camp\'s', !fromDepot.equals(fromCamp));
+
+await step(26); // ONLY change: `haulPickedUp` false -> true, on a settled dot
+await wait(400);
+const carryingOut = await shot();
+// `haulKind` is 'supply' in BOTH frames, deliberately: a direction marker
+// driven by the job kind (frozen at dispatch) cannot tell them apart, and the
+// round trip this increment is named for is exactly the case it draws
+// backwards (spec §2.10).
+check('a hauler carrying goods out reads differently from one carrying them in (only `haulPickedUp` differs)', !carryingOut.equals(fromDepot));
+
+await step(27); // the trip ends: the hauler goes idle, resting at the camp
+await wait(4500); // it walks back to the camp band at the cosmetic pace
+const idleAtCamp = await shot();
+
+await step(28); // ONLY change: `haulAt` moves from the camp tile to the depot's
+await wait(1500);
+const idleAtDepot = await shot();
+// The state the camp-anchored geometry could never express: with idle haulers
+// falling through to the camp band regardless of where they stopped, these two
+// frames are identical — the colonist a player watches teleport home.
+check('an idle hauler resting at a depot is drawn at the depot, not back at the camp', !idleAtDepot.equals(idleAtCamp));
+
+await step(29); // dispose()
 await wait(300);
 check('dispose() raises no errors', pageErrors.length === 0);
 

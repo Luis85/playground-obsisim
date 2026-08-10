@@ -81,7 +81,12 @@ export type HaulKind = 'collect' | 'supply';
 /**
  * How far along a leg a hauler is, as 0 (just left) to 1 (arrived).
  *
- * The renderer needs this because the simulated trip has a duration and a
+ * Module-private: the only way to ask this question is `legPositionOf` below,
+ * because every caller that asks it wants a position and the ratio on its own
+ * is what let a second copy of the two multiplications appear. It was exported
+ * while `haulSpot` kept a third copy in pixel space; that copy is gone.
+ *
+ * The ratio exists at all because the simulated trip has a duration and a
  * fixed-speed walk animation does not: at 1x the sim moves a hauler 4 tiles/s
  * while the dot managed 1.875, so the dot was still crossing open ground when
  * the trip flipped legs and it turned round without ever reaching the building
@@ -97,7 +102,7 @@ export type HaulKind = 'collect' | 'supply';
  * reports more ticks left than its length clamps to 0 rather than running
  * backwards past the camp.
  */
-export function legProgress(ticksLeft: number, totalTicks: number): number {
+function legProgress(ticksLeft: number, totalTicks: number): number {
   if (totalTicks <= 0) return 1;
   return Math.min(1, Math.max(0, (totalTicks - ticksLeft) / totalTicks));
 }
@@ -124,10 +129,12 @@ export interface RunningLeg {
  *
  * Here rather than on `HaulTrip` because it is the same law `legProgress`
  * is, and separating the ratio from the two multiplications that consume it is
- * what let a SECOND copy of those multiplications appear beside the first.
- * Every caller that has to answer "where is this hauler" — a cancellation
- * choosing its resting tile, a move re-pricing an outbound leg from where the
- * walk actually got to — must answer it identically, or the ticks charged and
+ * what let a SECOND copy of those multiplications appear beside the first —
+ * and then a THIRD, in pixel space, inside `haulSpot` (src/app/world/layout.ts),
+ * which is where the duplication was actually closed. Every caller that has to
+ * answer "where is this hauler" — a cancellation choosing its resting tile, a
+ * move re-pricing an outbound leg from where the walk actually got to, the
+ * canvas drawing the dot — must answer it identically, or the ticks charged and
  * the line the player watches describe different journeys.
  *
  * A fractional tile is the correct answer and not a rounding bug: the result is

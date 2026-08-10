@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { describePick, layoutWorld, pickBuildingAt, TILE } from '../../src/app/world/layout';
 import { CAMP_COLS } from '../../src/shared/placement';
+import { CAMP_TILE } from '../../src/shared/haul';
 import type { ColonistSnapshot } from '../../src/shared/snapshot';
 import { makeBuilding, makeSnapshot, makeWorker } from './fixtures';
 
@@ -326,17 +327,31 @@ describe('hauler placement', () => {
   // (8,4) is hypot(6,4) = 7.21 tiles from the camp, so haulTicks at 2 tiles/tick
   // is ceil(7.21/2) = 4. Every leg below is 4 ticks long.
   const LEG_TICKS = 4;
+  const DOOR = { col: 8, row: 4 };
+  // A store site that is NOT the camp — the endpoint the old camp-anchored
+  // geometry could not express at either end of a leg.
+  const DEPOT = { col: 14, row: 9 };
+  // Both endpoints of each leg, frozen the way the engine freezes them. The
+  // layout reads these and nothing else while a leg is running: no phase has
+  // a case of its own and neither end is assumed to be the camp.
+  const outboundLeg = {
+    haulLegFromCol: CAMP_TILE.col, haulLegFromRow: CAMP_TILE.row,
+    haulLegToCol: DOOR.col, haulLegToRow: DOOR.row,
+  };
+  const returnLeg = {
+    haulLegFromCol: DOOR.col, haulLegFromRow: DOOR.row,
+    haulLegToCol: CAMP_TILE.col, haulLegToRow: CAMP_TILE.row,
+  };
   const haulSnapshot = (overrides: Partial<ColonistSnapshot>) => makeSnapshot({
-    buildings: [makeBuilding(1, { defId: 'forester', col: 8, row: 4 })],
+    buildings: [makeBuilding(1, { defId: 'forester', col: DOOR.col, row: DOOR.row })],
     // Default: an outbound hauler that has ARRIVED (0 ticks left), which is the
     // doorstep case the placement tests below were written against. The leg
-    // total and pickup tile match building 1's own (fixed, in this describe
-    // block) position — haulSpot now reads them from the snapshot rather than
-    // recomputing them from the building's live tile (OBS-5-01); the dedicated
-    // "building moved mid-leg" test below is the one that overrides them.
+    // total and both endpoints come off the snapshot — haulSpot never recomputes
+    // them from the building's live tile (OBS-5-01); the dedicated "building
+    // moved mid-leg" test below is the one that overrides them.
     colonists: [makeWorker(20, {
       hauling: true, haulPhase: 'outbound', haulTicksLeft: 0,
-      haulLegTicks: LEG_TICKS, haulLegFromCol: 8, haulLegFromRow: 4,
+      haulLegTicks: LEG_TICKS, ...outboundLeg,
       ...overrides,
     })],
   });
@@ -353,7 +368,9 @@ describe('hauler placement', () => {
   });
 
   it('sends a hauler that finished its return leg back to the camp', () => {
-    const hauler = haulerIn(haulSnapshot({ haulTargetId: 1, haulPhase: 'returning', haulTicksLeft: 0, carrying: 6 }));
+    const hauler = haulerIn(haulSnapshot({
+      haulTargetId: 1, haulPhase: 'returning', haulTicksLeft: 0, carrying: 6, ...returnLeg,
+    }));
     expect(hauler.x).toBeLessThan(CAMP_COLS);
     expect(hauler.carrying).toBe(true);
   });
@@ -364,11 +381,18 @@ describe('hauler placement', () => {
   // flipped legs, so it turned round without ever reaching the building.
   // Position is now derived from the leg's remaining ticks, so the two clocks
   // agree by construction at any speed.
-  it('places a just-dispatched hauler at the camp, not already at its target', () => {
+  it('places a just-dispatched hauler at the camp end of its leg, not already at its target', () => {
     const justSent = haulerIn(haulSnapshot({ haulTargetId: 1, haulTicksLeft: LEG_TICKS }));
-    const camp = layoutWorld(haulSnapshot({ haulTargetId: 1 })).camp;
-    expect(justSent.x).toBeCloseTo(camp.x);
-    expect(justSent.y).toBeCloseTo(camp.y);
+    // The camp end derived rather than hardcoded: a return leg that has ARRIVED
+    // stands on exactly the tile an outbound leg departs from.
+    const arrivedHome = haulerIn(haulSnapshot({
+      haulTargetId: 1, haulPhase: 'returning', haulTicksLeft: 0, carrying: 6, ...returnLeg,
+    }));
+    expect(justSent.x).toBeCloseTo(arrivedHome.x);
+    expect(justSent.y).toBeCloseTo(arrivedHome.y);
+    // ...and nowhere near the door it is walking toward
+    const arrivedThere = haulerIn(haulSnapshot({ haulTargetId: 1 }));
+    expect(Math.hypot(justSent.x - arrivedThere.x, justSent.y - arrivedThere.y)).toBeGreaterThan(1);
   });
 
   it('advances an outbound hauler monotonically from camp to doorstep', () => {
@@ -387,7 +411,7 @@ describe('hauler placement', () => {
     // sim has the hauler AT the building with a full return leg ahead of it.
     const arrived = haulerIn(haulSnapshot({ haulTargetId: 1, haulTicksLeft: 0 }));
     const turning = haulerIn(haulSnapshot({
-      haulTargetId: 1, haulPhase: 'returning', haulTicksLeft: LEG_TICKS, carrying: 6,
+      haulTargetId: 1, haulPhase: 'returning', haulTicksLeft: LEG_TICKS, carrying: 6, ...returnLeg,
     }));
     expect(turning.x).toBeCloseTo(arrived.x);
     expect(turning.y).toBeCloseTo(arrived.y);
@@ -396,7 +420,7 @@ describe('hauler placement', () => {
   it('walks a returning hauler back along the same line it came out on', () => {
     const out = (t: number) => haulerIn(haulSnapshot({ haulTargetId: 1, haulTicksLeft: t }));
     const back = (t: number) => haulerIn(haulSnapshot({
-      haulTargetId: 1, haulPhase: 'returning', haulTicksLeft: t, carrying: 6,
+      haulTargetId: 1, haulPhase: 'returning', haulTicksLeft: t, carrying: 6, ...returnLeg,
     }));
     // Same fraction of the leg travelled, opposite direction: one tick out of
     // four is the mirror of three ticks left on the way home.
@@ -412,13 +436,14 @@ describe('hauler placement', () => {
   });
 
   it('keeps a hauler at the doorstep of its target while the crew hold their own distinct spots', () => {
-    const building = makeBuilding(1, { defId: 'forester', col: 8, row: 4, workerSlots: 2 });
-    // The doorstep is a pure function of the building's cell (see haulerSpot):
-    // derive its exact coordinates from a layout with only the hauler present,
-    // rather than hardcoding the cell's offset here.
+    const building = makeBuilding(1, { defId: 'forester', col: DOOR.col, row: DOOR.row, workerSlots: 2 });
+    const arrived = { hauling: true, haulTargetId: 1, haulPhase: 'outbound' as const, haulTicksLeft: 0, haulLegTicks: LEG_TICKS, ...outboundLeg };
+    // The doorstep is a pure function of the leg's own `to` tile (see
+    // haulerSpot): derive its exact coordinates from a layout with only the
+    // hauler present, rather than hardcoding the cell's offset here.
     const haulerAlone = layoutWorld(makeSnapshot({
       buildings: [building],
-      colonists: [makeWorker(20, { hauling: true, haulTargetId: 1, haulPhase: 'outbound', haulTicksLeft: 0 })],
+      colonists: [makeWorker(20, arrived)],
     }));
     const doorstep = haulerAlone.colonists.find((w) => w.id === 20)!;
 
@@ -427,7 +452,7 @@ describe('hauler placement', () => {
       colonists: [
         makeWorker(1, { buildingId: 1 }),
         makeWorker(2, { buildingId: 1 }),
-        makeWorker(20, { hauling: true, haulTargetId: 1, haulPhase: 'outbound', haulTicksLeft: 0 }),
+        makeWorker(20, arrived),
       ],
     }));
 
@@ -458,10 +483,13 @@ describe('hauler placement', () => {
     // guard: a hauler's placement carries the sentinel slot (-1). Without the
     // guard, allocateSlots would look up that sentinel by id and hand it right
     // back once the same worker becomes real crew at the same building.
-    const building = makeBuilding(1, { defId: 'forester', col: 8, row: 4, workerSlots: 4 });
+    const building = makeBuilding(1, { defId: 'forester', col: DOOR.col, row: DOOR.row, workerSlots: 4 });
     const before = layoutWorld(makeSnapshot({
       buildings: [building],
-      colonists: [makeWorker(20, { hauling: true, haulTargetId: 1, haulPhase: 'outbound', haulTicksLeft: 0 })],
+      colonists: [makeWorker(20, {
+        hauling: true, haulTargetId: 1, haulPhase: 'outbound', haulTicksLeft: 0,
+        haulLegTicks: LEG_TICKS, ...outboundLeg,
+      })],
     }));
     const wasHauler = before.colonists.find((w) => w.id === 20)!;
     expect(wasHauler.at).toBe(1); // sanity: this frame is the doorstep case, its placement carries the sentinel
@@ -491,16 +519,112 @@ describe('hauler placement', () => {
       buildings: [makeBuilding(1, { defId: 'forester', col: 23, row: 15 })], // moved mid-leg, far corner
       colonists: [makeWorker(20, {
         hauling: true, haulTargetId: 1, haulPhase: 'returning', haulTicksLeft: 2, carrying: 6,
-        haulLegTicks: LEG_TICKS, haulLegFromCol: 8, haulLegFromRow: 4, // frozen at the ORIGINAL (8,4) pickup
+        haulLegTicks: LEG_TICKS, ...returnLeg, // frozen at the ORIGINAL (8,4) -> camp leg
       })],
     });
     const hauler = layoutWorld(snapshot).colonists.find((w) => w.id === 20)!;
     // Halfway through the ORIGINAL 4-tick leg (2 of 4 remain), walking the
-    // pickup(8,4)<->camp line. The old, buggy computation re-derives both
-    // endpoint and total from the building's CURRENT tile: haulTicks(23, 15,
-    // …) = 13, so legProgress(2, 13) ≈ 0.846 — 85% home on a line from the
-    // far-corner door, not the door this hauler actually left.
-    expect(hauler.x).toBeCloseTo(5.25);
-    expect(hauler.y).toBeCloseTo(2.9);
+    // (8,4)->camp(2,0) line: tile (5,2), plus the doorstep offset. The old,
+    // buggy computation re-derives both endpoint and total from the building's
+    // CURRENT tile: haulTicks(23, 15, …) = 13, so legProgress(2, 13) ≈ 0.846 —
+    // 85% home on a line from the far-corner door, not the door this hauler
+    // actually left.
+    expect(hauler.x).toBeCloseTo(5.5);
+    expect(hauler.y).toBeCloseTo(3.05);
+  });
+
+  // The three states a hauler's dot can be in, and the fields that place each
+  // (Task 10 step 3's layout half). The two field pairs fail in opposite ways:
+  // the leg endpoints read 0,0 on a cleared trip and are obviously wrong at a
+  // glance, while `haulAt*` mid-leg holds the tile the trip STARTED from — a
+  // plausible tile, not a sentinel — so a dot placed from it looks fine.
+  it('draws a mid-leg hauler between the leg\'s own endpoints, never from the tile it last stood still on', () => {
+    // Three DISTINCT tiles, so no reader can pass by picking the wrong pair:
+    // the leg runs depot(14,9) -> door(8,4) while `haulAt` still reads (5,12).
+    const hauler = haulerIn(makeSnapshot({
+      buildings: [makeBuilding(1, { defId: 'forester', col: DOOR.col, row: DOOR.row })],
+      colonists: [makeWorker(20, {
+        hauling: true, haulTargetId: 1, haulPhase: 'fetching', haulKind: 'supply',
+        haulTicksLeft: 3, haulLegTicks: LEG_TICKS,
+        haulLegFromCol: DEPOT.col, haulLegFromRow: DEPOT.row,
+        haulLegToCol: DOOR.col, haulLegToRow: DOOR.row,
+        haulAtCol: 5, haulAtRow: 12,
+      })],
+    }));
+    // A quarter of the way along (1 of 4 ticks spent): (12.5, 7.75), plus the
+    // doorstep offset. Reading `haulAt` instead would put it at (5.5, 13.05),
+    // reading either endpoint alone at (14.5, 10.05) or (8.5, 5.05).
+    expect(hauler.x).toBeCloseTo(13);
+    expect(hauler.y).toBeCloseTo(8.8);
+    expect(hauler.travelling).toBe(true);
+  });
+
+  it('parks a hauler idle at the camp among the campers, in a real camp slot', () => {
+    const layout = layoutWorld(makeSnapshot({
+      buildings: [makeBuilding(1, { defId: 'forester', col: DOOR.col, row: DOOR.row })],
+      colonists: [
+        makeWorker(20, { hauling: true, haulPhase: 'idle', haulAtCol: CAMP_TILE.col, haulAtRow: CAMP_TILE.row }),
+        makeWorker(21),
+      ],
+    }));
+    const hauler = layout.colonists.find((w) => w.id === 20)!;
+    const camper = layout.colonists.find((w) => w.id === 21)!;
+    expect(hauler.at).toBeNull();
+    expect(hauler.slot).toBeGreaterThanOrEqual(0); // a real camp slot, not the hauler sentinel
+    expect(hauler.x).toBeLessThan(CAMP_COLS);
+    // The camp band is the only thing with slot machinery, and this is why the
+    // camp case goes through it: an idle hauler must not stack on a camper.
+    expect(`${hauler.x},${hauler.y}`).not.toBe(`${camper.x},${camper.y}`);
+  });
+
+  it('stands a hauler idle at a depot on the depot\'s doorstep, not back at the camp', () => {
+    // The case the camp-anchored geometry could never express, and the one a
+    // player reads as a colonist teleporting home. `haulLegTicks` and both
+    // endpoints are left at their cleared 0 — an idle dot must not come from
+    // them either.
+    const idleAt = (col: number, row: number) => layoutWorld(makeSnapshot({
+      buildings: [makeBuilding(1, {
+        defId: 'storehouse', col: DEPOT.col, row: DEPOT.row, workerSlots: 0,
+        state: 'storing', stored: 24, storage: 60,
+      })],
+      colonists: [makeWorker(20, { hauling: true, haulPhase: 'idle', haulAtCol: col, haulAtRow: row })],
+    }));
+    const depotLayout = idleAt(DEPOT.col, DEPOT.row);
+    const resting = depotLayout.colonists.find((w) => w.id === 20)!;
+    const depot = depotLayout.buildings.find((b) => b.id === 1)!;
+    expect(resting.x).toBeCloseTo(depot.col + 0.5);
+    expect(resting.y).toBeGreaterThan(depot.row + 0.5); // on the doorstep, below the cell
+    // The control: the same code path still camps a hauler resting at the camp.
+    const atCamp = idleAt(CAMP_TILE.col, CAMP_TILE.row).colonists.find((w) => w.id === 20)!;
+    expect(atCamp.x).toBeLessThan(CAMP_COLS);
+  });
+
+  it('reads a carried load\'s direction off haulPickedUp, never off the job kind', () => {
+    const trip = (pickedUp: boolean) => haulerIn(makeSnapshot({
+      buildings: [makeBuilding(1, { defId: 'bakery', col: DOOR.col, row: DOOR.row })],
+      colonists: [makeWorker(20, {
+        hauling: true, haulTargetId: 1, haulPhase: 'returning', haulKind: 'supply',
+        carrying: 4, haulTicksLeft: 2, haulLegTicks: LEG_TICKS, ...returnLeg,
+        haulPickedUp: pickedUp,
+      })],
+    }));
+    // BOTH are `supply` trips, deliberately: a marker driven by haulKind calls
+    // them the same thing, and the round trip this increment is named for —
+    // supply out, collected output home — is exactly the one it draws
+    // backwards (spec §2.10).
+    expect(trip(true)).toMatchObject({ carrying: true, carryingOut: true });
+    expect(trip(false)).toMatchObject({ carrying: true, carryingOut: false });
+  });
+
+  it('carries a store\'s fill and its capacity through to the canvas', () => {
+    // Four distinct piles on one building, so a gauge wired to the wrong one
+    // cannot pass: stored 24, capacity 60, output buffer 7, in-tray 3.
+    const layout = layoutWorld(makeSnapshot({
+      buildings: [makeBuilding(1, {
+        defId: 'storehouse', workerSlots: 0, state: 'storing',
+        stored: 24, storage: 60, buffered: 7, inputBuffered: 3,
+      })],
+    }));
+    expect(layout.buildings[0]).toMatchObject({ state: 'storing', stored: 24, storage: 60 });
   });
 });

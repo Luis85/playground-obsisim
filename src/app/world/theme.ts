@@ -14,7 +14,8 @@ export interface WorldTheme {
   workerToolRing: string;
   /** Batch progress fill — bright cream so it reads on green tiles. */
   progressFill: string;
-  /** A hauler's carried load. The world palette's production language is
+  /** A hauler's carried load, when the load came OUT of a building's output
+   * buffer. The world palette's production language is
    * already spoken for — red/orange/green for building health and state,
    * purple for the output-full stall, cream for tools and progress,
    * blue-violet for interaction (accent) — so cyan is the in-transit hue,
@@ -25,6 +26,22 @@ export interface WorldTheme {
    * never mistaken for the cream tool ring it sits flush against on a
    * tooled hauler. */
   carriedLoad: string;
+  /**
+   * A hauler's carried load when it did NOT come out of a building — i.e.
+   * colony stock drawn from the camp or a storehouse and being carried IN to
+   * a building that needs it. Its own hue beside `carriedLoad`, because the
+   * whole point of the pair is that flow direction reads at a glance (§2.10);
+   * which of the two a dot wears is decided by the snapshot's `haulPickedUp`
+   * and never by the job kind, which is frozen at dispatch.
+   *
+   * Deliberately the SAME brown as `stateRing.storing`, the way `carriedLoad`
+   * deliberately matches `stateRing.relocating`: goods sitting in a depot and
+   * goods walking out of one are the same goods, and that match is not a
+   * coincidence to be tidied away. Every vault hue is spoken for elsewhere,
+   * and the two nearest free candidates would have collided on a single dot —
+   * the child mark's yellow (#e6c84a) is one RGB unit off the vault orange.
+   */
+  carriedInput: string;
   /** Interactive accent — the selection ring and the valid-ghost tint. */
   accent: string;
   /** Danger — the blocked-ghost tint (the same resolved red the
@@ -45,6 +62,10 @@ export interface WorldTheme {
 }
 
 const HEX = /^#[0-9a-f]{6}$/i;
+
+/** A depot's sacks and crates. Named once because two things wear it on
+ * purpose — see `carriedInput` and `stateRing.storing`. */
+const STORE_BROWN = '#a9835a';
 
 // Obsidian themes expose their palette as CSS variables; anything that is not
 // a plain 6-digit hex (hsl(), rgb(), empty) falls back so ex.Color.fromHex
@@ -119,12 +140,13 @@ export function resolveWorldTheme(read: VarReader): WorldTheme {
       // are claimed below by the child mark and homelessMark), so this is
       // hardcoded like unstaffed's grey and elder's silver: a warm brown, the
       // register a depot's sacks and crates actually read as.
-      storing: '#a9835a',
+      storing: STORE_BROWN,
     },
     colonistColors: Array.from({ length: COLONIST_BUCKETS }, (_, i) => mixHex(red, green, i / (COLONIST_BUCKETS - 1))),
     workerToolRing: '#f2ecdd',
     progressFill: '#f5efdc',
     carriedLoad: pick(read, '--color-cyan', '#4bbfd4'),
+    carriedInput: STORE_BROWN,
     accent: pick(read, '--interactive-accent', '#7c8cf0'),
     danger: red,
     stageMark: {

@@ -92,18 +92,22 @@ const growWorkers = () => [worker(10, { buildingId: 1, toolTicks: 100 }), worker
  * colony reset by design (see renderer.ts), which would wipe the scene between
  * phases instead of animating through it.
  *
- * Building 1 never moves across these phases, so worker 12's leg total and
- * return-leg pickup tile are the same constants (2 ticks, the building's own
- * (4,1)) on every haul phase — baked in here rather than repeated per phase,
- * the way `hauler` overrides `haulTargetId`/`haulPhase`/`haulTicksLeft` per
- * phase instead. haulSpot now reads these from the snapshot rather than
- * recomputing them (OBS-5-01), so a stale or missing value here would move
- * the dot, not just fail silently.
+ * Building 1 never moves across these phases, so worker 12's leg total is the
+ * same constant (2 ticks) on every haul phase — baked in here rather than
+ * repeated per phase, the way `hauler` overrides the phase and the leg's two
+ * endpoints instead. haulSpot reads all of these off the snapshot rather than
+ * recomputing them (OBS-5-01), so a stale or missing value here would move the
+ * dot, not just fail silently. `haulPickedUp` is baked in too and never varies
+ * across these four: this is a collect trip, and the phase that reveals the
+ * load marker must differ from its predecessor by `carrying` alone.
  */
+const OUT_LEG = { haulLegFromCol: CAMP_TILE.col, haulLegFromRow: CAMP_TILE.row, haulLegToCol: 4, haulLegToRow: 1 };
+const HOME_LEG = { haulLegFromCol: 4, haulLegFromRow: 1, haulLegToCol: CAMP_TILE.col, haulLegToRow: CAMP_TILE.row };
+
 const haulScene = (tick: number, hauler: Partial<ColonistSnapshot>, forester: Partial<BuildingSnapshot> = {}) => snap(tick,
   [building(1, 'forester', 4, 1, { buffered: 12, state: 'outputFull', ...forester }), building(2, 'farm', 6, 1)],
   [worker(10, { buildingId: 1 }), worker(11, { buildingId: 1 }), worker(12, {
-    toolTicks: 100, haulLegTicks: 2, haulLegFromCol: 4, haulLegFromRow: 1, ...hauler,
+    toolTicks: 100, haulLegTicks: 2, haulPickedUp: true, ...hauler,
   })]);
 
 /**
@@ -123,6 +127,44 @@ const haulScene = (tick: number, hauler: Partial<ColonistSnapshot>, forester: Pa
  * is a colony reset (see renderer.ts) and would wipe the scene between phases
  * instead of changing one thing in it.
  */
+const DEPOT = { col: 10, row: 5 };
+
+/**
+ * The store phases hold EVERYTHING constant except one field on the depot or
+ * on hauler 30 — the same shape the haul and demographic scenes were rebuilt
+ * into after OBS-4-04.
+ *
+ * The bakery sits at (4,1) and the depot at (10,5), so camp -> bakery and
+ * depot -> bakery are two genuinely different lines. That is the whole point
+ * of the pair of phases below: the camp-anchored geometry this increment
+ * replaces drew every leg from the camp tent, which would have made the two
+ * frames identical — a check that stayed green with the feature absent.
+ *
+ * `haulKind` is 'supply' on BOTH carrying phases, also deliberately: the
+ * carrying-in/carrying-out marker is driven by `haulPickedUp`, and a marker
+ * that read the job kind instead would draw the two the same way.
+ */
+const depotHolding = (over: Partial<BuildingSnapshot> = {}) => [building(2, 'storehouse', DEPOT.col, DEPOT.row, {
+  workerSlots: 0, state: 'storing', storage: 60, stored: 15, ...over,
+})];
+
+const storeScene = (tick: number, depot: BuildingSnapshot[], hauler: Partial<ColonistSnapshot> = {}) => snap(tick,
+  [building(1, 'bakery', 4, 1, { workers: 1, state: 'waitingForInput' }), ...depot],
+  [worker(30, {
+    hauling: true, haulPhase: 'idle', haulAtCol: CAMP_TILE.col, haulAtRow: CAMP_TILE.row, ...hauler,
+  })]);
+
+// Half way along a 2-tick leg into the bakery's door, carrying four units.
+// Only the leg's `from` end differs between the two.
+const SUPPLY_FROM_CAMP: Partial<ColonistSnapshot> = {
+  haulTargetId: 1, haulPhase: 'outbound', haulKind: 'supply', carrying: 4,
+  haulTicksLeft: 1, haulLegTicks: 2,
+  haulLegFromCol: CAMP_TILE.col, haulLegFromRow: CAMP_TILE.row, haulLegToCol: 4, haulLegToRow: 1,
+};
+const SUPPLY_FROM_DEPOT: Partial<ColonistSnapshot> = {
+  ...SUPPLY_FROM_CAMP, haulLegFromCol: DEPOT.col, haulLegFromRow: DEPOT.row,
+};
+
 const homeScene = (tick: number, resident: Partial<ColonistSnapshot> = {}) => snap(tick,
   [building(1, 'house', 4, 1, {
     workerSlots: 0, state: 'housing', beds: 4, occupants: (resident.homeId ?? null) === null ? 0 : 1,
@@ -157,12 +199,12 @@ const phases: Array<() => void> = [
   // published total (OBS-4-09, OBS-5-01), so these values are what move it,
   // not elapsed wall-clock.
   () => renderer.sync(haulScene(5, {})),                                                    // 6: baseline, idle at camp
-  () => renderer.sync(haulScene(6, { hauling: true, haulTargetId: 1, haulPhase: 'outbound', haulTicksLeft: 0 })), // 7: arrived at the building
-  () => renderer.sync(haulScene(7, { hauling: true, haulTargetId: 1, haulPhase: 'returning', haulTicksLeft: 1 })), // 8: half way home — a genuinely interpolated point, neither endpoint
-  () => renderer.sync(haulScene(8, { hauling: true, haulTargetId: 1, haulPhase: 'returning', haulTicksLeft: 1, carrying: 6 })), // 9: same point, now loaded
+  () => renderer.sync(haulScene(6, { hauling: true, haulTargetId: 1, haulPhase: 'outbound', haulTicksLeft: 0, ...OUT_LEG })), // 7: arrived at the building
+  () => renderer.sync(haulScene(7, { hauling: true, haulTargetId: 1, haulPhase: 'returning', haulTicksLeft: 1, ...HOME_LEG })), // 8: half way home — a genuinely interpolated point, neither endpoint
+  () => renderer.sync(haulScene(8, { hauling: true, haulTargetId: 1, haulPhase: 'returning', haulTicksLeft: 1, carrying: 6, ...HOME_LEG })), // 9: same point, now loaded
   // ONE change from the previous phase: building 1 flips to relocating. Its
   // ring colour must differ, and nothing else in the scene moves.
-  () => renderer.sync(haulScene(9, { hauling: true, haulTargetId: 1, haulPhase: 'returning', haulTicksLeft: 1, carrying: 6 }, { state: 'relocating', relocatingTicks: 6 })),
+  () => renderer.sync(haulScene(9, { hauling: true, haulTargetId: 1, haulPhase: 'returning', haulTicksLeft: 1, carrying: 6, ...HOME_LEG }, { state: 'relocating', relocatingTicks: 6 })),
   () => {
     renderer.setGhost({ defId: 'bakery', col: 10, row: 5, valid: true });
     renderer.setSelection(1);
@@ -186,7 +228,17 @@ const phases: Array<() => void> = [
   () => renderer.sync(homeScene(3, { homeId: 1 })),                 // 17: colonist 4 moves in — ONLY its homeId changes
   () => renderer.sync(homeScene(4, { homeId: 1, stage: 'child' })), // 18: the same colonist becomes a child
   () => renderer.sync(homeScene(5, { homeId: 1, stage: 'elder' })), // 19: the same colonist becomes an elder
-  () => renderer.dispose(),                                         // 20
+  // Eight store phases, one change each — see storeScene above.
+  () => renderer.sync(storeScene(6, [])),                                          // 20: baseline — a bakery and one hauler idle at camp
+  () => renderer.sync(storeScene(7, depotHolding({ state: 'unstaffed' }))),         // 21: a storehouse appears, in a state it shares with every other def
+  () => renderer.sync(storeScene(8, depotHolding())),                              // 22: ONLY the depot's state changes — unstaffed to storing
+  () => renderer.sync(storeScene(9, depotHolding({ stored: 45 }))),                // 23: ONLY `stored` changes — 15 of 60 to 45 of 60
+  () => renderer.sync(storeScene(10, depotHolding({ stored: 45 }), SUPPLY_FROM_CAMP)),   // 24: the hauler takes a supply leg out of the camp
+  () => renderer.sync(storeScene(11, depotHolding({ stored: 45 }), SUPPLY_FROM_DEPOT)),  // 25: ONLY the leg's `from` end changes — camp to depot
+  () => renderer.sync(storeScene(12, depotHolding({ stored: 45 }), { ...SUPPLY_FROM_DEPOT, haulPickedUp: true })), // 26: ONLY `haulPickedUp` changes
+  () => renderer.sync(storeScene(13, depotHolding({ stored: 45 }))),               // 27: the trip ends — the hauler is idle at the camp
+  () => renderer.sync(storeScene(14, depotHolding({ stored: 45 }), { haulAtCol: DEPOT.col, haulAtRow: DEPOT.row })), // 28: ONLY where it rests changes
+  () => renderer.dispose(),                                         // 29
 ];
 
 window.__step = (index: number) => {

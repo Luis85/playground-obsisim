@@ -1024,67 +1024,432 @@ the other is decided and deliberately not fixed.
 
 ## 4. Balance values
 
-**Starting points, not claims.** Per increment 5's thesis — a constant
-justified by prose rather than measurement is a guess — this table records
-where the increment starts, and **§4 is to be rewritten with what the harness
-measured before this increment is called done.** "Validated, unchanged" is a
-legitimate outcome for any row.
+**Measured, and rewritten.** The table this section shipped with recorded where
+the increment started and promised that §4 would be rewritten with what the
+harness measured before the increment was called done. This is that rewrite.
+Every figure below comes from the instruments committed in
+`tests/engine/balance.test.ts`; reproduce any of it with `npm run
+balance:report` and `npm run balance:population`.
 
-| constant | start | reasoning to be checked |
-| --- | ---: | --- |
-| `inputBufferCap` | 12 | Mirrors `outputBufferCap`, so a building's in-tray and out-tray are the same size and a hauler's round trip is symmetric. At one input per batch this is 12 batches of runway — ~36 ticks for a mill, comfortably longer than the 13-tick worst-case one-way walk. |
-| `storehouseCapacity` | 60 | Five full output buffers, so one depot serves a cluster of four or five producers for several trips before it backs up. |
-| `minSupplyUnits` | 2 | Don't walk thirteen tiles to deliver one unit. Low enough that a small colony is not locked out of supply entirely, which a higher floor would do. |
-| `storehouse` cost | 20 wood, 10 planks | Between a forester (10 wood) and a mill (20 wood, 10 planks): a real decision in the early game, trivially affordable once the plank chain runs. |
+**No constant moved**, and that is not the same as nothing having been learned.
+One constant had a clear measured case for a change, was retuned, and was
+measured back out again on a second fixture — §4.2 records that trial in full,
+because the trial is the evidence. Two of the readings argue against a
+*mechanic* rather than against a magnitude, and §4.3 says which of them
+contradicts §1 rather than quietly editing §1 to agree.
 
-### 4.1 What the harness must answer
+| constant | value | outcome | the measurement behind it |
+| --- | ---: | --- | --- |
+| `inputBufferCap` | 12 | **Validated — for a reason the shipped comment did not give, and against a retune that measured better on one fixture and worse on another.** | It is not runway, it is *concurrency*: a supply hauler claims its whole load against the target's in-tray, so `inputBufferCap / haulCarryCapacity` is how many loads may be walking toward one building at once. At 12 that caps a far processor at **72%** of ceiling however many haulers are hired; at 24 the same run reads **92%**. It is also, today, the dispatcher's only fairness floor — §4.2. |
+| `storehouseCapacity` | 60 | **Validated as a magnitude. The mechanic it sizes is incomplete.** | The depot is full — 60 of 60 — in every measured run, and its benefit is a one-off: **+26 / +24 / +28** planks at 600 / 1,200 / 2,400 ticks. At capacity 240 it is full at 240 and the one-off is proportionally bigger (+114 planks at 2,400 ticks). Raising a capacity does not create the flow that is missing (§4.3). |
+| `storehouse` cost | 20 wood, 10 planks | **Validated, unchanged.** | A crossover against hiring another hauler does exist — **leg ≈ 11, and only from the third hauler onward** — so the depot neither never-wins nor wins-everywhere. The window is narrow, and cutting the price would only make a mechanic that stops paying after 600 ticks cheaper to buy. |
+| `minSupplyUnits` | 2 | **Validated, unchanged.** | Not the binding term in any reading taken: the far processor's plateau is in-tray concurrency, the depot's decay is a missing flow, and q3's starvation is the ranking. Nothing measured here moves it. |
+| `birthFoodPerHead` | 12 | **Validated, unchanged — now measured with a live depot in the colony.** | Peak 40, final 39, trough 34, 73 births, **0 starvation deaths**, minimum 9.8–9.9 meals/head, across all four 12,000-tick runs, depots or none. Identical to increment 6's recorded curve. |
+| `outputBufferCap` / `haulCarryCapacity` / `haulTilesPerTick` | 12 / 6 / 2 | **Untouched, and measured untouched.** | Increment 5's sixteen-row sweep is byte-identical at `main`, at the pre-increment commit `237b3b3`, and at this branch's HEAD. |
 
-Three questions, and the instruments that answer them. Both harnesses need
-extending; that extension is a task in the plan, not an afterthought.
+### 4.1 What the harness measured
 
 **1. What did two-way haul do to increment 5's measured gradient?**
 
-Increment 5 measured that one hauler serves a building out to leg ~4, two by
-leg 8, three by leg 13. Re-run that sweep, and add a second one for an
-input-consuming building (a sawmill fed by a forester). Two things must be
-read, not one:
+**The control holds, and it is the clean reading of the whole increment.**
+Increment 5's sweep was re-run at three commits — `main` (end of increment 5),
+`237b3b3` (end of increment 6, the pre-flight for this one), and this branch's
+HEAD. **All sixteen rows are identical at all three, digit for digit:**
 
-- the **raw producer's** gradient should be **unchanged**. It has no inputs,
-  nothing is ever delivered to it, and a shift there means this increment broke
-  something it did not intend to touch. This is the control, and it is the more
-  important of the two readings.
-- the **processor's** gradient is expected to be roughly halved in reach. If it
-  is not, find out why before believing it.
+```
+tile        leg  haulers  delivered  %ceiling  stalled%  idle
+( 3, 0)     1        1        398       100         0   200
+( 8, 4)     4        1        394        99         0    67
+(15, 8)     8        1        210        53        50    36
+(15, 8)     8        2        390        98         0   141
+(23,15)    13        1        132        33        68    23
+(23,15)    13        2        258        65        38    54
+(23,15)    13        3        384        96         0    94
+```
+
+(seven of the sixteen; the rest are in the captured run). One hauler to leg 4,
+two by leg 8, three by leg 13 — exactly as increment 5 recorded. A raw producer
+has no inputs, nothing is ever delivered to it, and a shift here would have
+meant this increment broke something it did not intend to touch. It did not.
+
+**The processor's gradient is halved at one hauler and softens above it.**
+Measured on a **single-stage camp-fed sawmill** — increment 5's own sweep with
+exactly one thing changed, a recipe that has an input to walk in. Crew 2 and
+`ticksPerBatch` 3 are the forester's own, so `ceiling` is the same 400 and
+`share` is comparable row for row. `StageResult.ceiling`'s caveat covers a
+`workshop` and a stage *fed by another stage*, and this is neither, which is why
+the processor half is measured this way rather than as the second stage of a
+chain.
+
+| leg | forester %ceiling (1/2/3/4 haulers) | sawmill %ceiling (1/2/3/4 haulers) |
+| ---: | --- | --- |
+| 1 | 100 / 100 / 100 / 100 | 99 / 99 / 99 / 99 |
+| 4 | 99 / 99 / 99 / 99 | **89** / 98 / 98 / 98 |
+| 8 | 53 / 98 / 98 / 98 | 48 / 80 / 97 / 97 |
+| 13 | 33 / 65 / 96 / 96 | 30 / 55 / **71** / **72** |
+
+Reach at the 95% bar, reading the two extra tiles (legs 2 and 6) the same
+fixture was run at:
+
+| haulers | raw producer | processor | ratio |
+| ---: | ---: | ---: | ---: |
+| 1 | leg 4 | leg 2 | 0.50 |
+| 2 | leg 8 | leg 6 | 0.75 |
+| 3 | leg 13 | leg 8 | 0.62 |
+| 4 | leg 13 | never reaches 13 | — |
+
+So §4.1's expectation of "roughly halved" holds at one hauler and softens above
+it, and **the softening has a cause: the round trip §2.5 added.** 92–99% of
+supply trips in this sweep come home loaded, so the collect job rides home on
+the supply job and the second half of the work is nearly free once the first is
+being done.
+
+**The plateau at the far corner is not a hauler shortage.** At leg 13 the
+processor sits at 71–72% of ceiling and a fourth hauler buys one point, while
+those four haulers are idle only 5% of their ticks and the sawmill waits for
+input 30% of its own. `Claims.input` counts a fetching hauler's `plannedAmount`
+and an outbound hauler's `amount` against the target's in-tray room, so at most
+`inputBufferCap / haulCarryCapacity` = 2 loads can be walking toward one
+building at a time. Two loads of 6 over a 1 + 13 + 13 = 27-tick round trip is
+0.44 units per tick against a 2-worker sawmill's demand of 0.67 — 66% of
+ceiling. Measured 72%: the arithmetic and the reading agree. §4.2 is what
+follows from that.
 
 **2. Does a storehouse pay for itself, and from what distance?**
 
-The same two-stage chain at a range of distances, with and without a depot
-beside it, at each hauler count. The answer wanted is a *crossover distance*:
-the leg beyond which 20 wood and 10 planks buys more throughput than another
-hauler does. If there is no such distance — if the depot never wins, or wins
-everywhere — the storehouse is mistuned and `storehouseCapacity` or the cost is
-where to look first.
+Measured on a chain that stays haul-bound at every distance — forester crew 3
+feeding sawmill crew 2, five leg pairs from (5,2)/(8,4) out to (20,12)/(23,15),
+the depot between the two buildings, haulers 1–4, 600 ticks. `storedAtEnd` is
+57–60 in every with-depot run and **0 in every control**, so no row below is a
+run compared against itself.
 
-**3. Does the dispatch order thrash, and is the deadlock self-resolving in
-practice?**
+Planks made (gross, from `ProductionLedger`):
 
-§2.6 argues the deadlock away structurally. Measure it: run a colony with a
-deliberately drained ledger and every building wanting inputs, and confirm that
-collection resumes rather than the colony sitting still. Report the split of
-hauler-ticks between the two kinds over a long run, and how often a supply trip
-returns loaded; the round-trip mechanic in §2.5 is only worth its complexity if
-that number is not near zero.
+| legs (A/B) | no depot 1/2/3/4 | depot 1/2/3/4 |
+| --- | --- | --- |
+| 2 / 4 | 233 / 388 / 392 / 393 | 261 / 394 / 394 / 394 |
+| 4 / 6 | 154 / 303 / 327 / 386 | 191 / 320 / 355 / 391 |
+| 6 / 8 | 114 / 228 / 285 / 351 | 156 / 255 / 342 / 361 |
+| 9 / 11 | 84 / 162 / 242 / 270 | 132 / 207 / 269 / 301 |
+| 11 / 13 | 66 / 132 / 204 / 224 | 120 / 186 / 230 / 261 |
 
-**The fetch leg is the overhead to watch.** A supply trip is three legs where
-the discarded base model made it two, and the first leg buys nothing but
-position. Report its share of hauler-ticks. If it is large, the ranking in §2.6
-— which orders on the *whole* trip rather than on either leg — is not doing its
-job of keeping haulers fetching from the nearest stocked site.
+**The depot's own contribution grows monotonically with distance** — at one
+hauler and at four: +12% / +0.3% at leg 2-4, +24% / +1% at 4-6, +37% / +3% at
+6-8, +57% / +12% at 9-11, **+82% / +17%** at 11-13.
 
-**A fourth reading, taken for free and worth having:** the population harness
-staffs but **cannot build** (increment 6 §4.1). Increment 6 flagged that as a
-conservative control; with a storehouse in the game it becomes a distortion,
-because a colony that cannot build a depot cannot play this increment. The
-harness extension should let a scenario place one, and the 12,000-tick chain
-run should be repeated with and without — if the retuned `birthFoodPerHead: 12`
-holds in both, that is a result worth recording beside increment 6's curve.
+**The crossover against another hauler**, which is the question this section
+actually asked — depot-at-*h* against no-depot-at-*h+1*:
+
+| legs | h=1→2 | h=2→3 | h=3→4 |
+| --- | --- | --- | --- |
+| 2 / 4 | hauler (261 vs 388) | depot (394 vs 392) | depot (394 vs 393) |
+| 4 / 6 | hauler (191 vs 303) | hauler (320 vs 327) | hauler (355 vs 386) |
+| 6 / 8 | hauler (156 vs 228) | hauler (255 vs 285) | hauler (342 vs 351) |
+| 9 / 11 | hauler (132 vs 162) | hauler (207 vs 242) | tie (269 vs 270) |
+| 11 / 13 | hauler (120 vs 132) | hauler (186 vs 204) | **depot (230 vs 224)** |
+
+**The crossover distance is leg ≈ 11, and only from the third hauler onward.**
+Below that, and at any distance while the colony has fewer than three haulers
+on the chain, another colonist beats 20 wood and 10 planks. The two rows at leg
+2-4 where the depot wins are ties at ceiling, not wins. (A *slacker* chain — a
+crew-1 sawmill, which saturates by leg 8 — has the depot edging the hauler from
+two upward, but by 1–3 planks out of ~195, because both sides are already at
+ceiling. That fixture cannot answer the question and is not the one quoted.)
+
+**And the depot pays once and then stops.** Corner chain, 3 haulers, depot
+against none, at three run lengths:
+
+| ticks | no depot (planks / per tick) | depot (planks / per tick) | depot advantage | `storedAtEnd` |
+| ---: | --- | --- | ---: | ---: |
+| 600 | 204 / 0.340 | 230 / 0.383 | +12.7% | 60 |
+| 1,200 | 416 / 0.347 | 440 / 0.367 | +5.8% | 60 |
+| 2,400 | 840 / 0.350 | 868 / 0.362 | +3.3% | 60 |
+
+The absolute gain is 26 / 24 / 28 planks — **flat**. Between tick 600 and tick
+2,400 the depot run produced 638 planks and the control 636: after the first 600
+ticks the depot contributes nothing whatever. It is full in every run. §4.3 says
+what that means for §1's framing of the mechanic.
+
+Two consequences follow, both measured. **Raising `storehouseCapacity` buys a
+proportionally bigger one-off, not a rate**: the same corner chain at 2,400
+ticks makes 840 planks with no depot, 868 at capacity 60 and 954 at capacity
+240, with `storedAtEnd` at the full capacity in both. And **a depot beside a
+camp-fed processor is not worth building**: a solo sawmill at (23,15) with a
+depot at (13,8) makes 294 planks without it and **266 with it** at three haulers
+(−10%), 296 without and 306 with at four. The depot can never shorten that
+building's input leg, and moving the deposit off the camp leaves the hauler's
+next fetch starting further from the only site that holds wood.
+
+**3. Does the dispatch order thrash, and is the deadlock self-resolving?**
+
+**What was measured is an *opening*-drained ledger, not a mid-run drain**, and
+the distinction is stated rather than glossed because no instrument in this
+repository can stage the second one. The fixture is a mill (seeded wheat →
+flour) feeding a bakery (flour → bread): `seededResourcesFor` withholds every
+resource a stage produces, so at t=0 there is no flour at any site in the colony
+and the bakery's input must be manufactured before it can ever be delivered.
+That is §2.6's deadlock shape, taken from the opening rather than from the
+middle of a run.
+
+**There is no deadlock and no thrash — the opposite.** Hauler-tick split over
+600 ticks, as percentages of working (non-idle) hauler-ticks:
+
+| fixture | haulers | made₀ | made₁ | idle | working | collect% | supply% | fetch% | out% | return% | supply returns | loaded% |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| mill→bakery | 1 | 254 | **0** | 42 | 558 | 0 | 100 | 8 | 46 | 46 | 43 | 98 |
+| mill→bakery | 2 | 313 | 150 | 80 | 1120 | 0 | 100 | 7 | 47 | 46 | 78 | 96 |
+| mill→bakery | 3 | 335 | 319 | 122 | 1678 | 0 | 100 | 7 | 47 | 46 | 113 | 97 |
+| mill→bakery | 4 | 394 | 375 | 175 | 2225 | 0 | 100 | 7 | 47 | 46 | 151 | 98 |
+| + depot (13,8) | 2 | 309 | 210 | 91 | 1109 | 0 | 100 | **20** | 44 | 36 | 89 | 96 |
+| + depot (13,8) | 4 | 383 | 357 | 200 | 2200 | 1 | 99 | **17** | 45 | 39 | 165 | 98 |
+| forester→sawmill, corner | 1 | 84 | 66 | 23 | 577 | 46 | 54 | 2 | 50 | 48 | 12 | 92 |
+| forester→sawmill, corner | 4 | 246 | 224 | 126 | 2274 | 41 | 59 | 2 | 49 | 48 | 49 | 88 |
+
+`conservationError` is 0 in every one of these runs.
+
+**Collection resumes; it never stops.** In a chain where every building wants
+inputs the collect *job kind* is dispatched on 0–1% of hauler-ticks — and both
+stages still produce, because collection happens on the return leg of supply
+trips. §2.6's structural argument that the deadlock cannot happen is sound.
+
+**The round trip is emphatically worth its complexity**, which is the verdict
+§4.1 asked for and the one that was most at risk. 88–98% of supply trips turn
+for home loaded, in every fixture and at every hauler count — 96–98% in the
+two-consumer chain, and the 88% is the corner chain at four haulers, where a
+hauler arriving at a sawmill whose out-tray a colleague has just emptied comes
+home empty. Without the mechanic, 96–100% of the walk home in a two-consumer
+colony would be an empty one. It stays.
+
+**The fetch leg is cheap in a camp-only colony and expensive with a depot**:
+2–8% of working hauler-ticks without one (2% on the corner chain, where the
+source is the camp the hauler is already standing at), **17–20% with one** —
+because a hauler that banked at a depot starts its next fetch there, and the
+camp is the only site that will ever hold a seeded input. That is the same
+defect §4.3 names, seen from the leg side rather than from the stock side.
+
+**The real failure mode is neither of the two this question asked about.** With
+one hauler the bakery at (15,9) produced **zero** bread in 600 ticks and spent
+100% of its ticks in `waitingForInput`, while the mill at (12,6) made 254 flour.
+Exchange the two tiles — same buildings, same crews, same single hauler — and
+the bakery makes 108.
+
+| layout | h | mill leg | bakery leg | flour | bread | mill wait% | bakery wait% |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| mill near, bakery far | 1 | 6 | 8 | 254 | **0** | 43 | **100** |
+| mill far, bakery near | 1 | 8 | 6 | 114 | 108 | 75 | 79 |
+| both beside the camp | 1 | 2 | 3 | 397 | 144 | 2 | 72 |
+| mill near, bakery far | 2 | 6 | 8 | 313 | 150 | 28 | 71 |
+| mill far, bakery near | 2 | 8 | 6 | 229 | 210 | 49 | 59 |
+
+`compareSupplyCandidates` ranks on movable stock, then on the whole route, then
+on ids — **with no fairness term and no ageing.** While the nearer hungry
+building can still take a load it takes every one, so under hauler scarcity the
+farther consumer is starved permanently rather than served late. That is not
+thrash and it is not the deadlock §2.6 argued away; it is a strict priority with
+no floor, and it is gameplay-visible as a bakery that never bakes. It is filed
+as an issue against §2.6's ranking rather than papered over with a constant.
+
+**The fourth reading: 12,000 ticks, with and without a depot.**
+
+**Not obtainable at the fixture size §4.1 named, and the reason is arithmetic.**
+`autoPlaceSequence` yields 40 plots (5 per row, odd rows from row 1) before
+falling back to a row-major scan, and the population harness lays huts, then
+houses, then depots. The chain fixture is 2 huts and 12 houses, so its depots
+land at plots 15–16 — (12,5) is 11.2 tiles from the camp — while the two huts
+sit on plots 1 and 2, (4,1) and (6,1), at 2.2 and 4.1 tiles. The camp is nearer
+to both huts than any later plot can be, so **no depot the harness can place in
+a two-hut colony is ever the nearest site to anything**, nothing is ever banked
+in it, and a with/without comparison compares a run against itself:
+
+| houses | depots | `storedAtEnd` |
+| ---: | ---: | ---: |
+| 12 | 2 | **0** |
+| 30 | 2 | **0** |
+| 40 | 2 | **120** |
+| 78 | 2 | 118 |
+
+At 40 houses the depots fall past the plot pass onto row 0 beside the camp band,
+where they *are* the nearest site to the huts and fill to capacity. So the
+reading is obtainable — at a different house count, and that substitution is
+named here rather than the 12-house pair being quoted as though it had said
+something. Taken at 40 houses, `chain` (2 huts, 2 haulers, 4 founders), 12,000
+ticks, `sampleEvery: 200`:
+
+| houses | depots | `storedAtEnd` | peak | final | trough (t≥3,000) | births | old age | starved | frozen | min meals/head |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 12 | 0 | 0 | 40 | 39 | 34 | 73 | 38 | **0** | 0 | 9.8 |
+| 12 | 2 | 0 (dead depot) | 40 | 39 | 33 | 73 | 38 | **0** | 0 | 9.8 |
+| 40 | 0 | 0 | 39 | 39 | 34 | 73 | 38 | **0** | 0 | 9.8 |
+| 40 | 2 | **120 (live)** | 40 | 39 | 34 | 73 | 38 | **0** | 0 | 9.9 |
+
+`birthFoodPerHead: 12` — **validated, unchanged**, now measured with the depot
+increment 6's harness could not place. The curve is increment 6's own, to the
+digit.
+
+**A fifth reading, added by the plan: what does dispatch cost at scale?**
+
+Wall clock per tick, same machine, same run length, one variable at a time. The
+figures include the conservation sentinel's three probes, which walk every
+building and every hauler per tick — so they overstate a production tick and
+understate dispatch's share of one.
+
+| case | buildings | haulers | ms/tick | `frozenSteps` | `storedAtEnd` |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| realistic colony | 40 | 6 | 2.525 | 0 | 0 |
+| realistic, 4 depots | 40 | 6 | 2.586 | 0 | 0 |
+| stress, 8 depots | 100 | 4 | 2.879 | 0 | 67 |
+| stress, 8 depots | 100 | 12 | 2.836 | 0 | 368 |
+| stress, 8 depots | 100 | 40 | 3.240 | 0 | 475 |
+| stress, 8 depots | 100 | 80 | **5.214** | 0 | 413 |
+
+Two-way dispatch costs **0–5% of tick wall clock at every realistic size**,
+which is inside run-to-run noise against the same colonies at `237b3b3`. The
+cost *is* real and it *is* super-linear in hauler count, and it only becomes
+visible when 40–80% of a 100-colonist colony is hauling, which no colony anyone
+would staff does. At `baseTicksPerSecond: 2` the real-time budget is 500 ms per
+tick; even the 80-hauler worst case spends **about 1% of it**. **Decision:
+record the ceiling and leave the design alone** — the pre-index-source-claims-
+by-site optimisation is not justified by any number this increment produced.
+If a later increment makes hauler counts above ~30 in a 100-building colony
+plausible, this is the measurement to re-take. `frozenSteps` is 0 at stress size
+at every hauler count measured, including 80, and that is now asserted by a
+committed test rather than only observed.
+
+### 4.2 The one constant with a measured case for change, and why it did not move
+
+`inputBufferCap` is the only constant this increment measured a causal case
+against, and the case is strong. The shipped comment justified 12 as *runway* —
+"12 batches, ~36 ticks for a mill, comfortably longer than the 13-tick
+worst-case walk". That is not what the number does. Because a supply hauler
+claims its whole load against the target's in-tray room, the cap sets how many
+loads may be **walking toward one building at once**, and that is
+`inputBufferCap / haulCarryCapacity` = 2. The measurement, taken by temporary
+mutation and with the constant restored afterwards:
+
+| `inputBufferCap` | leg 13, 4 haulers: %ceiling | waiting% | in-tray at end | leg 6, 4 haulers: %ceiling |
+| ---: | ---: | ---: | ---: | ---: |
+| **12 (shipped)** | 72 | 30 | 3 | 98 |
+| 24 | **92** | 3 | 6 | 97 |
+| 48 | 89 | 3 | 30 | 97 |
+
+24 relieves it, 48 does not improve on 24 and parks 30 units of colony stock in
+a single building's in-tray, where it is out of the spendable ledger and dies
+with the building. The processor sweep at 24 confirms the shape rather than one
+point of it: nothing anywhere gets worse, one hauler is unchanged at every
+distance (a single hauler is the binding term, not the cap), and every gain
+lands exactly where the in-tray was binding — leg 8 at two haulers 80 → **96**,
+leg 13 at two/three/four 55/71/72 → **60/74/92**.
+
+**And it was retuned to 24, on a branch, and measured back out.** The 31 balance
+tests stay green at 24. Eight unit tests do not, and they fail for a reason that
+is not fixture staleness. The clearest of them is
+*"three haulers and three starved mills spread out rather than converging on
+one"*: at a 12-unit in-tray one delivery claims a mill's whole room, so the
+second hauler is forced to a different building; at 24 all three haulers leave
+for the same mill. **`inputBufferCap` is currently the dispatcher's only
+fairness floor**, and it is an accidental one.
+
+That is not a test to retune. It is the same defect q3 measured, and doubling
+the cap makes it worse — measured on the two-consumer chain, which is what a
+colony actually looks like, rather than on the single camp-fed processor the
+gradient instrument uses:
+
+| haulers | bread at cap 12 | bread at cap 24 |
+| ---: | ---: | ---: |
+| 1 | 0 | 0 |
+| 2 | 150 | **79** |
+| 3 | 319 | **274** |
+| 4 | 375 | 376 |
+
+The mill — the nearer consumer — goes to its own ceiling (313 → 394 flour at two
+haulers) by soaking up hauling the bakery needed, and the chain's end product,
+the thing the colony eats, **falls by 47% at two haulers**. With a depot in the
+same colony the picture is the same (210 → 198 bread at two haulers).
+
+**So it stays at 12, and the reason is a sequencing one rather than a verdict on
+the value.** Until §2.6's ranking has a deliberate fairness term, the in-tray
+cap is doing that job by accident, and raising it removes the floor before the
+replacement exists. The right order is: give the ranking a fairness floor, then
+re-take this reading — at which point 24 may well be right, and the far
+processor's 72% ceiling is a real cost being paid in the meantime. Both halves
+are filed as issues against §2.6 and §2.1 so the pair is inherited as a
+judgement rather than as a silence.
+
+Two smaller notes on this reading, so a later increment does not have to
+rediscover them. The gradient instrument is a **single-stage camp-fed sawmill**,
+chosen because `ceiling` is exact there and `share` is comparable to increment
+5's raw sweep row for row; it is a good instrument and a poor model of a colony,
+and this retune is the case where the difference mattered. And the far-corner
+balance test is a *reading*, not a guard: it fails when the constant moves, on
+purpose, and its comment carries the numbers to rewrite it with.
+
+### 4.3 Where §1 and the numbers disagree
+
+**§1 sells the storehouse as an investment. It measures as a one-off buffer**,
+and §1 was written before anyone measured. Both statements are left standing
+rather than one being edited to match the other, because the disagreement is the
+finding.
+
+§1.1 says a storehouse "turns a distant cluster from a mistake into an
+investment", and §1.2 offers it as the third of three answers a player has to a
+badly sited processor. What the depot actually buys is 26 planks, once, and then
+nothing: +12.7% over 600 ticks, +5.8% over 1,200, +3.3% over 2,400, with the
+absolute gain flat at 26 / 24 / 28. Beside a camp-fed processor it is a **net
+loss** of 10% at three haulers.
+
+**The cause is structural, not a magnitude, which is why no constant in §4's
+table fixes it.** A store site can only ever be filled by a building's output.
+`destinationFor` and `remainderHome` deliberately refuse to route a load onward
+to another site — that is the store-to-store transfer §2.13 excludes — so
+nothing ever pushes camp stock outward into a depot and nothing ever brings a
+depot's stock back to the camp. A depot beside a chain fills with the chain's
+finished good (planks, which nothing consumes), and once full it can neither
+take another deposit nor stage another input. "Can be filled but never emptied"
+is a precise description of what was measured, and it is exactly what a transfer
+mechanic would fix.
+
+**This is not a removal case, and it was considered as one.** The depot does pay
+in the one placement §1 argues for — a producer feeding a consumer, far from the
+camp: +82% at one hauler and +17% at four, at leg 11-13 — and the crossover
+against hiring another colonist exists at leg ≈ 11 from the third hauler onward.
+So the mechanic wins somewhere real, on a narrow window, for a bounded amount.
+What §4 records is that it is currently a **one-off buffer** rather than the
+sustained investment §1 describes, and that the missing piece is a *flow*.
+`docs/requirements/Storehouse-to-Storehouse Transfer.md` carries it forward with
+these numbers as its justification.
+
+The other §2.5 mechanic §4.1 invited a verdict on came out the other way and is
+recorded here for symmetry: **the round trip stays.** 88–98% of supply trips
+come home loaded, and in a chain where every building wants inputs it is doing
+*all* of the collection. Increment 6 moved a shipped constant because a
+measurement argued against it; this increment declines to remove a shipped
+mechanic because a measurement argues for it. Both are the instrument working.
+
+### 4.4 What these instruments cannot do
+
+Three limits, recorded because each of them is a trap for the next increment
+that measures this area, and one of them nearly put a false finding in this
+document.
+
+- **No mid-run drain was tested, and none can be staged today.** q3's fixture
+  withholds a stage's product at t=0, so the ledger is drained at the *opening*
+  and the bakery's input must be manufactured before it can ever be delivered.
+  That is a genuine instance of §2.6's deadlock shape, but it is not the same
+  experiment as draining a running colony, and nothing here should be read as
+  though it were.
+- **A with/without-depot comparison in the population harness is confounded over
+  any horizon that outlives a founder.** The 12-house pair is byte-identical at
+  4,000 ticks and *not* at 12,000: `lifespanFor(id, bands)` jitters each
+  colonist's lifespan by entity id, and adding two storehouses shifts every
+  colonist's id by two. Before the first old-age death — around tick 5,700 —
+  that is invisible; after it, the two runs diverge for a reason that has
+  nothing to do with the depot. The fourth reading above is honest because every
+  figure it quotes agrees across all four runs, but a *tighter* comparison at
+  that horizon would be measuring jitter. `PopulationScenario.storehouses`
+  records this beside the placement trap it already carries.
+- **The population harness's depot placement depends on the colony's size**, per
+  the arithmetic in §4.1's fourth reading. A scenario that places depots and
+  reads `storedAtEnd` as 0 has not measured a depot that did nothing; it has
+  measured a run against itself. Every with-depot row in the captured report
+  prints `storedAtEnd` for exactly this reason, so the distinction is visible
+  from the output rather than having to be trusted.

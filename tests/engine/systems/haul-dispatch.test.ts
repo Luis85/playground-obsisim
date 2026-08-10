@@ -9,7 +9,7 @@ import { IdCounter, Stockpile } from '../../../src/engine/resources';
 import { CommandSystem } from '../../../src/engine/systems/command-system';
 import { ProductionSystem } from '../../../src/engine/systems/production-system';
 import { HaulSystem, haulerCapacity } from '../../../src/engine/systems/haul-system';
-import { holdsNoneOf } from '../../../src/engine/systems/haul-dispatch';
+import { claimsOf, heldAtOf, holdsNoneOf } from '../../../src/engine/systems/haul-dispatch';
 import { campAdjacentFreeTile, colonyTotal, enqueue } from '../fixtures';
 import {
   applyRemovals, buildColonyPrepWorld, createColonyWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist,
@@ -1272,5 +1272,124 @@ describe('the same world decides the same way whichever order it is walked in', 
     expect(jobs.map((job) => job.targetId)).toEqual([MILL_LOW.id, WOOD_LOW.id]);
 
     expect(jobsOf(reversed)).toEqual(jobs);
+  });
+});
+
+/**
+ * The claims a transfer holds, asserted on the lookups themselves rather than
+ * through a dispatch — nothing dispatches a transfer yet (that is Task 6), and
+ * these four quantities are the whole of what a transfer candidate is sized
+ * against, so they are worth pinning where a fixture can state each one alone.
+ *
+ * `heldAtOf` is exported on its own for the two cancellation paths outside
+ * `HaulSystem`, so it is callable with nothing but trips and a stockpile.
+ */
+const A_DEPOT: StoreSite = { id: 71, col: 20, row: 10, capacity: BALANCE.storehouseCapacity };
+const tripWith = (fields: Partial<HaulTrip>): HaulTrip => Object.assign(new HaulTrip(), fields);
+const rowsOf = (trips: readonly HaulTrip[]) => trips.map((trip) => ({
+  trip, job: new JobAssignment(null, true), home: new Home(null),
+}));
+const claimsFrom = (trips: readonly HaulTrip[], stockpile: Stockpile) =>
+  claimsOf(rowsOf(trips), stockpile, () => BALANCE.haulCarryCapacity);
+
+describe('the room a walking transfer reserves', () => {
+  // Pairwise distinct so no assertion below can be satisfied by a field that
+  // read a neighbour's value: what the depot physically holds, what one trip
+  // plans to bring, and what a second trip is already carrying.
+  const HELD = 30;
+  const PLANNED = 6;
+  const CARRIED = 4;
+
+  const stocked = () => {
+    const stockpile = new Stockpile({ wheat: 20 });
+    stockpile.refundAt(A_DEPOT, 'planks', HELD);
+    return stockpile;
+  };
+
+  it('a fetching transfer reserves destination room before it has picked anything up', () => {
+    // The leg during which the reservation is the ONLY thing between two
+    // haulers and the same headroom: `phase === 'returning'` alone counts
+    // nothing here, because a fetching hauler carries nothing yet.
+    const stockpile = stocked();
+    const fetching = tripWith({
+      kind: 'transfer', phase: 'fetching', destSiteId: A_DEPOT.id, resource: 'wheat',
+      plannedAmount: PLANNED, amount: 0,
+    });
+    expect(stockpile.totalAt(A_DEPOT.id)).toBe(HELD); // physically unchanged, which is the point
+    expect(heldAtOf(rowsOf([fetching]), stockpile)(A_DEPOT.id)).toBe(HELD + PLANNED);
+  });
+
+  it('a fetching SUPPLY reserves nothing at the camp its return leg defaults to', () => {
+    // The kind gate, on its own. `beginTrip` sets `destSiteId` to
+    // CAMP_SITE_ID for every trip and `turnForHome` resolves it for real only
+    // on the return, so an ungated clause has every supply fetch in the colony
+    // reserving camp room. Harmless — the camp is unbounded — and therefore
+    // exactly the kind of wrong that survives to become load-bearing.
+    const stockpile = stocked();
+    const fetching = tripWith({
+      kind: 'supply', phase: 'fetching', destSiteId: CAMP_SITE_ID, targetId: 9,
+      resource: 'wheat', plannedAmount: PLANNED, amount: 0,
+    });
+    expect(heldAtOf(rowsOf([fetching]), stockpile)(CAMP_SITE_ID)).toBe(20);
+  });
+
+  it('the returning term is unchanged, and the two never double-count', () => {
+    // `plannedAmount` is zeroed the moment `takeAt` returns a real figure and
+    // `amount` is zero until then, so a transfer contributes ONE of the two at
+    // any moment — never both, and never neither.
+    const stockpile = stocked();
+    const returning = tripWith({
+      kind: 'transfer', phase: 'returning', destSiteId: A_DEPOT.id, resource: 'wheat',
+      plannedAmount: 0, amount: CARRIED,
+    });
+    expect(heldAtOf(rowsOf([returning]), stockpile)(A_DEPOT.id)).toBe(HELD + CARRIED);
+  });
+});
+
+describe('what a transfer claims of a site', () => {
+  const OTHER_DEPOT: StoreSite = { id: 72, col: 4, row: 12, capacity: BALANCE.storehouseCapacity };
+
+  it('inboundAt counts a transfer walking toward a site, per resource and per site', () => {
+    const stockpile = new Stockpile({ wheat: 20 });
+    const claims = claimsFrom([
+      tripWith({ kind: 'transfer', phase: 'fetching', destSiteId: A_DEPOT.id, resource: 'wheat', plannedAmount: 6 }),
+      tripWith({ kind: 'transfer', phase: 'returning', destSiteId: A_DEPOT.id, resource: 'wheat', amount: 4 }),
+      // Same destination, a different resource: invisible to a per-resource
+      // lookup, which is exactly why `heldAt` and not `inboundAt` is what
+      // bounds a site's ROOM.
+      tripWith({ kind: 'transfer', phase: 'fetching', destSiteId: A_DEPOT.id, resource: 'planks', plannedAmount: 5 }),
+      // Same resource, a different destination.
+      tripWith({ kind: 'transfer', phase: 'fetching', destSiteId: OTHER_DEPOT.id, resource: 'wheat', plannedAmount: 3 }),
+      // A supply trip is not a transfer, whatever its destination says.
+      tripWith({ kind: 'supply', phase: 'fetching', destSiteId: A_DEPOT.id, resource: 'wheat', plannedAmount: 2 }),
+    ], stockpile);
+    expect(claims.inboundAt(A_DEPOT.id, 'wheat')).toBe(10);
+    expect(claims.inboundAt(A_DEPOT.id, 'planks')).toBe(5);
+    expect(claims.inboundAt(OTHER_DEPOT.id, 'wheat')).toBe(3);
+    expect(claims.inboundAt(A_DEPOT.id, 'bread')).toBe(0);
+  });
+
+  it('plannedOutAt counts every fetching trip out of a site, of every kind and resource', () => {
+    // The resource-agnostic twin of `unclaimedAt`, and the pair is the point:
+    // headroom is measured across every resource, so a per-resource claim
+    // cannot bound it. Both lookups are read off the same fixture so the
+    // difference is visible in one place.
+    const stockpile = new Stockpile();
+    stockpile.refundAt(A_DEPOT, 'wheat', 30);
+    stockpile.refundAt(A_DEPOT, 'planks', 20);
+    const claims = claimsFrom([
+      tripWith({ kind: 'supply', phase: 'fetching', sourceSiteId: A_DEPOT.id, resource: 'wheat', plannedAmount: 6 }),
+      tripWith({ kind: 'transfer', phase: 'fetching', sourceSiteId: A_DEPOT.id, resource: 'planks', plannedAmount: 5 }),
+      // Already loaded and walking: its take is out of the ledger, not planned.
+      tripWith({ kind: 'supply', phase: 'outbound', sourceSiteId: A_DEPOT.id, resource: 'wheat', amount: 4 }),
+      tripWith({ kind: 'transfer', phase: 'fetching', sourceSiteId: OTHER_DEPOT.id, resource: 'wheat', plannedAmount: 3 }),
+    ], stockpile);
+    expect(claims.plannedOutAt(A_DEPOT.id)).toBe(11);
+    expect(claims.plannedOutAt(OTHER_DEPOT.id)).toBe(3);
+    expect(claims.plannedOutAt(CAMP_SITE_ID)).toBe(0);
+    // The per-resource half sees one of the two and the site-wide half sees
+    // both — the same traversal, asked two different questions.
+    expect(claims.unclaimedAt(A_DEPOT.id, 'wheat')).toBe(24);
+    expect(claims.unclaimedAt(A_DEPOT.id, 'planks')).toBe(15);
   });
 });

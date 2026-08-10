@@ -109,6 +109,23 @@ export interface Claims {
   /** A site's stock of one resource, less what fetching haulers have already
    * planned to take out of it. */
   unclaimedAt(siteId: number, resource: ResourceId): number;
+  /** Units of a resource already walking toward a site on a transfer — the
+   * site-level twin of `input`, and for the identical reason: without it every
+   * idle hauler transfers into the same deficit on the same tick. */
+  inboundAt(siteId: number, resource: ResourceId): number;
+  /**
+   * Units a site is about to LOSE: what fetching haulers have planned to take
+   * out of it, across every resource and every kind — `unclaimedAt` with the
+   * resource filter removed.
+   *
+   * The pair is not a duplication. `unclaimedAt` bounds STOCK, which is
+   * per-resource; this bounds HEADROOM, which is measured across every
+   * resource, so no per-resource claim can bound it. The drain's `drainNeed`
+   * is sized against this one, and without it every idle hauler reads the same
+   * "below the floor" condition and schedules its own removal for room another
+   * hauler is already freeing.
+   */
+  plannedOutAt(siteId: number): number;
 }
 
 /** One pass over the haulers, adding whatever the caller says each one claims.
@@ -131,14 +148,42 @@ function sumOverTrips(workers: readonly TripRow[], claimOf: (trip: HaulTrip) => 
  * map — none of which any occupancy answer reads.
  */
 export function heldAtOf(workers: readonly TripRow[], stockpile: Stockpile): (siteId: number) => number {
-  return (siteId) => stockpile.totalAt(siteId) + sumOverTrips(workers, (trip) => (
-    trip.phase === 'returning' && trip.destSiteId === siteId ? trip.amount : 0
-  ));
+  return (siteId) => stockpile.totalAt(siteId) + sumOverTrips(workers, (trip) => reservedAt(trip, siteId));
+}
+
+/**
+ * What one trip has reserved of one site's room. Two terms, and they are
+ * disjoint by construction: `plannedAmount` is zeroed the moment `takeAt`
+ * returns a real figure, and `amount` is zero until then.
+ *
+ * The second term is GATED ON KIND, and the gate is not cosmetic. A transfer
+ * reserves its destination at DISPATCH, but spends its whole fetch leg at
+ * `phase === 'fetching'` with `amount === 0` — the leg during which that
+ * reservation is the only thing standing between two haulers and the same
+ * headroom. A supply trip's `destSiteId` is CAMP_SITE_ID for that same leg
+ * (`beginTrip` sets it; `turnForHome` resolves it for real only on the
+ * return), so an ungated clause would have every supply fetch in the colony
+ * reserving room at the camp — harmless, because the camp is unbounded, and
+ * therefore exactly the kind of wrong that survives to become load-bearing.
+ */
+function reservedAt(trip: HaulTrip, siteId: number): number {
+  if (trip.destSiteId !== siteId) return 0;
+  if (trip.phase === 'returning') return trip.amount;
+  if (trip.kind === 'transfer' && trip.phase === 'fetching') return trip.plannedAmount;
+  return 0;
 }
 
 export function claimsOf(
   workers: readonly HaulWorkerRow[], stockpile: Stockpile, capacityOf: (row: HaulWorkerRow) => number,
 ): Claims {
+  // ONE traversal expression behind both outgoing claims, asked two different
+  // questions: `unclaimedAt` passes a resource filter, `plannedOutAt` passes
+  // none. Two hand-written loops with the same phase-and-source predicate is
+  // how the pair drifts apart, and they must not — a site's stock and its
+  // headroom are drawn down by exactly the same trips.
+  const plannedOut = (siteId: number, matches: (trip: HaulTrip) => boolean) => sumOverTrips(workers, (trip) => (
+    trip.phase === 'fetching' && trip.sourceSiteId === siteId && matches(trip) ? trip.plannedAmount : 0
+  ));
   return {
     output: (buildingId) => {
       let total = 0;
@@ -154,9 +199,13 @@ export function claimsOf(
         : 0
     )),
     heldAt: heldAtOf(workers, stockpile),
-    unclaimedAt: (siteId, resource) => stockpile.getAt(siteId, resource) - sumOverTrips(workers, (trip) => (
-      trip.phase === 'fetching' && trip.sourceSiteId === siteId && trip.resource === resource ? trip.plannedAmount : 0
+    unclaimedAt: (siteId, resource) => stockpile.getAt(siteId, resource) - plannedOut(siteId, (trip) => trip.resource === resource),
+    inboundAt: (siteId, resource) => sumOverTrips(workers, (trip) => (
+      trip.kind === 'transfer' && trip.destSiteId === siteId && trip.resource === resource
+        ? trip.plannedAmount + (trip.phase === 'returning' ? trip.amount : 0)
+        : 0
     )),
+    plannedOutAt: (siteId) => plannedOut(siteId, () => true),
   };
 }
 

@@ -121,21 +121,37 @@ it('a building holding some of what it needs is not starving', async () => {
   // Mutating `=== 0` to `<= 1` must redden this.
 });
 
-it('starving is about the resource being delivered, not any input', async () => {
-  // A recipe with two inputs: zero of A, plenty of B. The candidate for A is
-  // starving; the candidate for B is not.
-  //
-  // PRE-FLIGHT RESULT: no shipped recipe has two inputs — every def in
-  // `src/engine/content/buildings.ts` has 0 or 1. So this test REQUIRES a
-  // fixture-local two-input def; it cannot be written against the catalog.
-  //
-  // Which means the distinction is untestable through the catalog and today
-  // `starving` and "in-tray empty" coincide exactly. Write the test anyway,
-  // against the fixture def: the per-candidate form is what stops the rule
-  // silently meaning the wrong thing the first time a recipe gains a second
-  // input, and a rule that only becomes wrong later is the kind this repo has
-  // been bitten by twice.
-});
+// ── `starving is about the resource being delivered, not any input` does NOT
+// ── belong in this file. It is a UNIT test, and the reason is structural.
+//
+// This step first asked for it here, against a fixture-local two-input def.
+// That is impossible twice over, and the second reason is the one that matters:
+//
+//   1. No shipped recipe has two inputs — every def in
+//      `src/engine/content/buildings.ts` has 0 or 1 — and `needOf` reads the
+//      module-level `BUILDINGS` catalog by defId, which `setup` gives no way to
+//      inject. So there is no fixture def to write it against.
+//   2. Even GIVEN a two-input def it still could not be written, because
+//      `needOf` calls `shortestOf` ONCE and `supplyCandidates` emits a candidate
+//      only for the resource it returns. With A at zero, A always has the lowest
+//      ratio, so the B candidate the test must compare against never exists. The
+//      per-resource distinction is not observable at the dispatch level AT ALL,
+//      with or without a catalog change.
+//
+// So `starving` is derived in `supplyCandidates` through a small exported
+// predicate, and the predicate is unit-tested directly against a two-resource
+// `InputBuffer` — zero of A, plenty of B, starving for A and not for B. An
+// `InputBuffer` is content-free, so this needs no def, no catalog mock and no
+// world. It is the repo's own documented escape: `docs/process/agent-workflow.md`
+// — "Where an integration test cannot isolate a rule, export the rule and
+// unit-test it directly — `cheapestHaulerToRelease` is exported for exactly that
+// reason."
+//
+// The point survives the move intact, and it is worth restating because the
+// move makes the test look optional: today `starving` and "the in-tray is empty"
+// coincide exactly, and stating the rule per-CANDIDATE is what stops it quietly
+// meaning the wrong thing the first time a recipe gains a second input. The
+// mutation that must redden it is the predicate reading `input.total() === 0`.
 ```
 
 - [ ] **Step 2: Implement**

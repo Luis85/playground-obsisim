@@ -124,13 +124,14 @@ So the fix is the issue's second shape, a starvation term derived entirely from
 live state:
 
 > **A candidate is *starving* when the building holds zero of the resource that
-> candidate would deliver AND has no batch in progress**, and *topping up*
-> otherwise. Starving outranks topping up, ahead of every existing term. Within
-> a band nothing changes.
+> candidate would deliver, has no batch in progress, and has no supply delivery
+> already claimed toward it** — nothing in hand, nothing in progress, nothing on
+> the way. *Topping up* otherwise. Starving outranks topping up, ahead of every
+> existing term. Within a band nothing changes.
 
-Derived from `InputBuffer.amounts`, the resource `needOf` already chose, and
-`Production.batchActive`. No new state, no new component, no iteration-order
-dependence, and the tie-break chain still ends at a site id.
+Derived from `InputBuffer.amounts`, the resource `needOf` already chose,
+`Production.batchActive`, and `Claims.input`. No new state, no new component, no
+iteration-order dependence, and the tie-break chain still ends at a site id.
 
 **The second clause is not a refinement, and an earlier draft of this section
 was wrong without it.** That draft ranked on the empty in-tray alone and
@@ -152,9 +153,29 @@ live component field (`Production`), and reading it costs this rule nothing it
 was not already paying: `HaulSystem`'s building query gains `Production`, which
 is an existing component, so §2.3's "no new component" holds.
 
-With both clauses the rule says what the prose always meant: **this building
-cannot turn anything into anything right now, and has nothing to start with.**
-A building mid-batch is not starving, however empty its tray.
+**The third clause is this section's own §2.4 rule, applied to itself.** A draft
+with only the first two derived `starving` entirely from physical state — an
+in-tray and a batch flag, neither of which moves when a hauler is *dispatched*.
+Dispatch runs every idle hauler within one tick, so the second hauler reads the
+same empty tray as the first and is promoted to the same building, and the
+third after it. `Claims.input` bounds the damage at `inputBufferCap / capacity`
+— two haulers at today's constants — because `needOf` returns null once the
+tray's room is fully claimed. Bounded is not the same as intended: the guarantee
+below says the promotion "ends the moment a single load lands", and without this
+clause that sentence is simply false.
+
+Apply this spec's own test, the one §2.4 opens with and Task 12 puts in
+`docs/process/agent-workflow.md`: *if ten idle haulers were dispatched on the
+same tick, would this have stopped the tenth?* A term computed from physical
+state would not, and `starving` was such a term. It is the one bound in this
+increment that nobody thought to check, in the increment whose central process
+lesson is that every bound must be reservation-aware — which is the reason it is
+written up here at length rather than quietly fixed.
+
+With all three clauses the rule says what the prose always meant: **this
+building cannot turn anything into anything right now, has nothing to start
+with, and has nothing already coming.** A building mid-batch is not starving,
+however empty its tray; neither is one with a load already walking toward it.
 
 **Today this is indistinguishable from "the in-tray is empty", and the
 distinction is still the one to implement.** Every recipe in
@@ -182,11 +203,15 @@ the ordinary route term decides again. It cannot pin a hauler to a distant
 building indefinitely, because the condition it ranks on is extinguished by
 serving it once.
 
-Both clauses are needed for that argument to hold. Without `batchActive` the
-condition is *not* extinguished by serving the building once — it returns on the
-tick the next batch starts and every batch after it — so what looks like a floor
-becomes a term that fires on and off for every consumer in the colony, and the
-band stops distinguishing anything.
+All three clauses are needed for that argument to hold, and each fails it a
+different way. Without `batchActive` the condition is *not* extinguished by
+serving the building once — it returns on the tick the next batch starts and
+every batch after it — so what looks like a floor becomes a term that fires on
+and off for every consumer in the colony, and the band stops distinguishing
+anything. Without the claim clause the promotion is not extinguished until a
+load physically *lands*, several legs later, so every hauler idle on the
+dispatch tick is promoted to the same building and "serving it once" is not what
+happens at all.
 
 **The risk this takes, stated because §4 must measure it in both directions.**
 The failure mode opposite to starvation is a hauler crossing the map past a

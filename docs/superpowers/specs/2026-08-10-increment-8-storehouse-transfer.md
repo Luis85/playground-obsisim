@@ -475,8 +475,9 @@ and it cannot have become a source for `r` on the way there.
 **`roomAt(D)` is a separate term from `D.deficit(r)` and neither implies the
 other.** A deficit is measured in *demand for one resource*; room is measured in
 *total occupancy across every resource*, which is what `StoreSite.capacity`
-bounds. A depot holding 56 wood in 60 units of capacity, with a wheat demand of
-12 and no wheat, has a deficit of 12 and a room of 4. Sizing a load on the
+bounds. A depot holding **44** wood in 60 units of capacity, with a wheat demand
+of 12 and no wheat, has a deficit of 12 and a room of 4 — the free floor takes
+12 of the 60, so room is `60 − 12 − 44`. Sizing a load on the
 deficit alone dispatches a full hauler into four units of space, and
 `bankWithSpill` then forwards the excess **to the camp** — a silent teleport of
 goods that had a hauler standing right there to walk them, which is precisely

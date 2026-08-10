@@ -546,7 +546,12 @@ it('a deficit already being walked toward is not offered twice', () => {
 });
 
 it('a deficit larger than the depot has room for is sized to the room', () => {
-  // 56 wood in a 60-cap depot, 12-unit wheat demand, zero wheat: deficit 12,
+  // CORRECTED from 56 wood, which is impossible once staging stops at the free
+  // floor: at 56 the room is 0, not 4, so the fixture asserts a transfer that
+  // cannot exist. 44 gives room exactly 4 (60 - 12 floor - 44) and every
+  // discriminating property survives.
+  //
+  // 44 wood in a 60-cap depot, 12-unit wheat demand, zero wheat: deficit 12,
   // room 4. movable must be 4, not 6. DISCRIMINATING — a fixture where the
   // deficit is already below both haulerCapacity and the room passes with the
   // room term deleted entirely.

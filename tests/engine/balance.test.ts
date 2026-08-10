@@ -443,6 +443,16 @@ describe('the two-way haul instruments', () => {
     // where-are-the-goods-standing reconstruction it replaced. Six wood walking
     // TOWARD this sawmill are not six planks it produced.
     expect(r.stages[1].made).toBeLessThan(r.stages[1].delivered + r.stages[1].finalBuffer + r.carriedAtEnd);
+
+    // `delivered` can never exceed `made` — a hauler cannot deliver more of a
+    // resource than the stage that owns it produced. This holds for `made`
+    // (checked above) precisely because it is now read from the ledger rather
+    // than reconstructed; it is NOT independently checked for `delivered`
+    // anywhere else. A harness that read stage 0's delivered figure (the
+    // forester's WOOD, hauled in to feed the sawmill) for stage 1 would push
+    // this well past `made`, since wood delivered to feed a hungry sawmill
+    // outruns the planks the sawmill itself is producing.
+    expect(r.stages[1].delivered).toBeLessThanOrEqual(r.stages[1].made);
   }, 120000);
 
   it('a two-stage chain reports each building separately, and feeds itself', async () => {
@@ -473,6 +483,16 @@ describe('the two-way haul instruments', () => {
     expect(r.stages[1].stalledTicks).toBe(0);
     expect(r.stages[0].waitingForInputTicks).toBe(0);
     expect(r.stages[1].waitingForInputTicks).toBeGreaterThan(0);
+
+    // The other half of the same opposite-diagnostics pair, on the IN-tray
+    // rather than the tick tally: the forester has no recipe input at all, so
+    // its buffer is 0 by construction, while the under-hauled sawmill backs up
+    // a real one. Reading either stage's buffer for the other — a wrong index
+    // into `buildingIds`, or the wrong element of `results` — would either
+    // collapse both to 0 or swap which one is 0, and this is the only
+    // assertion in the file that would notice either.
+    expect(r.stages[0].finalInputBuffer).toBe(0);
+    expect(r.stages[1].finalInputBuffer).toBeGreaterThan(0);
 
     // The result's own fields ARE the first stage's, so every measurement
     // written against the single-building form still reads what it always did.
@@ -542,9 +562,16 @@ describe('population instruments', () => {
   it('a self-feeding colony keeps every unit it makes', async () => {
     // Short beside the 12,000-tick curves above: conservation is a per-tick
     // invariant summed over the run, so it either holds from the first tick or
-    // it does not, and 1,500 ticks of a growing colony exercises births,
+    // it does not, and 1,503 ticks of a growing colony exercises births,
     // deaths, hauling and hunger alike.
-    const r = await runPopulationScenario({ ...chain, ticks: 1500, sampleEvery: 100, houses: ROOMY_HOUSES });
+    //
+    // 1,503, not the round 1,500: `removalFlow` below is only exercised if a
+    // hauler is genuinely mid-trip, cargo in hand, on the exact tick the run
+    // ends — otherwise a lost load and an empty-handed ending are
+    // indistinguishable. Measured directly: 1,500/1,501/1,502 all end with
+    // every hauler's hands empty, so `removalFlow` would be 0 whether or not
+    // the closing count were computed correctly. 1,503 does not.
+    const r = await runPopulationScenario({ ...chain, ticks: 1503, sampleEvery: 100, houses: ROOMY_HOUSES });
 
     expect(r.goods.conservationError).toBe(0);
     // Non-vacuity: this colony really did make and eat goods. It starts from
@@ -553,6 +580,13 @@ describe('population instruments', () => {
     expect(r.goods.made).toBeGreaterThan(0);
     expect(r.goods.eaten).toBeGreaterThan(0);
     expect(r.goods.commandFlow).toBe(0);
+    // `conservationError` is algebraically blind to `final`: `removalFlow` is
+    // DEFINED as `final - endOfTick`, so it cancels out of the predicted total
+    // exactly and `final` never appears in the check above. This is the only
+    // assertion in the file that reads the closing count at all — without it,
+    // goods that vanished from wherever `goodsStanding` sums (a colonist's
+    // `carrying`, say) would leave every other term here satisfied.
+    expect(r.goods.removalFlow).toBe(0);
   }, 180000);
 
   it('the frozen-step sentinel still reads zero at stress colony size', async () => {

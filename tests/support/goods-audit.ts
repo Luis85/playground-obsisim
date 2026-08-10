@@ -24,6 +24,13 @@ import type { TColonySystemFactory } from '../../src/engine/world';
  * hands, and a leak anywhere in that chain would surface in a §4 figure as a
  * balance problem rather than as the bug it is.
  *
+ * `conservationError` itself only pins the Production+Haul window to exactly
+ * zero: a loss inside Hunger/Population/Efficiency — which since §2.7 includes
+ * a dying hauler's cargo being banked into a nearby store
+ * (population-system.ts) — is absorbed into `eaten` and asserted only
+ * positive, and a loss after `StatsSystem` is absorbed into
+ * `commandFlow`/`removalFlow`.
+ *
  * Both correction terms are load-bearing, and each was a defect in an earlier
  * draft of this instrument:
  *

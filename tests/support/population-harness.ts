@@ -64,6 +64,16 @@ export interface PopulationScenario {
    * keeps its tiles whatever this number is — which is what makes a
    * with-and-without pair differ in the depot alone rather than in the depot
    * plus every haul leg in the colony.
+   *
+   * THE TRAP: a depot only becomes a live store site once it is the nearest
+   * site to something. `autoPlaceSequence` gives the first huts the plots
+   * nearest the camp, so in a SMALL colony (§4.1's 2-hut/12-house chain fixture
+   * among them) the camp stays nearest to everything and the depot goes
+   * unused — `PopulationResult.storedAtEnd` is 0 whether or not one is placed,
+   * and a with/without comparison at that size is measuring a run against
+   * itself. Before quoting any difference a with-depot comparison makes,
+   * assert `storedAtEnd > 0` in the WITH-depot run; see the stress-size fixture
+   * in balance.test.ts for a colony where that holds.
    */
   storehouses?: number;
   ticks: number;
@@ -110,8 +120,11 @@ export interface PopulationResult {
    * every tick-indexed figure in a report is short by that much.
    */
   frozenSteps: number;
-  /** Units this colony's storehouses hold at the end. 0 with no depot, and
-   * evidence that a placed one is a live store site rather than scenery. */
+  /** Units this colony's storehouses hold at the end. Always 0 with no depot
+   * placed — but NOT necessarily positive with one, since a small colony's
+   * depot can sit unused (see `PopulationScenario.storehouses`); a positive
+   * reading is evidence of a live store site, a zero reading is not evidence
+   * of the opposite. */
   storedAtEnd: number;
   /** The conservation sentinel. `conservationError` must be 0. */
   goods: GoodsAuditResult;

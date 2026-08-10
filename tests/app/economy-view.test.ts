@@ -78,6 +78,50 @@ describe('EconomyView', () => {
     expect(pressure.classes()).toContain('obsisim-negative');
   });
 
+  // The input-side twin of the haul-pressure test above (§2.10's answer to
+  // "why is my bakery stopped?"). unitsShort (2) and buildingsWaitingForInput
+  // (3) are deliberately distinct: every recipe here takes exactly one input
+  // at quantity 1, so a per-building deficit is 0 or 1 — building 2's
+  // inputBuffered: 1 already covers its recipe's want and contributes 0,
+  // which is what keeps the total (2) from coinciding with the count (3). A
+  // getter swapped between the two slots, or a template reading buffered
+  // deficits as a flat per-building count, would fail this rather than pass
+  // by coincidence.
+  it('states the input backlog and how many buildings it has stopped', async () => {
+    const wrapper = mountWith(EconomyView, makeSnapshot({
+      buildings: [
+        makeBuilding(1, { defId: 'mill', state: 'waitingForInput', inputBuffered: 0 }),
+        makeBuilding(2, { defId: 'bakery', state: 'waitingForInput', inputBuffered: 1 }),
+        makeBuilding(3, { defId: 'sawmill', state: 'waitingForInput', inputBuffered: 0 }),
+      ],
+    }));
+    await wrapper.vm.$nextTick();
+    const pressure = wrapper.find('[data-test="input-pressure"]');
+    const text = pressure.text();
+    expect(text).toContain('2 units short');
+    expect(text).toContain('3 buildings waiting for input');
+    expect(pressure.classes()).toContain('obsisim-negative');
+  });
+
+  it('uses the singular "building" when exactly one is waiting for input', async () => {
+    const wrapper = mountWith(EconomyView, makeSnapshot({
+      buildings: [makeBuilding(1, { defId: 'mill', state: 'waitingForInput', inputBuffered: 0 })],
+    }));
+    await wrapper.vm.$nextTick();
+    const text = wrapper.find('[data-test="input-pressure"]').text();
+    expect(text).toContain('1 building waiting for input');
+  });
+
+  it('says input delivery is keeping up when no building is waiting', async () => {
+    const wrapper = mountWith(EconomyView, makeSnapshot({
+      buildings: [makeBuilding(1, { defId: 'forester', state: 'producing' })],
+    }));
+    await wrapper.vm.$nextTick();
+    const pressure = wrapper.find('[data-test="input-pressure"]');
+    expect(pressure.text()).toContain('keeping up');
+    expect(pressure.classes()).not.toContain('obsisim-negative');
+  });
+
   it('uses the singular "hauler" when exactly one is on duty', async () => {
     // Waiting (7), stalled (2), and haulers (1) are again mutually distinct.
     // toContain('1 hauler on duty') genuinely discriminates: the wrongly

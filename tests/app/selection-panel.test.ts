@@ -69,6 +69,29 @@ describe('SelectionPanel', () => {
     expect(wrapper.find('[data-test="selection-waiting"]').text()).toContain('4');
   });
 
+  // buffered (4) and inputBuffered (9) are deliberately distinct, so an
+  // In span bound to the wrong field changes this assertion rather than
+  // coinciding with the Waiting one above.
+  it('reports the goods waiting in the input buffer alongside the output buffer', async () => {
+    const wrapper = mountPanel(7, { buffered: 4, inputBuffered: 9 });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-test="selection-input"]').text()).toContain('9');
+  });
+
+  // held (41) and capacity (60) are distinct, so a Stored span reading either
+  // field into the wrong slot changes this assertion. The producer case
+  // (storage: 0, the fixture default) proves the line does not appear for
+  // every building — only a store has one to show.
+  it('shows a storehouse\'s contents against capacity, and hides it for a producer', async () => {
+    const store = mountPanel(7, { defId: 'storehouse', state: 'storing', stored: 41, storage: 60 });
+    await store.vm.$nextTick();
+    expect(store.find('[data-test="selection-storage"]').text()).toBe('Stored: 41 / 60');
+
+    const producer = mountPanel(7, {});
+    await producer.vm.$nextTick();
+    expect(producer.find('[data-test="selection-storage"]').exists()).toBe(false);
+  });
+
   // relocatingTicks: 9 is deliberately distinct from every other numeric field
   // on this fixture (col 6, row 3, workers 1, workerSlots 2) — a mis-binding
   // to any neighbour would render a different number and fail the exact match.

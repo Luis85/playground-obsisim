@@ -435,6 +435,24 @@ it('a site is never both source and sink for one resource', () => {
 
 it('a full-enough depot drains its no-demand stock to the camp', () => {});
 
+it('a depot saturated with a resource it DOES demand still drains the excess', () => {
+  // 60 wheat in a 60-cap depot against a wheat demand of 12. The drain picks
+  // the largest `surplus(r)`, NOT the largest holding among resources with zero
+  // demand — under the latter this depot has no drainable resource at all and
+  // stays saturated for the rest of the game, which is increment 7's §4.3
+  // defect surviving the increment written to remove it.
+  //
+  // Reachable in ordinary play, which is the point: staging is bounded by the
+  // deficit and cannot overfill, but COLLECT banks a producer's output at the
+  // nearest site with room and never consults demand. A depot between a farm
+  // and a mill gets here on its own.
+  //
+  // Assert BOTH halves or it proves nothing: a drain IS dispatched, and it
+  // never takes the depot below its demand of 12 — the second is what keeps
+  // staging from pulling the load straight back and is the termination
+  // argument, not a nicety.
+});
+
 it('a depot with headroom above the floor does not drain', () => {
   // The clause that makes a drain purposeful rather than tidying. Its own
   // fixture: stock present, demand zero, headroom ABOVE the floor.

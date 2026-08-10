@@ -374,9 +374,33 @@ per §2.7: `capacity − heldAt(D)`, unbounded for the camp.
 
 **2. Drain (push), bounded → unbounded only.** Source `S` is a **bounded** site
 whose free space has fallen below `BALANCE.storehouseFreeFloor`; destination is
-the **camp**, and only the camp. The resource drained is the one `S` holds most
-of among those it has no demand for (ties by catalog order, mirroring
-`fullestResource`).
+the **camp**, and only the camp. The resource drained is the one with the
+largest `S.surplus(r)` — **claimed-net stock above local demand** — with ties by
+catalog order, mirroring `fullestResource`.
+
+**Not "the resource it has no demand for", which an earlier draft said and which
+reintroduced the exact defect this increment exists to remove.** A depot fills
+from two directions, and only one of them is bounded by demand. Staging stops at
+the deficit, so it cannot overfill; but *collect* banks a producer's output at
+the nearest site with room, and nothing about that consults the site's demand at
+all. A depot beside a farm and a mill therefore reaches 60 wheat against a wheat
+demand of 12 in the ordinary course of play. Under the no-demand filter, wheat
+is excluded because its demand is nonzero, no other resource is present to
+drain, and the depot sits saturated for the rest of the game — silting up with
+one chain's good and refusing every short-hop deposit, which is §4.3 of
+increment 7 word for word, surviving the increment written to fix it.
+
+Selecting on surplus removes the hole without weakening anything, because
+`S.surplus(r) = max(0, unclaimedAt(S, r) − S.demand(r))` **already** refuses to
+drain below demand. The 60-wheat depot has a surplus of 48 and drains six of it;
+at 12 it has a surplus of 0 and is no longer a drain candidate for wheat. A
+resource with no demand is simply the case where the whole claimed-net holding
+is surplus — the old rule was a special case of the new one, and the special
+case was the one that could not answer.
+
+Termination is unaffected. A drain never takes a resource below the demand that
+would stage it back, so the dead band of §2.4's closing paragraph still holds
+and no drained unit can be pulled straight back in.
 
 ```
 occupancyAt(S) = totalAt(S) − plannedOutAt(S)        ← every resource, not one

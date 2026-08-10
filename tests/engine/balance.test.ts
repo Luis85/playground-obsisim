@@ -968,9 +968,15 @@ describe('dispatch order under a drained ledger', () => {
     // fixture at two and three haulers — printed by the report below and
     // deliberately not asserted — spreads to 189/210 and 319/292, ratios of
     // 0.90 and 0.92. So this fixture family's own widest spread is about a
-    // tenth, 0.85 sits just below it, and a later task that shifts throughput
-    // asymmetrically reds here reading as a tolerance to re-take rather than as
-    // a balance regression. Both failure modes are nowhere near it: a
+    // tenth and 0.85 sits just below it. Be clear that this is a LOOSENING and
+    // not just a reshaping: at 108, `< 10` is a ratio floor of about 0.915, so
+    // 0.85 admits a gap of roughly 16 where 10 was admitted. It is also
+    // calibrated at the family level — the 0.90/0.92 spreads are at two and
+    // three haulers, while this assertion runs at one, where the ratio is 1.00
+    // and there is no spread to calibrate against. §4.1 point 6 records both.
+    // A later task that shifts throughput asymmetrically reds here reading as a
+    // tolerance to re-take rather than as a balance regression, and it should
+    // re-take it knowing that. Both failure modes are nowhere near it: a
     // dispatcher that starves the far bakery whatever the layout, and the
     // pre-floor tree itself, both read 0 / 108 = 0.
     const [far, near] = [bakeryFar.stages[1].made, bakeryNear.stages[1].made];

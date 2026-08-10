@@ -1097,8 +1097,8 @@ one variable each. Recorded in §4 as its own table.
 - Increment 5's distance sweep and increment 7's processor sweep, unchanged
   fixtures. Acceptance criterion 2 — the counter-direction the §2.1 risk
   demands.
-- The hauler-tick split, to confirm the fix did not simply convert throughput
-  into walking.
+- The hauler-tick split, to ask whether the fix converted throughput into
+  walking. The answer is split: trip *shape* is unchanged, trip *length* is not.
 
 **The readings, and the tree really was clean.** Every figure below is
 `BALANCE_REPORT=1 vitest run --project balance` on the report blocks in
@@ -1140,25 +1140,54 @@ this is the measurement of.** The layout that was already being served does not
 move: `mill far, bakery near` differs by one unit of flour at two haulers and
 not at all at one or three. And at **three haulers every figure in both layouts
 is identical before and after** — with that much hauling nobody is ever starved,
-so the new band is empty and the old ordering decides in full. The floor is
-inert exactly where there is nothing to fix.
+so the new band is empty and the old ordering decides in full. What that
+supports is a narrow claim, and it is the only one this fixture licenses: **the
+floor is inert where the far consumer was already being served**, most strictly
+at three haulers, where the fixture is identical pre and post. It is *not* inert
+wherever nothing is starving — the near-camp row starves nobody and still moves
+397 → 259 flour and 144 → 250 bread. **Read point 5 before quoting this
+paragraph**; the two belong together.
 
 **2. Acceptance criterion 2 held — digit for digit, both sweeps, every column.**
 Increment 5's sixteen-row distance sweep and increment 7's sixteen-row processor
 sweep were re-run on unchanged fixtures at both commits and the two outputs are
 **byte-identical**, including `delivered`, `%ceiling`, `stalled%`, `waiting%`,
-`idle`, `supplyReturns` and `loaded`. They also still agree with the figures
-increment 7 §4.1 recorded (100/99/53/98/33/65/96 on the raw sweep;
-99/89/48/30, 98/80/55, 97/71, 72 on the processor half). **No figure moved, so
-nothing needs justifying here.** That the raw sweep is unmoved is close to
-structural — a forester has no inputs, so it is never a supply candidate at all
-— but the processor sweep is a genuine test of the term and it is unmoved for a
+`idle`, `supplyReturns` and `loaded`. The readings, since this is the acceptance
+criterion and prose is not a reading — seven of the sixteen raw rows and four of
+the sixteen processor rows, in the report block's own columns. **Every cell is a
+single figure rather than a pair because every cell is the same figure at
+`be4566c` and at HEAD**, which is the whole content of the criterion:
+
+| tile | leg | haulers | delivered | %ceiling | stalled% | idle |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| ( 3, 0) | 1 | 1 | 398 | 100 | 0 | 200 |
+| ( 8, 4) | 4 | 1 | 394 | 99 | 0 | 67 |
+| (15, 8) | 8 | 1 | 210 | 53 | 50 | 36 |
+| (15, 8) | 8 | 2 | 390 | 98 | 0 | 141 |
+| (23,15) | 13 | 1 | 132 | 33 | 68 | 23 |
+| (23,15) | 13 | 2 | 258 | 65 | 38 | 54 |
+| (23,15) | 13 | 3 | 384 | 96 | 0 | 94 |
+
+| sawmill tile | leg | haulers | delivered | %ceiling | waiting% | idle | supplyReturns | loaded |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| ( 8, 4) | 4 | 1 | 354 | 89 | 21 | 60 | 60 | 59 |
+| (15, 8) | 8 | 2 | 321 | 80 | 23 | 68 | 66 | 64 |
+| (23,15) | 13 | 3 | 282 | 71 | 33 | 82 | 63 | 61 |
+| (23,15) | 13 | 4 | 286 | 72 | 30 | 121 | 84 | 82 |
+
+Both blocks also still agree with what increment 7 §4.1 recorded: set these rows
+against its raw-producer and sawmill `%ceiling` tables at the same tiles and
+hauler counts. **No figure moved, so nothing needs justifying here.** That the
+raw sweep is unmoved is close to structural — a forester has no inputs, so it is
+never a supply candidate at all — but the processor sweep is a genuine test of
+the term and it is unmoved for a
 reason worth stating: with one consuming building and one resource, every
 candidate carries the same `starving` value, so the new term is constant across
 the comparison and the route ordering below it decides exactly as before.
 
-**3. The hauler-tick split: the throughput was not converted into walking.**
-Percentages are of working (non-idle) hauler ticks.
+**3. The hauler-tick split: the *shape* of a trip did not change, but a trip got
+longer.** Percentages are of working (non-idle) hauler ticks. A cell without an
+arrow read the same at both commits.
 
 | fixture | haulers | idle | working | collect% | supply% | fetch% | out% | return% | supply round trips | loaded% |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -1166,14 +1195,28 @@ Percentages are of working (non-idle) hauler ticks.
 | mill→bakery | 2 | 80 → 77 | 1120 → 1123 | 0 → 0 | 100 → 100 | 7 → 7 | 47 → 47 | 46 → 46 | 78 → 77 | 96 → 96 |
 | mill→bakery | 3 | 122 → 122 | 1678 → 1678 | 0 → 0 | 100 → 100 | 7 → 7 | 47 → 47 | 46 → 46 | 113 → 113 | 97 → 97 |
 | mill→bakery | 4 | 175 → 175 | 2225 → 2225 | 0 → 0 | 100 → 100 | 7 → 7 | 47 → 47 | 46 → 46 | 151 → 151 | 98 → 98 |
-| mill→bakery + depot | 2 / 4 | unchanged | unchanged | 0/1 | 100/99 | 20 / 17 | 44 / 45 | 36 / 39 | 89 / 165 | 96 / 98 |
-| forester→sawmill | 1–4 | unchanged | unchanged | 41–47 | 53–59 | 2 | 49–50 | 48 | 12–49 | 88–97 |
+| mill→bakery + depot | 2 | 91 | 1109 | 0 | 100 | 20 | 44 | 36 | 89 | 96 |
+| mill→bakery + depot | 4 | 200 | 2200 | 1 | 99 | 17 | 45 | 39 | 165 | 98 |
+| forester→sawmill | 1–4 | 23 / 52 / 87 / 126 | 577 / 1148 / 1713 / 2274 | 41–47 | 53–59 | 2 | 49–50 | 48 | 12 / 23 / 34 / 49 | 88–97 |
 
-The split is flat to the percentage point in every row: the haulers do not walk
-a different *shape* of trip, and they do not walk more of one. Working ticks
-move by +5 of 558 at one hauler and +3 of 1,123 at two — under 1% — and idle
-ticks fall rather than rise, so the fix is not being paid for out of slack
-either.
+The forester row's counted columns are per hauler, one to four, slash-separated;
+its percentage columns were recorded as the range across those four counts and
+are given as one, because that is the reading that exists.
+
+**Trip shape is flat.** Within the collect/supply/fetch/out/return split no
+column moves by more than a single point in any row — `fetch%` 8 → 7 and `out%`
+46 → 47 at one hauler are the whole of it — so the haulers do not walk a
+different *kind* of trip. Working ticks move by +5 of 558 at one hauler and +3
+of 1,123 at two, under 1%, and idle ticks fall rather than rise, so the fix is
+not paid for out of slack either.
+
+**Trip length is not flat, and this paragraph must not be quoted as if it
+were.** Two columns say the trips got longer. `loaded%` drops 98 → 95 at one
+hauler, the one figure in the split that moves by more than a point. And the
+same 43 → 38 supply round trips, over slightly *more* working ticks, is
+558/43 = **13.0 → 563/38 = 14.8 ticks per supply round trip, +14%** — which is
+walking further per delivery. Point 4 is where that is priced; the two points
+are about different quantities and neither cancels the other.
 
 **4. What the floor costs, which is not nothing, and the mechanism is in the
 row above.** The near mill loses badly wherever the floor fires: **254 → 115**
@@ -1181,9 +1224,12 @@ flour at one hauler (−55%), 313 → 260 at two (−17%), 397 → 259 beside th
 (−35%). Gross units across both stages fall too — 254 → 223 at one hauler
 (−12%), 463 → 449 at two (−3%), 541 → 509 beside the camp (−6%) — and the
 hauler-tick split says why: the same working ticks complete **43 → 38** supply
-round trips, because a trip to the leg-8 building is longer than a trip to the
-leg-6 one. Fewer, longer trips is the honest price of serving the far consumer,
-and it is charged in the intermediate good.
+round trips, **13.0 → 14.8 ticks each (+14%)**, because a trip to the leg-8
+building is longer than a trip to the leg-6 one. The two sides of that match:
+trips fall **11.6%** (38/43) against gross units **12.2%** (223/254), so the
+loss is in the number of deliveries a fixed budget of walking buys, not in
+anything getting slower per tick. Fewer, longer trips is the honest price of
+serving the far consumer, and it is charged in the intermediate good.
 
 **What it buys is the thing the colony eats.** Bread rises in every
 configuration where the floor fires at all: 0 → 108, 150 → 189, 144 → 250. A
@@ -1195,9 +1241,12 @@ are not the same quantity.
 
 **5. A finding the fixture was not built to look for: the floor's reach is wider
 than the pathology it was written for.** The near-camp row starves nobody —
-before the change the bakery there already made 144 loaves — and it is the row
-that moves *most* in percentage terms (bread +74%, flour −35%). The cause is one
-step below the new term, in `movable` descending. The mill's wheat is seeded at
+before the change the bakery there already made 144 loaves — and it carries
+**the largest movement in a row where nothing was starved** (bread +74%, flour
+−35%). Not the largest in the table: row 1's flour falls 55%, and row 1's bread
+goes 0 → 108, which has no percentage at all. What makes this row the
+interesting one is that it needed no fixing. The cause is one step below the new
+term, in `movable` descending. The mill's wheat is seeded at
 1,000,000, so its `movable` is the whole tray room (12) on every tick its tray
 is empty; the bakery's flour is only ever what the mill has already delivered,
 so its `movable` is usually smaller and it lost that comparison whether or not
@@ -1209,14 +1258,30 @@ purely distance-related fairness floor, and any later reading that assumes the
 term only fires on far buildings will be wrong. Task 11 should not attribute
 this movement to transfer.
 
-**6. Nothing was tuned to produce any of this.** No constant moved, no fixture
-was adjusted, and the one test bound that changed was *widened in form and not
-in strength*: `Math.abs(far - near) < 10` became a ratio against a stated 15%
-tolerance, because the absolute form was passing at a measured difference of
-**zero** (108 and 108) with nothing recording how much room it had. The same
-fixture at two and three haulers spreads to ratios of 0.90 and 0.92, so a later
-change that shifts throughput asymmetrically now reds with a message that reads
-as a tolerance to re-take rather than as a balance regression.
+**6. Nothing was tuned to produce any of this — but one bound was loosened, and
+by how much.** No constant moved and no fixture was adjusted. One test bound did
+change: `Math.abs(far - near) < 10` became
+`Math.min(far, near) / Math.max(far, near) > 0.85`. That is **weaker, not merely
+differently shaped**. At the magnitude these runs measure, 108, the old absolute
+bound is a ratio floor of about 108/118 ≈ **0.915**, so 0.85 admits a gap of
+roughly **16** loaves where **10** was admitted — about six ratio points of
+loosening.
+
+Why that is an acceptable trade: the absolute form was passing at a measured
+difference of **zero** (108 and 108) with nothing in the file recording whether
+10 was generous or a hair's breadth, so it made no statement about its own
+margin; and both failure modes this guard exists to catch score 0/108 = **0**,
+nowhere near either threshold, so the widening costs no discrimination.
+
+The calibration carries a caveat that belongs in the record. 0.85 sits just
+below **0.90 and 0.92** — the spreads the same *fixture family* shows at two and
+three haulers — but the assertion is taken at **one** hauler, where the measured
+ratio is 1.00 and there is no spread to calibrate against, precisely because
+both layouts agree exactly there. So the tolerance is justified at the level of
+the family rather than of the fixture it guards. That is defensible and it is
+stated: a later change that shifts throughput asymmetrically reds here with a
+message that reads as a tolerance to re-take rather than as a balance
+regression, and whoever re-takes it now knows where the number came from.
 
 ### 4.2 The transfer mechanic
 

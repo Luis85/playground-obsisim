@@ -252,6 +252,12 @@ describe('HaulSystem', () => {
   });
 
   it('dispatches identically regardless of entity order — same world, same claim', async () => {
+    // COLLECT only, which was the whole of dispatch in increment 4. The same
+    // property across BOTH kinds — supply's route and site-id links included —
+    // is haul-dispatch.test.ts's 'the same world decides the same way whichever
+    // order it is walked in', which needs a supply-capable fixture this
+    // forester-only harness cannot build.
+    //
     // both 3 tiles from camp, both holding 4: the lowest id must win either way
     const forward = await setup([{ id: 10, col: 5, row: 0, wood: 4 }, { id: 11, col: 2, row: 3, wood: 4 }], 1);
     const reversed = await setup([{ id: 11, col: 2, row: 3, wood: 4 }, { id: 10, col: 5, row: 0, wood: 4 }], 1);

@@ -130,6 +130,9 @@ const BESIDE_DEPOT = { col: 21, row: 10 };
 /** A depot two tiles from the mill and eleven from the camp — the tile that
  * makes "back to the source" and "to the nearest site" different answers. */
 const BESIDE_MILL = { col: 14, row: 9 };
+/** A collect-only producer on nobody else's tile, nearer the camp than the
+ * mill, so a hauler sent here rather than to MILL is unmistakable. */
+const FORESTER = { col: 6, row: 2 };
 
 describe('where a hauler starts', () => {
   // Every other number on HaulTrip defaults to zero, so this one field is the
@@ -662,6 +665,40 @@ describe('reservations', () => {
     const targets = haulers.map((h) => tripOf(h).targetId);
     expect(new Set(targets).size).toBe(3);
   });
+
+  it('a supply hauler claims the output it will load on arrival, so no second hauler is sent at it', async () => {
+    // The output claim counts haulers of BOTH kinds, because a supply hauler
+    // loads the target's out-tray on arrival too (§2.5 step 3).
+    //
+    // The camp holds exactly one carry of wheat, so the SOURCE claim (already
+    // covered above) is what leaves the second hauler with no supply job and
+    // pushes it onto the collect list — deliberately, so this case turns on the
+    // output claim alone rather than sharing the input claim's fixture. There
+    // the mill's 4 flour is the biggest backlog going and the forester's 3 wood
+    // the only other, so counting the supply hauler's carry against that 4 is
+    // the one thing that can send it to the forester instead.
+    const { world, buildings, haulers, step, stockpile } = await setup([
+      { defId: 'mill', ...MILL, buffer: { flour: 4 }, crew: 1 },
+      { defId: 'forester', ...FORESTER, buffer: { wood: 3 } },
+    ], 2, { camp: { wheat: 6 } });
+    const [mill, forester] = buildings;
+    // The two backlogs are tellable apart, and the mill's is the LARGER: an
+    // unclaimed mill wins the collect ordering outright.
+    expect(bufferOf(mill).total()).toBeGreaterThan(bufferOf(forester).total());
+
+    await step(1);
+    expect(tripOf(haulers[0])).toMatchObject({ kind: 'supply', phase: 'fetching', targetId: idOf(mill), plannedAmount: 6 });
+    expect(tripOf(haulers[1])).toMatchObject({ kind: 'collect', phase: 'outbound', targetId: idOf(forester) });
+
+    // And it really was a whole job, not merely a differently-labelled one:
+    // both loads come home, and nothing was created or destroyed on the way.
+    await step(1 + legTicks(CAMP_TILE, CAMP_TILE) + legTicks(CAMP_TILE, MILL) + legTicks(MILL, CAMP_TILE));
+    expect(stockpile.getAt(CAMP_SITE_ID, 'flour')).toBe(4);
+    expect(stockpile.getAt(CAMP_SITE_ID, 'wood')).toBe(3);
+    expect(inputOf(mill).amounts.get('wheat')).toBe(6);
+    expect(colonyTotal(world, 'wheat')).toBe(6);
+    expect(colonyTotal(world, 'flour')).toBe(4);
+  });
 });
 
 /**
@@ -754,5 +791,66 @@ describe('a target that moves under an outbound hauler', () => {
     expect(inputOf(mill).amounts.get('wheat')).toBe(6);
     expect(colonyTotal(world, 'wheat')).toBe(20);
     expect(systemErrors).toBe(0);
+  });
+});
+
+/**
+ * Determinism, across BOTH kinds. haul-system.test.ts covers collect on its
+ * own, which was the whole of it in increment 4; supply adds two ranking terms
+ * collect does not have — the whole hauler->source->building route, and the
+ * site id — and both chains end at the building id precisely so entity
+ * iteration order cannot reach the decision.
+ *
+ * What is compared is the claim-bearing half of `HaulTrip` and nothing else,
+ * because §2.6's invariant is that a hauler's intent IS those fields: two runs
+ * that agree on them hold identical claims by construction.
+ */
+const jobsOf = (fixture: Awaited<ReturnType<typeof setup>>) => fixture.haulers.map((hauler) => {
+  const { kind, phase, targetId, sourceSiteId, destSiteId, plannedAmount, ticksLeft } = tripOf(hauler);
+  return { kind, phase, targetId, sourceSiteId, destSiteId, plannedAmount, ticksLeft };
+});
+
+/** Every building id in the order this world's queries actually walk them. */
+const buildingOrderOf = (world: IRuntimeWorld): number[] =>
+  [...world.getEntities()].flatMap((entity) => entity.getComponent(Building)?.id ?? []);
+
+describe('the same world decides the same way whichever order it is walked in', () => {
+  // Two mills five tiles from the camp, two foresters ten: inside each pair
+  // every ranking term ABOVE the id is equal — movable 6 and 6 over a route of
+  // 5 and 5, backlog 9 and 9 at a distance of 10 and 10 — so the id tie-break
+  // is the only thing left that can decide, and array order is the only other
+  // candidate answer. The two pairs are ten tiles apart from each other so
+  // neither can be mistaken for the other's.
+  const MILL_LOW: Spec = { id: 21, defId: 'mill', col: 6, row: 3, crew: 1 };
+  const MILL_HIGH: Spec = { id: 22, defId: 'mill', col: 2, row: 5, crew: 1 };
+  const WOOD_LOW: Spec = { id: 31, defId: 'forester', col: 8, row: 8, buffer: { wood: 9 } };
+  const WOOD_HIGH: Spec = { id: 32, defId: 'forester', col: 10, row: 6, buffer: { wood: 9 } };
+  const distance = (a: TileRef, b: TileRef) => Math.hypot(a.col - b.col, a.row - b.row);
+
+  it('dispatches both kinds identically, down to the id the tie-break ends at', async () => {
+    // The ties are real ties, and the two pairs are not each other's.
+    expect(distance(CAMP_TILE, MILL_LOW)).toBe(distance(CAMP_TILE, MILL_HIGH));
+    expect(distance(CAMP_TILE, WOOD_LOW)).toBe(distance(CAMP_TILE, WOOD_HIGH));
+    expect(distance(CAMP_TILE, MILL_LOW)).not.toBe(distance(CAMP_TILE, WOOD_LOW));
+
+    // Exactly one carry of wheat at the camp, so the second hauler is left
+    // without a supply job by the SOURCE claim and both orderings get exercised
+    // in one tick — the input claim stays out of this case entirely.
+    const specs: Spec[] = [MILL_LOW, MILL_HIGH, WOOD_LOW, WOOD_HIGH];
+    const forward = await setup(specs, 2, { camp: { wheat: 6 } });
+    const reversed = await setup([...specs].reverse(), 2, { camp: { wheat: 6 } });
+    // Not the same run twice: the two worlds really are walked in opposite orders.
+    expect(buildingOrderOf(forward.world)).not.toEqual(buildingOrderOf(reversed.world));
+
+    await forward.step(1);
+    await reversed.step(1);
+    const jobs = jobsOf(forward);
+    // Non-vacuous three ways: neither hauler idled, both kinds were dispatched,
+    // and each decision landed on the lower id of its own tied pair.
+    expect(jobs.map((job) => job.phase)).toEqual(['fetching', 'outbound']);
+    expect(jobs.map((job) => job.kind)).toEqual(['supply', 'collect']);
+    expect(jobs.map((job) => job.targetId)).toEqual([MILL_LOW.id, WOOD_LOW.id]);
+
+    expect(jobsOf(reversed)).toEqual(jobs);
   });
 });

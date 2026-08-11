@@ -260,6 +260,26 @@ export interface BalanceResult extends StageResult {
   transfers: number;
   transfersStaging: number;
   transfersDrain: number;
+  /**
+   * The SAME trips counted at the opposite turn: the `-> returning` edge on a
+   * transfer job, once per trip that reached its source and loaded.
+   *
+   * A second derivation of `transfers`, published because it is the only thing
+   * that pins that field to being an EDGE count rather than a plausible
+   * magnitude. Asserting `haulerTicks.transfer > transfers` catches only the
+   * degenerate case where the two are equal; the likeliest wrong
+   * implementation — counting every tick in `fetching` on a transfer job —
+   * still reads well below the bucket and passes. It cannot agree with this,
+   * because turning for home happens once per trip however long the walk.
+   *
+   * The two can legitimately differ, and only in one direction: a trip still
+   * walking out when the run ends has been dispatched and has not yet turned
+   * (at most one per hauler), and a transfer whose source is spent by the time
+   * it arrives cancels where it stands rather than turning (`transferOnward`
+   * in haul-system.ts). So `transfers - transferReturns` is a small
+   * non-negative number, not necessarily zero.
+   */
+  transferReturns: number;
   /** Units in haulers' hands when the run ended. Published because it is
    * exactly the term the old `made` wrongly added to every stage's total. */
   carriedAtEnd: number;
@@ -288,6 +308,16 @@ export interface BalanceResult extends StageResult {
    * bound by hand is what put an invalid 4,800-tick reading in the spec; a
    * computed bound fails silently the next time a constant moves, an asserted
    * one fails loudly.
+   *
+   * ONE COUNT, TWO CAUSES, and the name says less than the field does: a
+   * STARVED colonist is counted here beside one who died of old age, because
+   * either one leaves the run a worker short and that is what this is asked.
+   * Today they cannot be confused — every balance scenario seeds `berries` at
+   * FED (see SEEDED_RESOURCE_IDS), which is far past what any crew here can eat
+   * in any run, so hunger never kills and every death reported is an old-age
+   * one. A future scenario that deliberately runs the food down would make the
+   * number ambiguous, and should split the two causes rather than quietly
+   * reinterpret this one.
    */
   deaths: number;
   retirements: number;
@@ -554,8 +584,9 @@ function tallyHaulers(
   }
 }
 
-/** Transfers dispatched over a run, split by `HaulTrip.staging`. */
-interface TransferTally { total: number; staging: number; drain: number }
+/** Transfers dispatched over a run, split by `HaulTrip.staging`, plus the same
+ * trips counted again at the turn for home. */
+interface TransferTally { total: number; staging: number; drain: number; returned: number }
 
 /**
  * Whether THIS tick is the one a transfer was dispatched on: the `idle` ->
@@ -570,6 +601,19 @@ interface TransferTally { total: number; staging: number; drain: number }
  */
 function dispatchedTransfer(before: HaulPhase, trip: HaulTrip): boolean {
   return before === 'idle' && trip.phase === 'fetching' && trip.kind === 'transfer';
+}
+
+/**
+ * Whether THIS tick is the one a transfer turned for home: the `-> returning`
+ * edge, on a transfer job.
+ *
+ * The same trips as `dispatchedTransfer`, counted at the other end, and that
+ * redundancy is the point — see `BalanceResult.transferReturns` for what the
+ * cross-check buys and for the two ways the two counts may legitimately
+ * disagree.
+ */
+function returnedTransfer(before: HaulPhase, trip: HaulTrip): boolean {
+  return before !== 'returning' && trip.phase === 'returning' && trip.kind === 'transfer';
 }
 
 /**
@@ -598,6 +642,7 @@ function tallyTransfers(world: IRuntimeWorld, tally: TransferTally, phases: Map<
     // on the very first tick would go unrecorded.
     const before = phases.get(colonist.id) ?? 'idle';
     phases.set(colonist.id, trip.phase);
+    if (returnedTransfer(before, trip)) tally.returned++;
     if (!dispatchedTransfer(before, trip)) continue;
     tally.total++;
     if (trip.staging) tally.staging++;
@@ -686,7 +731,7 @@ export async function runScenario(scenario: Scenario): Promise<BalanceResult> {
   };
   const phases = new Map<number, HaulPhase>();
   const tripPhases = new Map<number, HaulPhase>();
-  const transfers: TransferTally = { total: 0, staging: 0, drain: 0 };
+  const transfers: TransferTally = { total: 0, staging: 0, drain: 0, returned: 0 };
   const storedSeries: number[] = [];
   const turnover = { deaths: 0, retirements: 0 };
   const returns = { total: 0, loaded: 0 };
@@ -767,6 +812,7 @@ export async function runScenario(scenario: Scenario): Promise<BalanceResult> {
     transfers: transfers.total,
     transfersStaging: transfers.staging,
     transfersDrain: transfers.drain,
+    transferReturns: transfers.returned,
     carriedAtEnd: snapshot.colonists.reduce((sum, w) => sum + w.carrying, 0),
     storedAtEnd: storedUnits(snapshot),
     storedSeries,

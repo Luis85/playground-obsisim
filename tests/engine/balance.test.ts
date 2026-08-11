@@ -491,7 +491,7 @@ const stagedChain = () => runScenario({
 /** One forester and one hauler, run for as long as the caller likes and staffed
  * at whatever age it asks for — the shape the turnover instrument is measured
  * on, where the only variable is how much of a colonist's life the run spans. */
-const window = (ticks: number, ageTicks?: number) => runScenario({
+const turnoverWindow = (ticks: number, ageTicks?: number) => runScenario({
   defId: 'forester', col: 6, row: 3, crew: 2, haulers: 1, ticks, resource: 'wood', ageTicks,
 });
 
@@ -669,13 +669,34 @@ describe('the two-way haul instruments', () => {
     // non-zero, and being symmetric it could not catch an inversion at all.
     expect(withDepot.transfersDrain).toBeGreaterThan(withDepot.transfersStaging);
 
-    // AND IT IS NOT THE TICK BUCKET. `haulerTicks.transfer` counts once per
-    // active hauler-tick, which weights a long route more heavily than a short
-    // one — right for a hauler-tick split, wrong as a count, and the two were
-    // conflated once already. A transfer is several ticks of walking, so the
-    // bucket is strictly the larger of the two and an edge counter that had
-    // quietly become the bucket would fail here rather than merely read high.
-    expect(withDepot.haulerTicks.transfer).toBeGreaterThan(withDepot.transfers);
+    // AND IT IS NOT A TICK COUNT — pinned against a SECOND EDGE rather than
+    // against the tick bucket's magnitude, because the magnitude does not
+    // separate them here. `haulerTicks.transfer` counts once per active
+    // hauler-tick, and this fixture measures 492 of them against 77 transfers,
+    // a ratio of 6.4. But the likeliest wrong implementation — the one the
+    // harness's own doc names, counting every tick in `fetching` on a transfer
+    // job — reads 109, not the ~246 a half-of-the-bucket estimate suggests:
+    // these haulers idle near the depot they drain, so the fetch leg averages
+    // 1.4 ticks against a 5-tick walk out to the sawmill. 492 > 109 comfortably,
+    // and so would 492 > 109 * 3. A bar drawn between 4.5x and 6.4x would have
+    // to sit inside a 1.4x window and would be retuned by any fixture change.
+    //
+    // The turn for home is not a magnitude at all. Every transfer that reaches
+    // its source and loads turns exactly once, however long either leg, so a
+    // dispatch count and a turn-for-home count are THE SAME NUMBER derived at
+    // opposite ends of the trip — measured, 77 and 77. A per-tick counter
+    // agrees with neither (109 against 77), and so does one keyed on the wrong
+    // leg or the wrong job.
+    //
+    // The tolerance is `SUPPLIED_HAULERS` and it is one-sided by construction:
+    // `transfers` may exceed `transferReturns` by the trips still walking out
+    // when the run ends (at most one per hauler) plus any transfer that found
+    // its source spent and cancelled where it stood, and can never fall below
+    // it. Currently 0 of both, so this asserts a real bound rather than a
+    // fitted one — a widening gap is a zero-take regression, not noise.
+    expect(withDepot.transferReturns).toBeGreaterThan(0);
+    expect(withDepot.transfers - withDepot.transferReturns).toBeGreaterThanOrEqual(0);
+    expect(withDepot.transfers - withDepot.transferReturns).toBeLessThanOrEqual(SUPPLIED_HAULERS);
   }, 180000);
 
   it('the two classes of transfer are counted apart, and both are reachable', async () => {
@@ -688,10 +709,25 @@ describe('the two-way haul instruments', () => {
     expect(r.transfersStaging).toBeGreaterThan(0);
     expect(r.transfersDrain).toBeGreaterThan(0);
     expect(r.transfersStaging + r.transfersDrain).toBe(r.transfers);
-    // The class is read from `HaulTrip.staging` at dispatch, never re-derived
-    // from the route — this depot's staging loads and its drains both run
-    // between the same two sites, so a route-based attribution would put every
-    // one of them in the same bucket and this test is what would notice.
+    // The class is read from `HaulTrip.staging` at dispatch and never
+    // re-derived from the route, for the reason `BalanceResult.transfers`
+    // gives: §2.2 makes the camp an ordinary site in the pull rule, so a
+    // depot -> camp move is legitimately either class and route-based
+    // attribution is wrong rather than approximate.
+    //
+    // THIS FIXTURE IS NOT THE EVIDENCE FOR THAT, and it would be overclaiming
+    // to say so: one depot means the only sites are the camp and it, staging
+    // runs camp -> depot and drain runs depot -> camp, so a direction-keyed
+    // derivation would classify every trip here correctly. What actually
+    // guards the flag is the pair above — the drain-heavy fixture, whose
+    // lopsided split catches an inverted or ignored flag, and the partition
+    // identity, which catches a class counted twice or not at all. This test's
+    // job is narrower and is the one they cannot do: proving `transfersStaging`
+    // is REACHABLE, so their split is not a partition with one side
+    // structurally empty.
+    //
+    // And the staging really landed: goods stood in the depot at the end,
+    // which is where a staging transfer puts them.
     expect(r.storedAtEnd).toBeGreaterThan(0);
   }, 120000);
 
@@ -748,7 +784,7 @@ describe('the two-way haul instruments', () => {
     // about which horizons are safe. Doing that arithmetic by hand is what put
     // an invalid 4,800-tick reading in the spec — 5,700 is an AGE, and founders
     // spawn at BALANCE.startingAgeTicks.
-    const inside = await window(600);
+    const inside = await turnoverWindow(600);
     expect(inside.retirements).toBe(0);
     expect(inside.deaths).toBe(0);
 
@@ -757,7 +793,7 @@ describe('the two-way haul instruments', () => {
     // (2,500), so retirement lands at elapsed tick 3,000 (retireTicks - that)
     // and the earliest old-age death at 3,200 (lifespanTicks - spreadTicks -
     // that); 3,900 ticks is past both.
-    const past = await window(3900);
+    const past = await turnoverWindow(3900);
     expect(past.retirements).toBeGreaterThan(0);
     expect(past.deaths).toBeGreaterThan(0);
 
@@ -767,7 +803,7 @@ describe('the two-way haul instruments', () => {
     // rather than of run length, and it is the only test of `ageTicks`: a
     // harness that accepted the field and ignored it would report the middle
     // run's numbers here.
-    const young = await window(3900, BALANCE.lifeBands.matureTicks);
+    const young = await turnoverWindow(3900, BALANCE.lifeBands.matureTicks);
     expect(young.retirements).toBe(0);
     expect(young.deaths).toBe(0);
     // And the field changed the run rather than only its notices: the older

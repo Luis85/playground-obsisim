@@ -13,6 +13,7 @@ import type { DispatchInputs, HaulBuildingRow, StaffedSet } from '../../../src/e
 import { claimsOf } from '../../../src/engine/systems/haul-claims';
 import { chooseJob } from '../../../src/engine/systems/haul-dispatch';
 import { bankLoad, destinationFor } from '../../../src/engine/systems/haul-sites';
+import { haulerCapacity } from '../../../src/engine/systems/haul-system';
 import {
   compareTransferCandidates, drainCandidates, nextTransferTarget, siteDemandFrom, stagingCandidates,
   type TransferCandidate,
@@ -278,25 +279,35 @@ const SPLIT_HOLDING = 15;
 const SPLIT_SURPLUS = SPLIT_HOLDING - BALANCE.siteStagingTarget;
 
 /**
- * The depot the drain's `minTransferUnits` exemption exists for, built once
- * because two cases need it and every number in it is load-bearing.
+ * The depot the drain's `minTransferUnits` exemption is argued over, holding
+ * whatever a case needs it to hold.
  *
  * FOUR staffed consumers of four DIFFERENT inputs, all nearest depot A, so A's
  * demand is `4 x siteStagingTarget` = 48 — exactly
  * `storehouseCapacity - storehouseFreeFloor`, so `capTotalDemand` leaves it
- * alone and each resource really is wanted 12. A holds 15 of each: 60 of 60,
- * saturated, `drainNeed` at the full floor, and a surplus of 3 on every
- * resource with not one of them reaching the threshold.
+ * alone and each of the four resources really is wanted 12.
  */
-function splitSurplusDepot() {
+function fourInputDepot(holding: Partial<Record<ResourceId, number>>) {
   return colonyOf(
     [CAMP, A],
     [
       consumer('mill', NEAR_A), consumer('bakery', ALSO_NEAR_A),
       consumer('sawmill', THIRD_NEAR_A), consumer('workshop', FOURTH_NEAR_A),
     ],
-    [[A, { wheat: SPLIT_HOLDING, flour: SPLIT_HOLDING, wood: SPLIT_HOLDING, planks: SPLIT_HOLDING }]],
+    [[A, holding]],
   );
+}
+
+/**
+ * The depot the exemption exists FOR, built once because two cases need it and
+ * every number in it is load-bearing: 15 of each of the four inputs, so 60 of
+ * 60, saturated, `drainNeed` at the full floor, and a surplus of 3 on every
+ * resource with not one of them reaching the threshold.
+ */
+function splitSurplusDepot() {
+  return fourInputDepot({
+    wheat: SPLIT_HOLDING, flour: SPLIT_HOLDING, wood: SPLIT_HOLDING, planks: SPLIT_HOLDING,
+  });
 }
 
 describe('draining: a site above its floor pushes to the camp', () => {
@@ -386,14 +397,17 @@ describe('draining: a site above its floor pushes to the camp', () => {
   });
 
   it('a drain that would restore the floor outright is still refused', () => {
-    // The other side of the exemption, and what keeps it narrow. Here `movable`
-    // is held down by `drainNeed` rather than by the surplus: the depot has 51
-    // of 60, so it is three units below its floor and its 51 planks could give
-    // far more than that. The trip would FINISH the job, and a job that small
-    // means nine free units — more than a hauler carries — so every short-hop
-    // deposit still lands and nothing is stranded by waiting. Walking three
-    // units to the camp is precisely the trivial trip the threshold exists to
-    // refuse.
+    // The other side of the exemption, and what keeps it narrow. Here the
+    // surplus is nowhere near binding — the depot holds 51 of 60, so its 51
+    // planks could give a full-sized load many times over — and `drainNeed` is
+    // what holds `movable` down to 3. The trip would FINISH the job, and a job
+    // that small means nine units of headroom, more than a hauler carries, so
+    // every short-hop deposit still lands and nothing is stranded by waiting.
+    // (Here that headroom is nine PHYSICALLY free units; `drainNeed` is netted
+    // against `plannedOutAt`, so in general some of it may be room already
+    // booked out — see the fourth hauler in the multi-hauler case below.)
+    // Walking three units to the camp is precisely the trivial trip the
+    // threshold exists to refuse.
     const held = 51;
     const free = BALANCE.storehouseCapacity - held;
     const need = BALANCE.storehouseFreeFloor - free;
@@ -407,6 +421,66 @@ describe('draining: a site above its floor pushes to the camp', () => {
     // its own and the same depot drains without needing any exemption.
     const lower = colonyOf([CAMP, A], [], [[A, { planks: held + 1 }]]);
     expect(movablesOf(lower.candidates())).toEqual([BALANCE.minTransferUnits]);
+  });
+
+  it('a hauler too small to carry the threshold does not get the exemption', () => {
+    // The term the exemption is easiest to lose to, because it is invisible at
+    // the call site: the `capacity` a drain is sized against is the HAULER's
+    // own — `haulerCapacity`, not the flat `BALANCE.haulCarryCapacity` — and a
+    // hauler with no bed carries `round(6 x homelessFactor)` = 3, BELOW the
+    // threshold of 4. So `movable` can sit under the gate with the site
+    // perfectly able to offer a full load, and a rule that asked only whether
+    // this trip finishes the job would exempt it.
+    //
+    // 52 of 60: eight units free, `drainNeed` 4, and 52 planks of surplus. The
+    // site can hand over a full-sized load AND that load restores the floor;
+    // nothing about the site is stuck. A small hauler is not a stuck site, so
+    // there is no candidate for it.
+    const held = 52;
+    const free = BALANCE.storehouseCapacity - held;
+    const need = BALANCE.storehouseFreeFloor - free;
+    const small = haulerCapacity(null);
+    expect(small).toBeLessThan(BALANCE.minTransferUnits); // the hauler alone puts `movable` under the gate
+    expect(need).toBeGreaterThanOrEqual(BALANCE.minTransferUnits); // ...and neither other term does
+    expect(held - need).toBeGreaterThanOrEqual(BALANCE.minTransferUnits);
+    const colony = colonyOf([CAMP, A], [], [[A, { planks: held }]]);
+    expect(drainCandidates(colony.sites, colony.claims(), colony.demand(), small)).toEqual([]);
+
+    // Non-vacuous twice over, and the two halves say different things: the same
+    // depot drains for a hauler with a bed, so the depot is genuinely drainable
+    // and it is the hauler being refused; and the same small hauler DOES drain
+    // a site that is doing the best it can, so what it is refused is the
+    // exemption and not the job.
+    expect(movablesOf(drainCandidates(colony.sites, colony.claims(), colony.demand(), CAPACITY)))
+      .toEqual([BALANCE.minTransferUnits]);
+    const split = splitSurplusDepot();
+    expect(movablesOf(drainCandidates(split.sites, split.claims(), split.demand(), small)))
+      .toEqual([SPLIT_SURPLUS]);
+  });
+
+  it('a site that can still offer a full-sized load is not doing the best it can', () => {
+    // The `surplus < minTransferUnits` clause's own fixture, and the one state
+    // that separates the two halves of the exemption: here the site's surplus
+    // IS short of what the floor needs — the trip would not finish the job — so
+    // `surplus < drainNeed` holds and that clause ALONE would exempt this. The
+    // other one refuses it, and rightly: a surplus of 5 against a threshold of
+    // 4 is a site that can hand over a full-sized load, so nothing about the
+    // site is stuck. It is the hauler that is small.
+    //
+    // 60 of 60 with the fullest resource at 17 against its demand of 12: a
+    // saturated depot, `drainNeed` at the full floor of 12, and a surplus of 5.
+    const colony = fourInputDepot({ wheat: 17, flour: 15, wood: 14, planks: 14 });
+    const surplus = 17 - BALANCE.siteStagingTarget;
+    const small = haulerCapacity(null);
+    expect(colony.stockpile.totalAt(A_ID)).toBe(BALANCE.storehouseCapacity); // saturated: drainNeed is the floor
+    expect(surplus).toBeGreaterThanOrEqual(BALANCE.minTransferUnits); // ...but a full-sized load is on offer
+    expect(surplus).toBeLessThan(BALANCE.storehouseFreeFloor); // and it would NOT restore the floor
+    expect(drainCandidates(colony.sites, colony.claims(), colony.demand(), small)).toEqual([]);
+
+    // Non-vacuous: the load the site is holding out really is there, and a
+    // hauler with a bed walks all five units of it.
+    expect(movablesOf(drainCandidates(colony.sites, colony.claims(), colony.demand(), CAPACITY)))
+      .toMatchObject([surplus]);
   });
 
   it('a drain never targets another depot', () => {
@@ -494,10 +568,13 @@ describe('a bound that only a second hauler can see', () => {
     // claimed-net, and the fourth hauler is refused — by the exemption's own
     // boundary rather than by anything running out: after three, `plannedOutAt`
     // is 9 so `drainNeed` is 3, the untouched resource can still offer exactly
-    // 3, and `movable === drainNeed` puts that last trip back under
-    // `minTransferUnits`. Nine units of headroom is more than a hauler carries,
-    // so the short-hop deposits the depot exists for land again, which is the
-    // entire thing the drain was buying.
+    // 3, and a surplus that is no longer BELOW the need fails the exemption's
+    // second clause and puts that last trip back under `minTransferUnits`.
+    //
+    // The nine units that buys are booked room, not free space: the depot is
+    // still physically at 60 of 60 and will not accept a deposit until those
+    // three trips arrive. That is the point — the job is already being finished
+    // by trips in flight, so a fourth is the trivial trip and not the rescue.
     const colony = splitSurplusDepot();
     const dispatched = [colony.dispatch(), colony.dispatch(), colony.dispatch(), colony.dispatch()];
     expect(dispatched.map((c) => c?.movable ?? null))

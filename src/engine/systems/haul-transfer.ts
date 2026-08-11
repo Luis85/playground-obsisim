@@ -293,7 +293,8 @@ function drainFrom(
   const dest = sites.find((site) => site.id === CAMP_SITE_ID);
   const resource = drainResource(source, ledger);
   if (dest === undefined || resource === null) return;
-  const movable = Math.min(capacity, ledger.surplus(source.id, resource), need);
+  const surplus = ledger.surplus(source.id, resource);
+  const movable = Math.min(capacity, surplus, need);
   // THE DRAIN'S ONE EXEMPTION FROM `minTransferUnits`, and it is an exemption
   // rather than a retune of the constant: the question is which candidates the
   // gate applies to, not what the number is.
@@ -305,29 +306,44 @@ function drainFrom(
   // no other rule restores the headroom. What a refused drain strands is not
   // the three units; it is the site.
   //
-  // `movable < need` IS THE EXEMPTION, and the discrimination is the whole
-  // point. `movable = min(capacity, surplus, need)`, so `movable < need` says
-  // the site is already giving everything it can spare and the floor is STILL
-  // not restored. That is the four-input depot: 15 each of four resources in 60
+  // THE EXEMPTION IS THE SITE DOING THE BEST IT CAN, and the two clauses below
+  // are the two halves of that sentence — both about the SURPLUS, which is the
+  // only term of `min(capacity, surplus, need)` that is a property of the site
+  // rather than of the hauler or of how far the site has slipped.
+  // `surplus < minTransferUnits` says the site cannot offer a full-sized load
+  // of even its fullest resource; `surplus < need` says that handing over all
+  // of it still would not restore the floor. Together: it is giving everything
+  // it can spare, the floor is STILL not restored, and refusing means refusing
+  // forever. That is the four-input depot — 15 each of four resources in 60
   // units of capacity against a demand of 12 each, four surpluses of 3, not one
   // of them reaching 4 — saturated for the rest of the game under a flat gate,
   // refusing every short-hop collect deposit, which is increment 7's §4.3
   // defect arriving through a third door.
   //
-  // `movable === need` is the opposite situation and stays refused. There the
-  // trip FINISHES the job, so a sub-threshold `movable` means the site is
-  // within three units of its floor: at least `storehouseFreeFloor -
-  // minTransferUnits + 1` free units, nine of them, more than a hauler carries.
-  // Nothing is silting up, and walking three units to the camp is exactly the
-  // trivial trip the threshold exists to refuse. Nor can that refusal become
-  // permanent — fill the site further and `need` rises past its surplus, at
-  // which point the clause above fires.
+  // NEITHER OF THE OTHER TWO TERMS EARNS THE EXEMPTION, and each of them CAN
+  // bind below the threshold, so dropping either clause is a different rule:
   //
-  // `capacity` cannot reach this: at 6 against a threshold of 4, a `movable`
-  // that term binds clears the gate unaided. Surplus is the only term that can
-  // bind below the threshold, which is what makes the exemption the SITE doing
-  // the best it can rather than the hauler.
-  const minUnits = movable < need ? ANY_UNITS : BALANCE.minTransferUnits;
+  // - `capacity` is the HAULER's — `haulerCapacity`, not the flat
+  //   `BALANCE.haulCarryCapacity` — so a hauler with no bed (`homelessFactor`)
+  //   or a long enough commute (`commute.floor`) carries `round(6 x 0.5)` = 3,
+  //   below a threshold of 4. A small hauler is not a stuck site: its site can
+  //   offer a full load and the next hauler with a bed takes it. Such a hauler
+  //   simply makes no sub-threshold transfer, of either class, exactly as it
+  //   makes no sub-threshold staging one.
+  //
+  // - `need` binding means the trip FINISHES the job, so a sub-threshold
+  //   `movable` means the site is within three units of its floor: at least
+  //   `storehouseFreeFloor - minTransferUnits + 1` = 9 units of HEADROOM, more
+  //   than a hauler carries. Headroom, not necessarily free space — `drainNeed`
+  //   is netted against `plannedOutAt`, so those nine can be zero free units
+  //   with nine already booked out, which is exactly the fourth hauler at the
+  //   split-surplus depot. Either way nothing is silting up: the room is there,
+  //   or it is on its way out in trips already dispatched. Walking the last one
+  //   to three units to the camp is the trivial trip the threshold exists to
+  //   refuse, and that refusal cannot become permanent — deposit into the site
+  //   and `need` rises past the surplus, at which point the exemption fires.
+  const siteDoingItsBest = surplus < BALANCE.minTransferUnits && surplus < need;
+  const minUnits = siteDoingItsBest ? ANY_UNITS : BALANCE.minTransferUnits;
   const candidate = candidateOf(source, dest, resource, movable, false, minUnits);
   if (candidate !== null) out.push(candidate);
 }

@@ -91,7 +91,10 @@ export const BALANCE = {
    * later, so the speculative job takes the stricter threshold. It does not
    * extend to a drain, which is offered ahead of collect precisely because
    * something IS waiting for it, and which is exempt from this threshold when
-   * the surplus rather than the headroom is what binds it (`drainFrom`).
+   * the site's surplus is itself below the threshold AND still short of the
+   * headroom the site needs — the site doing the best it can, which is a
+   * property of the site and not of how much the hauler can carry
+   * (`drainFrom`).
    *
    * UNMEASURED, spec §4's question: is 4 the right premium over
    * `minSupplyUnits: 2`? Too low and haulers walk the map for tails; too high

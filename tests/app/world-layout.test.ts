@@ -664,6 +664,62 @@ describe('hauler placement', () => {
     expect(trip(false)).toMatchObject({ carrying: true, carryingOut: false });
   });
 
+  /**
+   * A transfer names NO building: `haulTargetId` is null for the whole round
+   * trip (spec §2.10), which is the one thing about it the layout could get
+   * wrong. `placeHaulers` already handles it — the null falls through to the
+   * same branch a demolished target takes — so this pins that behaviour rather
+   * than changing it, because "already handled" is exactly the kind of claim
+   * that stops being true without anyone noticing.
+   *
+   * The failure it rules out is specific and player-visible: a hauler whose
+   * post cannot be resolved falling through to the camp band, i.e. a dot
+   * teleporting home for the length of every transfer. Neither end of this leg
+   * is the camp and the interpolated point is neither endpoint, so a reader of
+   * the wrong field lands somewhere visibly wrong rather than coincidentally
+   * right.
+   */
+  it('draws a transfer on its own leg though it names no building at either end', () => {
+    const SOURCE = DEPOT;                  // (14,9)
+    const DEST = { col: 4, row: 14 };      // a second store, and not the camp
+    const depots = [
+      makeBuilding(1, { defId: 'storehouse', col: SOURCE.col, row: SOURCE.row, workerSlots: 0, state: 'storing', stored: 30, storage: 60 }),
+      makeBuilding(2, { defId: 'storehouse', col: DEST.col, row: DEST.row, workerSlots: 0, state: 'storing', stored: 5, storage: 60 }),
+    ];
+    const transferLeg = {
+      hauling: true, haulPhase: 'returning' as const, haulKind: 'transfer' as const,
+      haulTicksLeft: 2, haulLegTicks: LEG_TICKS, carrying: 6, haulPickedUp: false,
+      haulLegFromCol: SOURCE.col, haulLegFromRow: SOURCE.row,
+      haulLegToCol: DEST.col, haulLegToRow: DEST.row,
+    };
+    const transferring = haulerIn(makeSnapshot({
+      buildings: depots,
+      colonists: [makeWorker(20, { ...transferLeg, haulTargetId: null })],
+    }));
+    // Half way along (2 of 4 ticks left): (9, 11.5), plus the doorstep offset.
+    expect(transferring.x).toBeCloseTo(9.5);
+    expect(transferring.y).toBeCloseTo(12.55);
+    expect(transferring.x).toBeGreaterThan(CAMP_COLS); // nowhere near the camp band
+    expect(transferring.at).toBeNull();                // no post: a transfer has no target to hold one at
+    expect(transferring.travelling).toBe(true);        // sim pace, not the cosmetic reassignment walk
+    // The load came out of a STORE, so it is carrying goods in — the marker
+    // reads `haulPickedUp`, never the kind (§2.10), and `transfer` must not
+    // become the branch that finally flips it.
+    expect(transferring).toMatchObject({ carrying: true, carryingOut: false });
+
+    // The control that makes "the null costs nothing" measurable rather than
+    // asserted: the SAME leg, with a target id that does resolve, must put the
+    // dot on the same pixel. Only `at` — read by nothing but heldSlots, which
+    // skips haulers — may differ.
+    const targeted = haulerIn(makeSnapshot({
+      buildings: depots,
+      colonists: [makeWorker(20, { ...transferLeg, haulTargetId: 2 })],
+    }));
+    expect(targeted.x).toBeCloseTo(transferring.x);
+    expect(targeted.y).toBeCloseTo(transferring.y);
+    expect(targeted.at).toBe(2);
+  });
+
   it('carries a store\'s fill and its capacity through to the canvas', () => {
     // Four distinct piles on one building, so a gauge wired to the wrong one
     // cannot pass: stored 24, capacity 60, output buffer 7, in-tray 3.

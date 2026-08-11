@@ -74,9 +74,10 @@ export function haulTicks(col: number, row: number, tilesPerTick: number): numbe
  */
 export type HaulPhase = 'idle' | 'outbound' | 'returning' | 'fetching';
 
-/** The two jobs a hauler can be doing: bringing raw goods in, or moving
- * stored goods out to a building that needs them. */
-export type HaulKind = 'collect' | 'supply';
+/** The jobs a hauler can be doing: bringing raw goods in, moving stored goods
+ * out to a building that needs them, or moving stored goods from one
+ * storehouse-class site to another. */
+export type HaulKind = 'collect' | 'supply' | 'transfer';
 
 /**
  * How far along a leg a hauler is, as 0 (just left) to 1 (arrived).
@@ -236,6 +237,104 @@ export function nearestSiteWithRoom(
   return best;
 }
 
+/**
+ * One building's pull on whatever site is nearest to it. `inputs` is the
+ * recipe's input ids — the engine resolves the catalog, because this module
+ * may not import it.
+ *
+ * THE ENGINE, NOT THIS FUNCTION, FILTERS THESE. A source is a building that is
+ * staffed and not relocating; both are engine conditions (`StaffedSet`,
+ * `Relocation`) and passing an already-filtered list is what keeps this law
+ * free of both.
+ */
+export interface DemandSource {
+  col: number;
+  row: number;
+  inputs: readonly ResourceId[];
+}
+
+/**
+ * Scale a site's demand down to what it may hold above its free floor, sharing
+ * the cap between resources in proportion to what each was asking for and
+ * flooring every share to an integer.
+ *
+ * Proportional-and-floored rather than first-come: the answer must not depend
+ * on the order the resources were inserted in, and under-allocating by a unit
+ * or two is the safe direction, since an unallocated unit is simply not
+ * demanded by anyone. A total of zero can never exceed a cap of at least zero,
+ * so the division below cannot be reached with a zero divisor.
+ */
+function capTotalDemand(atSite: Map<ResourceId, number>, cap: number): void {
+  let total = 0;
+  for (const units of atSite.values()) total += units;
+  if (total <= cap) return;
+  for (const [resource, units] of atSite) atSite.set(resource, Math.floor((units * cap) / total));
+}
+
+/**
+ * Per-site, per-resource demand: what each site needs, derived from the
+ * buildings it is the nearest live site to (§2.2). A site has no recipe, so it
+ * cannot be asked what it needs — this is the generalisation of `needOf` from
+ * a building to a place.
+ *
+ * `targetPerSource` and `reserveFreeSpace` arrive as arguments rather than as
+ * `BALANCE.siteStagingTarget` and `BALANCE.storehouseFreeFloor`, for the reason
+ * `haulTicksBetween` takes `tilesPerTick`: src/shared/ imports nothing outside
+ * itself.
+ *
+ * ABSENCE IS ZERO. A site nobody is nearest to gets no entry, which is exactly
+ * the corner depot §4.3 measures and exactly the case the push rule exists for.
+ * The same holds when a site IS the nearest to a source that itself demands
+ * nothing (`inputs: []`, e.g. a forager or farm): the inner map is created
+ * lazily, inside the `inputs` loop, so a source contributing no resources
+ * creates no entry either.
+ *
+ * `reserveFreeSpace` IS THE DEMAND CAP, AND IT IS NOT OPTIONAL. A bounded
+ * site's TOTAL demand across every resource is capped at
+ * `capacity - reserveFreeSpace`. Without it, five staffed mills nearest one
+ * 60-unit depot demand 60; collect then fills the depot to 60 — collect does
+ * not consult demand at all, it just banks a producer's output at the nearest
+ * site with room — and there the site's surplus is `held - demand = 0`, so the
+ * drain can never fire and the free-space floor is unreachable by any rule.
+ * The depot silts up permanently, which is the §4.3 defect this increment
+ * exists to remove, arriving through the door demand cannot see.
+ *
+ * The camp is unbounded (`capacity === null`), keeps no floor, and is never
+ * capped. It is otherwise an ORDINARY site here: a building beside the camp
+ * pulls on the camp, and the camp is special only in the push rule (§2.4).
+ */
+export interface SiteDemandOptions {
+  /** What each consuming building asks its nearest site to hold. */
+  targetPerSource: number;
+  /** The room a bounded site may never be asked to fill. */
+  reserveFreeSpace: number;
+}
+
+export function siteDemandOf(
+  sites: readonly StoreSite[], sources: readonly DemandSource[],
+  { targetPerSource, reserveFreeSpace }: SiteDemandOptions,
+): Map<number, Map<ResourceId, number>> {
+  const demand = new Map<number, Map<ResourceId, number>>();
+  for (const source of sources) {
+    const site = nearestSite(source.col, source.row, sites);
+    if (site === null) continue;
+    for (const resource of source.inputs) {
+      let atSite = demand.get(site.id);
+      if (atSite === undefined) {
+        atSite = new Map<ResourceId, number>();
+        demand.set(site.id, atSite);
+      }
+      atSite.set(resource, (atSite.get(resource) ?? 0) + targetPerSource);
+    }
+  }
+  for (const site of sites) {
+    const atSite = demand.get(site.id);
+    if (atSite === undefined || site.capacity === null) continue;
+    capTotalDemand(atSite, Math.max(0, site.capacity - reserveFreeSpace));
+  }
+  return demand;
+}
+
 /** Every site holding unclaimed stock of some resource — the pool §2.6's
  * supply dispatch draws candidates from. `unclaimedAt` closes over the
  * resource, the same way `heldAt` closes over nothing but the site. */
@@ -262,6 +361,20 @@ export interface SupplyCandidate {
   siteRow: number;
   resource: ResourceId;
   movable: number;
+  /**
+   * The building is STOPPED: nothing in hand, nothing in progress, nowhere to
+   * put the result, nothing on the way. It holds none of `resource`, has no
+   * batch running, has output room for another batch, and has no supply
+   * delivery already claimed toward it — not merely running low, not merely
+   * mid-batch with a tray its own crew has just emptied, not blocked on
+   * COLLECTION with a full output buffer, and not one already being served by a
+   * hauler dispatched moments ago.
+   *
+   * About the resource THIS candidate would deliver rather than the in-tray as
+   * a whole, so two candidates for the same building can never rank differently
+   * for a reason no player could see.
+   */
+  starving: boolean;
 }
 
 /** Hauler-to-site-to-building: the full trip a supply candidate costs,
@@ -273,14 +386,44 @@ function supplyRouteDistance(candidate: SupplyCandidate, from: TileRef): number 
 }
 
 /**
- * THE supply job-selection order: clear the most movable stock first, then
- * prefer the cheapest whole route (hauler to source to building — not the
- * building's distance alone, or two candidates for the same building from
- * different sites could not be told apart), then lowest building id, then
- * lowest site id. The final tie-break is what makes selection independent of
- * candidate order, the same guarantee `compareHaulCandidates` gives collect.
+ * THE supply job-selection order: serve a STOPPED building before a running
+ * one, then clear the most movable stock, then prefer the cheapest whole route
+ * (hauler to source to building — not the building's distance alone, or two
+ * candidates for the same building from different sites could not be told
+ * apart), then lowest building id, then lowest site id. The final tie-break is
+ * what makes selection independent of candidate order, the same guarantee
+ * `compareHaulCandidates` gives collect.
+ *
+ * `starving` is a FLOOR, not a rival priority, and the distinction is the whole
+ * reason it is safe to put at the front (OBS-7-01). The condition it ranks on
+ * is extinguished the moment the building is served — on the DISPATCH tick,
+ * not on the arrival several legs later — and stays extinguished for as long as
+ * the building has a load coming or work to do. So a distant stopped building
+ * gets one trip ahead of the queue and cannot pin a hauler to itself
+ * indefinitely, which a standing "rank on need" or "rank on distance from full"
+ * term could, because those stay true while the building is being served.
+ *
+ * That guarantee is the engine's, not this comparator's: all FOUR clauses of
+ * `starving` are load-bearing for it, and each fails it differently if dropped.
+ * Three are physical (nothing in hand, nothing in progress, output room for the
+ * result) and would not be extinguished until a load LANDED — the third of them
+ * not even then, since a building blocked on COLLECTION is not unblocked by a
+ * delivery at all. The fourth is the claim already standing against the
+ * building, which is what makes "the moment it is served" true on the tick the
+ * promotion is spent. See `supplyCandidates` in
+ * src/engine/systems/haul-dispatch.ts, where the four are derived.
+ *
+ * What it fixes is a strict priority with no floor: while the nearer hungry
+ * building could still take a load it won every comparison and took every trip,
+ * so a bakery behind a mill made zero bread in 600 ticks. Nothing below this
+ * term moved — among equally starving (or equally fed) candidates the previous
+ * order decides in full, which is what stops the floor becoming the opposite
+ * failure, a hauler crossing the map past a building it could have served on
+ * the way.
  */
 export function compareSupplyCandidates(a: SupplyCandidate, b: SupplyCandidate, from: TileRef): number {
+  const byStarving = Number(b.starving) - Number(a.starving);
+  if (byStarving !== 0) return byStarving;
   const byMovable = b.movable - a.movable;
   if (byMovable !== 0) return byMovable;
   const byRoute = supplyRouteDistance(a, from) - supplyRouteDistance(b, from);

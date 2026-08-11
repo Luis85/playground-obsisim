@@ -105,6 +105,37 @@ describe('content catalog', () => {
     expect(BALANCE.minSupplyUnits).toBe(2);
   });
 
+  it('the three transfer constants are the values spec §4 starts them at', () => {
+    // Starting points with a §4 question attached, not measured values — each
+    // one's doc comment names the question it is unmeasured against. Pinned
+    // here so a retune is a deliberate edit in two places rather than a number
+    // that drifted, exactly as `minSupplyUnits` above is.
+    expect(BALANCE.siteStagingTarget).toBe(12);
+    expect(BALANCE.minTransferUnits).toBe(4);
+    expect(BALANCE.storehouseFreeFloor).toBe(12);
+  });
+
+  it('a transfer costs more to justify than a supply delivery', () => {
+    // The relationship, not the literals (spec §2.4): a supply trip serves a
+    // building blocked right now and a transfer serves one that might be
+    // blocked later, so the speculative job takes the stricter threshold.
+    // Retune either constant and this still holds; swap their roles and it
+    // does not.
+    expect(BALANCE.minTransferUnits).toBeGreaterThan(BALANCE.minSupplyUnits);
+  });
+
+  it('a bounded site keeps a floor it can still hold real stock above', () => {
+    // The floor is room a depot holds BACK, so a floor at or above the whole
+    // capacity would leave a storehouse with no usable space at all — every
+    // staging term would be zero and the drain would never stop. Also the
+    // demand cap (`capacity - storehouseFreeFloor`, spec §2.2) has to leave
+    // room for at least one consuming building's target, or no site could ever
+    // hold what a single mill beside it asks for.
+    expect(BALANCE.storehouseFreeFloor).toBeLessThan(BALANCE.storehouseCapacity);
+    expect(BALANCE.storehouseCapacity - BALANCE.storehouseFreeFloor)
+      .toBeGreaterThanOrEqual(BALANCE.siteStagingTarget);
+  });
+
   it('every edible has a meal weight, and nothing else does', () => {
     // Both directions. A new edible with no weight is invisible to the food
     // gates — the colony would starve while the store looked full — and a

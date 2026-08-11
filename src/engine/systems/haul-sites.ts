@@ -75,9 +75,28 @@ export function storeSitesOf(rows: readonly StoreSiteRow[], pending: PendingChan
 /**
  * An undelivered supply remainder goes back where it CAME from, not to
  * whatever site is nearest: routing it onward would turn camp wheat into depot
- * stock without it ever being consumed — the store-to-store transfer §2.13
- * excludes. `!pickedUp && amount > 0` is exactly this case, because a hauler
+ * stock without it ever being consumed — a store-to-store transfer nobody
+ * asked for. `!pickedUp && amount > 0` is exactly this case, because a hauler
  * only loads output with empty hands.
+ *
+ * `kind === 'supply'` IS THE FIRST CLAUSE, and it is the one condition this
+ * increment opens the rule by. A TRANSFER satisfies every other clause here —
+ * it never picks up a building's output, so `pickedUp` is false for its whole
+ * life — and sending one home would have it spend a round trip putting the
+ * goods back exactly where it found them. The guarantee the other clauses
+ * protect is unchanged: a supply remainder still walks home, and the reason it
+ * must is that NOTHING asked for it where it stands. A transfer's load was
+ * asked for, by the destination it was dispatched against; when that
+ * destination is gone (`depositArrival` finding it demolished or its reserved
+ * room eaten, or `transferOnward` finding it gone before the return leg
+ * begins), the nearest site with room is the honest answer, and routing the
+ * load home REGARDLESS is the answer this rule may not give. That is a rule
+ * about routing, not a claim the source can never win: `transferOnward` turns
+ * for home from the SOURCE tile, so `nearestSiteWithRoom` sees the source at
+ * distance 0 holding the room this trip has just freed, and picks it unless
+ * something else took that room. Nothing is lost when it does — the vanished
+ * destination is off the site list and emits no candidate, so the load is
+ * banked where the hauler stands rather than walked anywhere twice.
  *
  * Null when the source no longer exists (demolished, or in transit — it is
  * simply absent from `sites`) or filled while the load was away. Both fall
@@ -95,8 +114,9 @@ export function storeSitesOf(rows: readonly StoreSiteRow[], pending: PendingChan
  * call inherits that test instead of needing a second one.
  */
 function remainderHome(trip: HaulTrip, sites: readonly StoreSite[], heldAt: (siteId: number) => number): StoreSite | null {
+  if (trip.kind !== 'supply' || trip.pickedUp || trip.amount === 0) return null;
   const source = sites.find((site) => site.id === trip.sourceSiteId);
-  if (trip.pickedUp || trip.amount === 0 || source === undefined) return null;
+  if (source === undefined) return null;
   return nearestSiteWithRoom(source.col, source.row, [source], heldAt, trip.amount);
 }
 

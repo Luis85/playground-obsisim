@@ -70,6 +70,50 @@ export const BALANCE = {
    * deliver one unit. Low enough that a small colony is never locked out of
    * supply entirely, which a higher floor would do. */
   minSupplyUnits: 2,
+  /**
+   * Units of one input a site aims to hold for each staffed consuming building
+   * it is the nearest store site to (spec §2.2). One in-tray's worth, chosen
+   * because `inputBufferCap` is the only comparable quantity the game already
+   * has — not because it was measured.
+   *
+   * UNMEASURED, spec §4's question: does staging more than an in-tray's worth
+   * pay, or does it just move the stall from the building to the depot? The
+   * whole point of a depot beside a consumer (§1.1) is to feed it without
+   * occupying in-tray concurrency, so the answer decides whether this should
+   * be one tray, several, or a fraction.
+   */
+  siteStagingTarget: 12,
+  /**
+   * The smallest transfer worth walking, and deliberately a SEPARATE and
+   * larger constant than `minSupplyUnits` (spec §2.4) — on STAGING's argument
+   * rather than transfer's as a whole: a supply trip serves a building that is
+   * blocked right now, a staging transfer serves one that might be blocked
+   * later, so the speculative job takes the stricter threshold. It does not
+   * extend to a drain, which is offered ahead of collect precisely because
+   * something IS waiting for it, and which is exempt from this threshold when
+   * the site's surplus is itself below the threshold AND still short of the
+   * headroom the site needs — the site doing the best it can, which is a
+   * property of the site and not of how much the hauler can carry
+   * (`drainFrom`).
+   *
+   * UNMEASURED, spec §4's question: is 4 the right premium over
+   * `minSupplyUnits: 2`? Too low and haulers walk the map for tails; too high
+   * and a depot's dead band (`2 x minTransferUnits` wide) swallows the
+   * restocking the feature exists to do.
+   */
+  minTransferUnits: 4,
+  /**
+   * Free space a bounded site tries to keep — the room a depot holds back for
+   * the short-hop collect deposits that are its outbound value. Below it the
+   * site drains its largest surplus to the camp, and staging may never eat
+   * into it (spec §2.2's two bounds).
+   *
+   * UNMEASURED, spec §4's question: is buying room worth a walk at all? A
+   * drain spends a whole round trip on room rather than on goods, so a floor
+   * set too high pays that price constantly and one set to zero never pays it
+   * — and never notices a depot silting up either.
+   */
+  storehouseFreeFloor: 12,
   relocationTilesPerTick: RELOCATION_TILES_PER_TICK,
   yearTicks: YEAR_TICKS,
   /** Age bands in ticks (spec 2.2): child 0-9, adult 10-54, elder 55+,

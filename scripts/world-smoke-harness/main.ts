@@ -183,6 +183,25 @@ const SUPPLY_FROM_DEPOT: Partial<ColonistSnapshot> = {
   ...SUPPLY_FROM_CAMP, haulLegFromCol: DEPOT.col, haulLegFromRow: DEPOT.row,
 };
 
+/**
+ * The one leg a TRANSFER walks home on: a load drawn out of the depot and
+ * carried to the camp, which is a store like any other. Frozen here so the
+ * three phases below can each move exactly one thing against it — the shape
+ * OBS-4-04 requires, and the reason a check named for a transfer cannot pass
+ * because some unrelated field moved with it.
+ *
+ * `haulPickedUp` is false: the load came out of a store, so a transfer is
+ * carrying goods IN at both ends of its round trip and the direction marker
+ * (which reads that field and never the kind) must not move between the supply
+ * frame and the transfer frame either.
+ */
+const DRAIN_LEG: Partial<ColonistSnapshot> = {
+  haulPhase: 'returning', carrying: 4, haulPickedUp: false,
+  haulTicksLeft: 2, haulLegTicks: 4,
+  haulLegFromCol: DEPOT.col, haulLegFromRow: DEPOT.row,
+  haulLegToCol: CAMP_TILE.col, haulLegToRow: CAMP_TILE.row,
+};
+
 const homeScene = (tick: number, resident: Partial<ColonistSnapshot> = {}) => snap(tick,
   [building(1, 'house', 4, 1, {
     workerSlots: 0, state: 'housing', beds: 4, occupants: (resident.homeId ?? null) === null ? 0 : 1,
@@ -263,7 +282,21 @@ const phases: Array<() => void> = [
   // role phases 20, 24 and 27 already play.
   () => renderer.sync(storeScene(15, depotHolding({ stored: 45 }), { haulAtCol: DEPOT.col, haulAtRow: DEPOT.row }, neighborAt(0))),  // 29
   () => renderer.sync(storeScene(16, depotHolding({ stored: 45 }), { haulAtCol: DEPOT.col, haulAtRow: DEPOT.row }, neighborAt(50))), // 30: ONLY the neighbor's `stored` changes, 0 -> 50 (its `storage` stays 0)
-  () => renderer.dispose(),                                         // 31
+  // Three transfer phases. The scene is phase 30's exactly; only hauler 30
+  // moves. 31 is a setup frame that starts a whole trip and so carries no
+  // check of its own, the same role phases 20, 24, 27 and 29 already play.
+  () => renderer.sync(storeScene(17, depotHolding({ stored: 45 }), { ...DRAIN_LEG, haulKind: 'supply', haulTargetId: 1 }, neighborAt(50))), // 31: the hauler walks a load home from the depot, on a trip that NAMES a building
+  // ONLY change: the two fields that are one fact — this trip names no
+  // building. A transfer is `haulKind: 'transfer'` with `haulTargetId: null`
+  // for its whole life, and neither can be moved without the other without
+  // describing a trip the engine cannot produce.
+  () => renderer.sync(storeScene(18, depotHolding({ stored: 45 }), { ...DRAIN_LEG, haulKind: 'transfer', haulTargetId: null }, neighborAt(50))), // 32
+  // ONLY change: `haulTicksLeft`, 2 of 4 -> 0, on that same transfer. This is
+  // what makes phase 32's pixel-equality non-vacuous: it proves the transfer's
+  // dot is on the canvas and positioned from its frozen leg, so "identical" in
+  // 32 cannot mean "absent in both".
+  () => renderer.sync(storeScene(19, depotHolding({ stored: 45 }), { ...DRAIN_LEG, haulKind: 'transfer', haulTargetId: null, haulTicksLeft: 0 }, neighborAt(50))), // 33
+  () => renderer.dispose(),                                         // 34
 ];
 
 window.__step = (index: number) => {

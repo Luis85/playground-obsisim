@@ -1,4 +1,5 @@
 import { BALANCE, RESOURCES, type BuildingDef, type CostMap, type ResourceId } from '../engine/content';
+import type { HaulKind } from '../shared/haul';
 import type { LifeStage } from '../shared/population';
 import type { BuildingState } from '../shared/snapshot';
 
@@ -56,6 +57,28 @@ export const LIFE_STAGE_LABELS: Record<LifeStage, string> = {
   child: 'Child',
   adult: 'Adult',
   elder: 'Elder',
+};
+
+/**
+ * What a hauler's errand is called in the Population view's Job column, keyed
+ * by the HaulKind union for the reason LIFE_STAGE_LABELS is keyed by LifeStage:
+ * a fourth kind is a compile error here rather than an unlabelled one silently
+ * inheriting whichever branch happened to be the fallback.
+ *
+ * `collect` and `supply` deliberately share one word. The player's question is
+ * what the colony is doing with a colonist, and both of those are the same
+ * answer — goods moving between a building and a store. A transfer is the one
+ * that is not: it names no building at all (`haulTargetId` is null for its
+ * whole life), so a cell that resolved the target to a building name has
+ * nothing to say about it, and the world view draws it exactly like any other
+ * hauler carrying goods in (spec §2.10 — no new colour, no new glyph). This
+ * cell is therefore the ONLY surface that can identify WHICH hauler is
+ * transferring; the legend can only name the encoding.
+ */
+export const HAUL_KIND_LABELS: Record<HaulKind, string> = {
+  collect: 'Hauling',
+  supply: 'Hauling',
+  transfer: 'Transferring',
 };
 
 /** "25y". The sim counts only ticks and nothing downstream of BALANCE sees a

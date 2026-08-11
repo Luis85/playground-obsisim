@@ -5,11 +5,13 @@ import { isRelocating, type TileRef } from '../../shared/placement';
 import { commuteFactor } from '../../shared/population';
 import { BALANCE } from '../content/balance';
 import { RESOURCE_IDS } from '../content/resources';
-import { Building, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Relocation } from '../components';
+import { Building, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Production, Relocation } from '../components';
 import { PendingChanges, Stockpile } from '../resources';
-import type { Claims, DispatchInputs, HaulBuildingRow, HaulWorkerRow, StaffedSet } from './haul-dispatch';
-import { chooseJob, claimsOf, storeSitesFrom } from './haul-dispatch';
+import { arrivesAt, claimsOf, type Claims, type HaulWorkerRow } from './haul-claims';
+import type { DispatchInputs, HaulBuildingRow, StaffedSet } from './haul-dispatch';
+import { chooseJob, storeSitesFrom } from './haul-dispatch';
 import { bankLoad, destinationFor } from './haul-sites';
+import { siteDemandFrom } from './haul-transfer';
 
 /**
  * What THIS hauler carries per trip. A hauler's output is goods moved, so
@@ -95,21 +97,70 @@ function turnForHome(ctx: TickContext, trip: HaulTrip, at: TileRef): void {
 }
 
 /**
- * Arrival at the SOURCE of a supply trip. Both ends are rechecked before
- * anything is taken, because a leg takes ticks and the world moves during
- * them: the demolition handler cancels trips OUTBOUND to a building, and a
- * fetching hauler is walking to a source, so nothing else catches a target
+ * A transfer's tail, and the one leg with no counterpart in the supply path.
+ *
+ * A ZERO TAKE ENDS THE TRIP WHERE IT STANDS. A supply trip that finds its
+ * source spent carries on to its target building and finishes as an ordinary
+ * collect run; a transfer has no building to carry on to and nothing in its
+ * hands, so there is nothing left for it to do. `cancel()` disposes of nothing
+ * here precisely because `trip.amount` is zero — that is what makes it safe,
+ * and it is the reason this branch may not be widened.
+ *
+ * The return leg goes to the RESERVED destination, never through
+ * `destinationFor`. Re-resolving would release this trip's own reservation and
+ * take it again, which is exactly the double-count `destinationFor` documents
+ * — but worse, it would discard a room reservation that has been held since
+ * dispatch and re-decide against a world several ticks older than the one the
+ * candidate was sized in. The one case that CANNOT be honoured is a
+ * destination demolished while this hauler walked to the source: nothing is
+ * left to reserve, so a fresh resolution is all there is.
+ */
+function transferOnward(ctx: TickContext, trip: HaulTrip, at: TileRef): void {
+  if (trip.amount === 0) {
+    trip.cancel();
+    return;
+  }
+  const dest = ctx.siteById.get(trip.destSiteId);
+  if (dest === undefined) {
+    turnForHome(ctx, trip, at);
+    return;
+  }
+  trip.startLeg('returning', at, dest, BALANCE.haulTilesPerTick);
+}
+
+/**
+ * Arrival at the SOURCE of a supply or transfer trip. Both ends are rechecked
+ * before anything is taken, because a leg takes ticks and the world moves
+ * during them: the demolition handler cancels trips OUTBOUND to a building, and
+ * a fetching hauler is walking to a source, so nothing else catches a target
  * that has gone. The source is rechecked by TILE rather than by id — a
  * storehouse that relocates keeps its id and moves, and an id-keyed `takeAt`
  * would draw goods out of a building standing somewhere the hauler is not.
  *
+ * THE TILE HALF OF THAT RECHECK IS DEFENSE-IN-DEPTH, and this is a verified
+ * claim rather than an assumed one: `handleMoveBuilding` cancels every
+ * `fetching` trip whose `sourceSiteId` is the building it moves, a storehouse
+ * mid-move is off `storeSitesOf` for the whole countdown, and a trip is never
+ * persisted — so nothing leaves a fetching trip aimed at a tile its own source
+ * has left, and `source === undefined` answers first in every case that
+ * remains. Deleting the two tile comparisons passes the entire suite, which
+ * says the branch is unreachable, not that it is untested. Kept for the reason
+ * `buildingArrival` keeps its demolished-target branch: the rule that makes it
+ * unreachable lives in another handler, one edit away from not doing so.
+ *
  * Nothing has been picked up yet, so either recheck failing is a clean cancel:
  * no load, no disposal, no remainder.
+ *
+ * A TRANSFER IS ADMITTED BEFORE THE BUILDING LOOKUP CAN REFUSE IT. Its
+ * `targetId` is null by construction — it is going to a site, not to a
+ * building — so `targetRowOf` can only ever miss, and an unconditional guard
+ * here would cancel EVERY transfer on arrival at its own source, with the
+ * mechanic looking merely inert rather than broken.
  */
 function fetchArrival(ctx: TickContext, trip: HaulTrip, capacity: number): void {
   const row = targetRowOf(ctx, trip);
   const source = ctx.siteById.get(trip.sourceSiteId);
-  if (row === undefined || trip.resource === null) {
+  if ((row === undefined && trip.kind !== 'transfer') || trip.resource === null) {
     trip.cancel();
     return;
   }
@@ -136,6 +187,13 @@ function fetchArrival(ctx: TickContext, trip: HaulTrip, capacity: number): void 
   // it does not persist the way a genuine over-reservation would.
   trip.amount = ctx.stockpile.takeAt(trip.sourceSiteId, trip.resource, Math.min(trip.plannedAmount, capacity));
   trip.plannedAmount = 0;
+  // `row` is undefined HERE only for a transfer: the guard above cancelled
+  // every other kind whose target had gone, so this is the kind test and not a
+  // second, weaker one.
+  if (row === undefined) {
+    transferOnward(ctx, trip, source);
+    return;
+  }
   // Nothing left to deliver: the trip carries on to the building and finishes
   // as an ordinary collect run.
   if (trip.amount === 0) trip.resource = null;
@@ -231,13 +289,37 @@ function buildingArrival(ctx: TickContext, trip: HaulTrip, capacity: number): vo
  * The comparison is against the TILE this leg was aimed at, not the site id: a
  * storehouse that finishes relocating mid-leg keeps its id and changes its
  * tile, so an id-only test would deposit the load at a depot the hauler never
- * walked to.
+ * walked to. It is `arrivesAt`, the same predicate `inHandAt` filters its
+ * returning term with — one rule asked at both ends of a leg, so a site that
+ * moved cannot be counted as certain by the drain and then refused here.
+ *
+ * The second exit is a destination that still exists but can no longer take the
+ * WHOLE load. Reservation covers every hauler-driven way a site fills and §2.7
+ * records that no non-trip path can currently consume reserved room, so this is
+ * defense-in-depth — but the alternative is `bankWithSpill`, which banks what
+ * fits and forwards the rest to the camp past a hauler standing right there,
+ * and a teleport is not an acceptable failure mode for a rule that is merely
+ * expected to be unreachable.
+ *
+ * THE RECHECK IS `heldAt(dest) > capacity`, NOT `heldAt(dest) + amount >
+ * capacity`. `heldAt` counts `phase === 'returning' && destSiteId === dest` as
+ * `amount`, so THIS TRIP'S OWN LOAD IS ALREADY INSIDE THE FIGURE: a 4-unit
+ * transfer arriving at a 60-capacity depot physically holding 56 reads
+ * `heldAt === 60`, and adding its own 4 again asks `64 > 60` and turns a
+ * correctly reserved arrival away from the room reserved for it. Every exact
+ * fit fails that way, silently. The question this must ask is not "does my load
+ * fit" — it was made to fit at dispatch — but "did something else eat my room",
+ * and that is what comparing the reservation-inclusive figure against the
+ * capacity directly asks. `destinationFor` meets the same boundary from the
+ * other side and resolves it by releasing the trip's reservation first; its doc
+ * comment is the precedent rather than something to rediscover.
  */
 function depositArrival(ctx: TickContext, trip: HaulTrip): void {
   const at = { col: trip.legToCol, row: trip.legToRow };
   const dest = ctx.siteById.get(trip.destSiteId);
-  const arrived = dest !== undefined && dest.col === at.col && dest.row === at.row;
-  if (!arrived) {
+  const arrived = arrivesAt(trip, dest);
+  const roomLeft = dest === undefined || dest.capacity === null || ctx.claims.heldAt(dest.id) <= dest.capacity;
+  if (!arrived || !roomLeft) {
     if (trip.amount === 0) trip.cancel();
     else turnForHome(ctx, trip, at);
     return;
@@ -263,7 +345,7 @@ export const HaulSystem = () => createSystem({
   stockpile: WriteResource(Stockpile),
   buildings: queryComponents({
     building: Read(Building), position: Read(Position), buffer: Write(OutputBuffer),
-    input: Write(InputBuffer), relocation: Read(Relocation),
+    input: Write(InputBuffer), relocation: Read(Relocation), production: Read(Production),
   }),
   workers: queryComponents({ job: Read(JobAssignment), trip: Write(HaulTrip), home: Read(Home) }),
   pending: ReadResource(PendingChanges),
@@ -274,8 +356,13 @@ export const HaulSystem = () => createSystem({
     const byId = new Map(buildingRows.map((row) => [row.building.id, row]));
     const workerRows = [...workers.iter()];
     const sites = storeSitesFrom(buildingRows, pending);
+    // Built here rather than inside the context below because the claims need
+    // it too: `inHandAt` drops a returning reservation whose site has moved out
+    // from under it, which is a question about a site's LIVE tile. One map,
+    // read by that claim and by every arrival handler.
+    const siteById = new Map(sites.map((site) => [site.id, site]));
     const capacityOf = (row: HaulWorkerRow) => haulerCapacity(homeTileOf(row.home.buildingId, byId, pending));
-    const claims = claimsOf(workerRows, stockpile, capacityOf);
+    const claims = claimsOf(workerRows, stockpile, siteById, capacityOf);
     // ONE derivation, read by the dispatch filter and by the arrival recheck.
     // They are the same rule seen from two ends of a leg, so a second copy of
     // this expression is how the recheck stops matching what it rechecks.
@@ -284,12 +371,18 @@ export const HaulSystem = () => createSystem({
       stockpile,
       byId,
       sites,
-      siteById: new Map(sites.map((site) => [site.id, site])),
+      siteById,
       staffed,
       claims,
       demolished: pending.demolished,
     };
-    const inputs: DispatchInputs = { buildings: buildingRows, sites, staffed, claims };
+    // Once per tick rather than once per idle hauler, which is where it used to
+    // be rebuilt. It is derived from building positions, staffing and the site
+    // list — nothing a dispatch touches — so hoisting it changes no answer, and
+    // it is what pays for `chooseJob` asking about drains on every dispatch
+    // tick instead of only on an idle one.
+    const demand = siteDemandFrom(sites, buildingRows, staffed);
+    const inputs: DispatchInputs = { buildings: buildingRows, sites, staffed, claims, demand };
 
     for (const row of workerRows) {
       if (!row.job.hauling) continue;

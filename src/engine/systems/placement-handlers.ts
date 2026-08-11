@@ -7,7 +7,7 @@ import { BUILDINGS } from '../content/buildings';
 import { RESOURCES, RESOURCE_IDS } from '../content/resources';
 import type { HaulTrip } from '../components';
 import { buildingComponents } from '../spawn';
-import { heldAtOf } from './haul-dispatch';
+import { heldAtOf } from './haul-claims';
 import { destinationFor } from './haul-sites';
 import { shelterWithRoom } from './population-handlers';
 import { findBuilding, type CommandContext } from './command-handlers';

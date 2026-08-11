@@ -29,7 +29,13 @@ onMounted(() => {
       <span><i class="obsisim-chip" :style="{ borderColor: theme.stateRing.outputFull }" /> output full</span>
       <span><i class="obsisim-chip" :style="{ borderColor: theme.stateRing.relocating }" /> relocating</span>
       <span><i class="obsisim-chip is-round" :style="{ background: theme.carriedLoad }" /> carrying out</span>
-      <span><i class="obsisim-chip is-round" :style="{ background: theme.carriedInput }" /> carrying in</span>
+      <!-- One entry, not two: a store-to-store transfer is drawn with exactly
+           this mark and no other (spec §2.10 — no new colour, no new glyph),
+           so a row of its own would promise an encoding the canvas does not
+           have. Naming it here is what stops a player reading a dot walking
+           between two depots as a delivery to a building that isn't there;
+           WHICH hauler is transferring is the Population view's job column. -->
+      <span><i class="obsisim-chip is-round" :style="{ background: theme.carriedInput }" /> carrying in (delivery or transfer)</span>
       <span><i class="obsisim-chip" :style="{ borderColor: theme.stateRing.housing }" /> housing</span>
       <span><i class="obsisim-chip" :style="{ borderColor: theme.stateRing.storing }" /> storing</span>
       <span><i class="obsisim-chip is-round" :style="{ borderColor: theme.progressFill }" /> store fill</span>

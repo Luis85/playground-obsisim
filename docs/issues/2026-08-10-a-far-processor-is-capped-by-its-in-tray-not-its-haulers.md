@@ -125,3 +125,46 @@ Three things the re-measurement must do that this one could not:
 The far-corner balance test is a **reading**, not a guard: it fails when the
 constant moves, deliberately, and its comment carries the numbers to rewrite it
 with. Do not relax its bounds — re-measure and restate them.
+
+## Second measurement — increment 8, and the constant still does not move
+
+Increment 8 §1.2 committed in advance to answering this issue with a measurement
+rather than a retune, on the argument that if transfer made the cap non-binding
+the issue would close on a finding. **It did not close.** Spec §4.2 point 5, and
+`BALANCE_REPORT=1 npx vitest run --project balance -t 'prints the camp-fed
+processor and OBS-7-02 readings'`:
+
+| haulers | depot | %ceiling | wait% | in-tray at end | staging dispatches |
+| ---: | --- | ---: | ---: | ---: | ---: |
+| 3 | no | **71** | 33 | 0 | — |
+| 3 | yes | **58** | 40 | 10 | 2 |
+| 4 | no | **72** | 30 | 3 | — |
+| 4 | yes | **67** | 35 | 0 | 6 |
+
+Three things this adds to the record:
+
+- **The plateau is exactly where this issue left it.** 71% at three haulers and
+  72% at four, the fourth hauler buying one point, with transfer live in the
+  tree. The original reading re-takes.
+- **The arrangement that was supposed to relieve the cap makes it worse.** A
+  depot beside the camp-fed processor reads 58% at three haulers and 67% at
+  four, with waiting *up* rather than down. §1.1 of the increment-8 spec argued
+  that staging feeds a consumer "without occupying in-tray concurrency", which
+  is precisely this issue's finding addressed head-on. Staging fires **2 times
+  in 600 ticks** at three haulers and 6 at four — the one mechanism the design
+  had for relieving the cap does not fire often enough to be measured against
+  it. The loss has its own issue (`OBS-8-04`); what belongs here is that it
+  leaves this cap un-relieved.
+- **`siteStagingTarget: 24` does not rescue it either** — 255 planks against a
+  no-depot control of 294, still a 13% loss. The sweep is in §4.2 point 6.
+
+**So the statement of what a retune would have to buy is sharper than it was.**
+The cap is not merely un-relieved by transfer; it is un-relieved by the *only*
+mechanism the design had for relieving it, so raising the cap is once again the
+only lever. What has changed in this issue's favour is the sequencing: `OBS-7-01`
+is **Done**, so the deliberate fairness floor this issue was blocked on now
+exists and 24 can be re-measured against it. What has not changed is the three
+conditions that re-measurement must meet — a two-consumer fixture, end-of-run
+in-tray occupancy, and the population curve — none of which anything measured in
+increment 8 satisfies. `inputBufferCap` stays at 12 and the severity stays
+`minor`.

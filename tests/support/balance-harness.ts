@@ -650,19 +650,34 @@ interface TransferTally {
  * under a fetching hauler reproduces it on the first tick.
  *
  * Nothing a `Scenario` can express reaches it, which is why the predicate
- * stands as it is:
+ * stands as it is. The argument is the CONJUNCTION of the two facts below —
+ * one per half of the path — and NEITHER IS SUFFICIENT ALONE, so a change that
+ * falsifies either one voids it:
  *
- * - `runScenario` issues exactly one command, `moveBuilding`, and only ever on
- *   `buildingIds[0]`. It has no way to demolish anything at all, and
- *   `runPopulationScenario` issues no commands whatsoever.
- * - `handleMoveBuilding` cancels only a `fetching` trip whose `sourceSiteId` is
- *   the moved building, and a `sourceSiteId` is a STORE SITE. A stage must have
- *   a recipe (`stageResultOf` throws otherwise) and no building in the catalog
- *   both stores and has a recipe, so `buildingIds[0]` is never a store site and
- *   the cancel branch cannot match.
+ * - **Nothing measured demolishes.** `runScenario` issues exactly one command,
+ *   `moveBuilding`, and only ever on `buildingIds[0]`. It has no way to
+ *   demolish anything at all, and `runPopulationScenario` issues no commands
+ *   whatsoever. That closes the `handleDemolishBuilding` half. Checkable in one
+ *   step rather than taken on trust: `runScenario` below holds a single call to
+ *   `enqueue`, and its command literal is `moveBuilding`.
+ * - **The one command it does issue can never cancel.** `handleMoveBuilding`
+ *   cancels only a `fetching` trip whose `sourceSiteId` is the moved building,
+ *   and a `sourceSiteId` is a STORE SITE. A stage must have a recipe
+ *   (`stageResultOf` throws otherwise) and no building in the catalog both
+ *   stores and has a recipe, so `buildingIds[0]` is never a store site and the
+ *   cancel branch cannot match. That closes the `handleMoveBuilding` half.
  *
- * Both premises are pinned by a test rather than left here as prose — see
- * balance-harness.test.ts, 'a mid-run move cannot reach the transfer counter'.
+ * Both are pinned by tests rather than left here as prose — see
+ * balance-harness.test.ts, 'a stage the catalog gives no recipe yields no
+ * result at all' (the throw, which is what makes "a stage has a recipe" true)
+ * and 'a mid-run move cannot reach the transfer counter' (the catalog fact).
+ * ONE HEDGE, STATED RATHER THAN GLOSSED: that throw fires from `stageResultOf`
+ * AFTER the tick loop, so a `defId: 'storehouse'` stage — which the
+ * `BuildingDefId` type permits — would run the whole simulation, blind spot
+ * included, and only then reject. What is guaranteed is that no such run yields
+ * a `BalanceResult`, which is what a published figure needs, not that the
+ * defect never executes.
+ *
  * A scenario that gains a demolition, or a `moveTo` that can name a storehouse,
  * makes this predicate unsound and must fix it before publishing a figure:
  * identify a DISTINCT TRIP (its route, class and planned amount together)

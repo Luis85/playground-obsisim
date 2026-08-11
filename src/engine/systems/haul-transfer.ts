@@ -116,8 +116,27 @@ function ledgerOf(claims: Claims, demand: ReadonlyMap<number, ReadonlyMap<Resour
   const occupancy = (site: StoreSite) => claims.heldAt(site.id) - claims.plannedOutAt(site.id);
   return {
     surplus: (siteId, resource) => Math.max(0, claims.unclaimedAt(siteId, resource) - demandFor(siteId, resource)),
+    // The inner `Math.max(0, ...)` is load-bearing: `unclaimedAt` CAN GO
+    // NEGATIVE. `Stockpile.pay` spends camp-first across EVERY site — a
+    // construction cost, a meal — so a site's physical stock can be drawn down
+    // below what a fetching hauler has already claimed out of it, while that
+    // trip keeps its original `plannedAmount` until it arrives (`takeAt` then
+    // returns what is actually there, which is the recovery). Subtracting a
+    // negative holding ADDS to the deficit, counting the now-missing stock and
+    // the stale outgoing claim as two separate shortages: a site with a demand
+    // of 12, stock spent from 6 to 0 and a 6-unit fetch claim against it reads
+    // 18, and with idle haulers and a surplus elsewhere that stages a whole
+    // extra load above what the site wants.
+    //
+    // The asymmetry with `surplus` above is deliberate, NOT an oversight to be
+    // tidied away later: `surplus` is `max(0, unclaimedAt - demand)`, already 0
+    // for any negative `unclaimedAt`, so clamping there would change nothing.
+    // The deficit alone is the minimal correct change.
     deficit: (siteId, resource) => Math.max(
-      0, demandFor(siteId, resource) - claims.unclaimedAt(siteId, resource) - claims.inboundAt(siteId, resource),
+      0,
+      demandFor(siteId, resource)
+        - Math.max(0, claims.unclaimedAt(siteId, resource))
+        - claims.inboundAt(siteId, resource),
     ),
     room: (site) => (site.capacity === null
       ? Number.POSITIVE_INFINITY

@@ -3,6 +3,7 @@ import type { BuildingDefId, ResourceId } from '../../../src/shared/content-type
 import { CAMP_SITE_ID, CAMP_TILE, type StoreSite } from '../../../src/shared/haul';
 import type { TileRef } from '../../../src/shared/placement';
 import { BALANCE } from '../../../src/engine/content/balance';
+import { BUILDINGS } from '../../../src/engine/content/buildings';
 import { RESOURCE_IDS } from '../../../src/engine/content/resources';
 import {
   Building, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Production, Relocation,
@@ -399,6 +400,63 @@ describe('a bound that only a second hauler can see', () => {
     fetching.plannedAmount = CAPACITY;
     withFetch.trips.push(fetching);
     expect(withFetch.candidates()).toEqual([]);
+  });
+});
+
+describe('stock spent out from under a fetching hauler', () => {
+  it('does not stage the missing stock and its stale claim as two separate shortages', () => {
+    // `unclaimedAt` CAN GO NEGATIVE, and the deficit has to survive it.
+    // `Stockpile.pay` spends camp-first across EVERY site, so a construction
+    // cost can draw a depot's stock down below what a supply hauler already
+    // claimed out of it — the hauler keeps its `plannedAmount` until it
+    // arrives, and `takeAt` returns what is actually there. Unclamped,
+    // `demand - unclaimedAt` ADDS that stale claim to the deficit and the one
+    // missing pile is counted twice.
+    //
+    // Every number here is produced by the engine's own paths: the claim by a
+    // real `chooseJob` dispatch, the shortfall by a real `pay`. A fixture that
+    // set the claim or the stock by hand would prove nothing about the state
+    // this arises from.
+    const demand = BALANCE.siteStagingTarget; // 12: one sawmill beside depot A
+    const colony = colonyOf(
+      [CAMP, A, B],
+      [consumer('sawmill', NEAR_A)],
+      [[CAMP, { wood: 14 }], [A, { wood: CAPACITY }], [B, { wood: 30 }]],
+    );
+
+    // A supply hauler leaves for the depot beside the sawmill and claims every
+    // unit of wood standing there.
+    const supply = new HaulTrip();
+    chooseJob(supply, A_TILE, {
+      buildings: colony.buildings, sites: colony.sites, staffed: colony.staffed, claims: colony.claims(),
+    }, CAPACITY);
+    expect(supply).toMatchObject({
+      kind: 'supply', phase: 'fetching', sourceSiteId: A_ID, resource: 'wood', plannedAmount: CAPACITY,
+    });
+    colony.trips.push(supply);
+
+    // ...and then the colony builds a farm. 20 wood: the camp's 14 and, camp
+    // exhausted, the six the hauler is already walking toward.
+    expect(colony.stockpile.pay(BUILDINGS.farm.cost)).toBe(true);
+    expect(colony.stockpile.getAt(A_ID, 'wood')).toBe(0);
+    expect(colony.stockpile.getAt(B_ID, 'wood')).toBe(30); // the draw stopped at A, as `drawOrder` says
+    expect(colony.claims().unclaimedAt(A_ID, 'wood')).toBe(-CAPACITY); // negative, from a real spend
+
+    // The consequence, which is what the clamp is for: A wants 12 and gets 12.
+    const staged: TransferCandidate[] = [];
+    for (let won = colony.dispatch(A_TILE); won !== null; won = colony.dispatch(A_TILE)) staged.push(won);
+    expect(staged).toMatchObject([
+      { sourceSiteId: B_ID, destSiteId: A_ID, resource: 'wood', movable: CAPACITY, staging: true },
+      { sourceSiteId: B_ID, destSiteId: A_ID, resource: 'wood', movable: CAPACITY, staging: true },
+    ]);
+    expect(staged.reduce((sum, c) => sum + c.movable, 0)).toBe(demand);
+
+    // Non-vacuous: nothing ELSE could have refused a third hauler. B still has
+    // surplus to send, A still has room to take it, and the deficit is the only
+    // term left standing — unclamped it reads 18 and a third load goes out.
+    expect(colony.claims().unclaimedAt(B_ID, 'wood')).toBeGreaterThanOrEqual(CAPACITY);
+    expect(BALANCE.storehouseCapacity - BALANCE.storehouseFreeFloor - colony.claims().heldAt(A_ID))
+      .toBeGreaterThanOrEqual(CAPACITY);
   });
 });
 

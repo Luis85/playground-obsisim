@@ -132,12 +132,13 @@ leaving them in overstated how robust the argument was.
 
 ### What is pinned, and what is not
 
-Because §4.2 publishes transfer counts on this argument, the two conjuncts are
-pinned by assertions rather than by this prose, and the gaps are named:
+Because §4.2 publishes transfer counts on this argument, every link an assertion
+can reach is pinned by one rather than by this prose. Conjunct 1 has no such
+link; the gaps are named:
 
 | link | pinned by | fails how |
 | --- | --- | --- |
-| nothing in the catalog both stores and has a recipe | `balance-harness.test.ts`, 'a mid-run move cannot reach the transfer counter' | reddens on the commit that gives a store a recipe or a producer storage |
+| nothing in the catalog both stores and has a recipe | `balance-harness.test.ts`, 'a mid-run move cannot reach the transfer counter, and the catalog is why' | reddens on the commit that gives a store a recipe or a producer storage |
 | a stage without a recipe yields no result | `balance-harness.test.ts`, 'a stage the catalog gives no recipe yields no result at all' | reddens if `stageResultOf`'s throw is removed or its condition weakened |
 | `runScenario` issues only `moveBuilding` | **nothing** | see below |
 | `moveTo` names a stage, never a depot | **nothing** | see below |

@@ -8,7 +8,7 @@ import type { Stockpile } from '../resources';
  * dispatch decision can size against what is genuinely free rather than
  * against what is physically there.
  *
- * Split out of `haul-dispatch.ts` for the line budget, along the seam the four
+ * Split out of `haul-dispatch.ts` for the line budget, along the seam the
  * claims already draw: everything here answers "what is already spoken for",
  * and nothing here decides anything. `chooseJob`, the candidate builders and
  * the `begin*` family stay there, which is where the three kinds of work are
@@ -25,7 +25,7 @@ export interface TripRow { trip: HaulTrip; }
 export interface HaulWorkerRow extends TripRow { job: JobAssignment; home: Home; }
 
 /**
- * The four claims §2.6 requires, each derived from LIVE components on every
+ * The claims §2.6 requires, each derived from LIVE components on every
  * call rather than snapshotted at the top of the tick. That is what makes
  * dispatch a pure function of world state — and it is also what makes a trip
  * dispatched earlier in this same tick visible to the next hauler, without a
@@ -80,7 +80,8 @@ export interface Claims {
 }
 
 /** One pass over the haulers, adding whatever the caller says each one claims.
- * Shared by all four lookups so there is exactly one traversal to get wrong. */
+ * Shared by every lookup a trip alone can answer — `output` needs the whole row
+ * for `capacityOf` — so there is exactly one traversal to get wrong. */
 function sumOverTrips(workers: readonly TripRow[], claimOf: (trip: HaulTrip) => number): number {
   let total = 0;
   for (const { trip } of workers) total += claimOf(trip);
@@ -94,7 +95,7 @@ function sumOverTrips(workers: readonly TripRow[], claimOf: (trip: HaulTrip) => 
  *
  * Exported separately from `claimsOf` because the two cancellation paths that
  * bank a load outside `HaulSystem` need exactly this one lookup and none of the
- * other three. Building the whole `Claims` object for them would drag in
+ * others. Building the whole `Claims` object for them would drag in
  * `capacityOf`, and with it a hauler's home tile and the pending-construction
  * map — none of which any occupancy answer reads.
  */

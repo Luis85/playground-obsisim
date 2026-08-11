@@ -87,10 +87,16 @@ export function storeSitesOf(rows: readonly StoreSiteRow[], pending: PendingChan
  * protect is unchanged: a supply remainder still walks home, and the reason it
  * must is that NOTHING asked for it where it stands. A transfer's load was
  * asked for, by the destination it was dispatched against; when that
- * destination is gone (the one branch that reaches this function with a
- * transfer — `depositArrival` finding it demolished or its reserved room
- * eaten), the nearest site with room is the honest answer and the source is
- * the one answer that is certainly wrong.
+ * destination is gone (`depositArrival` finding it demolished or its reserved
+ * room eaten, or `transferOnward` finding it gone before the return leg
+ * begins), the nearest site with room is the honest answer, and routing the
+ * load home REGARDLESS is the answer this rule may not give. That is a rule
+ * about routing, not a claim the source can never win: `transferOnward` turns
+ * for home from the SOURCE tile, so `nearestSiteWithRoom` sees the source at
+ * distance 0 holding the room this trip has just freed, and picks it unless
+ * something else took that room. Nothing is lost when it does — the vanished
+ * destination is off the site list and emits no candidate, so the load is
+ * banked where the hauler stands rather than walked anywhere twice.
  *
  * Null when the source no longer exists (demolished, or in transit — it is
  * simply absent from `sites`) or filled while the load was away. Both fall

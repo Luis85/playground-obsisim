@@ -788,7 +788,9 @@ Every path that ends a transfer must put its load somewhere (§2.9).
 
 **Files:**
 - Modify: `src/engine/systems/command-handlers.ts`, `src/engine/systems/population-handlers.ts` (only if a transfer reaches a path they do not already cover)
-- Test: `tests/engine/systems/command-handlers.test.ts`, `tests/engine/systems/population-system.test.ts`, `tests/engine/stockpile.test.ts`
+- Test: `tests/engine/systems/command-system.test.ts`, `tests/engine/systems/population-system.test.ts`, `tests/engine/stockpile.test.ts`
+
+  **CORRECTED: `tests/engine/systems/command-handlers.test.ts` does not exist** — the command handlers are tested from `command-system.test.ts`. In the event, every case landed in `tests/engine/systems/haul-dispatch.test.ts` anyway, because only that file's fixture layout can dispatch a transfer at all.
 
 **Expect most of this to be verification, not change.** The existing paths were written against `HaulTrip`, not against a kind, and should cover a transfer unchanged. **That is the claim this task tests rather than assumes** — increment 7 fixed the dispatch/arrival rule three times, and each time it was a path that "obviously" already worked.
 

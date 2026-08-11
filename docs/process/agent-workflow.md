@@ -34,8 +34,8 @@ Increment 4 shipped several tests that passed with the feature entirely removed
 — including one guarding user-visible behaviour that survived deletion against
 all 364 tests. A test that has never been seen to fail is a claim, not evidence.
 
-Three failure modes recur — the first two found again in increment 5, the
-third in increment 7:
+Five failure modes recur — the first two found again in increment 5, the third
+in increment 7, and the last two in increment 8:
 
 - **Indistinguishable fixture values.** A test asserting `0.00` where the wrong
   field also holds `0` proves nothing. Increment 5's first draft of the
@@ -56,6 +56,34 @@ third in increment 7:
   check hid an untested `>` vs `>=`) both shipped this way. Test each clause
   with a fixture where the *other* clause is false, so this one alone has to
   carry the assertion.
+- **One hauler cannot test a bound that only the tenth would breach.** A rule
+  that sizes a claim reads the same answer for every agent dispatched inside one
+  tick, because physical state does not move until somebody *arrives* — so a
+  fixture with one or two haulers passes identically whether the bound is
+  reservation-aware or not. Increment 8 shipped three such terms in drafts and
+  found a fourth in review: `starving` derived from an empty in-tray alone (every
+  idle hauler promoted to the same building), `drainNeed` unnetted against
+  `plannedOutAt` (ten haulers schedule all 60 units of a depot for removal
+  instead of the 12 that restore its floor), and `surplus` sized from physical
+  stock rather than `unclaimedAt` (two haulers claim the same units). Each cost a
+  review round on the spec alone. **Ask of every bound: if ten idle agents were
+  dispatched on the same tick, would this have stopped the tenth?** — and write
+  the fixture with as many agents as it takes to answer, which is usually three,
+  not two: two is the smallest number that can double-book, and three is the
+  smallest that can show the bound *ending*.
+- **A test that passes with the feature inert.** `storehouse balance` asserted
+  `chainDepot.storedAtEnd > 0` and `made > plain * 1.05`. Both passed with the
+  transfer mechanic never once dispatched: a depot that fills to 60 of 60 and
+  stops satisfies `> 0` exactly as well as one that turns over, and the one-off
+  buffer cleared the 5% margin on its own. Ten tasks of machinery were built,
+  instrumented and reviewed before anyone asked whether it ran. The other four
+  entries are about a test that cannot distinguish the bug from the fix; this one
+  is about a test that cannot distinguish the feature from its absence. **Assert
+  that the mechanism fired** — a count of the thing happening, pinned against a
+  control where it cannot happen — not only that the world looks as though it
+  might have. The fix that caught it is worth naming as the method: the
+  counter-assertion was added **first and seen red** (`expected 0 to be greater
+  than 0` at `3cd1df4`) before any dispatch change was made.
 
 Where an integration test cannot isolate a rule, export the rule and unit-test
 it directly — `cheapestHaulerToRelease` is exported for exactly that reason,

@@ -256,6 +256,10 @@ export interface BalanceResult extends StageResult {
    * rule), so route-based attribution would be wrong rather than approximate.
    * The snapshot deliberately does not carry the flag and must not gain it —
    * this harness builds the world itself, so it samples the component.
+   *
+   * Exact for every scenario this harness can express, and `dispatchedTransfer`
+   * carries the argument for that claim along with the one condition — a
+   * mid-tick cancel-and-redispatch, OBS-8-01 — that would void it.
    */
   transfers: number;
   transfersStaging: number;
@@ -278,6 +282,12 @@ export interface BalanceResult extends StageResult {
    * it arrives cancels where it stands rather than turning (`transferOnward`
    * in haul-system.ts). So `transfers - transferReturns` is a small
    * non-negative number, not necessarily zero.
+   *
+   * That difference going NEGATIVE is not a legitimate outcome, it is the
+   * signature of a missed dispatch: this edge is `before !== 'returning'` where
+   * the dispatch edge is `before === 'idle'`, so the loose form survives a
+   * cancel-and-redispatch tick that the strict one does not (OBS-8-01). No
+   * scenario this harness can express reaches it — see `dispatchedTransfer`.
    */
   transferReturns: number;
   /** Units in haulers' hands when the run ended. Published because it is
@@ -598,6 +608,38 @@ interface TransferTally { total: number; staging: number; drain: number; returne
  * exactly once per transfer. Counting ticks in `fetching` instead would report
  * the length of the walk out, which is `haulerTicks.transfer`'s question rather
  * than this one.
+ *
+ * ONE KNOWN BLIND SPOT, UNREACHABLE FROM THIS HARNESS TODAY (OBS-8-01). The
+ * edge is sampled at END of tick, so the intermediate `idle` is invisible when
+ * a trip is cancelled and re-dispatched inside a single tick. `CommandSystem`
+ * runs before `HaulSystem` and cancels a `fetching` trip whose source is being
+ * moved or demolished (and, for a demolition, an `outbound` one whose target
+ * is), so `before` can read `fetching` (or `outbound`) with a brand-new
+ * transfer already walking — the dispatch is missed, its `staging`/`drain`
+ * class with it, and `transferReturns` then counts a turn for home that
+ * `transfers` never counted, which is the one way that pair can invert. This
+ * is measured, not conjectured: a hand-built world that moves a DEPOT out from
+ * under a fetching hauler reproduces it on the first tick.
+ *
+ * Nothing a `Scenario` can express reaches it, which is why the predicate
+ * stands as it is:
+ *
+ * - `runScenario` issues exactly one command, `moveBuilding`, and only ever on
+ *   `buildingIds[0]`. It has no way to demolish anything at all, and
+ *   `runPopulationScenario` issues no commands whatsoever.
+ * - `handleMoveBuilding` cancels only a `fetching` trip whose `sourceSiteId` is
+ *   the moved building, and a `sourceSiteId` is a STORE SITE. A stage must have
+ *   a recipe (`stageResultOf` throws otherwise) and no building in the catalog
+ *   both stores and has a recipe, so `buildingIds[0]` is never a store site and
+ *   the cancel branch cannot match.
+ *
+ * Both premises are pinned by a test rather than left here as prose — see
+ * balance-harness.test.ts, 'a mid-run move cannot reach the transfer counter'.
+ * A scenario that gains a demolition, or a `moveTo` that can name a storehouse,
+ * makes this predicate unsound and must fix it before publishing a figure:
+ * identify a DISTINCT TRIP (its route, class and planned amount together)
+ * rather than a phase edge. Not by counting inside `beginTransfer` — the
+ * increment's constraint is that nothing outside the trip remembers anything.
  */
 function dispatchedTransfer(before: HaulPhase, trip: HaulTrip): boolean {
   return before === 'idle' && trip.phase === 'fetching' && trip.kind === 'transfer';

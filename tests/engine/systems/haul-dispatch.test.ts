@@ -655,6 +655,17 @@ describe('reservations', () => {
     expect(tripOf(haulers[0])).toMatchObject({ phase: 'returning', amount: 6, destSiteId: CAMP_SITE_ID });
 
     await step(legTicks(BESIDE_DEPOT, CAMP_TILE));
+    // THE TOP-UP MAKES THIS DEPOT DRAINABLE, despite `UNDRAINABLE`'s name: at
+    // 59 of 60 its free space is 1 against a floor of 12, and with no consumer
+    // near it the whole 59 is surplus, so `drainNeed` is 11 and a full 6-unit
+    // drain is a legal candidate. The assertion below survives that, but by a
+    // margin rather than by construction, and the margin is worth writing down
+    // because a future reader moving a `step()` will otherwise get a confusing
+    // failure. The hauler banks here and goes idle; the loop has already passed
+    // it, so nothing is dispatched until the next tick, and a drain does not
+    // remove anything until it has WALKED to the depot — 11 more ticks from the
+    // camp. Twelve ticks of slack, not one. Move this assertion past that and
+    // it reads 53.
     expect(stockpile.totalAt(idOf(buildings[0]))).toBe(59); // untouched, not topped to 60
     expect(stockpile.getAt(CAMP_SITE_ID, 'wood')).toBe(6);
     expect(colonyTotal(world, 'wood')).toBe(6);
@@ -1527,6 +1538,18 @@ describe('what a transfer claims of a site', () => {
     // And the other half of the pair, unmoved by any of it: room is allowed to
     // be over-reserved, so `heldAt` counts the same load wherever the site is.
     expect(heldAtOf(rowsOf([carrying]), stockpile)(A_DEPOT.id)).toBe(34);
+
+    // `inboundAt` IS THE THIRD READER of the same reservation, and it keeps the
+    // stale one DELIBERATELY — it sizes a staging dispatch, so over-stating what
+    // is walking in only refuses a load, which costs nothing. Stated here rather
+    // than left to the accident that hand-built trips default to a (0,0) leg:
+    // that is fixture shape, not a claim, and it would let the narrowing spread
+    // to this accessor without reddening anything.
+    const inboundWith = (site: StoreSite) =>
+      claimsFrom([carrying], stockpile, [site]).inboundAt(A_DEPOT.id, 'planks');
+    expect(inboundWith(A_DEPOT)).toBe(4);
+    expect(inboundWith({ ...A_DEPOT, col: A_DEPOT.col + 1 })).toBe(4);
+    expect(inboundWith({ ...A_DEPOT, row: A_DEPOT.row + 1 })).toBe(4);
   });
 
   it('plannedOutAt counts every fetching trip out of a site, of every kind and resource', () => {

@@ -362,11 +362,13 @@ export interface SupplyCandidate {
   resource: ResourceId;
   movable: number;
   /**
-   * The building is STOPPED: nothing in hand, nothing in progress, nothing on
-   * the way. It holds none of `resource`, has no batch running, and has no
-   * supply delivery already claimed toward it — not merely running low, not
-   * merely mid-batch with a tray its own crew has just emptied, and not one
-   * already being served by a hauler dispatched moments ago.
+   * The building is STOPPED: nothing in hand, nothing in progress, nowhere to
+   * put the result, nothing on the way. It holds none of `resource`, has no
+   * batch running, has output room for another batch, and has no supply
+   * delivery already claimed toward it — not merely running low, not merely
+   * mid-batch with a tray its own crew has just emptied, not blocked on
+   * COLLECTION with a full output buffer, and not one already being served by a
+   * hauler dispatched moments ago.
    *
    * About the resource THIS candidate would deliver rather than the in-tray as
    * a whole, so two candidates for the same building can never rank differently
@@ -401,13 +403,15 @@ function supplyRouteDistance(candidate: SupplyCandidate, from: TileRef): number 
  * indefinitely, which a standing "rank on need" or "rank on distance from full"
  * term could, because those stay true while the building is being served.
  *
- * That guarantee is the engine's, not this comparator's: all three clauses of
+ * That guarantee is the engine's, not this comparator's: all FOUR clauses of
  * `starving` are load-bearing for it, and each fails it differently if dropped.
- * Two are physical (nothing in hand, nothing in progress) and would not be
- * extinguished until a load LANDED; the third is the claim already standing
- * against the building, which is what makes "the moment it is served" true on
- * the tick the promotion is spent. See `supplyCandidates` in
- * src/engine/systems/haul-dispatch.ts, where the three are derived.
+ * Three are physical (nothing in hand, nothing in progress, output room for the
+ * result) and would not be extinguished until a load LANDED — the third of them
+ * not even then, since a building blocked on COLLECTION is not unblocked by a
+ * delivery at all. The fourth is the claim already standing against the
+ * building, which is what makes "the moment it is served" true on the tick the
+ * promotion is spent. See `supplyCandidates` in
+ * src/engine/systems/haul-dispatch.ts, where the four are derived.
  *
  * What it fixes is a strict priority with no floor: while the nearer hungry
  * building could still take a load it won every comparison and took every trip,

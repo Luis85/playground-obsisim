@@ -119,10 +119,12 @@ function needOf(
 }
 
 /**
- * One of `SupplyCandidate.starving`'s three clauses: this building holds NONE
- * of the resource a candidate would deliver. The other two — no batch running,
- * no delivery already claimed — stay at the call site in `supplyCandidates`,
- * because they read a different component and the claim ledger respectively.
+ * One of `SupplyCandidate.starving`'s FOUR clauses: this building holds NONE
+ * of the resource a candidate would deliver. The other three — no batch
+ * running, output room for another batch (`needOf`'s `couldStartBatch`), and no
+ * delivery already claimed — stay at the call site in `supplyCandidates`,
+ * because they read a different component, the recipe, and the claim ledger
+ * respectively.
  *
  * Per RESOURCE, not per buffer. Exported for that clause alone, because it
  * cannot be reached through dispatch even in principle: no shipped recipe has

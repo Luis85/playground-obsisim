@@ -962,11 +962,31 @@ describe('no sequence of legal transfers walks in circles', () => {
 });
 
 /**
- * §2.6's dispatch order, one clause per fixture: supply → drain → collect →
- * staging. It is a CHAIN, so every arm can be hidden by the one above it, and
- * a case that only shows its own arm winning proves nothing about the arm it
- * beat. Each case below therefore also shows that the candidate it outranked
- * genuinely existed on the same tick.
+ * §2.6's dispatch order: supply → drain → collect → staging. It is a CHAIN, so
+ * every arm can be hidden by the one above it, and a case that only shows its
+ * own arm winning proves nothing about the arm it beat. Each case below
+ * therefore also shows that the candidate it outranked genuinely existed on the
+ * same tick.
+ *
+ * THE FIVE CASES DO NOT ALL CARRY THE SAME DIRECTION, and it is worth saying
+ * which is which rather than implying one clause each. The clause this
+ * increment CHANGED is the drain's promotion above collect, so:
+ *
+ * - POSITIVE — the new ordering has to hold for these to pass, and a dispatcher
+ *   without the promotion fails them: `a drain outranks a collect`, and
+ *   `concurrent drains do not starve collect` (which additionally pins the
+ *   promotion ENDING, and needs three haulers to see it).
+ * - NEGATIVE — these assert `collect`, which the PRE-CHANGE dispatcher also
+ *   produced, so they cannot show the promotion exists; they bound how far it
+ *   reaches: `...and only while the depot is below its free floor` (a drain
+ *   above the floor must not fire) and `staging does NOT outrank a collect`
+ *   (only the drain half moved).
+ * - UNCHANGED — `supply still outranks a drain` asserts the half of the order
+ *   that did not move, and is a guard against widening the promotion upward.
+ *
+ * So the positive assertion of the new ordering rests on two cases, not five.
+ * Both are gated by mutations the other three survive; a reader adding a sixth
+ * case should say which of the three groups it joins.
  */
 describe('where the two transfer classes sit in the dispatch order', () => {
   /** One idle hauler through the real dispatcher, its trip KEPT so the next

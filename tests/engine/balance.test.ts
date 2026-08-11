@@ -596,10 +596,14 @@ describe('the two-way haul instruments', () => {
     // the same working ticks, so a leg the phase split forgot (the fetch leg
     // is the new one, and buys nothing but position) shows up here as a
     // mismatch rather than as a plausible number nobody re-derives.
-    const { idle, fetching, outbound, returning, collect, supply } = r.haulerTicks;
+    // `transfer` joins the job split here because this fixture PLACES A DEPOT,
+    // and a transfer only exists where a bounded site does. Omitting it would
+    // not merely lose a column: the identity below would fail, because a
+    // transfer's ticks are counted in the leg split either way.
+    const { idle, fetching, outbound, returning, collect, supply, transfer } = r.haulerTicks;
     expect(fetching).toBeGreaterThan(0);
     expect(supply).toBeGreaterThan(0);
-    expect(collect + supply).toBe(fetching + outbound + returning);
+    expect(collect + supply + transfer).toBe(fetching + outbound + returning);
     expect(r.haulerIdleTicks).toBe(idle);
   }, 120000);
 });
@@ -1027,7 +1031,7 @@ describe('dispatch order under a drained ledger', () => {
     // that banked at a depot starts its next fetch there, and the camp is the
     // only site holding a seeded input.
     const lines = ['', 'hauler-tick split — percentages of WORKING (non-idle) hauler ticks',
-      'fixture              haulers  made0  made1   idle  working  collect%  supply%  fetch%  out%  return%  supplyReturns  loaded%'];
+      'fixture              haulers  made0  made1   idle  working  collect%  supply%  transfer%  fetch%  out%  return%  supplyReturns  loaded%'];
     const emit = (label: string, haulers: number, r: BalanceResult) => {
       const t = r.haulerTicks;
       const working = t.fetching + t.outbound + t.returning;
@@ -1035,6 +1039,7 @@ describe('dispatch order under a drained ledger', () => {
       lines.push(
         `${label.padEnd(20)} ${String(haulers).padStart(7)}  ${String(r.stages[0].made).padStart(5)}  ${String(r.stages[1].made).padStart(5)}  ` +
         `${String(t.idle).padStart(5)}  ${String(working).padStart(7)}  ${pct(t.collect, 8)}  ${pct(t.supply, 7)}  ` +
+        `${pct(t.transfer, 9)}  ` +
         `${pct(t.fetching, 6)}  ${pct(t.outbound, 4)}  ${pct(t.returning, 7)}  ${String(r.supplyReturns).padStart(13)}  ` +
         `${((r.supplyReturnsLoaded / Math.max(1, r.supplyReturns)) * 100).toFixed(0).padStart(7)}`,
       );

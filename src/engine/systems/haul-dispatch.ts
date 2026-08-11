@@ -9,6 +9,7 @@ import type { HaulKind } from '../components';
 import { Building, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Production, Relocation } from '../components';
 import type { PendingChanges, Stockpile } from '../resources';
 import { storeSitesOf, type StoreSiteRow } from './haul-sites';
+import { nextTransferTarget, transferCandidates, type TransferCandidate } from './haul-transfer';
 
 /**
  * The building fields haulage cares about, materialized once per tick by
@@ -378,13 +379,26 @@ function supplyCandidates(
   return candidates;
 }
 
-/** What every dispatch agrees on, whichever kind of job it is. */
-function beginTrip(trip: HaulTrip, kind: HaulKind, buildingId: number): void {
+/**
+ * What every dispatch agrees on, whichever kind of job it is. `buildingId` is
+ * nullable because a transfer has no target: it moves goods between two SITES,
+ * and `targetId` stays null for its whole life.
+ *
+ * `staging` is written here rather than left alone, and the difference is one
+ * a fresh reader will not see: `cancel()` already clears it, so today every
+ * idle trip arrives here with it false. That is a property of the OTHER end of
+ * the trip, though, and this is the end that decides what the trip IS — a
+ * hauler that ran a staging transfer and then took a collect job still
+ * reporting `staging` would silently inflate §4.2's measurement, which is the
+ * only consumer the field has.
+ */
+function beginTrip(trip: HaulTrip, kind: HaulKind, buildingId: number | null): void {
   trip.kind = kind;
   trip.targetId = buildingId;
   trip.amount = 0;
   trip.pickedUp = false;
   trip.destSiteId = CAMP_SITE_ID;
+  trip.staging = false;
 }
 
 function beginSupply(trip: HaulTrip, at: TileRef, target: SupplyCandidate): void {
@@ -400,6 +414,33 @@ function beginCollect(trip: HaulTrip, at: TileRef, target: HaulCandidate): void 
   trip.resource = null;
   trip.plannedAmount = 0;
   trip.startLeg('outbound', at, { col: target.col, row: target.row }, BALANCE.haulTilesPerTick);
+}
+
+/**
+ * `beginSupply` minus its middle leg. A transfer walks to a source site and
+ * then to a destination site, so `targetId` is null throughout and the trip
+ * never enters `outbound`.
+ *
+ * `destSiteId` is written HERE, at dispatch, rather than resolved on the
+ * return the way a supply trip's is — and that is the whole reservation. A
+ * transfer's candidate was sized against room at that specific site
+ * (`SiteLedger.room`), so the room has to be held from this moment: `heldAt`
+ * counts a fetching transfer's `plannedAmount` against its destination
+ * precisely because this field is already set while the hauler is still
+ * walking the other way.
+ *
+ * `staging` is the candidate's class, recorded because it cannot be recovered
+ * afterwards — a depot to camp move is legitimately either class, and the
+ * snapshot carries no site ids to reconstruct it from.
+ */
+function beginTransfer(trip: HaulTrip, at: TileRef, target: TransferCandidate): void {
+  beginTrip(trip, 'transfer', null);
+  trip.resource = target.resource;
+  trip.sourceSiteId = target.sourceSiteId;
+  trip.destSiteId = target.destSiteId;
+  trip.plannedAmount = target.movable;
+  trip.staging = target.staging;
+  trip.startLeg('fetching', at, { col: target.sourceCol, row: target.sourceRow }, BALANCE.haulTilesPerTick);
 }
 
 /** Everything a dispatch decision reads, gathered once per tick. */
@@ -434,5 +475,23 @@ export function chooseJob(trip: HaulTrip, at: TileRef, inputs: DispatchInputs, c
     return;
   }
   const collect = nextHaulTarget(collectCandidates(buildings, claims));
-  if (collect !== null) beginCollect(trip, at, collect);
+  if (collect !== null) {
+    beginCollect(trip, at, collect);
+    return;
+  }
+  // Transfer is offered LAST, and only here, because it is the one kind of job
+  // NOBODY IS WAITING FOR. A supply trip unblocks a building that is producing
+  // nothing; a collect trip frees an output tray that is about to stall its
+  // producer. A transfer moves goods that are already banked, already counted,
+  // and already safe, from one store to another — so the only ticks it may
+  // spend are ticks that would otherwise be spent standing still.
+  //
+  // It is not free, and the cost is worth naming rather than hiding: a hauler
+  // mid-transfer is UNAVAILABLE for a supply job that arises next tick, and a
+  // transfer's round trip can be long. The order above bounds that cost to one
+  // trip per hauler — a transfer is never STARTED while real work exists — but
+  // it does not eliminate it, and no ordering could, because dispatch cannot
+  // see a tick ahead.
+  const transfer = nextTransferTarget(transferCandidates(buildings, sites, staffed, claims, capacity), at);
+  if (transfer !== null) beginTransfer(trip, at, transfer);
 }

@@ -619,3 +619,30 @@ describe('no sequence of legal transfers walks in circles', () => {
     expect(moves.filter((n) => n > 0).length).toBeGreaterThan(seeds.length / 2);
   });
 });
+
+describe('what a dispatched trip records about itself', () => {
+  it('a hauler that ran a staging transfer does not still report staging on its next job', () => {
+    // `staging` rides on the trip and NOTHING in the engine reads it — §4.2's
+    // instrument is its only consumer — so a stale `true` breaks no rule, only
+    // a measurement, which is the kind of wrong that survives a whole
+    // increment. `cancel()` clears the field at the end of a trip; this is the
+    // other end, where the trip is DECIDED, and the only fixture that can see
+    // it is one that hands dispatch a trip already dirty.
+    //
+    // A forester through `consumer()`: the helper builds a live building row,
+    // and this one is a producer rather than a consumer — no recipe inputs, so
+    // it contributes no site demand and the only job in this colony is the
+    // collect its output buffer offers.
+    const producer = consumer('forester', NEAR_A);
+    producer.buffer.add('wood', CAPACITY);
+    const colony = colonyOf([CAMP, A], [producer]);
+    const inputs: DispatchInputs = {
+      buildings: colony.buildings, sites: colony.sites, staffed: colony.staffed, claims: colony.claims(),
+    };
+    const trip = new HaulTrip();
+    trip.staging = true; // exactly as a finished staging transfer would have left it
+
+    chooseJob(trip, CAMP_TILE, inputs, CAPACITY);
+    expect(trip).toMatchObject({ kind: 'collect', phase: 'outbound', staging: false });
+  });
+});

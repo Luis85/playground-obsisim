@@ -1,6 +1,6 @@
 import type { IPreptimeWorld } from 'sim-ecs';
 import type { BuildingDefId, ResourceId } from '../../src/shared/content-types';
-import type { HaulKind, HaulPhase } from '../../src/shared/haul';
+import type { HaulPhase } from '../../src/shared/haul';
 import type { SaveGameV6 } from '../../src/shared/save';
 import type { ColonistSnapshot, Snapshot } from '../../src/shared/snapshot';
 import { haulTicks } from '../../src/shared/haul';
@@ -175,10 +175,22 @@ export interface StageResult {
   ceiling: number;
 }
 
-/** How a run's hauler-ticks were spent. Spec §4's third question asks for the
- * split between the two kinds of job and for the fetch leg's share — a supply
- * trip is three legs where the discarded base model made it two, and the first
- * buys nothing but position. */
+/**
+ * How a run's hauler-ticks were spent. Spec §4's third question asks for the
+ * split between the kinds of job and for the fetch leg's share — a supply trip
+ * is three legs where the discarded base model made it two, and the first buys
+ * nothing but position.
+ *
+ * `transfer` is the fourth category, added the moment `chooseJob` gained its
+ * third offer (Task 6) — earlier than the plan put it, because the guard that
+ * used to stand in its place THREW, and it fired on the tick transfers started
+ * running rather than waiting to be scheduled. That is what it was for: a
+ * silent 0-guess would have left three depot scenarios quietly reporting a
+ * hauler-tick split that omitted a whole kind of trip.
+ *
+ * A transfer only exists where a bounded site does, so every scenario without a
+ * storehouse reports 0 here — which is a fact about the fixture, not a gap.
+ */
 export interface HaulerTicks {
   idle: number;
   fetching: number;
@@ -186,6 +198,7 @@ export interface HaulerTicks {
   returning: number;
   collect: number;
   supply: number;
+  transfer: number;
 }
 
 export interface BalanceResult extends StageResult {
@@ -440,27 +453,6 @@ function tallyStates(snapshot: Snapshot, buildingIds: readonly number[], tallies
 }
 
 /**
- * `ticks[haulKind]++`, guarded against the bucket `HaulerTicks` has no room
- * for yet. Nothing dispatches a `'transfer'` trip before Task 6, so this
- * throws rather than guessing at a count for it — a silent 0-guess here would
- * hide the day transfers start, right when a later measurement needs to see
- * them land somewhere on purpose. Split out of `tallyHaulers` so the guard's
- * own branch doesn't push that function over the complexity gate.
- *
- * TASK 10 OWNS REMOVING THIS. When `HaulerTicks` gains its fourth category,
- * delete the throw and let `ticks[haulKind]++` handle every kind — the two are
- * one change, not two. Neither half can be done alone in silence: leaving the
- * throw after adding the bucket crashes any balance run carrying a transfer,
- * and deleting the throw before adding it fails `tsc`, because `HaulerTicks`
- * is a closed interface rather than an index signature. Said here as well as
- * in the plan so it is greppable from the code that has to change.
- */
-function tallyKind(ticks: HaulerTicks, haulKind: HaulKind): void {
-  if (haulKind === 'transfer') throw new Error('balance-harness: transfer trips are not modelled yet');
-  ticks[haulKind]++;
-}
-
-/**
  * One tick of hauler bookkeeping: which leg every hauler is walking, on which
  * kind of job, and whether a supply trip that just turned for home turned
  * loaded.
@@ -477,7 +469,9 @@ function tallyHaulers(
   for (const worker of colonists) {
     if (!worker.hauling) continue;
     ticks[worker.haulPhase]++;
-    if (worker.haulKind !== null && worker.haulPhase !== 'idle') tallyKind(ticks, worker.haulKind);
+    // Every kind, unguarded: `HaulerTicks` now has a bucket for each member of
+    // `HaulKind`, which is what retired the throw that used to stand here.
+    if (worker.haulKind !== null && worker.haulPhase !== 'idle') ticks[worker.haulKind]++;
     const turned = phases.get(worker.id) !== 'returning' && worker.haulPhase === 'returning';
     if (turned && worker.haulKind === 'supply') {
       returns.total++;
@@ -547,7 +541,9 @@ export async function runScenario(scenario: Scenario): Promise<BalanceResult> {
   audit.open(world.getResource(SnapshotStore).latest!, stockpile);
 
   const tallies: StageTally[] = stages.map(() => ({ stalled: 0, waiting: 0 }));
-  const haulerTicks: HaulerTicks = { idle: 0, fetching: 0, outbound: 0, returning: 0, collect: 0, supply: 0 };
+  const haulerTicks: HaulerTicks = {
+    idle: 0, fetching: 0, outbound: 0, returning: 0, collect: 0, supply: 0, transfer: 0,
+  };
   const phases = new Map<number, HaulPhase>();
   const returns = { total: 0, loaded: 0 };
   let relocatingTicks = 0;

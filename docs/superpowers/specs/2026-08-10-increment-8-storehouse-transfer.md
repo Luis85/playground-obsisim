@@ -1613,13 +1613,38 @@ statement this fixture supports.** Fit a line to the two clean end points
 > advantage ≈ **34 planks** + **0.078 planks/tick** × ticks
 
 It predicts 128 at 1,200 against 126 measured, and 347 at 4,000 against 343
-measured — the latter across a workforce change the fit knows nothing about. So
-the depot's advantage is a **one-off buffer term of about 34 planks** *plus* a
+measured — the latter across a workforce change the fit knows nothing about.
+That last check is legitimate despite the incomparability warning above the
+table: the advantage is a **within-pair difference** and both arms of the
+4,000-tick pair take the same `ageTicks`, so a level shift the two arms share
+cancels out of it. What would not survive the warning is comparing 1,745 planks
+against the 1,062 in the row above; comparing +343 against the fit does.
+
+So what the fit measures is a **one-off term of about 34 planks** *plus* a
 **sustained rate of 0.078 planks per tick**, which is 22% of the no-depot rate
-of 0.350. The one-off is the thing increment 7 measured and recorded as flat
-(26 / 24 / 28 planks at these same three horizons); it is still there and it has
-not grown. **What this increment added is the rate**, and the rate is the whole
-of the difference between this table and increment 7's.
+of 0.350.
+
+**That one-off term is the same order as increment 7's buffer and is not the
+same number, and the gap is a small finding of its own.** Increment 7 measured a
+flat 26 / 24 / 28 planks at these same three horizons, and point 6's sweep
+re-measures that buffer independently in *this* tree: with the mechanic inert —
+`minTransferUnits: 8`, or `storehouseFreeFloor: 0` — the corner chain still
+reads **+26 at 600 and +28 at 2,400**. The fitted 34 sits 20–30% above that, and
+the gap is larger than the fit's own out-of-sample error (2 planks at 1,200, 4
+at 4,000), so it is not obviously scatter. This section therefore does **not**
+claim the fitted intercept *is* increment 7's buffer, still there and not grown.
+An inert depot's flat buffer and the head start a depot that turns over
+accumulates in its first few hundred ticks are two quantities, and nothing
+measured here separates them: either the live one-off really is larger than the
+silted one, or the advantage is not quite linear and the intercept is absorbing
+curvature the three clean horizons are too few and too far apart to see.
+Deciding between those needs a measurement nobody took — points below 600 ticks
+in both arms, at minimum. It is recorded here as open rather than assumed away.
+
+**What this increment added is the rate**, and that part does not depend on the
+gap. The inert readings are flat across a fourfold horizon (+26, +28) where the
+live ones grow; whatever the exact size of the one-off term, the rate is the
+whole of the difference between this table and increment 7's.
 
 The same decomposition is why the percentage falls. The no-depot arm's
 throughput is flat at 0.340 / 0.347 / 0.350 planks per tick; the depot arm's
@@ -1687,22 +1712,42 @@ the fetch share of working ticks goes **4% → 26%**. In ticks: 4% of
 1,800 − 82 = 1,718 working ticks is ≈ 69, against 26% of 1,800 − 70 = 1,730,
 which is ≈ 450. The fetch leg therefore grew by about **381 hauler-ticks, and it
 buys nothing but position**. The transfer bucket over the same run is 281 ticks
-(37 staging + 244 drain), so roughly 100 of those 381 ticks are extra fetch on
-trips that are not transfers at all — a hauler that banked a load at the depot
-starts its next fetch there, and the seeded wood this building eats exists only
-at the camp. Supply's share falls 100% → 84%, which on 1,730 working ticks is
-about 265 ticks taken out of the only job that feeds this building.
+(37 staging + 244 drain), so **at least** 100 of those 381 ticks are extra fetch
+on trips that are not transfers at all. That is a lower bound and not an
+estimate: 281 is a job-class total covering all of a transfer's legs, so
+subtracting it from a leg total can only over-subtract. The mechanism is plain:
+a hauler that banked a load at the depot starts its next fetch there, and the
+seeded wood this building eats exists only at the camp. Supply's share falls
+100% → 84%, which on 1,730 working ticks is about 265 ticks taken out of the
+only job that feeds this building.
 
-**The dispatch order change does not reach this fixture, and the split says
-why.** `collect%` is **0** in every row of this table, with and without a depot:
-this is a single building whose planks ride home on the return leg of the supply
-trips that feed it (§2.5's round trip), so there is no collect candidate here
-for a drain to be promoted ahead of. The figures above are digit for digit the
-ones recorded on this fixture when transfer first ran (Task 6: 243 against 294,
-13 transfers, 281 transfer hauler-ticks) and the ones read before the dispatch
-order changed. This section did not re-run the pre-fix tree, so what is claimed
-is the agreement of the readings plus a mechanism that makes the agreement
-expected — not a controlled before/after.
+**The readings here are unchanged from before the dispatch order moved, and only
+half of that is explained by a mechanism.** The figures above are digit for digit
+the ones recorded on this fixture when transfer first ran, before `7c5042a`
+changed the order: 243 against 294 at three haulers, 13 transfers (2 staging in,
+11 drain out), 281 transfer hauler-ticks
+(`.superpowers/sdd/task-6-fix-report.md`, "What is actually true (600 ticks, 3
+haulers, depot at `CORNER_DEPOT` (21,14))").
+
+- **The collect-versus-drain relation cannot reach this fixture, and the split
+  proves it.** `collect%` is **0** in every row of this table, with and without
+  a depot: this is a single building whose planks ride home on the return leg of
+  the supply trips that feed it (§2.5's round trip), so there is no collect
+  candidate here for a drain to be promoted ahead of. That relation — the
+  headline of `7c5042a` — is a structural no-op here.
+- **The staging-versus-drain relation can reach it, and is not controlled.**
+  `7c5042a` also split one ranked `transferCandidates` list into drain offered
+  *before* collect and staging offered *after* it, so the two classes are now
+  ranked separately rather than against each other. This fixture dispatches
+  **both** classes — 2 staging and 11 drain at three haulers — so a relation
+  that did change is reachable here. The readings agree across it anyway, which
+  is evidence that it changed nothing on this fixture; it is not a mechanism
+  that forecloses one.
+
+So what is claimed is the **agreement of the readings**, plus a mechanism that
+covers the collect relation and not the staging one. This section did not re-run
+the pre-fix tree; that would be the controlled before/after, and it was not
+taken.
 
 **5. The hauler-tick split, with the two transfer classes apart.** Percentages
 of working (non-idle) hauler ticks. `drain%` and `stag%` are a partition of
@@ -1755,9 +1800,14 @@ this table is where the two halves separate.**
 - **The occupancy cost Task A's review named is visible and is bounded.** A
   drain outranks an adjacent collect regardless of route distance, and on the
   corner chain drains take up to 38% of working ticks. Supply is never
-  displaced by it — `supply%` stays non-zero in every row and the ordering puts
-  supply first — and no fixture here measures worse *because of* drains: the
-  configuration that does measure worse (the camp-fed processor) dispatches no
+  displaced by it, and the **dispatch ordering** is the evidence: supply is
+  offered before both transfer classes (§2.6), so a drain is never taken by a
+  hauler a servable supply job could have claimed. The share column is *not*
+  evidence for that — `supply%` stays non-zero in every row, but on the corner
+  chain at three haulers absolute supply ticks fall 925 → 437, so a non-zero
+  share is consistent with supply doing much less work. And no fixture here
+  measures worse *because of* drains: the configuration that does measure worse
+  (the camp-fed processor) dispatches no
   collect trips at all, so its loss is the fetch leg and not the promotion.
 
 **6. The three new constants, swept and not tuned.** Each was set, measured, and
@@ -1843,8 +1893,10 @@ why.
 §4.3 of increment 7 is the model, and both directions of it were exercised here.
 
 **Where §1 was confirmed.** The depot's advantage is no longer flat. It
-decomposes into a 34-plank one-off buffer — increment 7's finding, unchanged —
-plus a sustained 0.078 planks per tick, and the rate is what §1.1 predicted and
+decomposes into a one-off term of about 34 planks — the same order as increment
+7's flat buffer and 20–30% above the +26 / +28 the inert tree still measures
+here, a gap §4.2 point 1 records as open rather than assumes away — plus a
+sustained 0.078 planks per tick, and the rate is what §1.1 predicted and
 what the whole increment turns on. Acceptance criteria 3 and 4 both pass. §1.1's
 mechanism is confirmed on both halves, with the consumer-side relief durable and
 the producer-side relief decaying.

@@ -1,12 +1,13 @@
 ---
 id: OBS-7-01
 title: The supply ranking has no fairness floor, so the farther of two consumers is starved permanently rather than served late
-status: Open
+status: Done
 severity: important
 area: engine
 increment: 7
 created: 2026-08-10
 source: increment-7 task 14 (measure), section 4.1 q3 — found while measuring whether dispatch thrashes, which it does not
+resolved: increment-8 task 1 — a starvation band at the front of `compareSupplyCandidates`, measured on its own in spec §4.1 with no transfer code in the tree
 affects:
   - src/shared/haul.ts
   - src/engine/systems/haul-dispatch.ts
@@ -82,10 +83,23 @@ cost:
   being served, and let that beat route distance past some threshold. This is
   the classic fix and it fits the existing comparator, but it violates §2.6's
   "no memory between ticks, no iteration-order dependence" property — claims are
-  recomputed every tick from live components, and an age is state. It could be
-  derived rather than stored: `waitingForInputTicks` is already a live component
-  field and already published, and it is exactly "how long has this building been
-  unable to work".
+  recomputed every tick from live components, and an age is state.
+
+  > **Correction (increment 8, task 1).** This bullet originally continued: "It
+  > could be derived rather than stored: `waitingForInputTicks` is already a
+  > live component field and already published." **That is false**, and the
+  > correction is load-bearing rather than pedantic, because the sentence is
+  > what made ageing look free. `waitingForInputTicks` is an accumulator on
+  > `StageResult` in `tests/support/balance-harness.ts`, summed by sampling the
+  > published building *state* each tick; `grep` finds it in exactly two places,
+  > both in that file. No component in `src/` carries how long a building has
+  > been waiting, and the engine publishes only the instantaneous state
+  > (`snapshot-buildings.ts` derives `'waitingForInput'` fresh each tick). An
+  > age would therefore have to be **added** as memory between ticks — which is
+  > the property §2.6 forbids by name, so ageing is not derivable and this
+  > option was never the cheap one it reads as.
+
+
 - **A starvation term in the ranking.** Rank a building that has been at zero
   input above one that merely has room, before route distance is consulted at
   all. Derived entirely from live state, so §2.6's purity survives untouched. The
@@ -106,3 +120,52 @@ one meaningful.
 
 Do not simply relax `inputBufferCap` in its place. That is the accidental floor,
 not a fix, and §4.2 measured what removing it costs.
+
+## What landed, and what it cost
+
+**The second shape, exactly as this section framed it.** Increment 8 §2.1 put a
+`starving` band at the front of `compareSupplyCandidates`, derived entirely from
+live state: the building holds **zero** of the resource this candidate would
+deliver, has no batch in progress (`Production.batchActive`), has output room
+for another batch, and has no supply delivery already claimed toward it
+(`Claims.input`). Three of the four clauses are `startBatch`'s own
+preconditions, so the rule is one question — *would this load land and
+immediately do something* — asked against the function that decides, plus *is
+one already coming*. No new component, no memory between ticks, and the
+tie-break chain still ends at a site id.
+
+Two of those clauses were added during review and are recorded in §2.1 because
+each one alone is a defect:
+
+- **`batchActive`.** `payFrom` empties the in-tray *at the moment a batch
+  starts*, so holding zero is the ordinary state of a building producing
+  perfectly well. A one-clause rule promotes a healthy mid-batch producer ahead
+  of a consumer blocked for six hundred ticks.
+- **`Claims.input`.** A `starving` term computed from physical state alone does
+  not move when a hauler is *dispatched*, so every idle hauler on the tick reads
+  the same empty tray and is promoted to the same building. The bound in this
+  issue's own §2.4 — *if ten idle haulers were dispatched on the same tick,
+  would this have stopped the tenth?* — is the one that catches it.
+
+**The guard this issue asked for exists and is inverted.**
+`tests/engine/balance.test.ts`, now *"collection resumes, and the farther
+consumer is served late rather than never"*, runs the same two buildings with
+their tiles exchanged at **one** hauler and asserts both layouts above 50 loaves
+and their ratio above 0.85. It still discriminates in both directions, as this
+section required: a dispatcher that starves the second stage regardless of
+position puts both at zero, and one that merely moves the starvation fails the
+ratio. The one-hauler count is itself a discrimination point — at three haulers
+the fixture reads identically before and after the floor, so a guard taken there
+would stay green against a dispatcher with no floor at all.
+
+**The price, measured in §4.1 and recorded rather than netted out.** The near
+mill loses where the floor fires: 254 → 115 flour at one hauler (−55%), 313 →
+260 at two. The chain's end product gains everywhere: bread 0 → 108, 150 → 189,
+144 → 250. The mechanism is in the hauler-tick split — the same working ticks
+buy 43 → 38 supply round trips at 13.0 → 14.8 ticks each, because a trip to the
+leg-8 building is longer than a trip to the leg-6 one. Fewer, longer trips is
+what serving the far consumer costs, and it is charged in the intermediate good.
+
+**`inputBufferCap` still did not move**, which is what keeps `OBS-7-02`'s
+sequencing intact: the deliberate floor now exists, so that issue's re-measure
+is unblocked — see its own carry-forward note.

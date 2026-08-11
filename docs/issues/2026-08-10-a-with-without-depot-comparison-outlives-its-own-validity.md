@@ -82,3 +82,40 @@ Whichever way it goes, the assertion that catches the confound is cheap: run
 the pair at a horizon **below** the first old-age death and require them
 identical there. That pins the harness's determinism without pinning the
 jitter.
+
+## Status after increment 8 — the cheap guard landed, the structural fix did not
+
+**Half done, deliberately, and the halves are named so the next reader does not
+have to diff for them.**
+
+**Landed.** The cheap assertion this section asked for exists:
+`tests/engine/balance.test.ts`, *"a with/without-depot pair is identical below
+the turnover horizon"* — the same population scenario at `storehouses: 0` and
+`storehouses: 2` over 2,400 ticks, `JSON.stringify(samples)` required equal,
+plus `births` and `deathsByStarvation`. Three premises are **asserted rather
+than reasoned**, which is what makes it a determinism guard instead of a claim
+that depots change nothing: `deathsByOldAge === 0` in both arms (inside the
+window by measurement, not by arithmetic), `births > 0` (a pair that never bred
+would match trivially), and `storedAtEnd === 0` in both.
+
+The sibling doc comment this section asked for is on
+`PopulationScenario.storehouses` beside the placement trap, in the words this
+section chose: **below the first old-age death a with/without pair is comparable
+digit for digit; above it, only aggregate outcomes are.**
+
+**One thing the fix taught that this issue did not know.** The horizon is a
+property of the *fixture*, not a constant. `spawnFounders` in the population
+harness starts its adults at `matureTicks`, so retirement falls at elapsed 4,500
+and the earliest old-age death at 4,700; the *balance* harness's founders
+(`BALANCE.startingAgeTicks`) put the same two events at 3,000 and 3,200. Doing
+that arithmetic to decide a run is safe is how increment 8's own §4.2 drafted a
+4,800-tick run described as "still below the first old-age death" when every
+founder had in fact died by then. Both harnesses now carry the arithmetic in a
+comment and the tests assert `deathsByOldAge` instead of trusting it.
+
+**Not landed, and out of scope by §2.13.** The structural fix — a colonist-scoped
+salt (a birth ordinal) replacing the entity id in `lifespanFor` — was not
+attempted. It redefines what every existing population figure means, so it still
+belongs to an increment that needs the tighter comparison rather than to a
+test-support fix. **This issue therefore stays `Open` at `minor`**: the confound
+is guarded and documented, and it is not removed.

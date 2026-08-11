@@ -3,10 +3,12 @@ import { SystemError, type IEntity, type IPreptimeWorld, type IRuntimeWorld } fr
 import type { BuildingDefId, ResourceId } from '../../../src/shared/content-types';
 import { CAMP_SITE_ID, CAMP_TILE, haulTicksBetween, legPositionOf, type StoreSite } from '../../../src/shared/haul';
 import type { TileRef } from '../../../src/shared/placement';
+import { lifespanFor } from '../../../src/shared/population';
 import { BALANCE } from '../../../src/engine/content/balance';
-import { Building, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Relocation } from '../../../src/engine/components';
+import { Age, Building, Colonist, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Relocation } from '../../../src/engine/components';
 import { IdCounter, Stockpile } from '../../../src/engine/resources';
 import { CommandSystem } from '../../../src/engine/systems/command-system';
+import { PopulationSystem } from '../../../src/engine/systems/population-system';
 import { ProductionSystem } from '../../../src/engine/systems/production-system';
 import { HaulSystem, haulerCapacity } from '../../../src/engine/systems/haul-system';
 import { claimsOf, heldAtOf, holdsNoneOf } from '../../../src/engine/systems/haul-dispatch';
@@ -1783,5 +1785,280 @@ describe('the transfer trip', () => {
       sourceSiteId: idOf(control.buildings[SOURCE_AT]), destSiteId: idOf(control.buildings[DEST_AT]),
       plannedAmount: BALANCE.haulCarryCapacity,
     });
+  });
+});
+
+/**
+ * EVERY PATH THAT ENDS A TRANSFER MUST PUT ITS LOAD SOMEWHERE (§2.7, §2.9).
+ *
+ * The cancellation paths were all written against `HaulTrip`, before there was
+ * a kind to write them against, so a transfer is expected to pass through them
+ * unchanged. That is the claim these cases TEST rather than assume: this
+ * increment has already fixed a dispatch/arrival rule three times, and each
+ * time it was a path that obviously already worked.
+ *
+ * Every case asserts the COLONY TOTAL, which is what a player would notice
+ * being violated and what no single handler can satisfy by agreeing with
+ * itself. But conservation is necessary and not sufficient, and that is the
+ * trap here — a load teleported to the camp preserves the total exactly. So
+ * wherever the subject is that goods were CARRIED rather than moved by ledger
+ * adjustment, the camp's own holding is asserted not to have grown on the
+ * arrival tick and the hauler is asserted to be walking a fresh leg. A case
+ * that read only the total would stay green against precisely the bug it
+ * exists to prevent.
+ *
+ * They live here, beside `describe('the transfer trip')`, for the reason that
+ * describe block does: a transfer needs a bounded site and a real consumer's
+ * demand before it can be DISPATCHED at all, and only this file's layout has
+ * both. A hand-assembled `HaulTrip` would test the handler against a trip
+ * shape no dispatch can produce.
+ */
+describe('a transfer interrupted', () => {
+  it('is left alone by a demolition it has nothing to do with', async () => {
+    // `handleDemolishBuilding` walks trips by `targetId`, and a transfer's is
+    // NULL for its whole life — so no building id can ever match it and the
+    // fetching clause is a permanent near-miss. Correct, and untested until
+    // now: the forester demolished here is neither this trip's source nor its
+    // destination, holds nothing, and is not a store site at all.
+    const SOURCE_STOCK = 30;
+    const { world, buildings, haulers, step, stockpile } = await setup(
+      stagingSpecs(SOURCE_STOCK, [{ defId: 'forester', ...FORESTER }]), 1,
+      { systems: [CommandSystem, HaulSystem] },
+    );
+    const sourceId = idOf(buildings[SOURCE_AT]);
+    const destId = idOf(buildings[DEST_AT]);
+    const total = SOURCE_STOCK + BALANCE.inputBufferCap;
+    const toSource = legTicks(CAMP_TILE, STAGE_SOURCE);
+
+    await step(1);
+    expect(tripOf(haulers[0])).toMatchObject({ kind: 'transfer', phase: 'fetching', targetId: null, destSiteId: destId });
+
+    enqueue(world, { type: 'demolishBuilding', buildingId: idOf(buildings[4]) });
+    await step(1);
+    expect(world.hasEntity(buildings[4])).toBe(false); // it really did leave the world
+    // The WHOLE leg, not merely the phase: a trip cancelled here would be
+    // re-dispatched by the same tick's HaulSystem run and land back on
+    // `fetching` from wherever it had walked to, which the phase alone cannot
+    // tell from never having been interrupted.
+    expect(tripOf(haulers[0])).toMatchObject({
+      kind: 'transfer', phase: 'fetching', targetId: null, sourceSiteId: sourceId, destSiteId: destId,
+      plannedAmount: BALANCE.haulCarryCapacity, amount: 0,
+      ticksLeft: toSource - 1, legTicks: toSource, legFromCol: CAMP_TILE.col, legFromRow: CAMP_TILE.row,
+    });
+
+    // ...and it finishes the job it was dispatched on.
+    await step(toSource - 1 + legTicks(STAGE_SOURCE, STAGE_DEST));
+    expect(stockpile.getAt(destId, 'wheat')).toBe(BALANCE.haulCarryCapacity);
+    expect(colonyTotal(world, 'wheat')).toBe(total);
+  });
+
+  it('loses nothing when its SOURCE depot is demolished mid-fetch', async () => {
+    // Two rules meeting on one tick: `spillTo` sends the depot's contents to
+    // the camp, and the `fetching && sourceSiteId` clause ends the trip that
+    // was reserving stock there. Nothing has been picked up, so the
+    // cancellation disposes of nothing — and the hauler, now idle, is free to
+    // be re-dispatched against the stock's new home the very same tick.
+    const SOURCE_STOCK = 30;
+    const { world, buildings, haulers, step, stockpile } = await setup(
+      stagingSpecs(SOURCE_STOCK), 1, { systems: [CommandSystem, HaulSystem] },
+    );
+    const sourceId = idOf(buildings[SOURCE_AT]);
+    const total = SOURCE_STOCK + BALANCE.inputBufferCap;
+
+    await step(1);
+    expect(tripOf(haulers[0])).toMatchObject({ kind: 'transfer', phase: 'fetching', sourceSiteId: sourceId });
+
+    enqueue(world, { type: 'demolishBuilding', buildingId: sourceId });
+    await step(1);
+    expect(world.hasEntity(buildings[SOURCE_AT])).toBe(false);
+    // Banked wealth moves rather than dying with the building, so the colony
+    // total is untouched — the assertion the depot's own figure cannot make.
+    expect(stockpile.getAt(CAMP_SITE_ID, 'wheat')).toBe(SOURCE_STOCK);
+    expect(colonyTotal(world, 'wheat')).toBe(total);
+    // The trip no longer reserves a thing at a building that is gone. Read as
+    // the SOURCE it now names, not as `idle`: the cancellation and the
+    // re-dispatch happen in one tick, so `idle` is never observable here.
+    expect(tripOf(haulers[0])).toMatchObject({
+      kind: 'transfer', phase: 'fetching', sourceSiteId: CAMP_SITE_ID, amount: 0,
+      plannedAmount: BALANCE.haulCarryCapacity,
+    });
+  });
+
+  it('carries its load onward when its DESTINATION is demolished mid-fetch', async () => {
+    // The one demolition case NO cancellation clause matches: the trip is
+    // `fetching`, its `sourceSiteId` names a live depot, and its `targetId` is
+    // null — so it walks on, takes its load, and only then finds nothing left
+    // to reserve. `transferOnward`'s `dest === undefined` fallback, which is
+    // reachable from exactly here.
+    //
+    // Where the load then goes is not a free choice: `destinationFor` measures
+    // from where the hauler STANDS, which is the source it has just drawn from,
+    // and a site always has room for what was taken out of it a moment ago. So
+    // the honest answer is "put it back", and the point of the case is that the
+    // hauler CARRIES it there — a fresh leg, the goods out of the ledger
+    // meanwhile, and nothing appearing at the camp.
+    const SOURCE_STOCK = 30;
+    const { world, buildings, haulers, step, stockpile } = await setup(
+      stagingSpecs(SOURCE_STOCK), 1, { systems: [CommandSystem, HaulSystem] },
+    );
+    const sourceId = idOf(buildings[SOURCE_AT]);
+    const destId = idOf(buildings[DEST_AT]);
+    const total = SOURCE_STOCK + BALANCE.inputBufferCap;
+    const toSource = legTicks(CAMP_TILE, STAGE_SOURCE);
+    // A transfer's `targetId` is null, so a lookup that assumed a target
+    // throws — and sim-ecs swallows a throwing system into a `SystemError`
+    // rather than failing the step, which would read as a hauler quietly
+    // doing nothing.
+    let systemErrors = 0;
+    world.eventBus.subscribe(SystemError, () => { systemErrors++; });
+
+    await step(1);
+    expect(tripOf(haulers[0])).toMatchObject({ kind: 'transfer', phase: 'fetching', destSiteId: destId });
+
+    enqueue(world, { type: 'demolishBuilding', buildingId: destId });
+    await step(1);
+    expect(world.hasEntity(buildings[DEST_AT])).toBe(false);
+    expect(tripOf(haulers[0])).toMatchObject({ phase: 'fetching', destSiteId: destId, ticksLeft: toSource - 1 });
+
+    await step(toSource - 1); // source arrival, with no destination left to honour
+    expect(tripOf(haulers[0])).toMatchObject({
+      kind: 'transfer', phase: 'returning', amount: BALANCE.haulCarryCapacity, plannedAmount: 0,
+      destSiteId: sourceId, legToCol: STAGE_SOURCE.col, legToRow: STAGE_SOURCE.row,
+    });
+    // Carried, not written back: the load really is out of the ledger and in a
+    // pair of hands, and the camp — the destination a teleport would pick —
+    // gained nothing.
+    expect(stockpile.getAt(sourceId, 'wheat')).toBe(SOURCE_STOCK - BALANCE.haulCarryCapacity);
+    expect(stockpile.getAt(CAMP_SITE_ID, 'wheat')).toBe(0);
+    expect(colonyTotal(world, 'wheat')).toBe(total);
+
+    await step(1);
+    expect(tripOf(haulers[0])).toMatchObject({ phase: 'idle', amount: 0, resource: null });
+    expect(stockpile.getAt(sourceId, 'wheat')).toBe(SOURCE_STOCK);
+    expect(stockpile.getAt(CAMP_SITE_ID, 'wheat')).toBe(0);
+    expect(colonyTotal(world, 'wheat')).toBe(total);
+    expect(systemErrors).toBe(0);
+  });
+
+  it('does not deposit into a destination that is in transit', async () => {
+    // `storeSitesOf` already drops a relocating storehouse, so `depositArrival`
+    // finds no destination and turns the load for a site that still exists.
+    //
+    // THE DEPOT IS MOVED AWAY AND STRAIGHT BACK, and the round trip is the
+    // whole fixture. A one-way move changes the depot's TILE, and
+    // `depositArrival` compares tiles as well — so the case would pass just as
+    // well with the relocation rule deleted. Moved back, the tile matches the
+    // one this leg was aimed at and `relocating` is the ONLY thing standing
+    // between this load and a building being carried across the map.
+    const SOURCE_STOCK = 30;
+    const PARKED = { col: STAGE_DEST.col, row: STAGE_DEST.row + 4 };
+    const { world, buildings, haulers, step, stockpile } = await setup(
+      stagingSpecs(SOURCE_STOCK), 1, { systems: [CommandSystem, HaulSystem] },
+    );
+    const destId = idOf(buildings[DEST_AT]);
+    const neighbourId = idOf(buildings[NEIGHBOUR_AT]);
+    const total = SOURCE_STOCK + BALANCE.inputBufferCap;
+    const home = legTicks(STAGE_SOURCE, STAGE_DEST);
+
+    await step(1 + legTicks(CAMP_TILE, STAGE_SOURCE));
+    expect(tripOf(haulers[0])).toMatchObject({
+      phase: 'returning', destSiteId: destId, amount: BALANCE.haulCarryCapacity,
+      legToCol: STAGE_DEST.col, legToRow: STAGE_DEST.row,
+    });
+
+    await step(home - 2);
+    enqueue(
+      world,
+      { type: 'moveBuilding', buildingId: destId, to: PARKED },
+      { type: 'moveBuilding', buildingId: destId, to: STAGE_DEST },
+    );
+    await step(1);
+    // The fixture's whole premise, stated rather than assumed: same tile, still
+    // in transit. No ProductionSystem here, so the countdown never runs down.
+    expect(buildings[DEST_AT].getComponent(Position)).toMatchObject(STAGE_DEST);
+    expect(buildings[DEST_AT].getComponent(Relocation)!.ticksLeft).toBeGreaterThan(0);
+    expect(tripOf(haulers[0])).toMatchObject({ phase: 'returning', ticksLeft: 1, destSiteId: destId });
+
+    await step(1); // arrival at a tile whose depot is not a site
+    expect(stockpile.getAt(destId, 'wheat')).toBe(0);          // nothing went into a building mid-move
+    expect(stockpile.getAt(CAMP_SITE_ID, 'wheat')).toBe(0);    // and nothing was teleported home
+    expect(tripOf(haulers[0])).toMatchObject({
+      phase: 'returning', amount: BALANCE.haulCarryCapacity, destSiteId: neighbourId,
+      legToCol: STAGE_NEIGHBOUR.col, legToRow: STAGE_NEIGHBOUR.row, ticksLeft: legTicks(STAGE_DEST, STAGE_NEIGHBOUR),
+    });
+    expect(colonyTotal(world, 'wheat')).toBe(total);
+
+    await step(legTicks(STAGE_DEST, STAGE_NEIGHBOUR));
+    expect(stockpile.getAt(neighbourId, 'wheat')).toBe(BALANCE.haulCarryCapacity);
+    expect(colonyTotal(world, 'wheat')).toBe(total);
+  });
+
+  it('banks its load at a resolved site when its hauler is unassigned', async () => {
+    // `bankCarriedLoad`, the legitimate forward-without-a-walk: this colonist
+    // has stopped being a hauler, so nobody is left to carry anything. The load
+    // goes to the site nearest WHERE THE WALK ACTUALLY GOT TO, which two ticks
+    // into the return leg is still the source it came from — and neither the
+    // camp (the reflex answer) nor the destination it was reserved for.
+    const SOURCE_STOCK = 30;
+    const { world, buildings, haulers, step, stockpile } = await setup(
+      stagingSpecs(SOURCE_STOCK), 1, { systems: [CommandSystem, HaulSystem] },
+    );
+    const sourceId = idOf(buildings[SOURCE_AT]);
+    const destId = idOf(buildings[DEST_AT]);
+    const total = SOURCE_STOCK + BALANCE.inputBufferCap;
+    const home = legTicks(STAGE_SOURCE, STAGE_DEST);
+
+    await step(1 + legTicks(CAMP_TILE, STAGE_SOURCE) + 2); // two ticks of the return leg walked
+    expect(tripOf(haulers[0])).toMatchObject({
+      kind: 'transfer', phase: 'returning', amount: BALANCE.haulCarryCapacity, destSiteId: destId,
+      ticksLeft: home - 2,
+    });
+    expect(stockpile.getAt(sourceId, 'wheat')).toBe(SOURCE_STOCK - BALANCE.haulCarryCapacity);
+
+    enqueue(world, { type: 'unassignHauler' });
+    await step(1);
+    expect(haulers[0].getComponent(JobAssignment)!.hauling).toBe(false);
+    expect(tripOf(haulers[0])).toMatchObject({ phase: 'idle', amount: 0, resource: null });
+    // Where it stopped, interpolated — a quarter of the way along a leg from
+    // (6,3) to (20,10), which is neither endpoint and not a whole tile.
+    expect(tripOf(haulers[0])).toMatchObject({ atCol: 9.5, atRow: 4.75 });
+    expect(stockpile.getAt(sourceId, 'wheat')).toBe(SOURCE_STOCK); // banked at the nearest site with room
+    expect(stockpile.getAt(destId, 'wheat')).toBe(0);              // not at the destination it had reserved
+    expect(stockpile.getAt(CAMP_SITE_ID, 'wheat')).toBe(0);        // and not at the camp by reflex
+    expect(colonyTotal(world, 'wheat')).toBe(total);
+  });
+
+  it("banks its load at a resolved site when its hauler dies", async () => {
+    // `standDown`, the fourth cancellation path §2.7 names and the one in
+    // another system entirely. Killed LATE in the return leg, where the nearest
+    // site with room is no longer the source — which is what pins
+    // `remainderHome` staying shut for a transfer. A supply remainder walks
+    // home because nothing asked for it where it stands; a transfer's load was
+    // asked for, and sending it back would undo the trip.
+    const SOURCE_STOCK = 30;
+    const { world, buildings, haulers, step, stockpile } = await setup(
+      stagingSpecs(SOURCE_STOCK), 1, { systems: [PopulationSystem, HaulSystem] },
+    );
+    const sourceId = idOf(buildings[SOURCE_AT]);
+    const destId = idOf(buildings[DEST_AT]);
+    const total = SOURCE_STOCK + BALANCE.inputBufferCap;
+    const home = legTicks(STAGE_SOURCE, STAGE_DEST);
+
+    await step(1 + legTicks(CAMP_TILE, STAGE_SOURCE) + (home - 2)); // two ticks short of the depot
+    expect(tripOf(haulers[0])).toMatchObject({
+      kind: 'transfer', phase: 'returning', amount: BALANCE.haulCarryCapacity, destSiteId: destId, ticksLeft: 2,
+    });
+
+    // One tick short of this colonist's own lifespan: the next `ageEveryone`
+    // takes them over it and `resolveOldAge` fires on that same tick, ahead of
+    // HaulSystem — so `standDown` is the ONLY route the load has to a site.
+    const colonistId = haulers[0].getComponent(Colonist)!.id;
+    haulers[0].getComponent(Age)!.ticks = lifespanFor(colonistId, BALANCE.lifeBands) - 1;
+    await step(1);
+    expect(world.hasEntity(haulers[0])).toBe(false); // dead, and off the world
+    expect(stockpile.getAt(destId, 'wheat')).toBe(BALANCE.haulCarryCapacity); // nearest with room
+    expect(stockpile.getAt(sourceId, 'wheat')).toBe(SOURCE_STOCK - BALANCE.haulCarryCapacity); // NOT sent home
+    expect(stockpile.getAt(CAMP_SITE_ID, 'wheat')).toBe(0);
+    expect(colonyTotal(world, 'wheat')).toBe(total);
   });
 });

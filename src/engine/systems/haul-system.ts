@@ -135,6 +135,17 @@ function transferOnward(ctx: TickContext, trip: HaulTrip, at: TileRef): void {
  * storehouse that relocates keeps its id and moves, and an id-keyed `takeAt`
  * would draw goods out of a building standing somewhere the hauler is not.
  *
+ * THE TILE HALF OF THAT RECHECK IS DEFENSE-IN-DEPTH, and this is a verified
+ * claim rather than an assumed one: `handleMoveBuilding` cancels every
+ * `fetching` trip whose `sourceSiteId` is the building it moves, a storehouse
+ * mid-move is off `storeSitesOf` for the whole countdown, and a trip is never
+ * persisted — so nothing leaves a fetching trip aimed at a tile its own source
+ * has left, and `source === undefined` answers first in every case that
+ * remains. Deleting the two tile comparisons passes the entire suite, which
+ * says the branch is unreachable, not that it is untested. Kept for the reason
+ * `buildingArrival` keeps its demolished-target branch: the rule that makes it
+ * unreachable lives in another handler, one edit away from not doing so.
+ *
  * Nothing has been picked up yet, so either recheck failing is a clean cancel:
  * no load, no disposal, no remainder.
  *

@@ -110,9 +110,10 @@ export interface Claims {
   /** A site's stock of one resource, less what fetching haulers have already
    * planned to take out of it. */
   unclaimedAt(siteId: number, resource: ResourceId): number;
-  /** Units of a resource already walking toward a site on a transfer — the
-   * site-level twin of `input`, and for the identical reason: without it every
-   * idle hauler transfers into the same deficit on the same tick. */
+  /** Units of ONE resource already walking toward a site, on a trip of any
+   * kind — the site-level twin of `input`, and for the identical reason:
+   * without it every idle hauler transfers into the same deficit on the same
+   * tick. */
   inboundAt(siteId: number, resource: ResourceId): number;
   /**
    * Units a site is about to LOSE: what fetching haulers have planned to take
@@ -201,10 +202,20 @@ export function claimsOf(
     )),
     heldAt: heldAtOf(workers, stockpile),
     unclaimedAt: (siteId, resource) => stockpile.getAt(siteId, resource) - plannedOut(siteId, (trip) => trip.resource === resource),
+    // `reservedAt` again, narrowed to ONE resource: what is walking toward a
+    // site is exactly the per-resource slice of the reservation term `heldAt`
+    // already adds to that site's stock. Deliberately the SAME function rather
+    // than a second predicate of the same shape, so the two can never disagree
+    // about which trips are inbound — and so the kind asymmetry documented
+    // there governs here too. It is worth restating in this direction: a
+    // RETURNING load lands at `destSiteId` whatever kind of trip carried it,
+    // so a collect walking wheat home to a depot genuinely meets that depot's
+    // wheat demand and must shrink its deficit. Counting only transfers left
+    // an empty depot with a wheat demand of 12 and a six-unit collect already
+    // walking back to it reading a deficit of 12, dispatching two staging
+    // transfers on top, and landing at 18.
     inboundAt: (siteId, resource) => sumOverTrips(workers, (trip) => (
-      trip.kind === 'transfer' && trip.destSiteId === siteId && trip.resource === resource
-        ? trip.plannedAmount + (trip.phase === 'returning' ? trip.amount : 0)
-        : 0
+      trip.resource === resource ? reservedAt(trip, siteId) : 0
     )),
     plannedOutAt: (siteId) => plannedOut(siteId, () => true),
   };

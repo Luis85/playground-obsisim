@@ -116,6 +116,16 @@ function haulStateOf(world: IRuntimeWorld) {
   return { haulers, buildings, stockpile: world.getResource(Stockpile).toJSON() };
 }
 
+/**
+ * THE TRANSFER TRIP IS NOT TESTED HERE, and its absence is deliberate rather
+ * than a gap. `fetchArrival` and `depositArrival` are shared by all three kinds
+ * (haul-system.ts), so the branches a transfer takes through them —
+ * `transferOnward`'s zero-take cancel, the reserved-destination return, the
+ * exact-fit deposit — live where a transfer can actually be DISPATCHED, which
+ * needs a bounded site and a consumer's demand: `describe('the transfer trip')`
+ * in haul-dispatch.test.ts. Every fixture in this file is foresters and the
+ * camp, so no transfer is constructible in it at all.
+ */
 describe('HaulSystem', () => {
   it('walks out, loads a full carry, walks back, and banks it in the store', async () => {
     // (5,4) is 5 tiles from the camp -> 3 ticks each way

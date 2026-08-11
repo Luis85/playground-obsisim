@@ -239,8 +239,12 @@ describe('the supply leg', () => {
     // source" and "to the nearest site" are the same answer. Here the camp is
     // the source and eleven ticks away, while an empty depot stands two ticks
     // from the mill — so routing onward would turn camp wheat into depot stock
-    // without it ever being consumed, the store-to-store transfer §2.13
-    // excludes.
+    // without it ever being consumed: a store-to-store transfer nobody asked
+    // for, which is `remainderHome`'s own wording in haul-sites.ts. Task 6's
+    // transfer mechanic does not repeal this. A real transfer is dispatched
+    // against a DESTINATION'S demand and reserves room there; this load was
+    // sized against a building's in-tray that has since filled, and no site
+    // asked for it.
     const { world, buildings, haulers, step, stockpile } = await setup([
       { defId: 'mill', ...MILL, inputBuffer: { wheat: 8 }, crew: 1 },
       { defId: 'storehouse', ...BESIDE_MILL },
@@ -1277,9 +1281,10 @@ describe('the same world decides the same way whichever order it is walked in', 
 
 /**
  * The claims a transfer holds, asserted on the lookups themselves rather than
- * through a dispatch — nothing dispatches a transfer yet (that is Task 6), and
- * these four quantities are the whole of what a transfer candidate is sized
- * against, so they are worth pinning where a fixture can state each one alone.
+ * through a dispatch. `describe('the transfer trip')` below dispatches them for
+ * real; these four quantities are the whole of what a transfer candidate is
+ * sized against, so they are also worth pinning where a fixture can state each
+ * one alone, without a layout that makes every other quantity incidental.
  *
  * `heldAtOf` is exported on its own for the two cancellation paths outside
  * `HaulSystem`, so it is callable with nothing but trips and a stockpile.
@@ -1426,6 +1431,9 @@ const STAGE_NEIGHBOUR = { col: 20, row: 11 };
 /** The consumer whose appetite makes STAGE_DEST want anything at all. Its
  * in-tray is full in every fixture below. */
 const STAGE_MILL = BESIDE_DEPOT;
+/** A wheat producer STAGE_DEST is the nearest site to, so a load collected here
+ * walks INTO the depot's deficit rather than home to the camp. */
+const STAGE_FARM = { col: 22, row: 11 };
 const FULL_TRAY = { wheat: BALANCE.inputBufferCap };
 
 const stagingSpecs = (sourceStock: number, extra: readonly Spec[] = []): Spec[] => [
@@ -1713,5 +1721,67 @@ describe('the transfer trip', () => {
     const alone = await setup(stagingSpecs(SOURCE_STOCK), 1);
     await alone.step(1);
     expect(tripOf(alone.haulers[0])).toMatchObject({ kind: 'transfer', phase: 'fetching', staging: true });
+  });
+
+  it('a COLLECT already walking wheat into the depot leaves nothing for a second hauler to stage', async () => {
+    // `inboundAt` is a claim, so its fixture needs TWO haulers by construction:
+    // one hauler cannot be both the load already in the air and the hauler
+    // deciding whether to send another. The depot wants 12, holds 6, and a
+    // collect is carrying the other 6 home to it — so its deficit is 0 and
+    // there is nothing left to stage. A lookup that counts only `kind ===
+    // 'transfer'` cannot see that load, reads the deficit as 6, sends a second
+    // six-unit staging trip after it, and lands the depot at 18 against a
+    // target of 12: a wasted round trip and source surplus spent for nothing.
+    //
+    // The two 6s are equal ON PURPOSE, and that equality is the subject rather
+    // than a coincidence — the load in flight covers the shortfall EXACTLY,
+    // which is what takes the deficit to zero instead of merely shrinking it.
+    const DEPOT_STOCK = BALANCE.siteStagingTarget - BALANCE.haulCarryCapacity;
+    const SOURCE_STOCK = 20; // distinct from both, and far more than one carry
+    const withCollect: Spec[] = [
+      { defId: 'storehouse', ...STAGE_SOURCE },
+      { defId: 'storehouse', ...STAGE_DEST, stored: { wheat: DEPOT_STOCK } },
+      { defId: 'mill', ...STAGE_MILL, inputBuffer: FULL_TRAY, crew: 1 },
+      { defId: 'farm', ...STAGE_FARM, buffer: { wheat: BALANCE.haulCarryCapacity } },
+    ];
+    const { buildings, haulers, step, stockpile } = await setup(withCollect, 2);
+    const destId = idOf(buildings[DEST_AT]);
+    // The collected load really does walk to the DEPOT rather than to the camp,
+    // which is the whole reason it belongs in the depot's inbound figure.
+    expect(legTicks(STAGE_FARM, STAGE_DEST)).toBeLessThan(legTicks(STAGE_FARM, CAMP_TILE));
+
+    await step(1);
+    const [collector, spare] = haulers;
+    expect(tripOf(collector)).toMatchObject({ kind: 'collect', phase: 'outbound', targetId: idOf(buildings[3]) });
+    expect(tripOf(spare).phase).toBe('idle'); // no site holds a surplus to stage yet
+
+    await step(legTicks(CAMP_TILE, STAGE_FARM));
+    expect(tripOf(collector)).toMatchObject({
+      kind: 'collect', phase: 'returning', resource: 'wheat',
+      amount: BALANCE.haulCarryCapacity, destSiteId: destId,
+    });
+
+    // The surplus appears while that load is still in the air, so the second
+    // hauler decides with a live collect walking into the deficit — the whole
+    // point of the sequencing, since a load already BANKED is visible to
+    // `unclaimedAt` and proves nothing about `inboundAt`.
+    stockpile.refundAt(siteOf(buildings[SOURCE_AT]), 'wheat', SOURCE_STOCK);
+    await step(1);
+    expect(tripOf(collector).phase).toBe('returning'); // still walking: not yet banked anywhere
+    expect(tripOf(spare).phase).toBe('idle');
+
+    // ...and the same depot, the same 6-unit shortfall and the same surplus DO
+    // produce a staging transfer once nothing is walking in. Without this the
+    // reading above would pass just as well for a fixture in which no transfer
+    // was ever constructible.
+    const control = await setup([
+      { ...withCollect[SOURCE_AT], stored: { wheat: SOURCE_STOCK } }, withCollect[DEST_AT], withCollect[2],
+    ], 1);
+    await control.step(1);
+    expect(tripOf(control.haulers[0])).toMatchObject({
+      kind: 'transfer', phase: 'fetching', staging: true, resource: 'wheat',
+      sourceSiteId: idOf(control.buildings[SOURCE_AT]), destSiteId: idOf(control.buildings[DEST_AT]),
+      plannedAmount: BALANCE.haulCarryCapacity,
+    });
   });
 });

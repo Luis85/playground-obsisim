@@ -603,6 +603,12 @@ describe('the two-way haul instruments', () => {
     const { idle, fetching, outbound, returning, collect, supply, transfer } = r.haulerTicks;
     expect(fetching).toBeGreaterThan(0);
     expect(supply).toBeGreaterThan(0);
+    // The same non-vacuity the two lines above exist for, and the new bucket
+    // needs it MORE than they do: an identity is satisfied just as well by a
+    // column of zeros, so a later change that stopped dispatching transfers in
+    // this fixture would leave the sum below still balancing and the transfer
+    // share silently absent from §4's third question.
+    expect(transfer).toBeGreaterThan(0);
     expect(collect + supply + transfer).toBe(fetching + outbound + returning);
     expect(r.haulerIdleTicks).toBe(idle);
   }, 120000);
@@ -826,12 +832,26 @@ describe('storehouse balance', () => {
     // differs is where the processor's input comes from — the forester next
     // door, or the camp.
     //
-    // It matters because a store site can only ever be FILLED by a building's
-    // output (haul-sites.ts's remainderHome comment names the store-to-store
-    // transfer section 2.13 excludes). Nothing pushes camp stock outward, so a
-    // depot beside a camp-fed processor can never shorten the leg the input
-    // walks; all it does is move the deposit off the camp, which leaves the
-    // hauler's next fetch starting further from the only site holding wood.
+    // THE RATIONALE THAT USED TO STAND HERE WAS REPEALED BY TASK 6. It read
+    // "nothing pushes camp stock outward, so a depot beside a camp-fed
+    // processor can never shorten the leg the input walks" — and a staging
+    // transfer (haul-transfer.ts) is exactly a push of camp stock outward. The
+    // second bound therefore rests on a MEASUREMENT now rather than on an
+    // impossibility, and the measurement went the depot's way even less than
+    // before. Read off this fixture, transfers counted at dispatch:
+    //
+    // - the camp really does stage wood into the depot, so the mechanism the
+    //   old rationale denied is live — but only twice in 600 ticks, because
+    //   `chooseJob` offers a transfer LAST and this run leaves its haulers just
+    //   70 idle ticks out of 1,800 to spend on one.
+    // - the depot intercepts the sawmill's plank output (it is the nearest site
+    //   with room), and 11 drain loads then walk those planks back to the camp.
+    // - 281 of 1,800 hauler-ticks go on transfer trips, and none of them
+    //   shortens the leg the sawmill's wood walks.
+    //
+    // So the placement still does not pay, for a NEW reason: not that nothing
+    // can fill the depot, but that what fills it is worth less than the trips
+    // it costs.
     //
     // Neither bound is reachable by a depot that does nothing: a no-op depot
     // ties both comparisons, which passes the second and fails the first.
@@ -849,11 +869,20 @@ describe('storehouse balance', () => {
     // Beside the chain it buys throughput a player would notice. Measured 230
     // against 204 planks, +13%.
     expect(chainDepot.stages[1].made).toBeGreaterThan(chainPlain.stages[1].made * 1.05);
-    // Beside the camp-fed processor it buys nothing at all — measured 266
-    // against 294, a LOSS of 10%. The bound is stated as "no material gain"
-    // rather than as a loss because the sign flips with hauler count (at four
-    // haulers it is +3%), and the claim section 4 can carry is that this
-    // placement does not pay, not that it always costs.
+    // Beside the camp-fed processor it buys nothing at all — measured 243
+    // against 294, a LOSS of 17%. Both figures moved with Task 6: the control
+    // still reads 294, and the with-depot run fell from the 266 recorded here
+    // before transfers ran.
+    //
+    // The bound stays "no material gain" rather than being tightened onto that
+    // loss, and the reason it is stated that way has changed. It used to be
+    // that the sign flipped with hauler count — +3% at four haulers, as
+    // recorded here — and that is no longer true: re-measured under the live
+    // mechanic, four haulers read 276 against 296, a loss of 7%. The bound is
+    // left where it is because the claim section 4 carries is that this
+    // placement does not pay, and because a bound tightened onto a number this
+    // increment has only just moved would be pinning the transfer mechanic's
+    // current cost rather than the depot's value.
     expect(soloDepot.made).toBeLessThan(soloPlain.made * 1.05);
   }, 300000);
 
@@ -873,10 +902,14 @@ describe('storehouse balance', () => {
       }
       lines.push('');
     }
-    // Whether the depot keeps paying or fills once and stops. Nothing ever
-    // moves goods from a depot back to the camp, and the chain's planks have no
-    // consumer, so a depot beside one silts up with finished goods — after
-    // which it can neither take another deposit nor stage another input.
+    // Whether the depot keeps paying or fills once and stops. Since Task 6 a
+    // drain transfer is the one thing that could empty it, and on THIS chain it
+    // never fires: measured at both 600 and 2,400 ticks the corner depot ends
+    // full at 60 of 60 with ZERO transfer hauler-ticks. The chain's planks have
+    // no consumer, so the depot still silts up with finished goods — after
+    // which it can neither take another deposit nor stage another input — but
+    // that is now a measured property of this fixture rather than something the
+    // engine forbids.
     lines.push('does the depot keep paying — corner chain, 3 haulers', '  ticks  depot  planks  per tick  stored');
     for (const ticks of [600, 1200, 2400]) {
       for (const storehouses of [undefined, [CORNER_DEPOT]]) {

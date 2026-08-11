@@ -740,6 +740,98 @@ describe('reservations', () => {
     expect(colonyTotal(world, 'wood')).toBe(6);
   });
 
+  /**
+   * THE DRAIN'S OCCUPANCY IS NOT THE SAME QUANTITY AS ROOM, and the pair below
+   * is what says so: the same six units returning to the same depot, once with
+   * the depot moved out from under the leg and once with it standing still.
+   * §2.4 states occupancy as what will CERTAINLY be there — presence AT THE
+   * SITE, not existence in the world — so the moved case must not be counted,
+   * and the unmoved one must, or the whole term could be deleted instead.
+   *
+   * The depot is topped up in TWO steps because the case lives on the tick
+   * AFTER the reservation exists. Seeded at 47 from the start, the second
+   * hauler takes the drain on the very tick the first turns for home — it is
+   * processed later in the same tick — and no tick is left on which to move the
+   * depot. At 41 the reservation makes 47, which is 13 free against a floor of
+   * 12 and no drain at all; the last six units arrive with the move.
+   */
+  /** Four tiles past the depot and twenty-five from the camp, so the depot is
+   * the obvious destination and the return leg is three ticks — long enough to
+   * hold a tick for the move and a tick for the consequence. */
+  const PAST_DEPOT = { col: 24, row: 12 };
+  /** Eight tiles up: `legTicks(DEPOT, DEPOT_MOVED)` is 4 against the 3 the
+   * hauler is walking, so a fresh resolution is distinguishable from the old
+   * leg left running. */
+  const DEPOT_MOVED = { col: 20, row: 2 };
+  /** 41 + 6 = 47: 13 free against a floor of 12, so no drain yet. */
+  const BEFORE_MOVE = 41;
+  /** 47 + 6 = 53: 7 free, a drain of 5 — while 47 alone is still 13 free and
+   * produces no drain at all, which is the whole discrimination. */
+  const AFTER_MOVE = 47;
+
+  /** Both cases up to the tick before the depot does or does not move: a
+   * six-unit load walking home to a depot at 41, a second hauler idle beside
+   * it, and the depot topped to 47 behind the load. */
+  const returningToTheDepot = async () => {
+    const fixture = await setup([
+      { defId: 'storehouse', ...DEPOT, stored: { wheat: UNDRAINABLE } },
+      { defId: 'forester', ...PAST_DEPOT, buffer: { wood: 6 } },
+    ], 2);
+    const { buildings, haulers, step, stockpile } = fixture;
+    await step(legTicks(CAMP_TILE, PAST_DEPOT)); // dispatched, one tick short of the producer
+    stockpile.refundAt(siteOf(buildings[0]), 'wheat', BEFORE_MOVE - UNDRAINABLE);
+
+    await step(1); // loaded, and turned for home with the depot's room reserved
+    expect(tripOf(haulers[0])).toMatchObject({
+      phase: 'returning', amount: 6, destSiteId: idOf(buildings[0]), legTicks: legTicks(PAST_DEPOT, DEPOT),
+    });
+    expect(tripOf(haulers[1]).phase).toBe('idle'); // 41 + 6 = 47, still 13 free
+    stockpile.refundAt(siteOf(buildings[0]), 'wheat', AFTER_MOVE - BEFORE_MOVE);
+    return fixture;
+  };
+
+  it('a returning load aimed at a depot that has moved does not drain it', async () => {
+    const { buildings, haulers, step, stockpile } = await returningToTheDepot();
+    const depotId = idOf(buildings[0]);
+    // Physically there is nothing to drain, so only the stale reservation
+    // could make one — which is what puts the assertion on the reservation.
+    expect(stockpile.totalAt(depotId)).toBe(AFTER_MOVE);
+    expect(BALANCE.storehouseCapacity - AFTER_MOVE).toBeGreaterThan(BALANCE.storehouseFreeFloor);
+    buildings[0].getComponent(Position)!.row = DEPOT_MOVED.row; // relocated: same id, new tile
+
+    await step(1);
+    // ROOM still counts it, and that half of the ledger is one edit away from
+    // being lost: over-reserving room costs at worst a load not dispatched.
+    expect(heldAtOf(haulers.map((hauler) => ({ trip: tripOf(hauler) })), stockpile)(depotId)).toBe(AFTER_MOVE + 6);
+    // Occupancy does not, so no drain goes out and no real units leave.
+    expect(tripOf(haulers[1]).phase).toBe('idle');
+
+    // The exclusion lasts exactly as long as the mismatch. The hauler reaches
+    // the vacated tile, re-resolves onto the depot's new one, and the load is
+    // certain again — the drain refused above goes out on that tick.
+    await step(legTicks(PAST_DEPOT, DEPOT) - 1); // the rest of the walk to the tile the depot left
+    expect(tripOf(haulers[0])).toMatchObject({
+      phase: 'returning', destSiteId: depotId, legToRow: DEPOT_MOVED.row, legTicks: legTicks(DEPOT, DEPOT_MOVED),
+    });
+    expect(legTicks(DEPOT, DEPOT_MOVED)).not.toBe(legTicks(PAST_DEPOT, DEPOT)); // a fresh leg, not the old one
+    expect(tripOf(haulers[1])).toMatchObject({ kind: 'transfer', staging: false, sourceSiteId: depotId, plannedAmount: 5 });
+  });
+
+  it('a returning load aimed at a depot that has not moved still drains it', async () => {
+    // The other direction, so the filter above cannot be satisfied by deleting
+    // the term it filters: the same 47 units and the same load in hand, with
+    // nothing relocated, must still read 53 and still send the drain out.
+    const { buildings, haulers, step, stockpile } = await returningToTheDepot();
+    const depotId = idOf(buildings[0]);
+    expect(stockpile.totalAt(depotId)).toBe(AFTER_MOVE);
+    expect(BALANCE.storehouseCapacity - AFTER_MOVE).toBeGreaterThan(BALANCE.storehouseFreeFloor);
+
+    await step(1);
+    expect(tripOf(haulers[1])).toMatchObject({
+      kind: 'transfer', staging: false, phase: 'fetching', sourceSiteId: depotId, destSiteId: CAMP_SITE_ID, plannedAmount: 5,
+    });
+  });
+
   it('a depot holding less than the threshold still produces a candidate, because the whole site is movable', async () => {
     // worthMoving's own comment: a depot holding a single unit could feed a
     // staffed consumer forever if the threshold alone gated it, because one
@@ -1335,8 +1427,10 @@ const tripWith = (fields: Partial<HaulTrip>): HaulTrip => Object.assign(new Haul
 const rowsOf = (trips: readonly HaulTrip[]) => trips.map((trip) => ({
   trip, job: new JobAssignment(null, true), home: new Home(null),
 }));
-const claimsFrom = (trips: readonly HaulTrip[], stockpile: Stockpile) =>
-  claimsOf(rowsOf(trips), stockpile, () => BALANCE.haulCarryCapacity);
+/** The live site list goes in because `inHandAt` asks where a site STANDS, not
+ * merely which id a trip named — every other lookup ignores it. */
+const claimsFrom = (trips: readonly HaulTrip[], stockpile: Stockpile, sites: readonly StoreSite[]) =>
+  claimsOf(rowsOf(trips), stockpile, new Map(sites.map((site) => [site.id, site])), () => BALANCE.haulCarryCapacity);
 
 describe('the room a walking transfer reserves', () => {
   // Pairwise distinct so no assertion below can be satisfied by a field that
@@ -1408,11 +1502,31 @@ describe('what a transfer claims of a site', () => {
       tripWith({ kind: 'transfer', phase: 'fetching', destSiteId: OTHER_DEPOT.id, resource: 'wheat', plannedAmount: 3 }),
       // A supply trip is not a transfer, whatever its destination says.
       tripWith({ kind: 'supply', phase: 'fetching', destSiteId: A_DEPOT.id, resource: 'wheat', plannedAmount: 2 }),
-    ], stockpile);
+    ], stockpile, [A_DEPOT, OTHER_DEPOT]);
     expect(claims.inboundAt(A_DEPOT.id, 'wheat')).toBe(10);
     expect(claims.inboundAt(A_DEPOT.id, 'planks')).toBe(5);
     expect(claims.inboundAt(OTHER_DEPOT.id, 'wheat')).toBe(3);
     expect(claims.inboundAt(A_DEPOT.id, 'bread')).toBe(0);
+  });
+
+  it('inHandAt drops a load whose site has moved off the leg, in either axis, where heldAt keeps it', () => {
+    // The divergence itself, in one place and on both tile comparisons — the
+    // integration fixtures above can only move a depot one way at a time.
+    // A COLLECT, because the returning clause is gated on phase and not on
+    // kind: any load in a hauler's hands lands at `destSiteId`.
+    const stockpile = new Stockpile();
+    stockpile.refundAt(A_DEPOT, 'planks', 30);
+    const carrying = tripWith({
+      kind: 'collect', phase: 'returning', destSiteId: A_DEPOT.id, resource: 'planks', amount: 4,
+      legToCol: A_DEPOT.col, legToRow: A_DEPOT.row,
+    });
+    const inHandWith = (site: StoreSite) => claimsFrom([carrying], stockpile, [site]).inHandAt(A_DEPOT.id);
+    expect(inHandWith(A_DEPOT)).toBe(34); // standing where the leg is aimed
+    expect(inHandWith({ ...A_DEPOT, col: A_DEPOT.col + 1 })).toBe(30);
+    expect(inHandWith({ ...A_DEPOT, row: A_DEPOT.row + 1 })).toBe(30);
+    // And the other half of the pair, unmoved by any of it: room is allowed to
+    // be over-reserved, so `heldAt` counts the same load wherever the site is.
+    expect(heldAtOf(rowsOf([carrying]), stockpile)(A_DEPOT.id)).toBe(34);
   });
 
   it('plannedOutAt counts every fetching trip out of a site, of every kind and resource', () => {
@@ -1429,7 +1543,7 @@ describe('what a transfer claims of a site', () => {
       // Already loaded and walking: its take is out of the ledger, not planned.
       tripWith({ kind: 'supply', phase: 'outbound', sourceSiteId: A_DEPOT.id, resource: 'wheat', amount: 4 }),
       tripWith({ kind: 'transfer', phase: 'fetching', sourceSiteId: OTHER_DEPOT.id, resource: 'wheat', plannedAmount: 3 }),
-    ], stockpile);
+    ], stockpile, [A_DEPOT, OTHER_DEPOT]);
     expect(claims.plannedOutAt(A_DEPOT.id)).toBe(11);
     expect(claims.plannedOutAt(OTHER_DEPOT.id)).toBe(3);
     expect(claims.plannedOutAt(CAMP_SITE_ID)).toBe(0);

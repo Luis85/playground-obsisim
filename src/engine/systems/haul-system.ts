@@ -7,7 +7,7 @@ import { BALANCE } from '../content/balance';
 import { RESOURCE_IDS } from '../content/resources';
 import { Building, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Production, Relocation } from '../components';
 import { PendingChanges, Stockpile } from '../resources';
-import { claimsOf, type Claims, type HaulWorkerRow } from './haul-claims';
+import { arrivesAt, claimsOf, type Claims, type HaulWorkerRow } from './haul-claims';
 import type { DispatchInputs, HaulBuildingRow, StaffedSet } from './haul-dispatch';
 import { chooseJob, storeSitesFrom } from './haul-dispatch';
 import { bankLoad, destinationFor } from './haul-sites';
@@ -289,7 +289,9 @@ function buildingArrival(ctx: TickContext, trip: HaulTrip, capacity: number): vo
  * The comparison is against the TILE this leg was aimed at, not the site id: a
  * storehouse that finishes relocating mid-leg keeps its id and changes its
  * tile, so an id-only test would deposit the load at a depot the hauler never
- * walked to.
+ * walked to. It is `arrivesAt`, the same predicate `inHandAt` filters its
+ * returning term with — one rule asked at both ends of a leg, so a site that
+ * moved cannot be counted as certain by the drain and then refused here.
  *
  * The second exit is a destination that still exists but can no longer take the
  * WHOLE load. Reservation covers every hauler-driven way a site fills and §2.7
@@ -315,7 +317,7 @@ function buildingArrival(ctx: TickContext, trip: HaulTrip, capacity: number): vo
 function depositArrival(ctx: TickContext, trip: HaulTrip): void {
   const at = { col: trip.legToCol, row: trip.legToRow };
   const dest = ctx.siteById.get(trip.destSiteId);
-  const arrived = dest !== undefined && dest.col === at.col && dest.row === at.row;
+  const arrived = arrivesAt(trip, dest);
   const roomLeft = dest === undefined || dest.capacity === null || ctx.claims.heldAt(dest.id) <= dest.capacity;
   if (!arrived || !roomLeft) {
     if (trip.amount === 0) trip.cancel();
@@ -354,8 +356,13 @@ export const HaulSystem = () => createSystem({
     const byId = new Map(buildingRows.map((row) => [row.building.id, row]));
     const workerRows = [...workers.iter()];
     const sites = storeSitesFrom(buildingRows, pending);
+    // Built here rather than inside the context below because the claims need
+    // it too: `inHandAt` drops a returning reservation whose site has moved out
+    // from under it, which is a question about a site's LIVE tile. One map,
+    // read by that claim and by every arrival handler.
+    const siteById = new Map(sites.map((site) => [site.id, site]));
     const capacityOf = (row: HaulWorkerRow) => haulerCapacity(homeTileOf(row.home.buildingId, byId, pending));
-    const claims = claimsOf(workerRows, stockpile, capacityOf);
+    const claims = claimsOf(workerRows, stockpile, siteById, capacityOf);
     // ONE derivation, read by the dispatch filter and by the arrival recheck.
     // They are the same rule seen from two ends of a leg, so a second copy of
     // this expression is how the recheck stops matching what it rechecks.
@@ -364,7 +371,7 @@ export const HaulSystem = () => createSystem({
       stockpile,
       byId,
       sites,
-      siteById: new Map(sites.map((site) => [site.id, site])),
+      siteById,
       staffed,
       claims,
       demolished: pending.demolished,

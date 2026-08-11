@@ -100,10 +100,14 @@ function begunTransfer(candidate: TransferCandidate): HaulTrip {
 function carryingToA(resource: ResourceId, amount: number): HaulTrip {
   const trip = new HaulTrip();
   trip.kind = 'transfer';
-  trip.phase = 'returning';
   trip.destSiteId = A_ID;
   trip.resource = resource;
   trip.amount = amount;
+  // The LEG, not the phase alone, and through `startLeg` for the reason
+  // `handleMoveBuilding` uses it: `inHandAt` counts a load in hands only while
+  // the site still stands where the leg is aimed (`arrivesAt`), so a returning
+  // trip with no leg on it is aimed at tile (0, 0) and counts nowhere.
+  trip.startLeg('returning', NEAR_A, A_TILE, BALANCE.haulTilesPerTick);
   return trip;
 }
 
@@ -117,6 +121,7 @@ function colonyOf(sites: readonly StoreSite[], buildings: readonly HaulBuildingR
   const claims = () => claimsOf(
     trips.map((trip) => ({ trip, job: new JobAssignment(null, true), home: new Home(null) })),
     stockpile,
+    new Map(sites.map((site) => [site.id, site])),
     () => CAPACITY,
   );
   const demand = () => siteDemandFrom(sites, buildings, staffed);

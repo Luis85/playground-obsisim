@@ -1,4 +1,5 @@
 import type { ResourceId } from '../../shared/content-types';
+import type { StoreSite } from '../../shared/haul';
 import { HaulTrip, Home, JobAssignment } from '../components';
 import type { Stockpile } from '../resources';
 
@@ -49,9 +50,11 @@ export interface Claims {
    * before resolving a new destination, so nothing counts itself twice. */
   heldAt(siteId: number): number;
   /** A site's occupancy counting only what will CERTAINLY be there: physical
-   * stock plus loads already in a hauler's HANDS — `heldAt` minus its one
-   * intention term. NOT a tidier `heldAt`: the drain needs this quantity and
-   * staging room needs the other; `haul-transfer.ts` has the reasoning. */
+   * stock, plus the loads already in a hauler's HANDS that are still walking
+   * into where this site STANDS — `heldAt` minus its intention term and minus
+   * any reservation the site has since moved out from under. NOT a tidier
+   * `heldAt`: the drain needs this quantity and staging room needs the other;
+   * `haul-transfer.ts` has the reasoning and `arrivesAt` has the divergence. */
   inHandAt(siteId: number): number;
   /** A site's stock of one resource, less what fetching haulers have already
    * planned to take out of it. */
@@ -114,8 +117,16 @@ export function heldAtOf(workers: readonly TripRow[], stockpile: Stockpile): (si
  * reserving room at the camp — harmless, because the camp is unbounded, and
  * therefore exactly the kind of wrong that survives to become load-bearing.
  *
+ * THE SECOND CLAUSE IS GATED ON KIND; THE FIRST IS GATED ON PHASE ALONE, and
+ * that asymmetry is what gives everything below its reach. A load in a hauler's
+ * hands lands at `destSiteId` whatever kind of trip carried it, so a collect or
+ * a supply walking wheat home to a depot freezes exactly the leg a transfer's
+ * return leg freezes. None of what follows is transfer-only.
+ *
  * A DESTINATION THAT RELOCATES MID-RETURN LEAVES THIS RESERVATION AIMED AT A
- * SITE THE HAULER WILL NOT REACH, and that is bought rather than missed.
+ * SITE THE HAULER WILL NOT REACH. The two readers that only SIZE a dispatch buy
+ * that; `inHandAt`, which acts on its answer, does not — `arrivesAt` below is
+ * where the two part company.
  *
  * The window is exact. `handleMoveBuilding` deliberately leaves a `returning`
  * trip alone, so its leg stays frozen on the OLD tile while the site keeps its
@@ -130,35 +141,44 @@ export function heldAtOf(workers: readonly TripRow[], stockpile: Stockpile): (si
  * to the hauler reaching the vacated tile and re-resolving. Usually nonempty: a
  * building is carried at half a hauler's walking speed.
  *
- * Every error it causes points ONE WAY — the site reads FULLER than it will be.
- * `heldAt` over-reserves room, which §2.4 buys in as many words: the worst case
- * is a load not dispatched. `inboundAt` over-states what is walking in, so a
- * deficit is under-stated and a staging load is refused for those few ticks —
- * the same safe direction `SiteLedger.deficit`'s own clamp already chose, and
- * no consumer starves for it, since supply serves a building from any site and
- * never consults site demand. `inHandAt` over-states occupancy, so `drainNeed`
- * can fire a drain that would not otherwise exist (47 of 60 against a floor of
- * 12 reads 53 and drains 5). That last one ACTS on the stale intention, and it
- * is still the trade this engine makes: the units are carried to the camp,
- * conserved and still spendable, once — `plannedOutAt` nets the next hauler's
- * answer — where the intention `inHandAt` refuses to count is the one that may
- * bring NOTHING. Staleness here is of address, not of existence.
+ * FOR THE TWO SIZING READERS the error points ONE WAY — the site reads FULLER
+ * than it will be — and both buy it. `heldAt` over-reserves room, which §2.4
+ * buys in as many words: the worst case is a load not dispatched. `inboundAt`
+ * over-states what is walking in, so a deficit is under-stated and a staging
+ * load is refused for those few ticks — the same safe direction
+ * `SiteLedger.deficit`'s own clamp already chose, and no consumer starves for
+ * it, since supply serves a building from any site and never consults site
+ * demand. Neither can read a site EMPTIER: this only ever adds, and only at the
+ * one id a trip names.
  *
- * Nothing can read a site EMPTIER: this only ever adds, and only at the one id
- * a trip names. Nothing can lose the load either — `depositArrival` compares
- * the frozen tile, turns the hauler for a live site, and it CARRIES the load
- * there (`a depot that moves mid-return is walked to`, and `a returning hauler
- * re-resolving a moved depot does not count its own reservation`, both in
- * haul-dispatch.test.ts).
+ * `inHandAt` REFUSES IT, and that is the whole of the divergence `arrivesAt`
+ * expresses. §2.4 states its quantity as what will CERTAINLY BE THERE, which is
+ * presence AT THE SITE rather than existence in the world, and a load whose
+ * destination has moved will certainly not be there — it fails that test
+ * exactly as a fetch that brings nothing does. Counting it is not an analogue
+ * of the case `ledgerOf` rejects but the same case: a depot at 47 of 60 has
+ * `drainNeed` 0 — 13 free against a floor of 12 — reads 53 with a stale six,
+ * and drains 5 real units that never needed to move. `plannedOutAt` does not
+ * undo that. It counts the spurious drain itself, so it stops a second one
+ * stacking and nothing more; the units that left come back only through staging
+ * against a real demand. The failure is committed rather than self-correcting,
+ * which is the side of this engine's own rule that refuses.
  *
- * The fix a reader will reach for — drop a reservation whose frozen leg tile no
- * longer matches the live site — pays for that in the one direction that is not
- * free. A depot moved away and straight back (`does not deposit into a
+ * Nothing can lose the load either way — `depositArrival` asks `arrivesAt` of
+ * the same frozen tile, turns the hauler for a live site, and it CARRIES the
+ * load there (`a depot that moves mid-return is walked to`, and `a returning
+ * hauler re-resolving a moved depot does not count its own reservation`, both
+ * in haul-dispatch.test.ts).
+ *
+ * EXTENDING THAT FILTER TO `heldAt` would pay for room in the one direction
+ * that is not free, which is why the two now differ rather than both being
+ * narrowed. A depot moved away and straight back (`does not deposit into a
  * destination that is in transit`) would have this trip's room released
  * mid-leg, promised to another hauler, and then taken from the load it was held
  * for when the tiles match again on arrival: exactly the double-booking the
- * reservation exists to prevent. Over-reserving costs a trip; under-reserving
- * costs the trip already promised.
+ * reservation exists to prevent. Over-reserving room costs a trip;
+ * under-reserving costs the trip already promised. Occupancy is not room, and
+ * there removing is the direction §2.4 mandates.
  */
 function reservedAt(trip: HaulTrip, siteId: number): number {
   if (trip.destSiteId !== siteId) return 0;
@@ -167,8 +187,38 @@ function reservedAt(trip: HaulTrip, siteId: number): number {
   return 0;
 }
 
+/**
+ * Does the leg this hauler is walking END where that site stands RIGHT NOW?
+ *
+ * A leg is frozen on the tile it was aimed at when it began, and a storehouse
+ * that relocates KEEPS ITS ID and changes its tile, so an id can answer "which
+ * site was this aimed at" and only a tile can answer "is that where it is".
+ * `depositArrival` asks precisely this on arrival and calls this same function:
+ * one rule, asked once while sizing a dispatch and again when the hauler gets
+ * there, so a relocation cannot be visible to one end of a leg and not the
+ * other.
+ *
+ * THIS IS WHERE `inHandAt` AND `heldAt` PART COMPANY OVER THE SAME TRIP, and
+ * the divergence is the content of that pair rather than an inconsistency in
+ * it. `heldAt` asks how full a site MIGHT be and keeps counting the reservation
+ * whatever the tiles say, because over-reserving room costs at worst a load not
+ * dispatched (§2.4). `inHandAt` asks what will CERTAINLY be there, and the
+ * drain acts on its answer by REMOVING REAL GOODS, so a load that will
+ * certainly not arrive may not be in it. `reservedAt` above holds the window
+ * this opens in and the argument for each side of it.
+ *
+ * A GUARD ON THE SITE, because "this leg ends where that site stands" and "that
+ * site is still on the list" are one fact and not two: a destination that has
+ * gone entirely is the case `depositArrival` has always had to carry the load
+ * out of, and it fails this the same way a moved one does.
+ */
+export function arrivesAt(trip: HaulTrip, site: StoreSite | undefined): site is StoreSite {
+  return site !== undefined && site.col === trip.legToCol && site.row === trip.legToRow;
+}
+
 export function claimsOf(
-  workers: readonly HaulWorkerRow[], stockpile: Stockpile, capacityOf: (row: HaulWorkerRow) => number,
+  workers: readonly HaulWorkerRow[], stockpile: Stockpile, siteById: ReadonlyMap<number, StoreSite>,
+  capacityOf: (row: HaulWorkerRow) => number,
 ): Claims {
   // ONE traversal expression behind both outgoing claims, asked two different
   // questions: `unclaimedAt` passes a resource filter, `plannedOutAt` passes
@@ -193,10 +243,17 @@ export function claimsOf(
         : 0
     )),
     heldAt: heldAtOf(workers, stockpile),
-    // `reservedAt` again, its intention clause shut off by the phase test
-    // rather than by a second copy of its gate that could drift from it.
-    inHandAt: (siteId) => stockpile.totalAt(siteId)
-      + sumOverTrips(workers, (trip) => (trip.phase === 'returning' ? reservedAt(trip, siteId) : 0)),
+    // `reservedAt` again — the same traversal NARROWED, never a second copy of
+    // its gate that could drift from it. Two filters rather than one: the phase
+    // test shuts off its intention clause, and `arrivesAt` drops a returning
+    // load whose site has MOVED OUT FROM UNDER IT. The second filter is the one
+    // place this answer and `heldAt`'s differ about the same trip, and that is
+    // deliberate — room may be over-reserved for free, occupancy may not,
+    // because the drain spends this answer in real goods. The window, and why
+    // each side is the safe direction for its own reader, are at `reservedAt`.
+    inHandAt: (siteId) => stockpile.totalAt(siteId) + sumOverTrips(workers, (trip) => (
+      trip.phase === 'returning' && arrivesAt(trip, siteById.get(siteId)) ? reservedAt(trip, siteId) : 0
+    )),
     unclaimedAt: (siteId, resource) => stockpile.getAt(siteId, resource) - plannedOut(siteId, (trip) => trip.resource === resource),
     // `reservedAt` again, narrowed to ONE resource: what is walking toward a
     // site is exactly the per-resource slice of the reservation term `heldAt`

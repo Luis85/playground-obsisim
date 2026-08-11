@@ -113,6 +113,52 @@ export function heldAtOf(workers: readonly TripRow[], stockpile: Stockpile): (si
  * return), so an ungated clause would have every supply fetch in the colony
  * reserving room at the camp — harmless, because the camp is unbounded, and
  * therefore exactly the kind of wrong that survives to become load-bearing.
+ *
+ * A DESTINATION THAT RELOCATES MID-RETURN LEAVES THIS RESERVATION AIMED AT A
+ * SITE THE HAULER WILL NOT REACH, and that is bought rather than missed.
+ *
+ * The window is exact. `handleMoveBuilding` deliberately leaves a `returning`
+ * trip alone, so its leg stays frozen on the OLD tile while the site keeps its
+ * id and moves. `storeSitesOf` drops the site for the countdown, and
+ * ProductionSystem decrements that countdown BEFORE HaulSystem reads it, so a
+ * move costing R ticks is off the site list for R - 1 of them — for a one-tile
+ * move, none at all (ProductionSystem's worked-through-zero comment). Off the
+ * list is not merely unrouted-to: every reader reaches these lookups through
+ * the site LIST, so an absent site's occupancy cannot be asked at all. With L
+ * ticks left on the return leg when the move tick ends, the reservation is
+ * therefore observable for L - (R - 1) ticks — from the site rejoining the list
+ * to the hauler reaching the vacated tile and re-resolving. Usually nonempty: a
+ * building is carried at half a hauler's walking speed.
+ *
+ * Every error it causes points ONE WAY — the site reads FULLER than it will be.
+ * `heldAt` over-reserves room, which §2.4 buys in as many words: the worst case
+ * is a load not dispatched. `inboundAt` over-states what is walking in, so a
+ * deficit is under-stated and a staging load is refused for those few ticks —
+ * the same safe direction `SiteLedger.deficit`'s own clamp already chose, and
+ * no consumer starves for it, since supply serves a building from any site and
+ * never consults site demand. `inHandAt` over-states occupancy, so `drainNeed`
+ * can fire a drain that would not otherwise exist (47 of 60 against a floor of
+ * 12 reads 53 and drains 5). That last one ACTS on the stale intention, and it
+ * is still the trade this engine makes: the units are carried to the camp,
+ * conserved and still spendable, once — `plannedOutAt` nets the next hauler's
+ * answer — where the intention `inHandAt` refuses to count is the one that may
+ * bring NOTHING. Staleness here is of address, not of existence.
+ *
+ * Nothing can read a site EMPTIER: this only ever adds, and only at the one id
+ * a trip names. Nothing can lose the load either — `depositArrival` compares
+ * the frozen tile, turns the hauler for a live site, and it CARRIES the load
+ * there (`a depot that moves mid-return is walked to`, and `a returning hauler
+ * re-resolving a moved depot does not count its own reservation`, both in
+ * haul-dispatch.test.ts).
+ *
+ * The fix a reader will reach for — drop a reservation whose frozen leg tile no
+ * longer matches the live site — pays for that in the one direction that is not
+ * free. A depot moved away and straight back (`does not deposit into a
+ * destination that is in transit`) would have this trip's room released
+ * mid-leg, promised to another hauler, and then taken from the load it was held
+ * for when the tiles match again on arrival: exactly the double-booking the
+ * reservation exists to prevent. Over-reserving costs a trip; under-reserving
+ * costs the trip already promised.
  */
 function reservedAt(trip: HaulTrip, siteId: number): number {
   if (trip.destSiteId !== siteId) return 0;

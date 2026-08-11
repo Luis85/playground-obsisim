@@ -6,10 +6,12 @@ import type { TileRef } from '../../../src/shared/placement';
 import { lifespanFor } from '../../../src/shared/population';
 import { BALANCE } from '../../../src/engine/content/balance';
 import { Age, Building, Colonist, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Relocation } from '../../../src/engine/components';
-import { IdCounter, Stockpile } from '../../../src/engine/resources';
+import { IdCounter, SnapshotStore, Stockpile } from '../../../src/engine/resources';
 import { CommandSystem } from '../../../src/engine/systems/command-system';
 import { PopulationSystem } from '../../../src/engine/systems/population-system';
 import { ProductionSystem } from '../../../src/engine/systems/production-system';
+import { SnapshotSystem } from '../../../src/engine/systems/snapshot-system';
+import { StatsSystem } from '../../../src/engine/systems/stats-system';
 import { HaulSystem, haulerCapacity } from '../../../src/engine/systems/haul-system';
 import { claimsOf, heldAtOf, holdsNoneOf } from '../../../src/engine/systems/haul-dispatch';
 import { campAdjacentFreeTile, colonyTotal, enqueue } from '../fixtures';
@@ -1785,6 +1787,160 @@ describe('the transfer trip', () => {
       sourceSiteId: idOf(control.buildings[SOURCE_AT]), destSiteId: idOf(control.buildings[DEST_AT]),
       plannedAmount: BALANCE.haulCarryCapacity,
     });
+  });
+});
+
+/**
+ * A TRANSFER IS NOT A DELIVERY, AND IT CONSUMES NOTHING (§2.8).
+ *
+ * Both facts hold by construction rather than by a branch written for them: a
+ * transfer's load never came out of a building's output buffer, so `pickedUp`
+ * is false for its whole life and `bankLoad` routes it to `refundAt`; and
+ * `recordConsumed` fires only from `unload`, a leg a transfer never walks.
+ * Correctness that holds by construction is the kind that rots silently, which
+ * is the whole reason these two cases exist.
+ *
+ * EACH CASE RUNS THE SAME FIXTURE TWICE, and the second run is what makes the
+ * first one mean anything. "The transfer did not move Delivered/t" passes just
+ * as well with `addAt` deleted outright — the exact failure increment 5 shipped
+ * and increment 7 caught — so each case pairs it with a run in which the SAME
+ * amount of the SAME resource reaches the SAME site by the path that IS a
+ * delivery (or, for consumption, by the path that IS a consumption). Only the
+ * pair can tell "transfers are excluded" from "nothing moves the column".
+ *
+ * ONE LAYOUT SERVES ALL FOUR RUNS, and the runs differ only in where the wheat
+ * starts and whether the mill has room for any:
+ *
+ * - wheat standing in STAGE_SOURCE's ledger and a FULL mill tray -> the only
+ *   wheat job in the world is a transfer (a full tray is what `needOf` refuses,
+ *   while `demandSourcesOf` still counts the mill, so the demand survives).
+ * - wheat standing in STAGE_FARM's output buffer -> a collect, which banks at
+ *   STAGE_DEST because that is the nearest site to the farm.
+ * - wheat in the ledger and an EMPTY mill tray -> a supply, which unloads into
+ *   the tray and records the consumption.
+ *
+ * THE FORESTER IS IN EVERY RUN, and it is what stops the zero assertions being
+ * vacuous from the inside: it puts `FLOW_WOOD` units through `addAt` in each of
+ * the four runs, so a run reading `deliveredRate === 0` for wheat is reading it
+ * in a world where the delivery column is demonstrably alive. Its 3 is
+ * deliberately not the wheat load's 4, so the wheat column cannot pass by
+ * reading the wood column either — and in a supply run the wheat row carries a
+ * non-zero `consumptionRate` against a zero `deliveredRate`, which is the pair
+ * that stops the two columns being swapped for each other.
+ */
+const FLOW_LOAD = BALANCE.minTransferUnits;
+/** The forester's backlog: distinct from FLOW_LOAD on purpose, so no column
+ * here can read a neighbouring resource's value and still pass. */
+const FLOW_WOOD = 3;
+/**
+ * Ticks per run — the same number for every run, so `deliveredRate` and
+ * `consumptionRate` (a `BALANCE.statsWindowTicks`-wide mean) share one divisor
+ * across the pair and the two runs really are comparable. Comfortably past the
+ * longest trip any run walks (the farm collect, at 1 + 12 + 2) and comfortably
+ * inside the stats window, so no frame has yet been shifted off the back.
+ */
+const FLOW_RUN = 24;
+const FLOW_SYSTEMS = [HaulSystem, StatsSystem, SnapshotSystem];
+/** Indices into `flowSpecs`, named for the same reason `SOURCE_AT` is. */
+const FLOW_SOURCE_AT = 0;
+const FLOW_DEST_AT = 1;
+const FLOW_MILL_AT = 2;
+
+interface FlowFixture {
+  /** Wheat standing in STAGE_SOURCE's ledger — the transfer and supply runs. */
+  depotWheat?: number;
+  /** Wheat waiting in STAGE_FARM's out-tray — the collect run. */
+  farmWheat?: number;
+  /** The mill's in-tray. Full removes the supply candidate and leaves the
+   * transfer; empty is what lets a supply run at all. */
+  millTray?: number;
+}
+
+function flowSpecs({ depotWheat = 0, farmWheat = 0, millTray = BALANCE.inputBufferCap }: FlowFixture): Spec[] {
+  return [
+    { defId: 'storehouse', ...STAGE_SOURCE, stored: { wheat: depotWheat } },
+    { defId: 'storehouse', ...STAGE_DEST },
+    { defId: 'mill', ...STAGE_MILL, inputBuffer: { wheat: millTray }, crew: 1 },
+    { defId: 'farm', ...STAGE_FARM, buffer: { wheat: farmWheat } },
+    { defId: 'forester', ...FORESTER, buffer: { wood: FLOW_WOOD } },
+  ];
+}
+
+/** The three flow columns for one resource, exactly as the Economy view reads
+ * them off the published snapshot — not off `Stockpile`'s per-tick maps, which
+ * `StatsSystem` has already cleared by the time a test could look. */
+function flowsOf(world: IRuntimeWorld, id: ResourceId) {
+  const { deliveredRate, consumptionRate, madeRate } = world.getResource(SnapshotStore).latest!.stockpile[id];
+  return { deliveredRate, consumptionRate, madeRate };
+}
+
+describe('what a transfer does to the flow ledger', () => {
+  it('a transfer does not move Delivered/t, and a collect of the same size does', async () => {
+    // Run one: FLOW_LOAD units of wheat reach STAGE_DEST carried by a TRANSFER.
+    const moved = await setup(flowSpecs({ depotWheat: FLOW_LOAD }), 2, { systems: FLOW_SYSTEMS });
+    const movedDest = idOf(moved.buildings[FLOW_DEST_AT]);
+    await moved.step(1);
+    // The fixture's premise, stated rather than assumed: the wheat job really
+    // is a transfer, and the wood job beside it really is a delivery.
+    expect(moved.haulers.map((h) => tripOf(h).kind).sort()).toEqual(['collect', 'transfer']);
+
+    await moved.step(FLOW_RUN - 1);
+    // The goods DID arrive — so the zero below is "banked without being
+    // counted", not "nothing happened".
+    expect(moved.stockpile.getAt(movedDest, 'wheat')).toBe(FLOW_LOAD);
+    expect(flowsOf(moved.world, 'wheat')).toEqual({ deliveredRate: 0, consumptionRate: 0, madeRate: 0 });
+    // ...and `addAt` is demonstrably alive IN THIS RUN, at a rate the wheat row
+    // cannot have read: 3 units against wheat's 4.
+    expect(flowsOf(moved.world, 'wood').deliveredRate).toBeCloseTo(FLOW_WOOD / FLOW_RUN);
+    expect(FLOW_WOOD).not.toBe(FLOW_LOAD);
+
+    // Run two: the same layout, the same FLOW_LOAD units of wheat, the same
+    // destination site and the same number of ticks — but out of an output
+    // buffer, which is what makes it a delivery.
+    const collected = await setup(flowSpecs({ farmWheat: FLOW_LOAD }), 2, { systems: FLOW_SYSTEMS });
+    const collectedDest = idOf(collected.buildings[FLOW_DEST_AT]);
+    await collected.step(1);
+    expect(collected.haulers.map((h) => tripOf(h).kind)).toEqual(['collect', 'collect']);
+
+    await collected.step(FLOW_RUN - 1);
+    expect(collected.stockpile.getAt(collectedDest, 'wheat')).toBe(FLOW_LOAD); // same site, same amount
+    expect(flowsOf(collected.world, 'wheat').deliveredRate).toBeCloseTo(FLOW_LOAD / FLOW_RUN);
+    // And the OTHER two columns did not move with it, so the assertion above
+    // cannot be satisfied by a Delivered column wired to either neighbour.
+    expect(flowsOf(collected.world, 'wheat')).toMatchObject({ consumptionRate: 0, madeRate: 0 });
+    expect(flowsOf(collected.world, 'wood').deliveredRate).toBeCloseTo(FLOW_WOOD / FLOW_RUN);
+  });
+
+  it('a transfer records no consumption', async () => {
+    // `recordConsumed` fires only from `unload`, and a transfer never reaches
+    // it — there is no `outbound` leg and no building to unload into.
+    const moved = await setup(flowSpecs({ depotWheat: FLOW_LOAD }), 2, { systems: FLOW_SYSTEMS });
+    const movedDest = idOf(moved.buildings[FLOW_DEST_AT]);
+    await moved.step(1);
+    expect(moved.haulers.map((h) => tripOf(h).kind).sort()).toEqual(['collect', 'transfer']);
+
+    await moved.step(FLOW_RUN - 1);
+    expect(moved.stockpile.getAt(movedDest, 'wheat')).toBe(FLOW_LOAD); // the trip completed
+    expect(flowsOf(moved.world, 'wheat').consumptionRate).toBe(0);
+
+    // The same layout with the mill's tray EMPTY: the same FLOW_LOAD units come
+    // out of the same depot on the same tick, and this time a consuming path
+    // DOES fire — which is what makes the zero above a discrimination rather
+    // than a fixture in which nothing could ever have been consumed.
+    const supplied = await setup(flowSpecs({ depotWheat: FLOW_LOAD, millTray: 0 }), 2, { systems: FLOW_SYSTEMS });
+    await supplied.step(1);
+    expect(supplied.haulers.map((h) => tripOf(h).kind).sort()).toEqual(['collect', 'supply']);
+
+    await supplied.step(FLOW_RUN - 1);
+    expect(inputOf(supplied.buildings[FLOW_MILL_AT]).amounts.get('wheat')).toBe(FLOW_LOAD);
+    expect(flowsOf(supplied.world, 'wheat').consumptionRate).toBeCloseTo(FLOW_LOAD / FLOW_RUN);
+    // The mirror of the delivery case: here the wheat row carries consumption
+    // and NO delivery, so neither column can be reading the other.
+    expect(flowsOf(supplied.world, 'wheat')).toMatchObject({ deliveredRate: 0, madeRate: 0 });
+    expect(flowsOf(supplied.world, 'wood').deliveredRate).toBeCloseTo(FLOW_WOOD / FLOW_RUN);
+    // Nothing was banked at the destination either — the load went INTO the
+    // building, which is exactly what a transfer's never does.
+    expect(supplied.stockpile.getAt(idOf(supplied.buildings[FLOW_SOURCE_AT]), 'wheat')).toBe(0);
   });
 });
 

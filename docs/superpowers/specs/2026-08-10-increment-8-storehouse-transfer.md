@@ -1992,7 +1992,8 @@ measured, recorded in §4.2 point 6, and left alone. The successor is a retune
 task that re-takes the crossover sweep, the population curve and the stress
 colony at 24 before moving anything — the sweep here is one fixture family and
 one hauler count, which is enough to raise the question and not enough to answer
-it.
+it. **`OBS-8-05` carries it**, with the three unre-taken measurements named and
+the reason a benefit-only sweep will keep recommending 24.
 
 **Where a constant turned out not to matter.** `siteStagingTarget` moves no
 fixture's output across 6 / 12 / 24. The honest description of the staging half
@@ -2002,6 +2003,14 @@ processor, 4–6 on the staged chain, against 145 drains on the corner chain
 alone. The mechanic that pays is the drain. That is not what §1.1 predicted —
 §1.1's argument for a depot is staging goods toward a consumer — and it is
 recorded here as a second disagreement with §1 rather than as a detail.
+
+**`OBS-8-06` carries it**, and carries the judgement this section is not the
+place to take: the honest options include *deleting* the staging half, along with
+`siteDemandOf`, `inboundAt`, `siteStagingTarget` and half of §2.4. The issue
+argues that case is not yet made — every fixture here puts the camp within a few
+tiles of everything that consumes, so the leg staging exists to shorten is short
+in all of them — and that the fixture staging was designed for must be built
+before the mechanic is judged on fixtures built for the drain.
 
 ### 4.4 OBS-7-02, answered by measurement
 

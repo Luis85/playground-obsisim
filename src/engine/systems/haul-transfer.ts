@@ -168,18 +168,29 @@ function ledgerOf(claims: Claims, demand: ReadonlyMap<number, ReadonlyMap<Resour
   };
 }
 
+/** The floor a drain exempt from `minTransferUnits` still has to clear: a trip
+ * that moves nothing is not a trip. NOT a balance knob — it is the arithmetic
+ * fact that `movable` must be positive, which the threshold used to supply for
+ * free. See `drainFrom` for when it is used instead of the threshold. */
+const ANY_UNITS = 1;
+
 /**
  * The threshold both classes are gated on: do not walk thirteen tiles to move
  * three units. There is deliberately NO "or it is everything the site holds"
  * escape hatch here, unlike `worthMoving` — that clause exists so a lone unit
  * at a depot can still reach a consumer, and staging keeps that route open
- * through the ordinary supply job. A tail too small to transfer is not
- * stranded; it is left where it is, and supply can still fetch it.
+ * through the ordinary supply job. A tail too small to STAGE is not stranded;
+ * it is left where it is, and supply can still fetch it.
+ *
+ * That argument is about staging, and `minUnits` is a parameter rather than the
+ * constant because it is FALSE of a drain — `drainFrom` is the one caller that
+ * lowers it, and the reasoning lives there beside the term it turns on.
  */
 function candidateOf(
   source: StoreSite, dest: StoreSite, resource: ResourceId, movable: number, staging: boolean,
+  minUnits: number = BALANCE.minTransferUnits,
 ): TransferCandidate | null {
-  if (movable < BALANCE.minTransferUnits) return null;
+  if (movable < minUnits) return null;
   return {
     sourceSiteId: source.id, sourceCol: source.col, sourceRow: source.row,
     destSiteId: dest.id, destCol: dest.col, destRow: dest.row,
@@ -283,7 +294,41 @@ function drainFrom(
   const resource = drainResource(source, ledger);
   if (dest === undefined || resource === null) return;
   const movable = Math.min(capacity, ledger.surplus(source.id, resource), need);
-  const candidate = candidateOf(source, dest, resource, movable, false);
+  // THE DRAIN'S ONE EXEMPTION FROM `minTransferUnits`, and it is an exemption
+  // rather than a retune of the constant: the question is which candidates the
+  // gate applies to, not what the number is.
+  //
+  // A drain does not buy a delivery, it buys ROOM. `candidateOf`'s argument
+  // above — "a tail too small to move is not stranded, supply can still fetch
+  // it" — is staging's escape and is no escape here: by construction this stock
+  // sits ABOVE every nearby building's demand, so no supply trip wants it, and
+  // no other rule restores the headroom. What a refused drain strands is not
+  // the three units; it is the site.
+  //
+  // `movable < need` IS THE EXEMPTION, and the discrimination is the whole
+  // point. `movable = min(capacity, surplus, need)`, so `movable < need` says
+  // the site is already giving everything it can spare and the floor is STILL
+  // not restored. That is the four-input depot: 15 each of four resources in 60
+  // units of capacity against a demand of 12 each, four surpluses of 3, not one
+  // of them reaching 4 — saturated for the rest of the game under a flat gate,
+  // refusing every short-hop collect deposit, which is increment 7's §4.3
+  // defect arriving through a third door.
+  //
+  // `movable === need` is the opposite situation and stays refused. There the
+  // trip FINISHES the job, so a sub-threshold `movable` means the site is
+  // within three units of its floor: at least `storehouseFreeFloor -
+  // minTransferUnits + 1` free units, nine of them, more than a hauler carries.
+  // Nothing is silting up, and walking three units to the camp is exactly the
+  // trivial trip the threshold exists to refuse. Nor can that refusal become
+  // permanent — fill the site further and `need` rises past its surplus, at
+  // which point the clause above fires.
+  //
+  // `capacity` cannot reach this: at 6 against a threshold of 4, a `movable`
+  // that term binds clears the gate unaided. Surplus is the only term that can
+  // bind below the threshold, which is what makes the exemption the SITE doing
+  // the best it can rather than the hauler.
+  const minUnits = movable < need ? ANY_UNITS : BALANCE.minTransferUnits;
+  const candidate = candidateOf(source, dest, resource, movable, false, minUnits);
   if (candidate !== null) out.push(candidate);
 }
 

@@ -453,7 +453,10 @@ The test to apply to any term added later: *if ten idle haulers were dispatched
 on the same tick, would this term have stopped the tenth?* If it is computed
 from physical state, it would not.
 
-Two candidate classes, in this priority order.
+Two candidate classes. The numbering below is the **ranking order within one
+candidate list** — `compareTransferCandidates`'s first term — and **not** the
+order the two classes are offered at dispatch, which is the opposite way round:
+§2.6 offers a drain *ahead* of collect and staging *behind* it.
 
 **1. Staging (pull).** Source `S`, destination `D`, resource `r`, where
 `D.deficit(r) > 0` and `S.surplus(r) > 0` and `S ≠ D`.
@@ -644,14 +647,60 @@ question, not an assertion here.
 
 **Both classes are additionally gated on `BALANCE.minTransferUnits`**, the
 `minSupplyUnits` precedent: do not walk thirteen tiles to move three units.
-Deliberately a **separate and larger** constant than `minSupplyUnits`, because a
-supply trip serves a building that is blocked right now and a transfer serves
-one that might be later — the speculative job should have the stricter
-threshold. There is **no "or it is everything the site holds" escape hatch**
+Deliberately a **separate and larger** constant than `minSupplyUnits` — and that
+argument is **staging's**, not transfer's as a whole: a supply trip serves a
+building that is blocked right now and a *staging* transfer serves one that
+might be blocked later, so the speculative job takes the stricter threshold. It
+does not extend to a drain, which §2.6 now offers *ahead* of collect precisely
+because something is waiting for it. The constant's size remains staging's
+question; the exemption below is a question about which candidates the gate
+applies to, and it does not move the number.
+
+For staging there is **no "or it is everything the site holds" escape hatch**
 here, unlike `worthMoving`: that clause exists so a lone unit at a depot can
 still reach a consumer that would otherwise never see it, and staging keeps that
-route open through the ordinary supply job. A tail too small to transfer is not
+route open through the ordinary supply job. A tail too small to stage is not
 stranded; it is simply left where it is, and supply can still fetch it.
+
+**A drain is exempt from the threshold exactly when `movable < drainNeed(S)`,
+and the exemption is necessary because a drain buys room rather than a
+delivery.** "Supply can still fetch it" is staging's escape and is no escape
+here: by construction a drainable holding sits *above* every nearby building's
+demand, so no supply candidate exists for it either. What a refused drain
+strands is not the units; it is the site's headroom, and no other rule restores
+it.
+
+Without the exemption a saturated site whose surplus is *split* across several
+resources can never drain, because the drain picks **one** resource. Four
+staffed consumers of four different inputs nearest one 60-unit depot make its
+demand `4 × 12 = 48`; the depot holds 15 of each of the four (60 of 60); every
+surplus is 3, none reaches 4, and the depot is saturated for the rest of the
+game — it can neither accept a collect deposit nor stage anything. That is §4.3
+of increment 7 word for word, arriving through a third door, and it became
+reachable only when §2.6's reversal let a drain run on a busy chain at all.
+§2.4's own argument for the demand cap is that "the drain can always restore
+[the floor]"; here it could not.
+
+**`movable < drainNeed(S)` is the whole test, and the discrimination is the
+point.** `movable = min(haulerCapacity, S.surplus(r), drainNeed(S))`, so
+`movable < drainNeed(S)` says the site is *already giving everything it can
+spare* and the floor is still not restored — the site doing the best it can, and
+refusing it means refusing forever. `movable = drainNeed(S)` is the opposite
+situation: the trip **finishes the job**, so a sub-threshold `movable` means the
+site is within `minTransferUnits − 1` of its floor and therefore has at least
+`storehouseFreeFloor − minTransferUnits + 1` = **9** free units — more than a
+hauler carries, so every short-hop deposit still lands. Nothing is silting up,
+and walking those one-to-three units to the camp is exactly the trivial trip the
+threshold exists to refuse. Nor can that refusal become permanent: fill the site further
+and `drainNeed` rises past the surplus, at which point the clause above fires.
+
+`haulerCapacity` cannot reach the exemption at the shipped constants — 6 against
+a threshold of 4, so a `movable` that term binds clears the gate unaided — which
+is why the exemption is the *site's* limit and not the hauler's. The trigger is
+still `drainNeed`, still netted against `plannedOutAt`, so a reduced drain
+spends the headroom it books exactly as a full one does: in the split-surplus
+depot above, three drains of 3 go out and the fourth hauler finds
+`movable = drainNeed = 3` and no candidate.
 
 Together, `minTransferUnits` on each side of the target gives the pull rule a
 dead band `2 × minTransferUnits` wide. Oscillation inside it requires a consumer

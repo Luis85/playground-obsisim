@@ -85,9 +85,13 @@ export const BALANCE = {
   siteStagingTarget: 12,
   /**
    * The smallest transfer worth walking, and deliberately a SEPARATE and
-   * larger constant than `minSupplyUnits` (spec §2.4): a supply trip serves a
-   * building that is blocked right now, a transfer serves one that might be
-   * blocked later, so the speculative job takes the stricter threshold.
+   * larger constant than `minSupplyUnits` (spec §2.4) — on STAGING's argument
+   * rather than transfer's as a whole: a supply trip serves a building that is
+   * blocked right now, a staging transfer serves one that might be blocked
+   * later, so the speculative job takes the stricter threshold. It does not
+   * extend to a drain, which is offered ahead of collect precisely because
+   * something IS waiting for it, and which is exempt from this threshold when
+   * the surplus rather than the headroom is what binds it (`drainFrom`).
    *
    * UNMEASURED, spec §4's question: is 4 the right premium over
    * `minSupplyUnits: 2`? Too low and haulers walk the map for tails; too high

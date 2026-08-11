@@ -43,6 +43,10 @@ const A_TILE = { col: 20, row: 10 };
 const B_TILE = { col: 4, row: 14 };
 const NEAR_A = { col: 21, row: 10 };
 const ALSO_NEAR_A = { col: 20, row: 11 };
+/** Two more tiles around depot A, for the one fixture that needs FOUR staffed
+ * consumers nearest a single site. */
+const THIRD_NEAR_A = { col: 19, row: 10 };
+const FOURTH_NEAR_A = { col: 20, row: 9 };
 const NEAR_B = { col: 5, row: 14 };
 const ALSO_NEAR_B = { col: 4, row: 15 };
 /** A third depot, nearest to nothing and used only where a case needs a
@@ -267,6 +271,34 @@ describe('staging: a site pulls what the buildings around it eat', () => {
   });
 });
 
+/** Units of each of four resources in the split-surplus depot below. */
+const SPLIT_HOLDING = 15;
+/** ...and what each of them is worth as surplus, once the depot's demand is
+ * taken off. Three, against a `minTransferUnits` of four. */
+const SPLIT_SURPLUS = SPLIT_HOLDING - BALANCE.siteStagingTarget;
+
+/**
+ * The depot the drain's `minTransferUnits` exemption exists for, built once
+ * because two cases need it and every number in it is load-bearing.
+ *
+ * FOUR staffed consumers of four DIFFERENT inputs, all nearest depot A, so A's
+ * demand is `4 x siteStagingTarget` = 48 — exactly
+ * `storehouseCapacity - storehouseFreeFloor`, so `capTotalDemand` leaves it
+ * alone and each resource really is wanted 12. A holds 15 of each: 60 of 60,
+ * saturated, `drainNeed` at the full floor, and a surplus of 3 on every
+ * resource with not one of them reaching the threshold.
+ */
+function splitSurplusDepot() {
+  return colonyOf(
+    [CAMP, A],
+    [
+      consumer('mill', NEAR_A), consumer('bakery', ALSO_NEAR_A),
+      consumer('sawmill', THIRD_NEAR_A), consumer('workshop', FOURTH_NEAR_A),
+    ],
+    [[A, { wheat: SPLIT_HOLDING, flour: SPLIT_HOLDING, wood: SPLIT_HOLDING, planks: SPLIT_HOLDING }]],
+  );
+}
+
 describe('draining: a site above its floor pushes to the camp', () => {
   it('a full-enough depot drains its no-demand stock to the camp', () => {
     // Nobody is nearest to this depot, so it demands nothing and everything in
@@ -325,6 +357,56 @@ describe('draining: a site above its floor pushes to the camp', () => {
     const tight = colonyOf([CAMP, A], [], [[A, { planks: 52 }]]);
     expect(BALANCE.storehouseCapacity - 52).toBeLessThan(BALANCE.storehouseFreeFloor);
     expect(movablesOf(tight.candidates())).toEqual([BALANCE.minTransferUnits]);
+  });
+
+  it('a depot whose surplus is split across four resources still drains', () => {
+    // A saturated depot with its surplus SPREAD is the third door to increment
+    // 7's §4.3 defect. `drainResource` picks one resource — the single largest
+    // surplus — so with 15 of each of four inputs against a demand of 12 each,
+    // every candidate is worth 3 and a flat `minTransferUnits` of 4 refuses all
+    // of them, even though the aggregate surplus of 12 is exactly the floor
+    // being restored. The depot then accepts no collect deposit and stages
+    // nothing for the rest of the game.
+    //
+    // A drain buys ROOM, and `candidateOf`'s "supply can still fetch it"
+    // escape is no escape for it: this stock is above every nearby building's
+    // demand, so no supply candidate exists for it either.
+    const colony = splitSurplusDepot();
+    // The fixture IS the finding, so its premises are asserted rather than
+    // assumed — a demand quietly capped to 11, or a fifth resource in the
+    // depot, and this passes for a reason that has nothing to do with the rule.
+    expect(colony.stockpile.totalAt(A_ID)).toBe(BALANCE.storehouseCapacity);
+    expect(colony.demand().get(A_ID)?.get('wheat')).toBe(BALANCE.siteStagingTarget);
+    expect(SPLIT_SURPLUS).toBeLessThan(BALANCE.minTransferUnits);
+
+    expect(colony.candidates()).toMatchObject([{
+      sourceSiteId: A_ID, destSiteId: CAMP_SITE_ID, resource: 'wheat',
+      movable: SPLIT_SURPLUS, staging: false,
+    }]);
+  });
+
+  it('a drain that would restore the floor outright is still refused', () => {
+    // The other side of the exemption, and what keeps it narrow. Here `movable`
+    // is held down by `drainNeed` rather than by the surplus: the depot has 51
+    // of 60, so it is three units below its floor and its 51 planks could give
+    // far more than that. The trip would FINISH the job, and a job that small
+    // means nine free units — more than a hauler carries — so every short-hop
+    // deposit still lands and nothing is stranded by waiting. Walking three
+    // units to the camp is precisely the trivial trip the threshold exists to
+    // refuse.
+    const held = 51;
+    const free = BALANCE.storehouseCapacity - held;
+    const need = BALANCE.storehouseFreeFloor - free;
+    expect(need).toBeLessThan(BALANCE.minTransferUnits); // the threshold is what refuses it
+    expect(free).toBeGreaterThan(BALANCE.haulCarryCapacity); // and the depot is not silting up
+    expect(held - need).toBeGreaterThan(BALANCE.minTransferUnits); // surplus is NOT the binding term
+    const colony = colonyOf([CAMP, A], [], [[A, { planks: held }]]);
+    expect(colony.candidates()).toEqual([]);
+
+    // Non-vacuous: one unit further down, `drainNeed` reaches the threshold on
+    // its own and the same depot drains without needing any exemption.
+    const lower = colonyOf([CAMP, A], [], [[A, { planks: held + 1 }]]);
+    expect(movablesOf(lower.candidates())).toEqual([BALANCE.minTransferUnits]);
   });
 
   it('a drain never targets another depot', () => {
@@ -400,6 +482,30 @@ describe('a bound that only a second hauler can see', () => {
     expect([colony.dispatch(), colony.dispatch(), colony.dispatch()].map((c) => c?.movable ?? null))
       .toEqual([CAPACITY, CAPACITY, null]);
     expect(colony.claims().plannedOutAt(A_ID)).toBe(BALANCE.storehouseFreeFloor);
+  });
+
+  it('a reduced drain spends the headroom it books, exactly as a full one does', () => {
+    // The exemption lowers the THRESHOLD, not the bound — and only more than
+    // one hauler can tell the difference, because `drainNeed` does not fall
+    // until a dispatch nets against `plannedOutAt`.
+    //
+    // 60 of 60, a floor of 12, four surpluses of 3. Three drains of 3 go out,
+    // each taking a DIFFERENT resource because the surplus it spent is
+    // claimed-net, and the fourth hauler is refused — by the exemption's own
+    // boundary rather than by anything running out: after three, `plannedOutAt`
+    // is 9 so `drainNeed` is 3, the untouched resource can still offer exactly
+    // 3, and `movable === drainNeed` puts that last trip back under
+    // `minTransferUnits`. Nine units of headroom is more than a hauler carries,
+    // so the short-hop deposits the depot exists for land again, which is the
+    // entire thing the drain was buying.
+    const colony = splitSurplusDepot();
+    const dispatched = [colony.dispatch(), colony.dispatch(), colony.dispatch(), colony.dispatch()];
+    expect(dispatched.map((c) => c?.movable ?? null))
+      .toEqual([SPLIT_SURPLUS, SPLIT_SURPLUS, SPLIT_SURPLUS, null]);
+    expect(new Set(dispatched.flatMap((c) => c?.resource ?? [])).size).toBe(3);
+    expect(colony.claims().plannedOutAt(A_ID)).toBe(3 * SPLIT_SURPLUS);
+    expect(colony.claims().plannedOutAt(A_ID)).toBeLessThanOrEqual(BALANCE.storehouseFreeFloor);
+    expect(colony.claims().plannedOutAt(A_ID)).toBeGreaterThan(BALANCE.haulCarryCapacity);
   });
 
   it('a supply fetch from a depot counts toward its drain headroom', () => {

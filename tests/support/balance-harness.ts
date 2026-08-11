@@ -1,4 +1,4 @@
-import type { IPreptimeWorld } from 'sim-ecs';
+import type { IPreptimeWorld, IRuntimeWorld } from 'sim-ecs';
 import type { BuildingDefId, ResourceId } from '../../src/shared/content-types';
 import type { HaulPhase } from '../../src/shared/haul';
 import type { SaveGameV6 } from '../../src/shared/save';
@@ -7,7 +7,7 @@ import { haulTicks } from '../../src/shared/haul';
 import { autoPlacePosition, isTileBuildable, type TileRef, type WorldMapSize } from '../../src/shared/placement';
 import { BALANCE } from '../../src/engine/content/balance';
 import { BUILDINGS } from '../../src/engine/content/buildings';
-import { Building } from '../../src/engine/components';
+import { Building, Colonist, HaulTrip } from '../../src/engine/components';
 import { IdCounter, SimClock, SnapshotStore, Stockpile } from '../../src/engine/resources';
 import {
   ALL_SYSTEMS, applyRemovals, buildColonyPrepWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist,
@@ -113,6 +113,26 @@ export interface Scenario extends ScenarioStage {
    * the absolute number.
    */
   houseCrew?: boolean;
+  /**
+   * The age every colonist this scenario spawns starts at, defaulting to
+   * `spawnColonist`'s own `BALANCE.startingAgeTicks` (2,500) — a founder a
+   * quarter of the way through life.
+   *
+   * A run's turnover horizon is a function of exactly this number, which is
+   * what the field is for: at the default, retirement lands at ELAPSED tick
+   * 3,000 (`retireTicks - startingAgeTicks`) and the earliest old-age death at
+   * 3,200 (`lifespanTicks - spreadTicks - startingAgeTicks`), so a longer run
+   * measures replacement as well as logistics. `BALANCE.lifeBands.matureTicks`
+   * buys a young workforce and moves those two to 4,500 and 4,700.
+   *
+   * BOTH ARMS OF A COMPARISON MUST PASS THE SAME VALUE, for the reason
+   * `houseCrew` documents at greater length: uniformity is a property of the
+   * comparison, so a pair differing here compares two demographics rather than
+   * the variable under test. Whether a run actually stayed inside its window is
+   * not left to the arithmetic above — `BalanceResult.retirements` and
+   * `.deaths` report it, and §4.2 asserts those rather than trusting a sum.
+   */
+  ageTicks?: number;
 }
 
 /** Everything measured about ONE building of a scenario. */
@@ -217,11 +237,60 @@ export interface BalanceResult extends StageResult {
    * the second number is not near zero. */
   supplyReturns: number;
   supplyReturnsLoaded: number;
+  /**
+   * Transfers DISPATCHED over the run, and the two classes of §2.2's pull rule
+   * counted separately, because §4.2 must be able to say which half did the
+   * work.
+   *
+   * **An EDGE counter, and `haulerTicks.transfer` is not one.** That bucket
+   * increments once per active hauler-tick — exactly right for a hauler-tick
+   * split and exactly wrong as a count, because it weights a long route more
+   * heavily than a short one, so three slow transfers would outscore six quick
+   * ones. This counts the tick a hauler's trip crosses from `idle` to
+   * `fetching` on a transfer job, which is where `chooseJob` decided. Both
+   * instruments are wanted; they answer different questions.
+   *
+   * The class comes off `HaulTrip.staging`, read from the live trip at that
+   * tick and never re-derived from the route: a depot -> camp move is
+   * legitimately either class (§2.2 makes the camp an ordinary site in the pull
+   * rule), so route-based attribution would be wrong rather than approximate.
+   * The snapshot deliberately does not carry the flag and must not gain it —
+   * this harness builds the world itself, so it samples the component.
+   */
+  transfers: number;
+  transfersStaging: number;
+  transfersDrain: number;
   /** Units in haulers' hands when the run ended. Published because it is
    * exactly the term the old `made` wrongly added to every stage's total. */
   carriedAtEnd: number;
   /** Units held by this scenario's storehouses at the end. 0 with no depot. */
   storedAtEnd: number;
+  /**
+   * `storedAtEnd` sampled every tick instead of once: one entry per tick of the
+   * run, so `storedSeries.at(-1)` is `storedAtEnd` by construction.
+   *
+   * Acceptance criterion 4 is about TURNOVER, and a single closing level cannot
+   * distinguish a depot that never filled from one that filled and drained —
+   * both report a small number. The series can: it rises and falls, and a
+   * measurement that wants "did this depot cycle" reads its peak against its
+   * end rather than its end against a capacity.
+   */
+  storedSeries: number[];
+  /**
+   * Old-age and starvation deaths, and retirements, inside this run's own
+   * window — the instrument that makes the horizon arithmetic on
+   * `Scenario.ageTicks` unnecessary rather than merely written down.
+   *
+   * §4.2 asserts both are 0 at every horizon it measures a with/without-depot
+   * pair at, rather than trusting a prose claim about which horizons are safe:
+   * a colonist who retires stops working and one who dies stops existing, and
+   * either turns a logistics comparison into a demographic one. Computing the
+   * bound by hand is what put an invalid 4,800-tick reading in the spec; a
+   * computed bound fails silently the next time a constant moves, an asserted
+   * one fails loudly.
+   */
+  deaths: number;
+  retirements: number;
   /** The conservation sentinel. `conservationError` must be 0. */
   goods: GoodsAuditResult;
 }
@@ -430,13 +499,17 @@ function populateColony(
   buildingIds: readonly number[], occupied: TileRef[],
 ): void {
   const homes = shelterPlan(prep, ids, map, scenario, stages, occupied);
+  // `spawnColonist` falls back to BALANCE.startingAgeTicks on undefined, so an
+  // unset `ageTicks` spawns exactly the founders every earlier measurement was
+  // taken with — see Scenario.ageTicks for what setting it moves.
+  const ageTicks = scenario.ageTicks;
   stages.forEach((stage, index) => {
     for (let i = 0; i < stage.crew; i++) {
-      spawnColonist(prep, ids, { buildingId: buildingIds[index], homeId: homeOf(homes.crew[index], i) });
+      spawnColonist(prep, ids, { buildingId: buildingIds[index], homeId: homeOf(homes.crew[index], i), ageTicks });
     }
   });
   for (let i = 0; i < scenario.haulers; i++) {
-    spawnColonist(prep, ids, { hauling: true, homeId: homeOf(homes.haulers, i) });
+    spawnColonist(prep, ids, { hauling: true, homeId: homeOf(homes.haulers, i), ageTicks });
   }
 }
 
@@ -478,6 +551,73 @@ function tallyHaulers(
       if (worker.haulPickedUp) returns.loaded++;
     }
     phases.set(worker.id, worker.haulPhase);
+  }
+}
+
+/** Transfers dispatched over a run, split by `HaulTrip.staging`. */
+interface TransferTally { total: number; staging: number; drain: number }
+
+/**
+ * Whether THIS tick is the one a transfer was dispatched on: the `idle` ->
+ * `fetching` edge, on a transfer job.
+ *
+ * `chooseJob` only ever runs on an idle trip and returns immediately after
+ * (`continue` — "a trip dispatched this tick starts walking next tick"), and
+ * every leg is at least one tick long, so the edge is observable at end of tick
+ * exactly once per transfer. Counting ticks in `fetching` instead would report
+ * the length of the walk out, which is `haulerTicks.transfer`'s question rather
+ * than this one.
+ */
+function dispatchedTransfer(before: HaulPhase, trip: HaulTrip): boolean {
+  return before === 'idle' && trip.phase === 'fetching' && trip.kind === 'transfer';
+}
+
+/**
+ * One tick of transfer bookkeeping, read from the LIVE trip components rather
+ * than from the snapshot.
+ *
+ * `HaulTrip.staging` is the only place a transfer's class survives — the
+ * snapshot carries no site ids to reconstruct it from, and the route is not a
+ * discriminator either — and it is deliberately not published: the snapshot is
+ * the app's read model, no UI surface consumes the flag, and a published field
+ * that only a test reads is what later looks load-bearing to someone deciding
+ * what they may change. This harness builds the world itself, so it can ask the
+ * component directly.
+ *
+ * `phases` is this function's own, separate from `tallyHaulers`'s: that one
+ * follows the published leg, this one follows the trip, and sharing one map
+ * would make each edge depend on which tally ran first.
+ */
+function tallyTransfers(world: IRuntimeWorld, tally: TransferTally, phases: Map<number, HaulPhase>): void {
+  for (const entity of world.getEntities()) {
+    const trip = entity.getComponent(HaulTrip);
+    const colonist = entity.getComponent(Colonist);
+    if (trip === undefined || colonist === undefined) continue;
+    // A fresh trip is 'idle' (see HaulTrip's defaults), so an unseen hauler
+    // counts as idle rather than as "no edge" — otherwise a transfer dispatched
+    // on the very first tick would go unrecorded.
+    const before = phases.get(colonist.id) ?? 'idle';
+    phases.set(colonist.id, trip.phase);
+    if (!dispatchedTransfer(before, trip)) continue;
+    tally.total++;
+    if (trip.staging) tally.staging++;
+    else tally.drain++;
+  }
+}
+
+/** Units this scenario's storehouses hold right now. One derivation, read by
+ * the per-tick series and by the closing figure, so the two cannot disagree. */
+function storedUnits(snapshot: Snapshot): number {
+  return snapshot.buildings.reduce((sum, b) => sum + b.stored, 0);
+}
+
+/** Population turnover this tick, as the engine itself announced it. Notices
+ * are cleared each snapshot, so they are counted per tick rather than summed at
+ * the end. */
+function tallyTurnover(snapshot: Snapshot, turnover: { deaths: number; retirements: number }): void {
+  for (const { message } of snapshot.notices) {
+    if (message.includes('died of old age') || message.includes('starved')) turnover.deaths++;
+    else if (message.includes('retired')) turnover.retirements++;
   }
 }
 
@@ -545,6 +685,10 @@ export async function runScenario(scenario: Scenario): Promise<BalanceResult> {
     idle: 0, fetching: 0, outbound: 0, returning: 0, collect: 0, supply: 0, transfer: 0,
   };
   const phases = new Map<number, HaulPhase>();
+  const tripPhases = new Map<number, HaulPhase>();
+  const transfers: TransferTally = { total: 0, staging: 0, drain: 0 };
+  const storedSeries: number[] = [];
+  const turnover = { deaths: 0, retirements: 0 };
   const returns = { total: 0, loaded: 0 };
   let relocatingTicks = 0;
   // Whether the PREVIOUS tick ended with the countdown still running — see the
@@ -600,6 +744,11 @@ export async function runScenario(scenario: Scenario): Promise<BalanceResult> {
     if (issuingMove || wasRelocating) relocatingTicks++;
     wasRelocating = (snapshot.buildings.find((b) => b.id === buildingIds[0])?.relocatingTicks ?? 0) > 0;
     tallyHaulers(snapshot.colonists, haulerTicks, phases, returns);
+    // From the live trips, not this snapshot: `staging` is deliberately absent
+    // from the published read model — see tallyTransfers.
+    tallyTransfers(world, transfers, tripPhases);
+    storedSeries.push(storedUnits(snapshot));
+    tallyTurnover(snapshot, turnover);
   }
 
   const snapshot = world.getResource(SnapshotStore).latest!;
@@ -615,8 +764,14 @@ export async function runScenario(scenario: Scenario): Promise<BalanceResult> {
     haulerTicks,
     supplyReturns: returns.total,
     supplyReturnsLoaded: returns.loaded,
+    transfers: transfers.total,
+    transfersStaging: transfers.staging,
+    transfersDrain: transfers.drain,
     carriedAtEnd: snapshot.colonists.reduce((sum, w) => sum + w.carrying, 0),
-    storedAtEnd: snapshot.buildings.reduce((sum, b) => sum + b.stored, 0),
+    storedAtEnd: storedUnits(snapshot),
+    storedSeries,
+    deaths: turnover.deaths,
+    retirements: turnover.retirements,
     goods: audit.close(snapshot, stockpile),
   };
 }

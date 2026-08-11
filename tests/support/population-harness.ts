@@ -74,6 +74,29 @@ export interface PopulationScenario {
    * itself. Before quoting any difference a with-depot comparison makes,
    * assert `storedAtEnd > 0` in the WITH-depot run; see the stress-size fixture
    * in balance.test.ts for a colony where that holds.
+   *
+   * THE SIBLING TRAP (OBS-7-05): **below the first old-age death a with/without
+   * pair is comparable digit for digit; above it, only aggregate outcomes are.**
+   * Adding a depot spawns an entity, which shifts every colonist's id, and
+   * `lifespanFor` derives its jitter from the id — so past the first death the
+   * two runs draw different lifespans and diverge for a reason that has nothing
+   * to do with a depot. The two runs behind §4.1's fourth reading are 12,000
+   * ticks and differ in exactly that way while `storedAtEnd` is 0 in both, so
+   * the divergence cannot be the depot; every figure that reading quotes (peak,
+   * final, trough, births, deaths, starvation, minimum meals per head) is an
+   * aggregate that agreed across all four runs. Anything tighter — sample-for-
+   * sample equality, or a small difference read as an effect — would be
+   * measuring the jitter.
+   *
+   * The horizon is a property of the FIXTURE, not a constant: `spawnFounders`
+   * starts its adults at `matureTicks`, so retirement falls at elapsed 4,500
+   * and the earliest old-age death at 4,700 here, where the balance harness's
+   * founders (`BALANCE.startingAgeTicks`) put the same two at 3,000 and 3,200.
+   * Do not do that arithmetic to decide a run is safe — `deathsByOldAge` says
+   * so, and balance.test.ts asserts it beside the equality it licenses. The
+   * structural fix, a colonist-scoped salt that does not move when unrelated
+   * entities spawn, would redefine every existing population figure and belongs
+   * to an increment that needs it.
    */
   storehouses?: number;
   ticks: number;

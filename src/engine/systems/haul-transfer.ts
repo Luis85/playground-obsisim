@@ -326,10 +326,16 @@ function drainFrom(
   // - `capacity` is the HAULER's — `haulerCapacity`, not the flat
   //   `BALANCE.haulCarryCapacity` — so a hauler with no bed (`homelessFactor`)
   //   or a long enough commute (`commute.floor`) carries `round(6 x 0.5)` = 3,
-  //   below a threshold of 4. A small hauler is not a stuck site: its site can
-  //   offer a full load and the next hauler with a bed takes it. Such a hauler
-  //   simply makes no sub-threshold transfer, of either class, exactly as it
-  //   makes no sub-threshold staging one.
+  //   below a threshold of 4. BINDING ON IT IS NEVER WHAT CAUSES THE EXEMPTION,
+  //   which is the accurate form of the claim: "when capacity binds the
+  //   exemption does not fire" is false on TIES. Where capacity is the ONLY
+  //   binding term the site can still offer a full-sized load, so it is not a
+  //   stuck site — the next hauler with a bed takes it, and the small one makes
+  //   no sub-threshold transfer of either class, exactly as it makes no
+  //   sub-threshold staging one. Where capacity binds JOINTLY WITH THE SURPLUS
+  //   — `min(3, 3, 12)` at the split-surplus depot — the exemption DOES fire,
+  //   on the surplus's account and not on capacity's, and the fixture asserts
+  //   both halves with the same capacity-3 hauler.
   //
   // - `need` binding means the trip FINISHES the job, so a sub-threshold
   //   `movable` means the site is within three units of its floor: at least

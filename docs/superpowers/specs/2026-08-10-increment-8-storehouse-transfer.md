@@ -463,7 +463,7 @@ order the two classes are offered at dispatch, which is the opposite way round:
 
 ```
 S.surplus(r) = max(0, unclaimedAt(S, r) − S.demand(r))          ← NOT held(r) − demand(r)
-D.deficit(r) = max(0, D.demand(r) − unclaimedAt(D, r) − inboundAt(D, r))
+D.deficit(r) = max(0, D.demand(r) − max(0, unclaimedAt(D, r)) − inboundAt(D, r))
 movable      = min(haulerCapacity, D.deficit(r), S.surplus(r), roomAt(D))
 ```
 
@@ -471,6 +471,21 @@ Both sides are claimed-net in both directions (§2.2): the deficit subtracts wha
 is already leaving `D` as well as what is already arriving, so a depot at its
 target with a supply hauler mid-fetch can be restaged concurrently instead of
 waiting a whole trip to notice the hole.
+
+**The deficit's *inner* clamp is load-bearing and the surplus's absence of one
+is deliberate — the asymmetry is not an oversight to tidy away.**
+`unclaimedAt` **can go negative**: `Stockpile.pay` spends camp-first across every
+site for a construction cost or a meal, so a site's physical stock can be drawn
+below what a fetching hauler already claimed out of it, while that trip keeps its
+original `plannedAmount` until it arrives (`takeAt` returning what is actually
+there is the recovery). Subtracting a negative holding *adds* to the deficit,
+counting the now-missing stock and the stale outgoing claim as two separate
+shortages: a site with a demand of 12, stock spent from 6 to 0 and a 6-unit fetch
+claim against it reads **18**, and with idle haulers and a surplus elsewhere that
+stages a whole extra load above what the site wants. `S.surplus` needs no such
+clamp because its outer `max(0, …)` already returns 0 for any negative
+`unclaimedAt`; clamping there would change nothing, and the deficit alone is the
+minimal correct change.
 
 **Surplus is defined *through* `unclaimedAt`, not beside it.** Sizing it from
 physical `held` while listing `unclaimedAt` as a separate term in the `min` is
@@ -552,7 +567,10 @@ would stage it back, so the dead band of §2.4's closing paragraph still holds
 and no drained unit can be pulled straight back in.
 
 ```
-inHandAt(S)    = totalAt(S) + the loads RETURNING to S   ← heldAt without its intention term
+inHandAt(S)    = totalAt(S) + the loads RETURNING to S AND STILL AIMED AT WHERE S STANDS
+                                                         ← heldAt minus its intention term
+                                                           AND minus any load S has moved
+                                                           out from under (arrivesAt)
 occupancyAt(S) = inHandAt(S) − plannedOutAt(S)           ← every resource, not one
 drainNeed(S)   = max(0, storehouseFreeFloor − (S.capacity − occupancyAt(S)))
 movable        = min(haulerCapacity, S.surplus(r), drainNeed(S))
@@ -603,6 +621,32 @@ six real units that never needed to move. **The drain answers for removals it
 has scheduled and for loads already in a hauler's hands, not for intentions
 aimed at it** — so its occupancy is `inHandAt`, and `Claims` carries that
 accessor beside `heldAt` rather than changing what `heldAt` means.
+
+**A load in a hauler's hands is not automatically a load that will be there
+either, and the second worked case is a relocation.** "Certainly there" is
+presence *at the site*, not existence in the world. A returning leg is frozen on
+the tile it was aimed at when it began, and a storehouse that relocates **keeps
+its id and changes its tile** — so a load walking toward where a depot used to
+stand will certainly not arrive there, and `depositArrival` will turn it for a
+live site. Worked, and it is the same shape as the zero-fetch case above with a
+stale *address* rather than stale *stock*: a depot at 47 of 60 has `drainNeed` 0
+— 13 free against a floor of 12 — reads 53 with one stale six-unit reservation,
+and sends out a five-unit drain that never needed to move. `plannedOutAt` does
+not undo it, because it counts the spurious drain itself; it stops a second one
+stacking and nothing more, and the units come back only through staging against
+a real demand. So `inHandAt` counts a returning load **only while the trip's
+frozen leg tile still matches the live site** — the `arrivesAt` test, which is
+literally the same predicate `depositArrival` makes, so a relocation cannot be
+visible to one end of a leg and not the other.
+
+`heldAt` deliberately does **not** take that filter, and the divergence is the
+content of the pair rather than an inconsistency in it. Removing a reservation
+is the direction that is not free for *room*: a depot moved away and straight
+back would have the trip's room released mid-leg, promised to another hauler,
+and then taken from the load it was held for when the tiles match again on
+arrival. Over-reserving room costs a trip; under-reserving costs the trip
+already promised. `inboundAt` keeps counting the stale reservation for the same
+reason — it sizes a staging dispatch and refuses one, which loses nothing.
 
 **The drain's occupancy and staging's `roomAt` are therefore different
 quantities, and the two similar-looking expressions are not a tidying
@@ -697,11 +741,18 @@ below the threshold**, so dropping either clause is a different rule.
 
 `haulerCapacity` is **not** the flat `BALANCE.haulCarryCapacity`: it is that
 constant scaled by the commute factor, so a hauler with no bed or a long commute
-carries `round(6 × 0.5)` = **3**, below a threshold of 4. When that term binds,
-the exemption deliberately does **not** fire: a small hauler is not a stuck site
-— the site can still offer a full load, and the next hauler with a bed takes it.
-Such a hauler simply makes no sub-threshold transfer of either class, exactly as
-it makes no sub-threshold staging one.
+carries `round(6 × 0.5)` = **3**, below a threshold of 4. **Binding on that term
+is never what *causes* the exemption**, and the claim has to be put that way
+round rather than as "when it binds the exemption does not fire", which is false
+on ties. Where capacity is the *only* binding term the site can still offer a
+full-sized load, so it is not a stuck site: the next hauler with a bed takes it,
+and the small one simply makes no sub-threshold transfer of either class,
+exactly as it makes no sub-threshold staging one. But capacity can bind
+**jointly with the surplus** — at the split-surplus depot a capacity-3 hauler
+computes `min(3, 3, 12)` — and there the exemption *does* fire, on the surplus's
+account and not on capacity's. That fixture asserts it in both directions: the
+same capacity-3 hauler is refused at a depot whose surplus clears the threshold
+and drains the split-surplus one for 3.
 
 `drainNeed(S)` binding means the trip **finishes the job**, so a sub-threshold
 `movable` means the site is within `minTransferUnits − 1` of its floor and
@@ -977,11 +1028,15 @@ is worth verifying rather than assuming — and one of them does not:
 ```ts
 inHandAt(siteId: number): number
 // stockpile.totalAt(siteId) + sum over trips: phase === 'returning' && destSiteId === siteId
-//   → amount. `heldAt` WITHOUT its fetching-transfer term — see §2.4
+//   && arrivesAt(trip, site)  → amount
+// `heldAt` WITHOUT its fetching-transfer term, and WITHOUT any reservation whose
+//   site has moved out from under the frozen leg — see §2.4 for both subtractions
 
 inboundAt(siteId: number, resource: ResourceId): number
-// sum over trips: kind === 'transfer' && destSiteId === siteId && resource matches
-//   → plannedAmount + (phase === 'returning' ? amount : 0)
+// sum over trips: destSiteId === siteId && resource matches
+//   → (phase === 'returning' ? amount
+//      : kind === 'transfer' && phase === 'fetching' ? plannedAmount : 0)
+// KIND-INDEPENDENT on the returning half, and kind-gated only on the fetching one
 
 plannedOutAt(siteId: number): number
 // sum over trips: phase === 'fetching' && sourceSiteId === siteId → plannedAmount
@@ -990,17 +1045,32 @@ plannedOutAt(siteId: number): number
 
 `inHandAt` exists because the drain acts on its answer by removing real goods,
 so it may count only what will certainly be at the site: physical stock and the
-loads already in a hauler's hands. It is deliberately a *second* accessor rather
-than a correction to `heldAt` — staging's `roomAt` needs the intention term that
-this one drops, and §2.4 has the worked example of what each choice costs the
-other rule.
+loads already in a hauler's hands **that are still walking into where that site
+stands**. It is deliberately a *second* accessor rather than a correction to
+`heldAt` — staging's `roomAt` needs the intention term that this one drops, and
+§2.4 has the worked example of what each choice costs the other rule. Its second
+narrowing, `arrivesAt`, is where the two accessors part company over the same
+trip, and it is expressed as a *further filter* on `heldAt`'s traversal rather
+than as a second predicate of the same shape, so the two can never drift about
+which trips are inbound.
 
-`inboundAt` exists because a site's deficit must subtract transfers already
-walking toward it, or every idle hauler in the colony transfers into the same
-deficit on the same tick — the identical failure `Claims.input` exists to prevent
-for buildings, and it takes the identical shape. Its two terms are disjoint by
+`inboundAt` exists because a site's deficit must subtract loads already walking
+toward it, or every idle hauler in the colony transfers into the same deficit on
+the same tick — the identical failure `Claims.input` exists to prevent for
+buildings, and it takes the identical shape. Its two terms are disjoint by
 construction: `plannedAmount` is zeroed the moment `takeAt` returns a real figure,
 and `amount` is zero until then.
+
+**The returning half is kind-independent, and an earlier draft of this section
+was wrong to gate it on `kind === 'transfer'`.** A load in a hauler's hands lands
+at `destSiteId` whatever kind of trip carried it, so a **collect** walking wheat
+home to a depot genuinely meets that depot's wheat demand and must shrink its
+deficit. Counting only transfers left an empty depot with a 12-unit wheat demand
+and a six-unit collect already walking back to it reading a deficit of 12,
+dispatching two staging transfers on top, and landing at 18 against a target of
+12 — a wasted round trip and source surplus spent for nothing. Only the
+*fetching* half stays kind-gated, and for the reason `heldAt`'s does: a supply
+trip's `destSiteId` is `CAMP_SITE_ID` for its whole fetch leg.
 
 `plannedOutAt` exists because **headroom is measured across every resource and
 `unclaimedAt` is per-resource**, so no per-resource claim can bound it. It is what
@@ -1886,7 +1956,11 @@ why.
   latency-only and self-correcting. It was deliberately not changed before this
   measurement, for the same reason: changing a dispatch formula immediately
   before the task that measures it destroys the measurement's meaning. Filed as
-  an issue rather than fixed.
+  **`OBS-8-02`**, together with its outbound twin — `plannedOutAt` discounting a
+  stale outgoing claim, which suppresses a drain the same way this suppresses a
+  staging — because the two are one latency mirrored and one principle decides
+  both: *act on an intention where the failure mode is self-correcting; refuse
+  where it destroys value.*
 
 ### 4.3 What was written down whichever way it went
 
@@ -1958,6 +2032,14 @@ again the only lever — and OBS-7-02's own three conditions for that
 re-measurement (a two-consumer fixture, the in-tray's end-of-run occupancy, and
 the population curve) are all still unmet by anything measured here. The issue
 carries forward unchanged in severity with these readings attached.
+
+**What has changed in its favour is the sequencing.** OBS-7-02's suggested
+resolution is explicit that OBS-7-01 must land first, so the ranking has a
+deliberate fairness term before the accidental one is removed. OBS-7-01 is now
+**Done** (§2.1, measured alone in §4.1), so 24 is re-measurable against a
+dispatcher that has a floor. The depot-placement loss this section reports is
+filed separately as **`OBS-8-03`**, since it is a property of the transfer
+mechanic rather than of the cap.
 
 ### 4.5 What these instruments cannot do
 

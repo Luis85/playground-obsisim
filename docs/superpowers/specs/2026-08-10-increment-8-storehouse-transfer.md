@@ -87,10 +87,27 @@ observable from the throughput number they are supposed to explain.
 ### 1.3 What this makes harder, deliberately
 
 - **A third kind of work competes for one pool of haulers.** §2.6 answers this
-  structurally rather than by tuning: transfer is offered **last**, so it can
-  only consume hauler-ticks that would otherwise be idle. What it still costs is
-  *occupancy* — a hauler mid-transfer is unavailable for a supply job that
-  arises next tick — and §2.6 names that cost rather than denying it.
+  structurally rather than by tuning — and *which* structure it uses changed
+  once the increment was measured, which §2.6 records rather than smooths over.
+  **Staging**, the half nobody is waiting for, is offered **last**, so it spends
+  only hauler-ticks that would otherwise be idle. A **drain** is offered ahead
+  of collect, because for that one class something *is* waiting: a bounded site
+  below its free floor cannot take the short-hop deposits that are its entire
+  outbound value (§1.1). That is still a structural answer rather than a tuned
+  one, because the promotion is **bounded and self-extinguishing** — `drainNeed`
+  is netted against the removals already scheduled, so a saturated depot
+  schedules exactly the units that restore its floor and then stops being a
+  candidate at all. Nothing is set to a share; the condition ends.
+
+  **A reserved share of hauler-ticks was the considered alternative, and it was
+  rejected.** It is a constant to tune rather than a condition that terminates,
+  and it buys the drain its ticks by also letting *staging* — the speculative
+  class — compete with work somebody is blocked on. Promoting the one class with
+  a real blockage behind it costs less and can be argued to a stop.
+
+  What transfer still costs is *occupancy* — a hauler mid-transfer is
+  unavailable for a supply job that arises next tick — and §2.6 names that cost
+  rather than denying it.
 - **Two store sites and a camp are a machine for moving goods in circles**
   unless the rule forbids it. §2.4 makes circles inexpressible rather than
   unattractive, and states the argument.
@@ -703,39 +720,92 @@ gated off, it resolves nearest-with-room from where the hauler stands, which is
 correct: the goods are legitimately in motion and walking them all the way back
 to the source is the worst available answer.
 
-### 2.6 Dispatch: three kinds of work, and why the third cannot starve the others
+### 2.6 Dispatch: the two transfer classes sit on opposite sides of collect
 
-`chooseJob` offers **supply, then collect, then transfer.**
+`chooseJob` offers **supply, then drain, then collect, then staging.**
+
+**This section shipped saying "supply, then collect, then transfer", and the
+reversal below was forced by a measurement taken after that shipped rather than
+predicted before it.** The original argument is kept in full, because it was
+correct about staging and it is *why* staging did not move. It read:
+
+> **Transfer last, and this placement is load-bearing:**
+>
+> > A transfer moves goods that nothing is currently waiting for. If a building
+> > were waiting and servable, supply would have won this hauler; if a producer
+> > were stalled, collect would have. **So a transfer can only ever consume
+> > hauler-ticks that would otherwise have been idle, and it cannot starve
+> > either existing kind.**
+>
+> That is the structural answer to §1.3's worry about a third competitor, and it
+> is also what makes the feature measurable: `haulerIdleTicks` is the budget a
+> transfer spends, and §4.3 asks whether the spend bought anything.
+
+**That argument is sound, and it was falsified as a design by measurement rather
+than by reasoning.** The safety property and the feature turned out to be one
+knob. The budget the ordering leaves is **zero exactly where a depot
+saturates**: a chain busy enough to fill a depot is busy enough that a collect
+candidate exists on every dispatch tick, so `chooseJob` returned at the collect
+branch and the drain candidates were never consulted. On the
+corner chain (`cornerChain(3, [CORNER_DEPOT], ticks)`) that produced **zero
+transfers and zero transfer hauler-ticks** at 600 / 1,200 / 2,400 ticks, with
+the depot at 60 of 60 and an advantage over no depot of **26 / 24 / 28** planks
+— increment 7's §4.3 flat one-off buffer, digit for digit, surviving the
+increment written to remove it. Idle hauler-ticks were not the budget the
+argument assumed: 120 / 190 / 331 of 1,800 / 3,600 / 7,200, and essentially all
+of them were dispatch ticks rather than genuinely-nothing-to-do ticks. §4.2 has
+the readings and the after figures.
+
+The premise of the quoted argument is *"a transfer moves goods that nothing is
+currently waiting for"*, and for exactly one candidate class it is false.
 
 **Supply first** is unchanged and its reasoning is unchanged: a building waiting
 on inputs produces nothing, while one with a full output buffer has already
 produced and its goods are safe where they stand.
 
-**Collect second** is unchanged, and now has a reason of its own worth writing
-down: a full output buffer *does* stall a building — `outputFull` is what
-`StageResult.stalledTicks` counts — so collection unblocks production too, just
-less urgently than supply does.
+**Drain second, ahead of collect, and this is the reversal.** A drain candidate
+exists only for a **bounded** site whose free space has fallen below
+`BALANCE.storehouseFreeFloor` (§2.4). Something *is* waiting for that move. A
+depot without room cannot take the short-hop collect deposits that are its
+entire outbound value (§1.1), so every collect near it silently reverts to the
+long walk to the camp — the leg the depot was placed to remove. The goods are
+safe; the **pipeline stage** is blocked, and the drain is the only rule that
+unblocks it.
 
-**Transfer last, and this placement is load-bearing:**
+**It cannot starve collect, and the bound is structural rather than a tuning.**
+`drainNeed` is netted against `plannedOutAt`, so removals already scheduled
+count against the floor being restored: at a floor of 12 and a hauler capacity
+of 6, the first two haulers dispatched take drains and the third reads a
+`drainNeed` of zero and finds no candidate at all. **The promotion is
+extinguished by acting on it** — the same shape as §2.1's starving band, which
+is why it is a floor rather than a rival priority, and why §1.3 can still call
+the answer structural after the order changed. A reserved share of hauler-ticks
+would have been the tuned answer, and §1.3 records why it was refused.
 
-> A transfer moves goods that nothing is currently waiting for. If a building
-> were waiting and servable, supply would have won this hauler; if a producer
-> were stalled, collect would have. **So a transfer can only ever consume
-> hauler-ticks that would otherwise have been idle, and it cannot starve either
-> existing kind.**
+**Collect third** is unchanged in its reasoning, and now has one of its own
+worth writing down: a full output buffer *does* stall a building — `outputFull`
+is what `StageResult.stalledTicks` counts — so collection unblocks production
+too, just less urgently than supply does. It gives way only to a drain, and only
+to a drain from a site that is out of room.
 
-That is the structural answer to §1.3's worry about a third competitor, and it
-is also what makes the feature measurable: `haulerIdleTicks` is the budget a
-transfer spends, and §4.3 asks whether the spend bought anything.
+**Staging last, and the quoted argument above is its argument, untouched.** A
+staging load is one nobody is waiting for, ranked against a collect trip that
+frees an output tray about to stall its producer *right now*. Nothing measured
+here bears on staging's placement, and it did not move.
 
 **The cost this does not deny: occupancy.** A hauler that begins a transfer is
 unavailable for a supply job that arises on the next tick. Priority at dispatch
-does not undo commitment during a trip. Two things bound it — `minTransferUnits`
-keeps trivial transfers from being started at all, and the free-space floor
-keeps drains from being started when there is nothing to buy — and §4.1's
-hauler-tick split measures whether it bit.
+does not undo commitment during a trip, and no ordering could, because dispatch
+cannot see a tick ahead. The order above bounds the cost to one trip per hauler
+— a staging transfer is never *started* while real work exists, and a drain is
+never started when there is no room to buy — and `minTransferUnits` keeps
+trivial transfers from being started at all. Promoting the drain **spends this
+cost more often than the shipped order did**, which is the honest price of the
+reversal; §4.2's hauler-tick split, now with transfer as a fourth category,
+measures whether it bit.
 
-**Ranking within transfer candidates:**
+**Ranking within one candidate list, which is no longer where the two classes
+are separated:**
 
 1. **staging before drain** — a real consumer's demand outranks freeing room
 2. `movable` descending
@@ -748,10 +818,31 @@ hauler-tick split measures whether it bit.
 Selection is independent of candidate order — the same guarantee
 `compareHaulCandidates` and `compareSupplyCandidates` give.
 
-**Unlike those two, this chain cannot end at an id, and the difference is not
+**Term 1 no longer decides anything at dispatch, and saying so is the point of
+this paragraph.** The two classes are now separated at the *offer* level:
+`chooseJob` asks `drainCandidates` and `stagingCandidates` at two different
+priorities, and each list it ranks is single-class, so
+`compareTransferCandidates`'s class term is constant across every comparison it
+actually performs and terms 2–6 decide. The term is **not** removed. It remains
+correct for any caller handed a mixed list, it is what makes the comparator a
+total order over `TransferCandidate` rather than over one class of it, and it
+stays unit-tested on a mixed list for that reason — but a reader tracing why one
+transfer beat another in a running colony will not find the answer here, because
+the class question was settled one level up. Terms 2–6 are the live path, and
+term 6 is the one that keeps selection order-independent (below).
+
+The split also changes what each half must cost, which §2.4 does not say and a
+reader of the list would not guess. A drain is offered on **every** dispatch
+tick, so it is asked cheaply — one `drainNeed` per site, zero for the camp and
+for every bounded site above its floor, reaching the per-resource search only
+for a site that is genuinely saturated. Staging is the quadratic half and is
+still asked only when nothing else is left to do.
+
+**Unlike `compareHaulCandidates` and `compareSupplyCandidates`, this chain
+cannot end at an id, and the difference is not
 stylistic.** `needOf` picks one resource per building, so a (building, site)
 pair yields exactly one supply candidate and a site id fully distinguishes them.
-`transferCandidates` iterates resources: one source and one destination can
+`stagingCandidates` iterates resources: one source and one destination can
 produce several candidates differing only in *what is being moved*, and with
 equal `movable` those tie on class, route, source id and destination id
 together. A chain ending at a destination id returns 0 for a real pair of
@@ -1139,8 +1230,34 @@ extracting `initialSave`.
 8. **No circles.** A property test over randomised site stocks and demands: no
    sequence of legal transfers returns the ledger to a previously visited
    per-site distribution without a consumption event in between.
-9. **A transfer cannot starve supply or collect.** With a stalled producer and a
-   starving consumer both available, no idle hauler is dispatched on a transfer.
+9. **Transfer's place in the dispatch order, as four bounds a dispatcher can
+   fail.** The single "no idle hauler is dispatched on a transfer" form this
+   criterion carried is now **false as written** — with two idle haulers and a
+   saturated depot the second takes a drain while a stalled producer waits — and
+   §2.6 records why the order changed. What replaces it is what is still true
+   and still worth guarding:
+   1. **Supply is never displaced.** With a supply candidate available, no idle
+      hauler is dispatched on a transfer of either class, or on a collect.
+   2. **Staging never outranks collect.** With a stalled producer and a staging
+      candidate both available, the hauler collects.
+   3. **A drain outranks collect only from a site below its free floor.** With a
+      stalled producer available and a bounded site holding transferable surplus
+      but **at or above** `storehouseFreeFloor` free space, the hauler collects —
+      no drain candidate exists for a site with room.
+   4. **A drain is capped at `drainNeed` and extinguished by being acted on.** At
+      a floor of 12 and a hauler capacity of 6, a saturated bounded site yields a
+      drain to each of the first two haulers dispatched on one tick and **no
+      candidate at all** to the third, so a saturated depot never schedules the
+      removal of more than the floor it is restoring.
+
+   Each bound names a dispatcher that fails it, which is what keeps the criterion
+   from being vacuous: 1 fails for any order that offers transfer or collect
+   ahead of supply; 2 fails for one that offers staging before collect (and would
+   have been the whole of this criterion's old content); 3 fails for one that
+   promotes drains on a bare "this site is bounded" test instead of on the floor;
+   4 fails for one whose drain trigger is read from physical occupancy rather
+   than netted against `plannedOutAt` — the ten-idle-haulers test of §2.4, which
+   that dispatcher fails by scheduling all 60 units of a full depot for removal.
 10. **`npm run check:all` green**, no baseline loosened, no suppression added,
     every `src/` file at or under 500 nonblank lines.
 11. **The save is untouched.** `LATEST_SAVE_VERSION === 6`, and a v6 save

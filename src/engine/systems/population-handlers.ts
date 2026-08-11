@@ -4,7 +4,7 @@ import { birthBlocker, lifespanFor, stageOf } from '../../shared/population';
 import { BALANCE } from '../content/balance';
 import { MEAL_WEIGHTS } from '../content/resources';
 import { colonistComponents } from '../spawn';
-import { heldAtOf } from './haul-dispatch';
+import { heldAtOf } from './haul-claims';
 import { bankCarriedLoad } from './haul-sites';
 import { Age, Colonist, HaulTrip, Home, Hunger, JobAssignment } from '../components';
 import type { IdCounter, NoticeBoard, PendingChanges, RemovalLedger, SimClock, Stockpile } from '../resources';

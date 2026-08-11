@@ -5,7 +5,8 @@ import { isRelocating, type TileRef } from '../../shared/placement';
 import { BALANCE } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
 import { RESOURCE_IDS } from '../content/resources';
-import type { Claims, HaulBuildingRow, StaffedSet } from './haul-dispatch';
+import type { Claims } from './haul-claims';
+import type { HaulBuildingRow, StaffedSet } from './haul-dispatch';
 
 /**
  * Store-to-store transfer: the candidates, and the order they are ranked in.
@@ -268,16 +269,40 @@ function drainResource(site: StoreSite, ledger: SiteLedger): ResourceId | null {
 function drainFrom(
   source: StoreSite, sites: readonly StoreSite[], ledger: SiteLedger, capacity: number, out: TransferCandidate[],
 ): void {
+  // `drainNeed` answers FIRST, and the order is load-bearing now that
+  // `chooseJob` asks for drains on every dispatch tick rather than only on an
+  // idle one. It is zero for the camp (unbounded) and for every bounded site
+  // above its floor, which is almost all of them almost always — two
+  // traversals of the hauler list per site, against the seven `surplus` calls
+  // `drainResource` would otherwise make before discovering there was nothing
+  // to buy. Behaviour is unchanged: a zero `drainNeed` makes `movable` zero,
+  // which `candidateOf` already refuses.
+  const need = ledger.drainNeed(source);
+  if (need <= 0) return;
   const dest = sites.find((site) => site.id === CAMP_SITE_ID);
   const resource = drainResource(source, ledger);
   if (dest === undefined || resource === null) return;
-  const movable = Math.min(capacity, ledger.surplus(source.id, resource), ledger.drainNeed(source));
+  const movable = Math.min(capacity, ledger.surplus(source.id, resource), need);
   const candidate = candidateOf(source, dest, resource, movable, false);
   if (candidate !== null) out.push(candidate);
 }
 
+/** Per-site, per-resource demand, computed once per tick and handed to both
+ * builders below — the one input either of them needs that is not a claim. */
+export type SiteDemand = ReadonlyMap<number, ReadonlyMap<ResourceId, number>>;
+
 /**
- * Every store-to-store move that is legal right now, of both classes (§2.4).
+ * Every push a site below its free-space floor would make right now (§2.4's
+ * second class).
+ *
+ * Split from the pull half because `chooseJob` asks the two questions at
+ * DIFFERENT PRIORITIES and therefore at different frequencies. A drain is
+ * offered on every dispatch tick, ahead of collect, so it has to be cheap: it
+ * is one `drainNeed` per site — which is zero for the camp and for every
+ * bounded site above its floor — and it reaches `drainResource` only for a
+ * site that is genuinely saturated. Staging is the expensive half, quadratic
+ * in the site list, and it is still asked for only when nothing else is left
+ * to do.
  *
  * A site can never be both source and sink for one resource: deficit and
  * surplus come from ONE comparison of its claimed-net holding against its
@@ -287,16 +312,25 @@ function drainFrom(
  * site's surplus can be over-committed within a single tick until it lands
  * below its own demand, a source that has just made itself a sink.
  */
-export function transferCandidates(
-  buildings: readonly HaulBuildingRow[], sites: readonly StoreSite[], staffed: StaffedSet,
-  claims: Claims, capacity: number,
+export function drainCandidates(
+  sites: readonly StoreSite[], claims: Claims, demand: SiteDemand, capacity: number,
 ): TransferCandidate[] {
-  const ledger = ledgerOf(claims, siteDemandFrom(sites, buildings, staffed));
+  const ledger = ledgerOf(claims, demand);
+  const candidates: TransferCandidate[] = [];
+  for (const source of sites) drainFrom(source, sites, ledger, capacity, candidates);
+  return candidates;
+}
+
+/** Every pull a site with an unmet demand would make right now (§2.4's first
+ * class). The quadratic half, and the one nobody is waiting for. */
+export function stagingCandidates(
+  sites: readonly StoreSite[], claims: Claims, demand: SiteDemand, capacity: number,
+): TransferCandidate[] {
+  const ledger = ledgerOf(claims, demand);
   const candidates: TransferCandidate[] = [];
   for (const dest of sites) {
     for (const resource of RESOURCE_IDS) stageInto(dest, resource, sites, ledger, capacity, candidates);
   }
-  for (const source of sites) drainFrom(source, sites, ledger, capacity, candidates);
   return candidates;
 }
 

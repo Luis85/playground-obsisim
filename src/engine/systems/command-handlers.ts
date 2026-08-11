@@ -9,7 +9,7 @@ import type { TileRef } from '../../shared/placement';
 import { BALANCE } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
 import { Building, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Relocation, WorkerSlots } from '../components';
-import { heldAtOf } from './haul-dispatch';
+import { heldAtOf } from './haul-claims';
 import { bankCarriedLoad } from './haul-sites';
 import { shelterWithRoom, spawnArrival, type ShelterRow } from './population-handlers';
 import type { IdCounter, NoticeBoard, PendingChanges, RemovalLedger, SimClock, Stockpile, WorldMap } from '../resources';

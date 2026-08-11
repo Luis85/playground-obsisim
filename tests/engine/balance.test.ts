@@ -1103,6 +1103,21 @@ describe('storehouse balance', () => {
     expect(chainDepot.storedAtEnd).toBeGreaterThan(0);
     expect(soloDepot.storedAtEnd).toBeGreaterThan(0);
 
+    // AND THE MECHANIC RAN. Everything above this line passed with transfer
+    // entirely inert — `storedAtEnd` of 60 is a depot that filled once and
+    // stopped, and it satisfies `> 0` exactly as well as a depot that turns
+    // over does. That is the increment-level shape of the failure mode
+    // `docs/process/agent-workflow.md` exists to prevent: an assertion whose
+    // value is indistinguishable between the feature working and the feature
+    // never firing. The bound below is the one a dead mechanic cannot pass.
+    //
+    // `chainPlain` is the discriminator rather than a magnitude: a run with no
+    // bounded site anywhere has no transfer to make, so it pins the counter to
+    // zero from the other side and an over-counting instrument fails here
+    // rather than flattering the row above.
+    expect(chainPlain.transfers).toBe(0);
+    expect(chainDepot.transfers).toBeGreaterThan(0);
+
     // Beside the chain it buys throughput a player would notice. Measured 230
     // against 204 planks, +13%.
     expect(chainDepot.stages[1].made).toBeGreaterThan(chainPlain.stages[1].made * 1.05);

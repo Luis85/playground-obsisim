@@ -13,7 +13,8 @@ import { ProductionSystem } from '../../../src/engine/systems/production-system'
 import { SnapshotSystem } from '../../../src/engine/systems/snapshot-system';
 import { StatsSystem } from '../../../src/engine/systems/stats-system';
 import { HaulSystem, haulerCapacity } from '../../../src/engine/systems/haul-system';
-import { claimsOf, heldAtOf, holdsNoneOf } from '../../../src/engine/systems/haul-dispatch';
+import { claimsOf, heldAtOf } from '../../../src/engine/systems/haul-claims';
+import { holdsNoneOf } from '../../../src/engine/systems/haul-dispatch';
 import { campAdjacentFreeTile, colonyTotal, enqueue } from '../fixtures';
 import {
   applyRemovals, buildColonyPrepWorld, createColonyWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist,
@@ -612,15 +613,45 @@ describe('what a leg cannot assume', () => {
   });
 });
 
+/**
+ * A NEARLY-FULL DEPOT IS NO LONGER A STATE A FIXTURE MAY SEED, and every case
+ * below fills one while the hauler walks instead.
+ *
+ * `chooseJob` offers a drain ahead of collect, and a drain candidate exists for
+ * exactly a bounded site with less than `storehouseFreeFloor` free — which is
+ * every depot these cases need. Seeded at 59 of 60 the hauler no longer takes
+ * the collect at all: it drains the depot, and by the time anything is walking
+ * a load home there is room for it. The state is not merely inconvenient to
+ * reach now; it is one dispatch actively dissolves.
+ *
+ * So the depot is seeded below its floor's reach and topped up on the tick
+ * before the hauler arrives at the producer, which is the tick before
+ * `turnForHome` reads the room. The hauler is mid-trip throughout, so no
+ * dispatch runs and no drain can undo the setup. Direct construction of a state
+ * the engine defends against is the same technique §2.7 prescribes for the
+ * room recheck, and it is stated rather than dressed up as a scenario.
+ *
+ * WITHOUT THIS the second case still passes and no longer tests its own name:
+ * one hauler drains the depot, the other collects and finds the room the drain
+ * just made, and "the second goes to the camp" is satisfied by a run in which
+ * nothing was ever bound for a full depot.
+ */
 describe('reservations', () => {
+  /** Below the free floor's reach at setup (free 50 against a floor of 12), so
+   * the fixture opens with no drain candidate anywhere. */
+  const UNDRAINABLE = 10;
+
   it('a load whose whole size does not fit is not split across a depot and the camp', async () => {
     // 59 of 60 in the depot: room for one unit of a six-unit load. Skipping
     // only FULL sites would bank 1 here and forward 5 to the camp with nobody
     // walking them.
     const { world, buildings, haulers, step, stockpile } = await setup(
-      [{ defId: 'storehouse', ...DEPOT, stored: { wheat: 59 } }, { defId: 'forester', ...BESIDE_DEPOT, buffer: { wood: 6 } }], 1,
+      [{ defId: 'storehouse', ...DEPOT, stored: { wheat: UNDRAINABLE } }, { defId: 'forester', ...BESIDE_DEPOT, buffer: { wood: 6 } }], 1,
     );
-    await step(1 + legTicks(CAMP_TILE, BESIDE_DEPOT));
+    await step(legTicks(CAMP_TILE, BESIDE_DEPOT)); // dispatched, and one tick short of the producer
+    stockpile.refundAt(siteOf(buildings[0]), 'wheat', 59 - UNDRAINABLE);
+
+    await step(1); // arrival: `turnForHome` reads a depot with room for one
     expect(tripOf(haulers[0])).toMatchObject({ phase: 'returning', amount: 6, destSiteId: CAMP_SITE_ID });
 
     await step(legTicks(BESIDE_DEPOT, CAMP_TILE));
@@ -634,12 +665,15 @@ describe('reservations', () => {
     // equidistant enough that both haulers turn for home on the same tick —
     // which is the only tick a reservation can be the deciding fact.
     const near = { col: 20, row: 11 };
-    const { buildings, haulers, step } = await setup([
-      { defId: 'storehouse', ...DEPOT, stored: { wheat: 54 } },
+    const { buildings, haulers, step, stockpile } = await setup([
+      { defId: 'storehouse', ...DEPOT, stored: { wheat: UNDRAINABLE } },
       { defId: 'forester', ...BESIDE_DEPOT, buffer: { wood: 6 } },
       { defId: 'forester', ...near, buffer: { wood: 6 } },
     ], 2);
-    await step(1 + legTicks(CAMP_TILE, BESIDE_DEPOT));
+    await step(legTicks(CAMP_TILE, BESIDE_DEPOT));
+    stockpile.refundAt(siteOf(buildings[0]), 'wheat', 54 - UNDRAINABLE);
+
+    await step(1);
     const trips = haulers.map(tripOf);
     expect(trips.every((t) => t.phase === 'returning' && t.amount === 6)).toBe(true);
 
@@ -661,10 +695,13 @@ describe('reservations', () => {
     // leg one tick as well and the assertion below cannot tell a leg that was
     // freshly resolved from one that was simply left alone.
     const moved = { col: 20, row: 2 };
-    const { buildings, haulers, step } = await setup(
-      [{ defId: 'storehouse', ...DEPOT, stored: { wheat: 54 } }, { defId: 'forester', ...BESIDE_DEPOT, buffer: { wood: 6 } }], 1,
+    const { buildings, haulers, step, stockpile } = await setup(
+      [{ defId: 'storehouse', ...DEPOT, stored: { wheat: UNDRAINABLE } }, { defId: 'forester', ...BESIDE_DEPOT, buffer: { wood: 6 } }], 1,
     );
-    await step(1 + legTicks(CAMP_TILE, BESIDE_DEPOT));
+    await step(legTicks(CAMP_TILE, BESIDE_DEPOT));
+    stockpile.refundAt(siteOf(buildings[0]), 'wheat', 54 - UNDRAINABLE);
+
+    await step(1);
     const depotId = idOf(buildings[0]);
     expect(tripOf(haulers[0])).toMatchObject({ phase: 'returning', destSiteId: depotId, amount: 6 });
 

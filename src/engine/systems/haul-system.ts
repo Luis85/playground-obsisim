@@ -7,9 +7,11 @@ import { BALANCE } from '../content/balance';
 import { RESOURCE_IDS } from '../content/resources';
 import { Building, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Production, Relocation } from '../components';
 import { PendingChanges, Stockpile } from '../resources';
-import type { Claims, DispatchInputs, HaulBuildingRow, HaulWorkerRow, StaffedSet } from './haul-dispatch';
-import { chooseJob, claimsOf, storeSitesFrom } from './haul-dispatch';
+import { claimsOf, type Claims, type HaulWorkerRow } from './haul-claims';
+import type { DispatchInputs, HaulBuildingRow, StaffedSet } from './haul-dispatch';
+import { chooseJob, storeSitesFrom } from './haul-dispatch';
 import { bankLoad, destinationFor } from './haul-sites';
+import { siteDemandFrom } from './haul-transfer';
 
 /**
  * What THIS hauler carries per trip. A hauler's output is goods moved, so
@@ -367,7 +369,13 @@ export const HaulSystem = () => createSystem({
       claims,
       demolished: pending.demolished,
     };
-    const inputs: DispatchInputs = { buildings: buildingRows, sites, staffed, claims };
+    // Once per tick rather than once per idle hauler, which is where it used to
+    // be rebuilt. It is derived from building positions, staffing and the site
+    // list — nothing a dispatch touches — so hoisting it changes no answer, and
+    // it is what pays for `chooseJob` asking about drains on every dispatch
+    // tick instead of only on an idle one.
+    const demand = siteDemandFrom(sites, buildingRows, staffed);
+    const inputs: DispatchInputs = { buildings: buildingRows, sites, staffed, claims, demand };
 
     for (const row of workerRows) {
       if (!row.job.hauling) continue;

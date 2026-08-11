@@ -10,10 +10,12 @@ import {
 } from '../../../src/engine/components';
 import { Stockpile } from '../../../src/engine/resources';
 import type { DispatchInputs, HaulBuildingRow, StaffedSet } from '../../../src/engine/systems/haul-dispatch';
-import { chooseJob, claimsOf } from '../../../src/engine/systems/haul-dispatch';
+import { claimsOf } from '../../../src/engine/systems/haul-claims';
+import { chooseJob } from '../../../src/engine/systems/haul-dispatch';
 import { bankLoad, destinationFor } from '../../../src/engine/systems/haul-sites';
 import {
-  compareTransferCandidates, nextTransferTarget, siteDemandFrom, transferCandidates, type TransferCandidate,
+  compareTransferCandidates, drainCandidates, nextTransferTarget, siteDemandFrom, stagingCandidates,
+  type TransferCandidate,
 } from '../../../src/engine/systems/haul-transfer';
 
 /**
@@ -112,7 +114,17 @@ function colonyOf(sites: readonly StoreSite[], buildings: readonly HaulBuildingR
     stockpile,
     () => CAPACITY,
   );
-  const candidates = () => transferCandidates(buildings, sites, staffed, claims(), CAPACITY);
+  const demand = () => siteDemandFrom(sites, buildings, staffed);
+  /** Both classes, staging first — the single list `chooseJob` used to rank in
+   * one comparison, kept whole here because the RANKING is still one order
+   * (§2.6) even though dispatch now offers the two classes on opposite sides
+   * of collect. A test that asked only for the half it expected could not see
+   * a candidate leaking into the wrong class. */
+  const candidates = () => [
+    ...stagingCandidates(sites, claims(), demand(), CAPACITY),
+    ...drainCandidates(sites, claims(), demand(), CAPACITY),
+  ];
+  const inputs = (): DispatchInputs => ({ buildings, sites, staffed, claims: claims(), demand: demand() });
   /** One idle hauler, dispatched from wherever it stands: the winner is frozen
    * onto a trip, so the next call sees the claims it left behind. */
   const dispatch = (from: TileRef = CAMP_TILE): TransferCandidate | null => {
@@ -120,7 +132,7 @@ function colonyOf(sites: readonly StoreSite[], buildings: readonly HaulBuildingR
     if (won !== null) trips.push(begunTransfer(won));
     return won;
   };
-  return { sites, buildings, stockpile, trips, staffed, claims, candidates, dispatch };
+  return { sites, buildings, stockpile, trips, staffed, claims, demand, candidates, inputs, dispatch };
 }
 
 const movablesOf = (candidates: readonly TransferCandidate[]) => candidates.map((c) => c.movable);
@@ -246,9 +258,7 @@ describe('staging: a site pulls what the buildings around it eat', () => {
     const colony = colonyOf([CAMP, A, B], [mill], [[B, { wheat: 1 }]]);
     expect(colony.candidates()).toEqual([]);
 
-    const inputs: DispatchInputs = {
-      buildings: colony.buildings, sites: colony.sites, staffed: colony.staffed, claims: colony.claims(),
-    };
+    const inputs: DispatchInputs = colony.inputs();
     const trip = new HaulTrip();
     chooseJob(trip, CAMP_TILE, inputs, CAPACITY);
     expect(trip).toMatchObject({
@@ -441,9 +451,7 @@ describe('stock spent out from under a fetching hauler', () => {
     // A supply hauler leaves for the depot beside the sawmill and claims every
     // unit of wood standing there.
     const supply = new HaulTrip();
-    chooseJob(supply, A_TILE, {
-      buildings: colony.buildings, sites: colony.sites, staffed: colony.staffed, claims: colony.claims(),
-    }, CAPACITY);
+    chooseJob(supply, A_TILE, colony.inputs(), CAPACITY);
     expect(supply).toMatchObject({
       kind: 'supply', phase: 'fetching', sourceSiteId: A_ID, resource: 'wood', plannedAmount: CAPACITY,
     });
@@ -510,9 +518,7 @@ describe('stock spent out from under a fetching hauler', () => {
     // whose staging room is gone but whose FREE FLOOR is exactly the room it
     // keeps for short-hop deposits like this one.
     const collect = new HaulTrip();
-    chooseJob(collect, A_TILE, {
-      buildings: colony.buildings, sites: colony.sites, staffed: colony.staffed, claims: colony.claims(),
-    }, CAPACITY);
+    chooseJob(collect, A_TILE, colony.inputs(), CAPACITY);
     expect(collect).toMatchObject({ kind: 'collect', phase: 'outbound', targetId: sawmill.building.id });
     collect.resource = 'planks';
     collect.amount = sawmill.buffer.take('planks', CAPACITY);
@@ -767,6 +773,150 @@ describe('no sequence of legal transfers walks in circles', () => {
   });
 });
 
+/**
+ * §2.6's dispatch order, one clause per fixture: supply → drain → collect →
+ * staging. It is a CHAIN, so every arm can be hidden by the one above it, and
+ * a case that only shows its own arm winning proves nothing about the arm it
+ * beat. Each case below therefore also shows that the candidate it outranked
+ * genuinely existed on the same tick.
+ */
+describe('where the two transfer classes sit in the dispatch order', () => {
+  /** One idle hauler through the real dispatcher, its trip KEPT so the next
+   * hauler on the same tick sees the claims it left behind. That is the only
+   * way a netted term like `drainNeed` can be told from an unnetted one —
+   * physical stock does not move until a hauler arrives, several legs later. */
+  function dispatchJob(colony: ReturnType<typeof colonyOf>, from: TileRef = CAMP_TILE): HaulTrip {
+    const trip = new HaulTrip();
+    chooseJob(trip, from, colony.inputs(), CAPACITY);
+    colony.trips.push(trip);
+    return trip;
+  }
+
+  /** A producer with a finished batch waiting in its tray: the collect
+   * candidate these cases have to rank against. A forester rather than a
+   * consumer on purpose — its recipe has no inputs, so it contributes no site
+   * demand and can never produce a supply candidate that would outrank
+   * everything under test. */
+  function producerWithFullTray(at: TileRef): HaulBuildingRow {
+    const row = consumer('forester', at);
+    row.buffer.add('wood', CAPACITY);
+    return row;
+  }
+
+  it('a drain outranks a collect', () => {
+    // The one reversal this increment measured. A depot pinned at capacity
+    // with nothing beside it that eats, and a producer beside it with a full
+    // tray: both jobs are on offer, and the drain goes first. The goods in the
+    // tray are safe where they stand; the depot's lost headroom is what turns
+    // every short-hop collect near it back into the long walk to the camp,
+    // which is the leg the depot was placed to remove.
+    const colony = colonyOf([CAMP, A], [producerWithFullTray(NEAR_A)], [[A, { planks: BALANCE.storehouseCapacity }]]);
+    expect(colony.candidates()).toMatchObject([
+      { sourceSiteId: A_ID, destSiteId: CAMP_SITE_ID, resource: 'planks', movable: CAPACITY, staging: false },
+    ]);
+    expect(dispatchJob(colony)).toMatchObject({
+      kind: 'transfer', phase: 'fetching', sourceSiteId: A_ID, destSiteId: CAMP_SITE_ID, staging: false,
+    });
+
+    // The half that makes this an ORDERING rather than a fixture with one
+    // legal answer: the same producer and the same tray, with the depot's
+    // stock removed so no drain is offered, and the collect the assertion
+    // above outranked is taken.
+    const producer = producerWithFullTray(NEAR_A);
+    const undrained = colonyOf([CAMP, A], [producer]);
+    expect(undrained.candidates()).toEqual([]);
+    expect(dispatchJob(undrained)).toMatchObject({
+      kind: 'collect', phase: 'outbound', targetId: producer.building.id,
+    });
+  });
+
+  it('...and only while the depot is below its free floor', () => {
+    // The discriminating half of the case above: without it, that one passes
+    // for a dispatcher that prefers a transfer unconditionally. The same
+    // colony with the depot at exactly `capacity - storehouseFreeFloor` — its
+    // free space IS the floor, `drainNeed` is 0, nothing needs to leave — and
+    // the collect goes.
+    const producer = producerWithFullTray(NEAR_A);
+    const atTheFloor = BALANCE.storehouseCapacity - BALANCE.storehouseFreeFloor;
+    const colony = colonyOf([CAMP, A], [producer], [[A, { planks: atTheFloor }]]);
+    // Surplus is emphatically NOT what is missing: 48 units stand there with
+    // no demand for them anywhere, so a drain sized on surplus alone — or one
+    // whose floor test was dropped — would move a full load.
+    expect(colony.claims().unclaimedAt(A_ID, 'planks')).toBeGreaterThan(CAPACITY);
+    expect(colony.candidates()).toEqual([]);
+    expect(dispatchJob(colony)).toMatchObject({
+      kind: 'collect', phase: 'outbound', targetId: producer.building.id,
+    });
+  });
+
+  it('supply still outranks a drain', () => {
+    // The half of the order that did NOT move. A mill with an empty tray and
+    // wheat standing at the depot beside it, plus a saturated depot across the
+    // map: a building waiting on inputs produces nothing, and that still
+    // outranks buying a depot's headroom back.
+    const colony = colonyOf(
+      [CAMP, A, B],
+      [consumer('mill', NEAR_B)],
+      [[A, { planks: BALANCE.storehouseCapacity }], [B, { wheat: 30 }]],
+    );
+    // Non-vacuous: the drain really is on offer this tick, and would be taken
+    // the moment nothing outranked it.
+    expect(colony.candidates()).toMatchObject([
+      { sourceSiteId: A_ID, destSiteId: CAMP_SITE_ID, resource: 'planks', staging: false },
+    ]);
+    expect(dispatchJob(colony, B_TILE)).toMatchObject({
+      kind: 'supply', phase: 'fetching', sourceSiteId: B_ID, resource: 'wheat',
+    });
+  });
+
+  it('staging does NOT outrank a collect', () => {
+    // The clause that says only the DRAIN half of the transfer rule moved. A
+    // depot with a real unmet demand, a camp with the stock to fill it, and a
+    // producer beside the depot with a full tray: the collect goes, because
+    // nobody is waiting for a staged load while that producer's next batch is
+    // waiting for its tray.
+    //
+    // The mill's in-tray is FULL, and that is what makes the fixture
+    // constructible at all: a site's demand counts every staffed consuming
+    // building, while `needOf` returns null once the tray has no room. So this
+    // mill contributes A's 12-unit wheat demand and NO supply candidate —
+    // without which supply would answer first and the ordering under test
+    // would never be reached.
+    const mill = consumer('mill', NEAR_A);
+    mill.input.add('wheat', BALANCE.inputBufferCap);
+    expect(mill.input.room(BALANCE.inputBufferCap)).toBe(0);
+    const producer = producerWithFullTray(ALSO_NEAR_A);
+    const colony = colonyOf([CAMP, A], [mill, producer], [[CAMP, { wheat: 30 }]]);
+    // Non-vacuous: the staging candidate really is on offer, and it is the
+    // only transfer here — the depot is empty, so nothing drains either.
+    expect(colony.candidates()).toMatchObject([
+      { sourceSiteId: CAMP_SITE_ID, destSiteId: A_ID, resource: 'wheat', movable: CAPACITY, staging: true },
+    ]);
+    expect(dispatchJob(colony)).toMatchObject({
+      kind: 'collect', phase: 'outbound', targetId: producer.building.id,
+    });
+  });
+
+  it('concurrent drains do not starve collect', () => {
+    // The structural bound behind "a drain cannot starve collect": the
+    // promotion is extinguished by ACTING on it. 60 of 60, a floor of 12, a
+    // carry of 6, and THREE haulers on one tick — the first two drain, and the
+    // third reads a `drainNeed` netted to zero against the removals they have
+    // already scheduled, so the collect it was outranked by twice now goes.
+    //
+    // A one- or two-hauler fixture cannot see this. With the netting removed
+    // `drainNeed` never falls, and the hauler that must be REFUSED a drain is
+    // the third.
+    const producer = producerWithFullTray(NEAR_A);
+    const colony = colonyOf([CAMP, A], [producer], [[A, { planks: BALANCE.storehouseCapacity }]]);
+    const trips = [dispatchJob(colony), dispatchJob(colony), dispatchJob(colony)];
+    expect(trips.map((trip) => trip.kind)).toEqual(['transfer', 'transfer', 'collect']);
+    expect(trips[2]).toMatchObject({ phase: 'outbound', targetId: producer.building.id });
+    // Exactly restored, not overshot: two loads of 6 against a 12-unit floor.
+    expect(colony.claims().plannedOutAt(A_ID)).toBe(BALANCE.storehouseFreeFloor);
+  });
+});
+
 describe('what a dispatched trip records about itself', () => {
   it('a hauler that ran a staging transfer does not still report staging on its next job', () => {
     // `staging` rides on the trip and NOTHING in the engine reads it — §4.2's
@@ -783,9 +933,7 @@ describe('what a dispatched trip records about itself', () => {
     const producer = consumer('forester', NEAR_A);
     producer.buffer.add('wood', CAPACITY);
     const colony = colonyOf([CAMP, A], [producer]);
-    const inputs: DispatchInputs = {
-      buildings: colony.buildings, sites: colony.sites, staffed: colony.staffed, claims: colony.claims(),
-    };
+    const inputs: DispatchInputs = colony.inputs();
     const trip = new HaulTrip();
     trip.staging = true; // exactly as a finished staging transfer would have left it
 

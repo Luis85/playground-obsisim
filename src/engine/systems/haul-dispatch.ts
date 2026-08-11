@@ -107,6 +107,11 @@ export interface Claims {
    * for. A trip releases its own reservation (by clearing `destSiteId`)
    * before resolving a new destination, so nothing counts itself twice. */
   heldAt(siteId: number): number;
+  /** A site's occupancy counting only what will CERTAINLY be there: physical
+   * stock plus loads already in a hauler's HANDS — `heldAt` minus its one
+   * intention term. NOT a tidier `heldAt`: the drain needs this quantity and
+   * staging room needs the other; `haul-transfer.ts` has the reasoning. */
+  inHandAt(siteId: number): number;
   /** A site's stock of one resource, less what fetching haulers have already
    * planned to take out of it. */
   unclaimedAt(siteId: number, resource: ResourceId): number;
@@ -201,6 +206,10 @@ export function claimsOf(
         : 0
     )),
     heldAt: heldAtOf(workers, stockpile),
+    // `reservedAt` again, its intention clause shut off by the phase test
+    // rather than by a second copy of its gate that could drift from it.
+    inHandAt: (siteId) => stockpile.totalAt(siteId)
+      + sumOverTrips(workers, (trip) => (trip.phase === 'returning' ? reservedAt(trip, siteId) : 0)),
     unclaimedAt: (siteId, resource) => stockpile.getAt(siteId, resource) - plannedOut(siteId, (trip) => trip.resource === resource),
     // `reservedAt` again, narrowed to ONE resource: what is walking toward a
     // site is exactly the per-resource slice of the reservation term `heldAt`

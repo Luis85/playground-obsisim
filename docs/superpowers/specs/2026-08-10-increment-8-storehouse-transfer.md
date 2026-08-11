@@ -532,7 +532,8 @@ would stage it back, so the dead band of §2.4's closing paragraph still holds
 and no drained unit can be pulled straight back in.
 
 ```
-occupancyAt(S) = heldAt(S) − plannedOutAt(S)         ← every resource, not one
+inHandAt(S)    = totalAt(S) + the loads RETURNING to S   ← heldAt without its intention term
+occupancyAt(S) = inHandAt(S) − plannedOutAt(S)           ← every resource, not one
 drainNeed(S)   = max(0, storehouseFreeFloor − (S.capacity − occupancyAt(S)))
 movable        = min(haulerCapacity, S.surplus(r), drainNeed(S))
 ```
@@ -556,26 +557,50 @@ third finds `drainNeed` at 0 and no candidate at all.
 headroom is measured across every resource, so a per-resource claim cannot bound
 it. §2.7 specifies it; the two share one traversal.
 
-**`occupancyAt` is `heldAt`, not `totalAt`, and the distinction is the whole
-point of calling this reservation-aware.** An earlier draft wrote `totalAt`,
-which counts the removal a drain has scheduled but not the arrival a returning
-hauler has already reserved — reservation-aware in one direction only. A depot
-at 54 of 60 with a six-unit fetch leaving and a six-unit collect return inbound
-then reads occupancy 48, free space 12, and `drainNeed` 0; but once both land it
-is back at 54 with six units of headroom, below the floor. The drain waits a
-full trip for a condition that was already determined at dispatch. `heldAt`
-already counts returning loads (§2.7), so future occupancy needs no new claim:
-`60 − 6 = 54`, free 6, `drainNeed` 6, and the drain goes out on the tick the
-answer is knowable.
+**`occupancyAt` is not `totalAt`, and that distinction is the whole point of
+calling this reservation-aware.** An earlier draft wrote `totalAt`, which counts
+the removal a drain has scheduled but not the arrival a returning hauler has
+already reserved — reservation-aware in one direction only. A depot at 54 of 60
+with a six-unit fetch leaving and a six-unit collect return inbound then reads
+occupancy 48, free space 12, and `drainNeed` 0; but once both land it is back at
+54 with six units of headroom, below the floor. The drain waits a full trip for
+a condition that was already determined at dispatch. A returning load is already
+in a hauler's hands, so counting it needs no new claim: `60 − 6 = 54`, free 6,
+`drainNeed` 6, and the drain goes out on the tick the answer is knowable.
 
-**Inbound *staging* is a different quantity and is still deliberately excluded.**
-`heldAt` counts a returning transfer's `amount`, which is what makes the
-paragraph above work, but the drain does not subtract a *fetching* transfer's
-reservation toward this site — `inboundAt`. A depot simultaneously below its
-floor and being staged into is a placement problem, and having the drain chase
-inbound staging couples the two rules in the one direction that could oscillate.
-The drain answers for removals it has scheduled and for loads already in a
-hauler's hands, not for intentions aimed at it.
+**But `occupancyAt` is not `heldAt` either, and the two must not be collapsed
+into one expression.** `heldAt` carries a second inbound term — a *fetching*
+transfer's `plannedAmount` against the destination it reserved at dispatch — and
+that term is an **intention**, not a load. The drain may not count it. A fetching
+transfer can arrive with **zero**: `takeAt` returns what is actually at the
+source, which `Stockpile.pay` spends camp-first for a build or a meal, and which
+a demolition can remove outright. Worked: a depot physically holding 42, a
+six-unit staging transfer *fetching* toward it and a six-unit collect
+*returning* to it reads `heldAt` 54 — free space 6 against a floor of 12 — and a
+six-unit drain goes out. If the fetch then takes nothing, the collect lands the
+depot on 48, exactly the ceiling the floor reserves, and the drain has removed
+six real units that never needed to move. **The drain answers for removals it
+has scheduled and for loads already in a hauler's hands, not for intentions
+aimed at it** — so its occupancy is `inHandAt`, and `Claims` carries that
+accessor beside `heldAt` rather than changing what `heldAt` means.
+
+**The drain's occupancy and staging's `roomAt` are therefore different
+quantities, and the two similar-looking expressions are not a tidying
+opportunity.** `roomAt` asks *how full might this site be* and must count every
+intention aimed at it: without the fetching term, two staging transfers
+dispatched on the same tick book the same headroom and the second one's overflow
+is forwarded to the camp on arrival (the teleport `roomAt` exists to prevent).
+Over-reserving room costs nothing — the worst case is a load not dispatched.
+`occupancyAt` asks *what will certainly be there* and must count no intention at
+all, because acting on one **removes real goods**. Same site, same tick, two
+honest answers; anyone who folds them back into a single `heldAt` reintroduces
+the overbooking bug on one side or the phantom drain on the other.
+
+Coupling the drain to inbound staging in the other direction — *subtracting*
+`inboundAt`, so a depot being staged into drains less — is also refused, and for
+a separate reason: a depot simultaneously below its floor and being staged into
+is a placement problem, and chasing inbound staging couples the two rules in the
+one direction that could oscillate.
 
 **No `roomAt` term here, and the absence is a consequence rather than an
 omission:** a drain's destination is always the camp, the camp is unbounded, and
@@ -788,9 +813,13 @@ is worth verifying rather than assuming — and one of them does not:
 - **input** counts supply trips against a building's in-tray room. A transfer
   targets no building. Works unchanged.
 
-**Two new claims are required.**
+**Three new claims are required.**
 
 ```ts
+inHandAt(siteId: number): number
+// stockpile.totalAt(siteId) + sum over trips: phase === 'returning' && destSiteId === siteId
+//   → amount. `heldAt` WITHOUT its fetching-transfer term — see §2.4
+
 inboundAt(siteId: number, resource: ResourceId): number
 // sum over trips: kind === 'transfer' && destSiteId === siteId && resource matches
 //   → plannedAmount + (phase === 'returning' ? amount : 0)
@@ -799,6 +828,13 @@ plannedOutAt(siteId: number): number
 // sum over trips: phase === 'fetching' && sourceSiteId === siteId → plannedAmount
 //   ACROSS EVERY RESOURCE — this is `unclaimedAt` with the resource filter removed
 ```
+
+`inHandAt` exists because the drain acts on its answer by removing real goods,
+so it may count only what will certainly be at the site: physical stock and the
+loads already in a hauler's hands. It is deliberately a *second* accessor rather
+than a correction to `heldAt` — staging's `roomAt` needs the intention term that
+this one drops, and §2.4 has the worked example of what each choice costs the
+other rule.
 
 `inboundAt` exists because a site's deficit must subtract transfers already
 walking toward it, or every idle hauler in the colony transfers into the same

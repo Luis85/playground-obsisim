@@ -108,12 +108,32 @@ interface SiteLedger {
 
 function ledgerOf(claims: Claims, demand: ReadonlyMap<number, ReadonlyMap<ResourceId, number>>): SiteLedger {
   const demandFor = (siteId: number, resource: ResourceId) => demand.get(siteId)?.get(resource) ?? 0;
-  // `occupancy` nets out units already scheduled to leave, which is the
-  // "how full will this end up" `drainNeed` wants; `room` below deliberately
-  // omits that subtraction, wanting "how full is this right now" instead, so
-  // staging never counts space a drain has not yet actually vacated. Both
-  // asymmetries err toward doing less, the safe direction for each.
-  const occupancy = (site: StoreSite) => claims.heldAt(site.id) - claims.plannedOutAt(site.id);
+  // `occupancy` and `room` are DIFFERENT QUANTITIES, and the two expressions
+  // below must not be tidied into one (§2.4).
+  //
+  // `room` asks how full a site is RIGHT NOW and counts every intention aimed
+  // at it — that is what `heldAt`'s fetching-transfer term is for, and without
+  // it two staging transfers dispatched on the same tick book the same headroom
+  // and the second one's overflow is forwarded to the camp on arrival. Over-
+  // reserving room costs nothing: the worst case is a load not dispatched.
+  //
+  // `occupancy` asks what will CERTAINLY be there, and may NOT count an
+  // intention, because acting on one removes REAL goods. A fetching transfer
+  // can bring zero: `takeAt` returns what is actually at the source, which
+  // `Stockpile.pay` may have spent out from under the claim (camp-first, for a
+  // build or a meal) or a demolition removed. A depot physically holding 42
+  // with a 6-unit fetch aimed at it and a 6-unit collect returning to it reads
+  // 54 under `heldAt` — free space 6 against a floor of 12 — and a 6-unit drain
+  // goes out; if the fetch then takes nothing, the collect leaves the depot at
+  // 48, exactly its ceiling, and the drain has removed six units that never
+  // needed to move. Hence `inHandAt`: stock, plus loads already in a hauler's
+  // hands, and no intentions.
+  //
+  // `plannedOutAt` is still netted out, and is not the same kind of term: a
+  // scheduled removal is this rule's own doing rather than a guess about
+  // another hauler's, and without it every idle hauler schedules the whole site
+  // for removal on one tick.
+  const occupancy = (site: StoreSite) => claims.inHandAt(site.id) - claims.plannedOutAt(site.id);
   return {
     surplus: (siteId, resource) => Math.max(0, claims.unclaimedAt(siteId, resource) - demandFor(siteId, resource)),
     // The inner `Math.max(0, ...)` is load-bearing: `unclaimedAt` CAN GO

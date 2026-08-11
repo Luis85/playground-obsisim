@@ -11,6 +11,7 @@ import {
 import { Stockpile } from '../../../src/engine/resources';
 import type { DispatchInputs, HaulBuildingRow, StaffedSet } from '../../../src/engine/systems/haul-dispatch';
 import { chooseJob, claimsOf } from '../../../src/engine/systems/haul-dispatch';
+import { bankLoad, destinationFor } from '../../../src/engine/systems/haul-sites';
 import {
   compareTransferCandidates, nextTransferTarget, siteDemandFrom, transferCandidates, type TransferCandidate,
 } from '../../../src/engine/systems/haul-transfer';
@@ -83,6 +84,19 @@ function begunTransfer(candidate: TransferCandidate): HaulTrip {
   trip.sourceSiteId = candidate.sourceSiteId;
   trip.destSiteId = candidate.destSiteId;
   trip.staging = candidate.staging;
+  return trip;
+}
+
+/** A hauler on its last leg into depot A, holding a load the depot has already
+ * reserved room for: the one kind of inbound claim occupancy counts, because
+ * the goods are in a hand rather than in a plan. */
+function carryingToA(resource: ResourceId, amount: number): HaulTrip {
+  const trip = new HaulTrip();
+  trip.kind = 'transfer';
+  trip.phase = 'returning';
+  trip.destSiteId = A_ID;
+  trip.resource = resource;
+  trip.amount = amount;
   return trip;
 }
 
@@ -457,6 +471,81 @@ describe('stock spent out from under a fetching hauler', () => {
     expect(colony.claims().unclaimedAt(B_ID, 'wood')).toBeGreaterThanOrEqual(CAPACITY);
     expect(BALANCE.storehouseCapacity - BALANCE.storehouseFreeFloor - colony.claims().heldAt(A_ID))
       .toBeGreaterThanOrEqual(CAPACITY);
+  });
+
+  it('does not drain a depot on the strength of a fetching transfer that may bring nothing', () => {
+    // §2.4: the drain answers for removals it has scheduled and for loads
+    // already in a hauler's HANDS, not for intentions aimed at it. A fetching
+    // transfer is an intention and it may take ZERO — `takeAt` returns what is
+    // actually at the source, which `Stockpile.pay` can spend out from under
+    // the claim — while a drain it triggers removes REAL goods. Occupancy built
+    // from `heldAt` counts exactly that intention, so the two disagree.
+    //
+    // 42 planks in the depot, a 6-unit staging transfer fetching wood toward
+    // it, and a 6-unit collect returning planks to it: `heldAt` reads 54, free
+    // space 6 against a floor of 12, and a 6-unit drain goes out. Occupancy
+    // counted from what is in hand reads 48 — exactly the ceiling the collect
+    // is about to land the depot on — and nothing needs to leave.
+    const HELD = 42;
+    const CEILING = BALANCE.storehouseCapacity - BALANCE.storehouseFreeFloor;
+    const sawmill = consumer('sawmill', NEAR_A);
+    sawmill.buffer.add('planks', CAPACITY); // a batch waiting for its short hop
+    const colony = colonyOf([CAMP, A], [sawmill], [[CAMP, BUILDINGS.farm.cost], [A, { planks: HELD }]]);
+
+    // The staging transfer, through the ordinary candidate path: the depot
+    // wants 12 wood for its sawmill and has room for exactly one load.
+    expect(colony.dispatch()).toMatchObject({
+      sourceSiteId: CAMP_SITE_ID, destSiteId: A_ID, resource: 'wood', movable: CAPACITY, staging: true,
+    });
+    const [staged] = colony.trips;
+
+    // ...and then the colony builds a farm. `pay` draws camp-first, so it
+    // spends the very wood that hauler is walking toward.
+    expect(colony.stockpile.pay(BUILDINGS.farm.cost)).toBe(true);
+    expect(colony.claims().unclaimedAt(CAMP_SITE_ID, 'wood')).toBe(-CAPACITY); // negative, from a real spend
+
+    // Meanwhile a collect walks the sawmill's planks home. Both halves are the
+    // engine's own: `chooseJob` picks the job — no site holds wood now, so no
+    // supply candidate can outrank it — and `destinationFor` picks the depot,
+    // whose staging room is gone but whose FREE FLOOR is exactly the room it
+    // keeps for short-hop deposits like this one.
+    const collect = new HaulTrip();
+    chooseJob(collect, A_TILE, {
+      buildings: colony.buildings, sites: colony.sites, staffed: colony.staffed, claims: colony.claims(),
+    }, CAPACITY);
+    expect(collect).toMatchObject({ kind: 'collect', phase: 'outbound', targetId: sawmill.building.id });
+    collect.resource = 'planks';
+    collect.amount = sawmill.buffer.take('planks', CAPACITY);
+    collect.pickedUp = true;
+    const home = destinationFor(collect, NEAR_A, colony.sites, colony.claims().heldAt);
+    collect.startLeg('returning', NEAR_A, home, BALANCE.haulTilesPerTick); // `turnForHome`, minus the walking
+    expect(collect).toMatchObject({ phase: 'returning', destSiteId: A_ID, amount: CAPACITY, pickedUp: true });
+    colony.trips.push(collect);
+
+    // The consequence, and the whole point: no drain goes out.
+    expect(colony.dispatch()).toBeNull();
+
+    // The other consequence, once every trip still standing is played out: the
+    // fetch finds the camp spent and takes nothing, the collect banks in the
+    // room reserved for it, and the depot lands ON its ceiling instead of six
+    // units below it with a hauler walking those six to the camp for nothing.
+    for (const trip of colony.trips) {
+      if (trip.phase !== 'fetching' || trip.resource === null) continue;
+      trip.amount = colony.stockpile.takeAt(trip.sourceSiteId, trip.resource, trip.plannedAmount);
+    }
+    expect(staged.amount).toBe(0);
+    bankLoad(colony.stockpile, home, collect);
+    expect(colony.stockpile.totalAt(A_ID)).toBe(CEILING);
+
+    // Non-vacuous, and the other half of the rule: the SAME six units already
+    // in a hauler's hands do count, and the same depot does drain. The
+    // correction is "never on an intention", not "drain less". These two trips
+    // are built by hand rather than dispatched — the fixture is the minimal
+    // pair of the one above, differing only in which leg the wood is on.
+    const inHand = colonyOf([CAMP, A], [consumer('sawmill', NEAR_A)], [[A, { planks: HELD }]]);
+    inHand.trips.push(carryingToA('wood', CAPACITY), carryingToA('planks', CAPACITY));
+    expect(inHand.claims().inHandAt(A_ID)).toBe(HELD + 2 * CAPACITY);
+    expect(movablesOf(inHand.candidates())).toEqual([CAPACITY]);
   });
 });
 

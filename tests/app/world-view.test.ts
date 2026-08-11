@@ -214,6 +214,13 @@ describe('WorldView', () => {
     // encoding, and this increment is not the exception).
     expect(legend.text()).toContain('carrying out');
     expect(legend.text()).toContain('carrying in');
+    // Named ON the carrying-in entry rather than as an entry of its own: a
+    // transfer is drawn with that exact mark and no other (spec §2.10), so a
+    // separate row would advertise an encoding the canvas does not have. This
+    // pins the WORD reaching the legend, not which hauler is transferring —
+    // that is the Population view's job column, which is where the
+    // discriminating check for the transfer label lives.
+    expect(legend.text()).toContain('transfer');
     expect(legend.text()).toContain('storing');
     expect(legend.text()).toContain('store fill');
     expect(legend.text()).toContain('housing');

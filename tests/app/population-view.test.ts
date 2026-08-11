@@ -97,6 +97,60 @@ describe('PopulationView', () => {
     expect(rows[1].text()).toContain('Idle');
   });
 
+  /**
+   * The per-colonist job cell is the ONLY surface that can say WHICH hauler is
+   * transferring — a legend row names the encoding and nothing else (spec
+   * §2.10) — so this is the discriminating check for the transfer label.
+   *
+   * Four haulers in one mount, because the label has to survive three
+   * neighbours that must NOT read as a transfer: a collect trip, a supply trip
+   * (the kind a transfer is a truncation of, and the one most likely to be
+   * lumped in with it), and a hauler between trips whose `haulKind` is null.
+   * A branch that read `hauling` alone, or that mapped every non-null kind to
+   * the transfer label, fails on one of those three rather than on row 1 alone.
+   *
+   * `haulTargetId` is null on the transfer rows, which is the whole point: a
+   * job cell that resolved the target to a building name would have nothing to
+   * render here.
+   */
+  it('names a transferring hauler apart from every other kind of hauling', async () => {
+    const { wrapper } = mountPopulationView({
+      colonists: [
+        makeWorker(1, { hauling: true, haulPhase: 'fetching', haulKind: 'transfer', haulTargetId: null }),
+        makeWorker(2, { hauling: true, haulPhase: 'returning', haulKind: 'collect', haulTargetId: 7 }),
+        makeWorker(3, { hauling: true, haulPhase: 'outbound', haulKind: 'supply', haulTargetId: 7 }),
+        makeWorker(4, { hauling: true, haulPhase: 'idle', haulKind: null, haulTargetId: null }),
+        makeWorker(5, { buildingId: null }),
+      ],
+    });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('[data-test="job-1"]').text()).toBe('Transferring');
+    expect(wrapper.get('[data-test="job-2"]').text()).toBe('Hauling');
+    expect(wrapper.get('[data-test="job-3"]').text()).toBe('Hauling');
+    expect(wrapper.get('[data-test="job-4"]').text()).toBe('Hauling');
+    expect(wrapper.get('[data-test="job-5"]').text()).toBe('Idle');
+  });
+
+  // The other half of the transfer label: a transfer on its RETURNING leg is
+  // still a transfer. The kind is frozen at dispatch and the phase is not, so
+  // a label that read the phase (or `haulPickedUp`, which is false on both
+  // legs of a transfer) would flip halfway through the round trip.
+  it('keeps the transfer label across the phase flip that ends the fetch', async () => {
+    const { wrapper, store } = mountPopulationView({
+      colonists: [makeWorker(1, { hauling: true, haulPhase: 'fetching', haulKind: 'transfer' })],
+    });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('[data-test="job-1"]').text()).toBe('Transferring');
+
+    store.ingest(makeSnapshot({
+      colonists: [makeWorker(1, {
+        hauling: true, haulPhase: 'returning', haulKind: 'transfer', haulPickedUp: false, carrying: 6,
+      })],
+    }), { paused: true, speed: 1, error: null });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('[data-test="job-1"]').text()).toBe('Transferring');
+  });
+
   // Every age in the roster is a different number of years, so a cell reading
   // the wrong ROW is as visible as a cell doing the wrong arithmetic. The
   // expected strings divide by BALANCE.yearTicks rather than hardcoding "25y",

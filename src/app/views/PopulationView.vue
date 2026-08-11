@@ -10,7 +10,8 @@ import { NOMAD_REJECTIONS } from '../../shared/population';
 // Presentation lives in labels.ts, never in the template: LIFE_STAGE_LABELS is
 // a Record keyed by the LifeStage union, so a stage added without a label is a
 // type error here rather than a raw union member in the rendered cell.
-import { ageLabel, commuteLabel, LIFE_STAGE_LABELS, starvingLabel } from '../labels';
+import { ageLabel, commuteLabel, HAUL_KIND_LABELS, LIFE_STAGE_LABELS, starvingLabel } from '../labels';
+import type { HaulKind } from '../../shared/haul';
 // The stage/beds/homeless/meals block, shared with the Dashboard so the two
 // screens cannot disagree about a number the player compares across tabs.
 import PopulationSummary from '../components/PopulationSummary.vue';
@@ -32,8 +33,13 @@ const jobNames = computed(() => {
 // '?' rather than throwing: jobNames only tracks buildings still in the
 // snapshot, so a stale buildingId (a building removed mid-tick) degrades to
 // an unknown label instead of crashing the whole table.
-function jobLabel(buildingId: number | null, hauling: boolean): string {
-  if (hauling) return 'Hauling';
+// `haulKind` rather than `haulTargetId`: a transfer names no building for its
+// whole life, so the id this column otherwise resolves to a name is null on
+// exactly the rows that need distinguishing. Null kind means a hauler between
+// trips, which is still hauling — HAUL_KIND_LABELS covers the three kinds a
+// running trip can be.
+function jobLabel(buildingId: number | null, hauling: boolean, haulKind: HaulKind | null): string {
+  if (hauling) return haulKind === null ? 'Hauling' : HAUL_KIND_LABELS[haulKind];
   if (buildingId === null) return 'Idle';
   return jobNames.value.get(buildingId) ?? '?';
 }
@@ -119,7 +125,7 @@ function starvingClass(starvingTicks: number): string {
           <td :data-test="`age-${w.id}`">{{ ageLabel(w.ageTicks) }}</td>
           <td :data-test="`stage-${w.id}`">{{ LIFE_STAGE_LABELS[w.stage] }}</td>
           <td :data-test="`commute-${w.id}`" :class="commuteClass(w.homeId)">{{ commuteLabel(w.homeId, w.commuteTiles, w.commuteFactor) }}</td>
-          <td>{{ jobLabel(w.buildingId, w.hauling) }}</td>
+          <td :data-test="`job-${w.id}`">{{ jobLabel(w.buildingId, w.hauling, w.haulKind) }}</td>
           <td :data-test="`hunger-${w.id}`" :class="hungerClass(w.hunger)">{{ w.hunger }} / {{ BALANCE.hungerMax }}</td>
           <td :data-test="`starving-${w.id}`" :class="starvingClass(w.starvingTicks)">{{ starvingLabel(w.starvingTicks) }}</td>
           <td :data-test="`efficiency-${w.id}`">{{ (w.efficiency * 100).toFixed(0) }}%</td>

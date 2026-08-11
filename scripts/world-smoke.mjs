@@ -286,7 +286,34 @@ const neighborFull = await shot();
 // nothing — the two frames must be pixel-identical.
 check('the fill gauge stays hidden on a non-store building however far `stored` moves (the `storage > 0` gate)', neighborFull.equals(neighborEmpty));
 
-await step(31); // dispose()
+// A transfer names no building: `haulKind` is 'transfer' and `haulTargetId` is
+// null for the whole round trip. One change per phase (see DRAIN_LEG in the
+// harness): the leg, the load, the direction marker and every building are
+// identical across the two frames below, and only the trip's identity moves.
+await step(31); // the hauler walks a load home from the depot on a trip that NAMES a building
+await wait(1500);
+const namedTrip = await shot();
+
+await step(32); // ONLY change: kind -> 'transfer' and target -> null (one fact, two fields)
+await wait(1500);
+const transfer = await shot();
+// PIXEL-IDENTICAL is the claim, not merely "drawn somewhere". A transfer is a
+// job kind, not a new entity (spec §2.10): no new colour, no new glyph, and
+// `haulPickedUp` stays the direction marker. This frame goes red if a
+// kind-driven branch is ever added to the marker, and equally if a null
+// `haulTargetId` starts falling through to the camp band — the colonist a
+// player would watch teleport home for the length of every transfer.
+check('a transfer is drawn exactly like the same leg that names a building (no kind branch, no null-target fallback)', transfer.equals(namedTrip));
+
+await step(33); // ONLY change: `haulTicksLeft`, 2 of 4 -> 0, on that same transfer
+await wait(1500);
+const transferArrived = await shot();
+// What makes the equality above non-vacuous: the transfer's dot IS on the
+// canvas, and it is positioned from the frozen leg despite naming no building.
+// Without this, a transfer that vanished entirely would satisfy phase 32.
+check('a transfer\'s dot advances along its own frozen leg though it names no building', !transferArrived.equals(transfer));
+
+await step(34); // dispose()
 await wait(300);
 check('dispose() raises no errors', pageErrors.length === 0);
 

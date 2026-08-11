@@ -315,6 +315,98 @@ describe('SnapshotSystem', () => {
     expect([depotAt.col, depotAt.row]).not.toEqual([0, 0]);
   });
 
+  /**
+   * A TRANSFER, which is the supply trip minus its middle leg: `fetching` to a
+   * source site, then `returning` to a destination site, naming no building at
+   * any point. It is built so that nothing else is dispatchable in it — the
+   * same three exclusions `describe('the transfer trip')` in
+   * haul-dispatch.test.ts relies on, restated here because this fixture must
+   * run SnapshotSystem too:
+   *
+   * - no building holds any output, so there is no collect candidate;
+   * - the mill's in-tray is FULL, which removes the supply candidate it would
+   *   otherwise be (`needOf` refuses a building with no room) while leaving it
+   *   a demand source, since demand filters on staffing and relocation only;
+   * - the source depot is nearest to nobody, so its stock is pure surplus and
+   *   never a supply source-of-last-resort by accident.
+   *
+   * The mill is the only reason the destination depot wants anything at all.
+   */
+  async function depotTransferFixture() {
+    const sourceAt = { col: 6, row: 3 };
+    const destAt = { col: 20, row: 10 };
+    const millAt = { col: 21, row: 10 };
+    const save = initialSave();
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
+    save.stockpile = {};   // nothing at the camp, so the source depot is the only surplus
+    const prep = buildColonyPrepWorld({ save, systems: [HaulSystem, SnapshotSystem] });
+    const ids = getPrepResource(prep, IdCounter);
+    const source = spawnBuilding(prep, ids, { defId: 'storehouse', progress: 0, batchActive: false, ...sourceAt, relocatingTicks: 0 });
+    spawnBuilding(prep, ids, { defId: 'storehouse', progress: 0, batchActive: false, ...destAt, relocatingTicks: 0 });
+    const mill = spawnBuilding(prep, ids, {
+      defId: 'mill', progress: 0, batchActive: false, ...millAt, relocatingTicks: 0,
+      inputBuffer: { wheat: BALANCE.inputBufferCap },
+    });
+    const millId = mill.getComponent(Building)!.id;
+    const at = campAdjacentFreeTile([sourceAt, destAt, millAt]);
+    const house = spawnBuilding(prep, ids, { defId: 'house', progress: 0, batchActive: false, col: at.col, row: at.row, relocatingTicks: 0 });
+    const homeId = house.getComponent(Building)!.id;
+    spawnColonist(prep, ids, { buildingId: millId, ageTicks: BALANCE.lifeBands.matureTicks, homeId });
+    spawnColonist(prep, ids, { hauling: true, ageTicks: BALANCE.lifeBands.matureTicks, homeId });
+
+    const world = await prep.prepareRun();
+    const sourceId = source.getComponent(Building)!.id;
+    world.getResource(Stockpile).refundAt({ id: sourceId, ...sourceAt, capacity: BALANCE.storehouseCapacity }, 'wheat', 30);
+    const hauler = () => world.getResource(SnapshotStore).latest!.colonists.find((c) => c.hauling)!;
+    const step = async (times: number) => { for (let i = 0; i < times; i++) await world.step(); };
+    return { world, step, hauler, sourceAt, destAt };
+  }
+
+  /**
+   * The snapshot half of §2.10, and the claim both surfaces are built on: a
+   * live transfer publishes `haulKind: 'transfer'` with `haulTargetId` NULL,
+   * on both of its legs.
+   *
+   * Neither half is free. `haulKind` is published as `trip.phase === 'idle' ?
+   * null : trip.kind`, so a kind that never reached the trip, or a guard that
+   * blanked it, would leave the Population view's job column reading 'Hauling'
+   * for every transfer — a label nothing else in the app can supply. And the
+   * null target is the state the world layout has to survive: it is what makes
+   * "a transfer names no building" true rather than merely intended.
+   */
+  it('publishes a transfer as a transfer, naming no building on either leg', async () => {
+    const { step, hauler, sourceAt, destAt } = await depotTransferFixture();
+
+    await step(1); // dispatched: walking EMPTY to the source it will load at
+    expect(hauler()).toMatchObject({
+      haulKind: 'transfer', haulPhase: 'fetching', haulTargetId: null,
+      haulPickedUp: false, carrying: 0,
+      haulLegFromCol: CAMP_TILE.col, haulLegFromRow: CAMP_TILE.row,
+      haulLegToCol: sourceAt.col, haulLegToRow: sourceAt.row,
+    });
+
+    await step(haulTicksBetween(CAMP_TILE, sourceAt, BALANCE.haulTilesPerTick)); // loads, and turns for the destination
+    expect(hauler()).toMatchObject({
+      // The kind is frozen at dispatch and survives the phase flip; the null
+      // target survives it too, which is the half a `targetId` cleared only on
+      // trip end could pass by accident on the first leg alone.
+      haulKind: 'transfer', haulPhase: 'returning', haulTargetId: null,
+      // Carrying goods IN: the load came out of a store, so the direction
+      // marker points inward on BOTH legs of a transfer, and `haulPickedUp`
+      // is what says so (§2.10). It never flips, which is exactly why the
+      // Population view's label cannot be derived from it.
+      haulPickedUp: false, carrying: BALANCE.haulCarryCapacity,
+      haulLegFromCol: sourceAt.col, haulLegFromRow: sourceAt.row,
+      haulLegToCol: destAt.col, haulLegToRow: destAt.row,
+    });
+    // Non-vacuous: this leg touches the camp at neither end, so a published
+    // pair that had quietly fallen back to a camp anchor fails above.
+    expect([sourceAt, destAt, CAMP_TILE].map((t) => `${t.col},${t.row}`)).toHaveLength(new Set(
+      [sourceAt, destAt, CAMP_TILE].map((t) => `${t.col},${t.row}`),
+    ).size);
+  });
+
   it('publishes each colonist\'s commute, and spends the same factor on the building\'s workPower', async () => {
     // The snapshot is where a player learns WHY a building is slow, so the
     // commute has to be visible and it has to be the number the simulation

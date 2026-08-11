@@ -1540,54 +1540,372 @@ stated: a later change that shifts throughput asymmetrically reds here with a
 message that reads as a tolerance to re-take rather than as a balance
 regression, and whoever re-takes it now knows where the number came from.
 
-### 4.2 The transfer mechanic
+### 4.2 The transfer mechanic, measured
 
-- **The corner chain**, with and without a depot, at 600 / 1,200 / 2,400 — every
-  one of them below the tick-3,000 retirement horizon (§2.13). Acceptance
-  criteria 3 and 4. Reported as absolute advantage per horizon, not only as a
-  percentage — flatness is the finding and a percentage hides it.
-- **A fourth horizon at 4,000, and only with a young workforce.** §1.1's
-  prediction is about *growth*, so a fourth point genuinely strengthens it — but
-  4,800 on a default fixture is past retirement AND past every founder's death,
-  which measures replacement rather than transfer. The scenario therefore takes
-  an explicit starting age of `lifeBands.matureTicks`, moving retirement to tick
-  4,500 and the earliest death to 4,700; `spawnColonist` already honours a
-  per-colonist `ageTicks`, so this is a scenario passthrough rather than new
-  machinery. Both arms of the with/without pair use the same override, so the
-  pair stays comparable; the young-workforce row is **not** comparable digit for
-  digit with the three above it, and the table must say so.
-- **Every horizon asserts its own control rather than trusting this
-  arithmetic.** The run reports deaths and retirements inside the measured
-  window and the test requires both to be zero. That is the durable fix: the
-  4,800 error came from computing "below the first old-age death" by hand and
-  conflating an age with an elapsed tick, and a computed bound fails silently
-  the next time a constant moves while an asserted one fails loudly.
-- **`stalledTicks` and `waitingForInputTicks` per stage**, so the *mechanism* in
-  §1.1 is confirmed or denied separately from the throughput it is supposed to
-  explain.
-- **The camp-fed processor**, the configuration that lost 10%. Kept, reported,
-  and not rescued (§1.2).
-- **The hauler-tick split** including transfer as a fourth category, against
-  `haulerIdleTicks` — §2.6's claim is that transfers are paid for out of idle
-  time, and this is where it is checked.
-- **A sweep of each new constant** across at least three values, on the fixture
-  that constant is supposed to govern.
+**How every figure below was taken.** Each block is one report block in
+`tests/engine/balance.test.ts`, run on this branch's HEAD with the dispatch
+order §2.6 now describes (supply → drain → collect → staging) in the tree:
 
-### 4.3 What must be written down whichever way it goes
+```
+BALANCE_REPORT=1 npx vitest run --project balance -t 'prints the §4.2 horizon readings'
+BALANCE_REPORT=1 npx vitest run --project balance -t 'prints the camp-fed processor and OBS-7-02 readings'
+BALANCE_REPORT=1 npx vitest run --project balance -t 'prints the hauler-tick split'
+BALANCE_REPORT=1 npx vitest run --project balance -t 'prints the constant sweep fixtures'
+```
 
-§4.3 of increment 7 is the model. If the depot's advantage is still flat, that
-is recorded as a second disagreement with §1 and the mechanic is described as
-what it measured as — not retuned until the number cooperates. If the camp-fed
-processor gets worse, that is recorded too, with the fetch-leg share as the
-evidence, and the successor is named.
+Every number in §4.2–§4.4 is a reading taken here. Where a figure recorded
+earlier in this branch's history is quoted for comparison it is labelled as
+such and is never mixed into a row of fresh readings.
+
+**Nothing was tuned to produce any of it.** The three new constants were swept
+(point 6) by editing `src/engine/content/balance.ts`, taking a reading, and
+restoring the shipped value; `git diff src/engine/content/balance.ts` is empty
+at the commit that carries this section. No dispatch formula was changed. Two
+places where a change would have improved a number are recorded in point 7
+rather than acted on.
+
+**1. The headline: the corner chain with and without a depot.** A leg-11
+forester (crew 3) feeding a leg-13 sawmill (crew 2), three haulers, the depot at
+(21,14) between them. `planks` is stage 1's gross output, `wood` stage 0's;
+`st0` is the forester's stalled ticks and `wt1` the sawmill's waiting-for-input
+ticks, each as a percentage of the run; `full%` is the share of ticks the depot
+sat at `storehouseCapacity`; `turnover` is whether its stock ever fell.
+
+| ticks | age | depot | planks | wood | st0 | wt1 | stored | peak | full% | turnover | transfers | staging | drain | idle | deaths | retirements |
+| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 600 | default | no | 204 | 222 | 69 | 53 | 0 | 0 | 0 | false | 0 | 0 | 0 | 87 | 0 | 0 |
+| 600 | default | **yes** | **285** | 303 | 55 | 32 | 54 | 60 | 2 | **true** | 40 | 0 | 40 | 183 | 0 | 0 |
+| 1,200 | default | no | 416 | 438 | 69 | 52 | 0 | 0 | 0 | false | 0 | 0 | 0 | 156 | 0 | 0 |
+| 1,200 | default | **yes** | **542** | 561 | 59 | 31 | 51 | 60 | 2 | **true** | 75 | 0 | 75 | 306 | 0 | 0 |
+| 2,400 | default | no | 840 | 864 | 70 | 51 | 0 | 0 | 0 | false | 0 | 0 | 0 | 298 | 0 | 0 |
+| 2,400 | default | **yes** | **1062** | 1083 | 60 | 30 | 57 | 60 | 2 | **true** | 145 | 0 | 145 | 553 | 0 | 0 |
+| 4,000 | young | no | 1402 | 1427 | 70 | 51 | 0 | 0 | 0 | false | 0 | 0 | 0 | 486 | 0 | 0 |
+| 4,000 | young | **yes** | **1745** | 1765 | 61 | 30 | 57 | 60 | 2 | **true** | 236 | 0 | 236 | 878 | 0 | 0 |
+
+The 4,000-tick pair takes `ageTicks: BALANCE.lifeBands.matureTicks` in **both**
+arms, so it is comparable with itself and **not** comparable digit for digit
+with the three rows above it — a younger crew is a differently-jittered crew as
+well as a longer-serving one. The `deaths` and `retirements` columns are
+asserted zero by the test, not computed from the horizon; §4.5 says why that
+distinction was worth a column.
+
+**The advantage, absolutely and as a percentage, because the two disagree.**
+
+| ticks | age | no depot | depot | advantage | advantage % | advantage per tick |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| 600 | default | 204 | 285 | **+81** | +39.7% | 0.135 |
+| 1,200 | default | 416 | 542 | **+126** | +30.3% | 0.105 |
+| 2,400 | default | 840 | 1062 | **+222** | +26.4% | 0.093 |
+| 4,000 | young | 1402 | 1745 | **+343** | +24.5% | 0.086 |
+
+**Acceptance criterion 3 is met: 222 at 2,400 exceeds 81 at 600, and the
+advantage is monotone across all three clean horizons.** That is the criterion
+as it is written, and it is worth being clear that the bar is a low one — *any*
+sustained rate advantage grows in absolute terms with the horizon, so criterion
+3 separates a one-off buffer from a rate and does nothing finer. The percentage
+column moves the other way, 39.7 → 30.3 → 26.4, and read alone it would say the
+mechanic is getting worse.
+
+**Both readings are explained by one decomposition, and it is the strongest
+statement this fixture supports.** Fit a line to the two clean end points
+(600, 81) and (2,400, 222):
+
+> advantage ≈ **34 planks** + **0.078 planks/tick** × ticks
+
+It predicts 128 at 1,200 against 126 measured, and 347 at 4,000 against 343
+measured — the latter across a workforce change the fit knows nothing about. So
+the depot's advantage is a **one-off buffer term of about 34 planks** *plus* a
+**sustained rate of 0.078 planks per tick**, which is 22% of the no-depot rate
+of 0.350. The one-off is the thing increment 7 measured and recorded as flat
+(26 / 24 / 28 planks at these same three horizons); it is still there and it has
+not grown. **What this increment added is the rate**, and the rate is the whole
+of the difference between this table and increment 7's.
+
+The same decomposition is why the percentage falls. The no-depot arm's
+throughput is flat at 0.340 / 0.347 / 0.350 planks per tick; the depot arm's
+*decays* — 0.475 / 0.452 / 0.443 — because a fixed 34-plank head start is spread
+over a longer run. A percentage of a growing base therefore shrinks while the
+thing it measures grows, which is exactly the failure mode §4.3 of increment 7
+recorded in the opposite direction, and it is why this section reports the
+absolute column first.
+
+**2. The mechanism, confirmed separately from the throughput it explains.**
+§1.1 claims a depot works by unstalling a producer and unstarving a consumer.
+Both halves are visible in the `st0` and `wt1` columns above, and they behave
+differently:
+
+- **The consumer side is the durable half.** The sawmill's
+  `waitingForInputTicks` falls from 51–53% of the run to **30–32%**, and that
+  relief is flat across every horizon — 32, 31, 30, 30.
+- **The producer side fades.** The forester's `stalledTicks` falls from 69–70%
+  to 55% at 600 ticks, but the improvement decays with the horizon: 55 → 59 →
+  60 → 61. By 2,400 ticks the depot has bought the producer ten points of stall
+  where at 600 it bought fourteen.
+
+That is the same shape as the one-off-plus-rate decomposition seen from the
+other side: the depot's spare room is a finite thing that is consumed early, and
+what persists is the shorter leg it puts between the two buildings.
+
+**3. Turnover, and acceptance criterion 4.** `storedAtEnd` is **54 / 51 / 57**
+of a 60-unit capacity at the three clean horizons and 57 at the fourth; the
+series is non-monotone at every horizon; and the depot sits at capacity for
+**2% of ticks** at every horizon measured. **Acceptance criterion 4 is met as it
+is written** — below capacity at every horizon, and turnover rather than a
+monotone climb to 60.
+
+The nuance belongs in the record rather than in a footnote: **the depot does
+still reach 60.** Its peak is capacity in every with-depot run. What changed is
+that it no longer *stays* there. The pre-fix reading on this same fixture was 60
+of 60 with zero transfers and a series that never fell once — a depot that
+filled once and stopped. "No longer saturates" is true in the sense criterion 4
+operationalises (it does not sit full) and false in the sense the phrase
+suggests (it does touch full).
+
+**4. The camp-fed processor — the configuration that lost, and lost by more.**
+§1.2 committed in advance to reporting this configuration including worse, and
+§2.13 puts the obvious remedy out of scope. A camp-fed sawmill at (23,15), crew
+2, the same 400-unit ceiling as the raw sweep's forester, with and without the
+same corner depot beside it. `%ceil` is `delivered / ceiling`; the percentage
+columns are of working (non-idle) hauler ticks.
+
+| haulers | depot | made | delivered | %ceil | wait% | in-tray | idle | fetch% | collect% | supply% | transfer% | transfers | staging | drain | staging ticks | drain ticks | stored |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2 | no | 232 | 220 | 55 | 28 | 0 | 42 | 4 | 0 | 100 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| 2 | yes | 228 | 218 | 55 | 45 | 0 | 43 | 18 | 0 | 98 | 2 | 1 | 1 | 0 | 24 | 0 | 59 |
+| 3 | no | **294** | 282 | 71 | 33 | 0 | 82 | 4 | 0 | 100 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| 3 | yes | **243** | 231 | 58 | 40 | 10 | 70 | 26 | 0 | 84 | 16 | 13 | 2 | 11 | 37 | 244 | 48 |
+| 4 | no | **296** | 286 | 72 | 30 | 3 | 121 | 4 | 0 | 100 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| 4 | yes | **276** | 269 | 67 | 35 | 0 | 117 | 26 | 0 | 80 | 20 | 22 | 6 | 16 | 122 | 326 | 56 |
+
+**A loss of 17% at three haulers (243 against 294) and 7% at four (276 against
+296).** Increment 7 recorded 10% at three and a *gain* of 3% at four for this
+placement; this is worse on both counts, and it is reported rather than
+rescued.
+
+**The fetch leg is the mechanism, and the arithmetic closes.** At three haulers
+the fetch share of working ticks goes **4% → 26%**. In ticks: 4% of
+1,800 − 82 = 1,718 working ticks is ≈ 69, against 26% of 1,800 − 70 = 1,730,
+which is ≈ 450. The fetch leg therefore grew by about **381 hauler-ticks, and it
+buys nothing but position**. The transfer bucket over the same run is 281 ticks
+(37 staging + 244 drain), so roughly 100 of those 381 ticks are extra fetch on
+trips that are not transfers at all — a hauler that banked a load at the depot
+starts its next fetch there, and the seeded wood this building eats exists only
+at the camp. Supply's share falls 100% → 84%, which on 1,730 working ticks is
+about 265 ticks taken out of the only job that feeds this building.
+
+**The dispatch order change does not reach this fixture, and the split says
+why.** `collect%` is **0** in every row of this table, with and without a depot:
+this is a single building whose planks ride home on the return leg of the supply
+trips that feed it (§2.5's round trip), so there is no collect candidate here
+for a drain to be promoted ahead of. The figures above are digit for digit the
+ones recorded on this fixture when transfer first ran (Task 6: 243 against 294,
+13 transfers, 281 transfer hauler-ticks) and the ones read before the dispatch
+order changed. This section did not re-run the pre-fix tree, so what is claimed
+is the agreement of the readings plus a mechanism that makes the agreement
+expected — not a controlled before/after.
+
+**5. The hauler-tick split, with the two transfer classes apart.** Percentages
+of working (non-idle) hauler ticks. `drain%` and `stag%` are a partition of
+`transfer%`, asserted equal to it in the suite because the two are read from
+different places — the bucket off the snapshot's published leg, the classes off
+`HaulTrip.staging` on the live trip.
+
+| fixture | haulers | made0 | made1 | idle | working | collect% | supply% | transfer% | drain% | stag% | fetch% | out% | return% |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| mill→bakery | 1 | 115 | 108 | 37 | 563 | 0 | 100 | 0 | 0 | 0 | 7 | 47 | 46 |
+| mill→bakery | 2 | 260 | 189 | 77 | 1123 | 0 | 100 | 0 | 0 | 0 | 7 | 47 | 46 |
+| mill→bakery | 4 | 394 | 375 | 175 | 2225 | 0 | 100 | 0 | 0 | 0 | 7 | 47 | 46 |
+| mill→bakery + depot | 2 | 276 | 227 | 86 | 1114 | 0 | 99 | 1 | 0 | 1 | 20 | 44 | 36 |
+| mill→bakery + depot | 4 | 379 | 360 | 186 | 2214 | 1 | 94 | 5 | 3 | 2 | 19 | 42 | 39 |
+| forester→sawmill | 3 | 222 | 204 | 87 | 1713 | 46 | 54 | 0 | 0 | 0 | 2 | 50 | 48 |
+| forester→sawmill + depot | 1 | 156 | 142 | 62 | 538 | 43 | 22 | 35 | 35 | 0 | 7 | 43 | 50 |
+| forester→sawmill + depot | 2 | 228 | 210 | 108 | 1092 | 35 | 32 | 32 | 32 | 0 | 15 | 37 | 48 |
+| forester→sawmill + depot | 3 | 303 | 285 | 183 | 1617 | 35 | 27 | 38 | 38 | 0 | 14 | 37 | 48 |
+| forester→sawmill + depot | 4 | 347 | 323 | 251 | 2149 | 31 | 39 | 29 | 29 | 0 | 16 | 38 | 46 |
+| staged chain | 4 | 305 | 192 | 274 | 2126 | 20 | 55 | 25 | 20 | 5 | 21 | 56 | 24 |
+
+**§2.6's "paid for out of idle time" is now a claim about staging alone, and
+this table is where the two halves separate.**
+
+- **A drain is not paid out of idle time, and it is not supposed to be.** On the
+  corner chain at three haulers, adding the depot moves `collect%` 46 → 35 and
+  `supply%` 54 → 27 to fund a `drain%` of 38. Those ticks come straight out of
+  the other two jobs, which is what offering a drain ahead of collect *means*.
+  §2.6's original argument does not cover it and no longer claims to.
+- **And the displacement is not what it costs, because the trips got shorter.**
+  Total working ticks *fall* 1,713 → 1,617 while idle ticks more than double, 87
+  → 183 — and output rises 204 → 285 planks. The depot buys 40% more planks for
+  6% *less* walking. A hauler-tick split that had only looked for displacement
+  would have reported this fixture as a cost.
+- **Staging is small everywhere it is reachable, and is consistent with the idle
+  claim.** `stag%` is **0 in every corner-chain row** — that fixture dispatches
+  drains and nothing else — 1–2% on mill→bakery + depot, and 5% on the staged
+  chain, the one fixture in the file that reaches both classes. On the staged
+  chain that is 112 staging hauler-ticks against 274 idle ones, so staging fits
+  inside the slack §2.6 said it could only spend. That is consistency, not
+  proof: the instrument cannot say what those haulers would have done with the
+  ticks.
+- **A third fixture, printed because it is neither of the two stories above.**
+  The mill→bakery chain with a depot at (13,8) gains at two haulers — 227 bread
+  against 189, +20% — and loses slightly at four, 360 against 375, −4%. Its
+  `fetch%` goes 7 → 19–20 exactly as the camp-fed processor's does, but it has a
+  second consumer for the depot to sit between, so the shorter legs pay for the
+  longer fetch at the hauler count where hauling is scarce and stop paying when
+  it is not. Recorded rather than analysed: no assertion rests on it.
+- **The occupancy cost Task A's review named is visible and is bounded.** A
+  drain outranks an adjacent collect regardless of route distance, and on the
+  corner chain drains take up to 38% of working ticks. Supply is never
+  displaced by it — `supply%` stays non-zero in every row and the ordering puts
+  supply first — and no fixture here measures worse *because of* drains: the
+  configuration that does measure worse (the camp-fed processor) dispatches no
+  collect trips at all, so its loss is the fetch leg and not the promotion.
+
+**6. The three new constants, swept and not tuned.** Each was set, measured, and
+restored. The no-depot arm is absent by construction: all three constants are
+read only through a bounded site, so a run with no storehouse cannot see any of
+them. `corner 600` / `corner 2400` are planks made with the depot; the no-depot
+controls are 204 and 840 from point 1.
+
+| constant | value | corner 600 | corner 2400 | staged chain (planks) | camp-fed far, 3 haulers | transfers on the corner chain |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `siteStagingTarget` | 6 | 285 | 1062 | 192 | 245 | 40 drain / 0 staging |
+| `siteStagingTarget` | **12 (shipped)** | 285 | 1062 | 192 | 243 | 40 drain / 0 staging |
+| `siteStagingTarget` | 24 | 285 | 1062 | 192 | 255 | 40 drain / 0 staging |
+| `minTransferUnits` | 2 | 275 | **831** | 192 | 240 | 164 drain / 0 staging |
+| `minTransferUnits` | **4 (shipped)** | 285 | **1062** | 192 | 243 | 145 drain / 0 staging |
+| `minTransferUnits` | 8 | 230 | **868** | 192 | 258 | **0** |
+| `storehouseFreeFloor` | 0 | 230 | 868 | 192 | 277 | **0** |
+| `storehouseFreeFloor` | 6 | 230 | 863 | 192 | 249 | 1 |
+| `storehouseFreeFloor` | **12 (shipped)** | 285 | 1062 | 192 | 243 | 145 |
+| `storehouseFreeFloor` | 24 | **300** | **1157** | 192 | 243 | 195 |
+
+**`siteStagingTarget` changes nothing that matters, and that is a finding.**
+Across 6 / 12 / 24 the corner chain is identical in every column — it dispatches
+no staging at all, so the constant is not read. The staged chain's staging
+volume does move (4 → 6 → 6 dispatches, 68 → 112 → 112 hauler-ticks) and its
+output **does not**: 192 units of stage-1 product at all three values. The only
+figure the constant moves is the camp-fed processor's, 245 / 243 / 255, and even
+its best value there is 13% below the no-depot control of 294. **The §4 question
+"does staging more than an in-tray's worth pay, or does it just move the stall?"
+is answered: on every fixture this repository can express, staging more does not
+pay, because it does not move enough goods to matter.** The successor is named
+in §4.3.
+
+**`minTransferUnits` has a hard ceiling nobody had written down, and 4 is
+already near it.** At 8 the mechanic is **entirely inert**: zero transfers on
+every fixture, the depot pinned at 60 of 60, and the corner chain reading 230
+and 868 — an advantage of +26 and +28 planks over no depot, which is increment
+7's flat one-off buffer digit for digit and is the same signature the pre-fix
+tree produced. The reason is arithmetic and is not tuning: a drain above the
+site-doing-its-best exemption must clear `minTransferUnits`, and a hauler
+carries `haulCarryCapacity` = 6, so **any value above 6 makes a full-sized
+transfer impossible to dispatch**. At 2 the mechanic runs harder and does worse:
+164 drains instead of 145, 2,560 drain hauler-ticks instead of 2,239, and 831
+planks against 1,062 — a 22% loss against the shipped value and *below* the
+inert tree's 868. Walking for tails costs more than the tails are worth. The
+shipped 4 is the best of the three measured and is bracketed on both sides by
+measurements rather than by argument.
+
+**`storehouseFreeFloor` is the one constant that would improve the headline, and
+it was not moved.** At 0 the mechanic is inert on the corner chain in exactly
+the way `minTransferUnits: 8` is — no drains, depot at 60 of 60, 230 and 868 —
+which answers §4's question "is buying room worth a walk at all?" with an
+unambiguous yes: a floor of zero never notices a depot silting up, and the
+silted depot is worth a flat one-off buffer and nothing more. At 6 it is still
+effectively inert (one drain in 2,400 ticks). At the shipped 12 it is 285 and
+1,062. **At 24 it is 300 and 1,157** — an advantage over no depot of +317 planks
+at 2,400 against the shipped value's +222, a 43% larger advantage, at a cost of
+3,041 drain hauler-ticks against 2,239 and a depot that ends at 39 of 60 rather
+than 57. The camp-fed processor is unchanged at 24 (243, identical to shipped),
+so the higher floor does not pay for its gain there.
+
+**That reading is recorded and deliberately not acted on**, and point 7 says
+why.
+
+**7. Two things this measurement wanted to change, and did not.**
+
+- **`storehouseFreeFloor: 24` measures better than the shipped 12 on the fixture
+  the increment's headline is read off.** Retuning a constant inside the task
+  that measures it is precisely what §1.2 and §4.3 exist to prevent: the number
+  it would improve is the number being reported. It is also a one-fixture
+  reading — the corner chain dispatches drains only, and the crossover sweep,
+  the population curve and the stress colony have not been re-taken at 24 — so
+  it is not yet a retune anyone could sign off. Named as work in §4.3, with the
+  measurement above as its evidence.
+- **P-22, `SiteLedger.room` not subtracting `plannedOutAt`.** Known, real,
+  latency-only and self-correcting. It was deliberately not changed before this
+  measurement, for the same reason: changing a dispatch formula immediately
+  before the task that measures it destroys the measurement's meaning. Filed as
+  an issue rather than fixed.
+
+### 4.3 What was written down whichever way it went
+
+§4.3 of increment 7 is the model, and both directions of it were exercised here.
+
+**Where §1 was confirmed.** The depot's advantage is no longer flat. It
+decomposes into a 34-plank one-off buffer — increment 7's finding, unchanged —
+plus a sustained 0.078 planks per tick, and the rate is what §1.1 predicted and
+what the whole increment turns on. Acceptance criteria 3 and 4 both pass. §1.1's
+mechanism is confirmed on both halves, with the consumer-side relief durable and
+the producer-side relief decaying.
+
+**Where §1 was contradicted, and the contradiction stands.** The camp-fed
+processor is **worse than increment 7 recorded**: a 17% loss at three haulers
+against 10%, and a 7% loss at four where increment 7 measured a 3% gain. §1.2
+committed in advance to reporting this configuration including worse; it is
+reported, the fetch-leg share above is the evidence, and nothing was retuned to
+soften it. §2.13 keeps the obvious remedy out of scope, so the successor is
+named rather than attempted: **a transfer's route should be able to lengthen a
+hauler's next fetch and be declined for it** — today a drain is chosen on the
+site's need alone, and on this fixture 381 hauler-ticks of extra fetch is the
+price.
+
+**Where a constant would have flattered the result.** `storehouseFreeFloor: 24`
+buys a 43% larger advantage on the headline fixture than the shipped 12. It was
+measured, recorded in §4.2 point 6, and left alone. The successor is a retune
+task that re-takes the crossover sweep, the population curve and the stress
+colony at 24 before moving anything — the sweep here is one fixture family and
+one hauler count, which is enough to raise the question and not enough to answer
+it.
+
+**Where a constant turned out not to matter.** `siteStagingTarget` moves no
+fixture's output across 6 / 12 / 24. The honest description of the staging half
+of this mechanic, as measured, is that **it is reachable, correct, and almost
+never worth a trip**: 0 dispatches on the corner chain, 1–6 on the camp-fed
+processor, 4–6 on the staged chain, against 145 drains on the corner chain
+alone. The mechanic that pays is the drain. That is not what §1.1 predicted —
+§1.1's argument for a depot is staging goods toward a consumer — and it is
+recorded here as a second disagreement with §1 rather than as a detail.
 
 ### 4.4 OBS-7-02, answered by measurement
 
-With transfer live, re-run the fixture that established `inputBufferCap: 12` as
-the binding constraint on a far processor. Either the cap is no longer binding —
-in which case OBS-7-02 closes on a finding and the constant never moves — or it
-still is, in which case the issue carries forward with a second measurement and a
-sharper statement of what a retune would have to buy.
+**The cap is still binding, so the issue carries forward with a second
+measurement.** The fixture is the one that established it: a camp-fed sawmill at
+(23,15), crew 2, whose in-tray admits at most
+`inputBufferCap / haulCarryCapacity` = 2 loads in flight at once. The rows are in
+§4.2 point 4.
+
+- **Without a depot, the plateau is exactly where the issue left it.** 71% of
+  ceiling at three haulers and 72% at four, with the fourth hauler buying one
+  point and the building waiting on its in-tray 33% and 30% of ticks. Those are
+  the issue's own figures, re-taken with transfer live in the tree.
+- **With a depot beside it — the arrangement that was supposed to relieve the
+  cap — it is worse, not better.** 58% at three haulers and 67% at four, with
+  waiting *up* to 40% and 35%. Staging fires 2 times in 600 ticks at three
+  haulers and 6 at four. The one mechanism that could feed this building without
+  occupying its in-tray does not fire often enough to be measured against the
+  cap at all.
+- **And `siteStagingTarget` does not rescue it.** Swept to 24 the same
+  configuration reads 255 against a no-depot control of 294 — still a 13% loss.
+
+**`inputBufferCap` does not move, and this measurement does not license moving
+it.** What it adds to the issue is a sharper statement of what a retune would
+have to buy: the cap is not merely un-relieved by transfer, it is un-relieved by
+the *only* mechanism the design had for relieving it, so raising the cap is once
+again the only lever — and OBS-7-02's own three conditions for that
+re-measurement (a two-consumer fixture, the in-tray's end-of-run occupancy, and
+the population curve) are all still unmet by anything measured here. The issue
+carries forward unchanged in severity with these readings attached.
 
 ### 4.5 What these instruments cannot do
 
@@ -1607,3 +1925,29 @@ with/without pair would have differed for reasons having nothing to do with
 transfer. §4.2 now requires each horizon to report deaths and retirements in
 window and assert both are zero. A prose claim about a horizon is exactly the
 kind of thing that is true when written and false after a constant moves.
+
+**The assertion exists and every horizon in §4.2 passes it**, including the
+4,000-tick one, which is clean only because both its arms take
+`ageTicks: lifeBands.matureTicks`. The counter is not vacuous: the same harness
+at 3,900 ticks and the default starting age reports retirements and deaths above
+zero, and reports both back at zero when handed the same override.
+
+**Four things §4.2's readings still cannot say.**
+
+- **Whether staging is genuinely paid out of idle time.** The staged chain
+  spends 112 staging hauler-ticks against 274 idle ones, which is consistent
+  with §2.6's claim and is not a test of it — no instrument here can say what a
+  hauler would have done with a tick it did not spend.
+- **Whether the drain's occupancy bound is per-tick or global.** §2.6 argues at
+  most `ceil(storehouseFreeFloor / capacity)` haulers are on drains per site at
+  once, and the hauler-tick split can see the aggregate share (up to 38% of
+  working ticks on the corner chain) but not the per-tick concurrency. No
+  fixture pins it.
+- **Whether `storehouseFreeFloor: 24` is better in a colony.** The sweep is one
+  fixture family, one hauler count, and one depot. The crossover sweep, the
+  12,000-tick population curve and the stress colony were not re-taken at any
+  swept value.
+- **Whether the camp-fed loss would survive a route-aware transfer.** §4.3 names
+  that successor from the fetch-leg arithmetic, which is an attribution rather
+  than an experiment: nothing here ran a dispatcher that declines a transfer for
+  lengthening the next fetch.

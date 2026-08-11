@@ -290,6 +290,30 @@ export interface BalanceResult extends StageResult {
    * scenario this harness can express reaches it — see `dispatchedTransfer`.
    */
   transferReturns: number;
+  /**
+   * `haulerTicks.transfer` split by the same `HaulTrip.staging` flag the
+   * dispatch counts are split by — the WALKING each class cost, beside the
+   * number of trips each class dispatched.
+   *
+   * Published because §2.6's ordering makes the two classes cost different
+   * things and a single bucket can no longer answer the question §4.2 asks of
+   * it. Staging is offered LAST, behind collect, so its ticks come out of what
+   * would otherwise be idle time; a drain is offered AHEAD of collect, so its
+   * ticks are by construction taken from collect. "Transfers are paid for out
+   * of idle time" is now a claim about staging alone, and checking it against a
+   * bucket holding both classes would confirm or deny it on the wrong number.
+   *
+   * A partition of `haulerTicks.transfer`, not a second tally beside it: both
+   * count one per hauler per non-idle tick on a transfer job, the first from
+   * the snapshot's published leg and this from the live trip. They are asserted
+   * equal in `tests/engine/balance.test.ts` rather than assumed, because they
+   * are read from different places and nothing else would notice them drifting.
+   *
+   * A TICK bucket and not a count, exactly as `haulerTicks.transfer` is — see
+   * `transfers` for why the two instruments are both wanted and must not be
+   * substituted for one another.
+   */
+  transferTicks: { staging: number; drain: number };
   /** Units in haulers' hands when the run ended. Published because it is
    * exactly the term the old `made` wrongly added to every stage's total. */
   carriedAtEnd: number;
@@ -595,8 +619,12 @@ function tallyHaulers(
 }
 
 /** Transfers dispatched over a run, split by `HaulTrip.staging`, plus the same
- * trips counted again at the turn for home. */
-interface TransferTally { total: number; staging: number; drain: number; returned: number }
+ * trips counted again at the turn for home, plus the hauler-ticks each class
+ * spent walking (`BalanceResult.transferTicks`). */
+interface TransferTally {
+  total: number; staging: number; drain: number; returned: number;
+  stagingTicks: number; drainTicks: number;
+}
 
 /**
  * Whether THIS tick is the one a transfer was dispatched on: the `idle` ->
@@ -659,6 +687,23 @@ function returnedTransfer(before: HaulPhase, trip: HaulTrip): boolean {
 }
 
 /**
+ * This hauler's contribution to the class-split tick bucket
+ * (`BalanceResult.transferTicks`): one per non-idle tick on a transfer job,
+ * exactly the terms `tallyHaulers` counts `haulerTicks.transfer` on, but split
+ * by a flag the snapshot does not carry.
+ *
+ * A LEVEL rather than an edge, which is why it takes no `before` phase and sits
+ * outside `tallyTransfers`'s edge guards — and why it is a function of its own
+ * rather than three more lines inside that loop: the quality gate scores
+ * cognitive complexity per function, and the loop was already near its bar.
+ */
+function tallyTransferTick(trip: HaulTrip, tally: TransferTally): void {
+  if (trip.kind !== 'transfer' || trip.phase === 'idle') return;
+  if (trip.staging) tally.stagingTicks++;
+  else tally.drainTicks++;
+}
+
+/**
  * One tick of transfer bookkeeping, read from the LIVE trip components rather
  * than from the snapshot.
  *
@@ -684,6 +729,7 @@ function tallyTransfers(world: IRuntimeWorld, tally: TransferTally, phases: Map<
     // on the very first tick would go unrecorded.
     const before = phases.get(colonist.id) ?? 'idle';
     phases.set(colonist.id, trip.phase);
+    tallyTransferTick(trip, tally);
     if (returnedTransfer(before, trip)) tally.returned++;
     if (!dispatchedTransfer(before, trip)) continue;
     tally.total++;
@@ -773,7 +819,9 @@ export async function runScenario(scenario: Scenario): Promise<BalanceResult> {
   };
   const phases = new Map<number, HaulPhase>();
   const tripPhases = new Map<number, HaulPhase>();
-  const transfers: TransferTally = { total: 0, staging: 0, drain: 0, returned: 0 };
+  const transfers: TransferTally = {
+    total: 0, staging: 0, drain: 0, returned: 0, stagingTicks: 0, drainTicks: 0,
+  };
   const storedSeries: number[] = [];
   const turnover = { deaths: 0, retirements: 0 };
   const returns = { total: 0, loaded: 0 };
@@ -855,6 +903,7 @@ export async function runScenario(scenario: Scenario): Promise<BalanceResult> {
     transfersStaging: transfers.staging,
     transfersDrain: transfers.drain,
     transferReturns: transfers.returned,
+    transferTicks: { staging: transfers.stagingTicks, drain: transfers.drainTicks },
     carriedAtEnd: snapshot.colonists.reduce((sum, w) => sum + w.carrying, 0),
     storedAtEnd: storedUnits(snapshot),
     storedSeries,

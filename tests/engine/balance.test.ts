@@ -709,6 +709,14 @@ describe('the two-way haul instruments', () => {
     expect(r.transfersStaging).toBeGreaterThan(0);
     expect(r.transfersDrain).toBeGreaterThan(0);
     expect(r.transfersStaging + r.transfersDrain).toBe(r.transfers);
+    // The TICK split's non-vacuity, and this is the only fixture that can
+    // supply it: every other depot in the file dispatches drains only, so
+    // `transferTicks.staging` is structurally 0 there and a bucket that was
+    // never incremented would look exactly like a fixture with no staging in
+    // it. The partition identity is asserted on the drain-heavy fixture; this
+    // is what stops that identity from holding with one side always empty.
+    expect(r.transferTicks.staging).toBeGreaterThan(0);
+    expect(r.transferTicks.drain).toBeGreaterThan(0);
     // The class is read from `HaulTrip.staging` at dispatch and never
     // re-derived from the route, for the reason `BalanceResult.transfers`
     // gives: §2.2 makes the camp an ordinary site in the pull rule, so a
@@ -775,6 +783,14 @@ describe('the two-way haul instruments', () => {
     expect(collect).toBeGreaterThan(0);
     expect(supply).toBeGreaterThan(0);
     expect(idle).toBeGreaterThan(0);
+
+    // And the transfer bucket splits by class without gaining or losing a tick.
+    // The two sides are read from DIFFERENT PLACES — `transfer` off the
+    // snapshot's published leg, `transferTicks` off the live trip, because the
+    // snapshot deliberately does not carry `HaulTrip.staging` — so nothing else
+    // in the file would notice them drifting apart. §4.2 quotes both columns
+    // beside each other, which is only legitimate while this holds.
+    expect(r.transferTicks.staging + r.transferTicks.drain).toBe(transfer);
   }, 120000);
 
   it('a run reports the deaths and retirements inside its own window', async () => {
@@ -1022,16 +1038,18 @@ describe('haul balance gradient — the processor half', () => {
  * 11 and 13, different defs and resources), so a reading that took one stage's
  * number for the other's cannot look plausible.
  */
-const crewChain = (a: TileRef, b: TileRef, haulers: number, storehouses?: TileRef[], ticks = TICKS) => runScenario({
+const crewChain = (
+  a: TileRef, b: TileRef, haulers: number, storehouses?: TileRef[], ticks = TICKS, ageTicks?: number,
+) => runScenario({
   defId: 'forester', col: a.col, row: a.row, crew: 3, haulers, ticks, resource: 'wood',
   second: { defId: 'sawmill', col: b.col, row: b.row, crew: 2, resource: 'planks' },
-  storehouses,
+  storehouses, ageTicks,
 });
 
 /** The far-corner instance of it: a leg-11 forester feeding a leg-13 sawmill. */
 const CORNER: readonly [TileRef, TileRef] = [{ col: 20, row: 12 }, { col: 23, row: 15 }];
-const cornerChain = (haulers: number, storehouses?: TileRef[], ticks = TICKS) =>
-  crewChain(CORNER[0], CORNER[1], haulers, storehouses, ticks);
+const cornerChain = (haulers: number, storehouses?: TileRef[], ticks = TICKS, ageTicks?: number) =>
+  crewChain(CORNER[0], CORNER[1], haulers, storehouses, ticks, ageTicks);
 
 /** The DEPOT tile for the chain above: between the two buildings and 19 tiles
  * from the camp, so it is the nearest site to both of them — the only
@@ -1154,24 +1172,243 @@ describe('storehouse balance', () => {
       }
       lines.push('');
     }
-    // Whether the depot keeps paying or fills once and stops. Since Task 6 a
-    // drain transfer is the one thing that could empty it, and on THIS chain it
-    // never fires: measured at both 600 and 2,400 ticks the corner depot ends
-    // full at 60 of 60 with ZERO transfer hauler-ticks. The chain's planks have
-    // no consumer, so the depot still silts up with finished goods — after
-    // which it can neither take another deposit nor stage another input — but
-    // that is now a measured property of this fixture rather than something the
-    // engine forbids.
-    lines.push('does the depot keep paying — corner chain, 3 haulers', '  ticks  depot  planks  per tick  stored');
-    for (const ticks of [600, 1200, 2400]) {
+    // Whether the depot keeps paying or fills once and stops is NOT read off
+    // this block: the horizon readings moved to their own report below, where
+    // the pair can carry its turnover, its transfer classes and its own
+    // deaths-and-retirements control instead of two columns of level.
+    console.log(lines.join('\n'));
+  }, 900000);
+});
+
+// ---------------------------------------------------------------------------
+// §4.2: the transfer mechanic, measured. Everything below produces a number for
+// §4.2–§4.5 of the increment-8 spec.
+// ---------------------------------------------------------------------------
+
+/**
+ * §4.2's three clean horizons on the corner chain, and they are clean by
+ * MEASUREMENT rather than by the arithmetic in this comment: every pair below
+ * asserts `deaths` and `retirements` are 0 inside its own window.
+ *
+ * The arithmetic is written down anyway because it is what chose these numbers,
+ * and because getting it wrong once is what put an invalid 4,800-tick reading in
+ * the spec. `lifespanTicks - spreadTicks` is 5,700 but that is an AGE; founders
+ * spawn at `BALANCE.startingAgeTicks` (2,500), so in ELAPSED ticks retirement
+ * lands at 3,000, the earliest old-age death at 3,200, and the last founder is
+ * gone by 4,800. 2,400 is therefore the longest clean horizon at the default
+ * starting age — and a 4,800-tick run would compare a with-depot arm against a
+ * without-depot arm whose colonists have different lifespans, because two extra
+ * entities shift every colonist id and `lifespanFor` jitters by id (OBS-7-05).
+ */
+const HORIZONS = [600, 1200, 2400] as const;
+
+/**
+ * §4.2's fourth point, and the reason it needs its own starting age: §1.1's
+ * claim is about GROWTH, so a longer horizon genuinely strengthens or weakens
+ * it, but 4,000 ticks is past the default fixture's retirement at 3,000.
+ * `lifeBands.matureTicks` (1,000) moves retirement to 4,500 and the earliest
+ * death to 4,700, so the window is clean again — asserted, not assumed.
+ *
+ * BOTH arms take the override, so the pair stays comparable with each other.
+ * The row is NOT comparable digit for digit with the three horizons above it:
+ * a younger crew is a differently-jittered crew as well as a longer-serving
+ * one.
+ */
+const YOUNG_HORIZON = 4000;
+
+/** One with/without-depot pair of the corner chain at one horizon, in the order
+ * every reading below unpacks them: plain first, depot second. */
+async function horizonPair(ticks: number, ageTicks?: number): Promise<[BalanceResult, BalanceResult]> {
+  const plain = await cornerChain(3, undefined, ticks, ageTicks);
+  return [plain, await cornerChain(3, [CORNER_DEPOT], ticks, ageTicks)];
+}
+
+/** Whether a depot's stock ever fell — turnover, as acceptance criterion 4
+ * asks for it, rather than the monotone climb to 60 that a single closing
+ * level cannot be told apart from. */
+const turnedOver = (series: readonly number[]) => series.some((units, i) => i > 0 && units < series[i - 1]);
+
+/** One run of a horizon pair, as a fixed-width row. Split out of the report
+ * block for the reason `crossoverRow` is: the quality gate scores complexity
+ * per function. */
+function horizonRow(ticks: number, age: string, depot: boolean, r: BalanceResult): string {
+  const pct = (n: number) => ((n / ticks) * 100).toFixed(0).padStart(3);
+  return (
+    `  ${String(ticks).padStart(5)}  ${age.padEnd(7)}  ${(depot ? 'yes' : 'no').padStart(5)}  ` +
+    `${String(r.stages[1].made).padStart(6)}  ${String(r.stages[0].made).padStart(4)}  ` +
+    `${pct(r.stages[0].stalledTicks)}  ${pct(r.stages[1].waitingForInputTicks)}  ` +
+    `${String(r.storedAtEnd).padStart(6)}  ${String(Math.max(...r.storedSeries)).padStart(4)}  ` +
+    `${pct(r.storedSeries.filter((units) => units >= BALANCE.storehouseCapacity).length)}  ` +
+    `${String(turnedOver(r.storedSeries)).padStart(8)}  ${String(r.transfers).padStart(6)}  ` +
+    `${String(r.transfersStaging).padStart(4)}  ${String(r.transfersDrain).padStart(5)}  ` +
+    `${String(r.haulerIdleTicks).padStart(4)}  ${String(r.deaths).padStart(6)}  ${String(r.retirements).padStart(7)}`
+  );
+}
+
+/** One camp-fed processor run, as a fixed-width row: the throughput columns
+ * OBS-7-02 is stated in, beside the hauler-tick columns §4.2 names as the
+ * suspect for the loss. */
+function processorRow(haulers: number, depot: boolean, r: BalanceResult): string {
+  const t = r.haulerTicks;
+  const working = t.fetching + t.outbound + t.returning;
+  const pct = (n: number, width: number) => ((n / working) * 100).toFixed(0).padStart(width);
+  return (
+    `  ${String(haulers).padStart(7)}  ${(depot ? 'yes' : 'no').padStart(5)}  ${String(r.made).padStart(4)}  ` +
+    `${String(r.delivered).padStart(5)}  ${((r.delivered / r.ceiling) * 100).toFixed(0).padStart(5)}  ` +
+    `${((r.waitingForInputTicks / TICKS) * 100).toFixed(0).padStart(5)}  ${String(r.finalInputBuffer).padStart(7)}  ` +
+    `${String(r.haulerIdleTicks).padStart(4)}  ${pct(t.fetching, 6)}  ${pct(t.collect, 8)}  ` +
+    `${pct(t.supply, 7)}  ${pct(t.transfer, 5)}  ` +
+    `${String(r.transfers).padStart(5)}  ${String(r.transfersStaging).padStart(4)}  ${String(r.transfersDrain).padStart(5)}  ` +
+    `${String(r.transferTicks.staging).padStart(6)}  ${String(r.transferTicks.drain).padStart(7)}  ` +
+    `${String(r.storedAtEnd).padStart(6)}`
+  );
+}
+
+/** One row of the constant sweep. `storedSeries.length` IS the run's tick
+ * count, so a fixture's own horizon normalises its wait percentage without the
+ * caller passing it. */
+function sweepRow(label: string, r: BalanceResult): string {
+  const last = r.stages.at(-1)!;
+  return (
+    `${label.padEnd(26)}  ${String(last.made).padStart(5)}  ${String(r.stages[0].made).padStart(5)}  ` +
+    `${String(r.storedAtEnd).padStart(6)}  ${String(Math.max(...r.storedSeries)).padStart(4)}  ` +
+    `${String(r.transfers).padStart(5)}  ${String(r.transfersStaging).padStart(4)}  ${String(r.transfersDrain).padStart(5)}  ` +
+    `${String(r.transferTicks.staging).padStart(6)}  ${String(r.transferTicks.drain).padStart(7)}  ` +
+    `${String(r.haulerIdleTicks).padStart(4)}  ` +
+    `${((last.waitingForInputTicks / r.storedSeries.length) * 100).toFixed(0).padStart(5)}`
+  );
+}
+
+describe('the transfer mechanic — §4.2', () => {
+  it('a depot beside a chain turns over, and its advantage over the horizon is what §4.2 records', async () => {
+    const advantage: number[] = [];
+    for (const ticks of HORIZONS) {
+      const [plain, depot] = await horizonPair(ticks);
+      // THE CONTROL, asserted rather than computed (§4.2, §4.5). A colonist who
+      // retires stops working and one who dies stops existing, and either turns
+      // a logistics comparison into a demographic one. Both arms, because the
+      // depot arm is the one whose ids are shifted.
+      expect(plain.deaths + plain.retirements).toBe(0);
+      expect(depot.deaths + depot.retirements).toBe(0);
+      // And the mechanic ran in the arm that has a depot to run it in.
+      expect(plain.transfers).toBe(0);
+      expect(depot.transfers).toBeGreaterThan(0);
+      // ACCEPTANCE CRITERION 4, at every horizon measured: below capacity, and
+      // a series that falls as well as rises. Both halves, because a depot that
+      // never filled satisfies the first on its own.
+      expect(depot.storedAtEnd).toBeLessThan(BALANCE.storehouseCapacity);
+      expect(Math.max(...depot.storedSeries)).toBeGreaterThan(0);
+      expect(turnedOver(depot.storedSeries)).toBe(true);
+      advantage.push(depot.stages[1].made - plain.stages[1].made);
+    }
+
+    // ACCEPTANCE CRITERION 3, as an ABSOLUTE advantage — a percentage of a
+    // growing base can shrink while the advantage grows, and increment 7 §4.3
+    // found flatness a percentage was hiding. Measured 81 / 126 / 222 planks at
+    // 600 / 1,200 / 2,400, which is the shape §1.1 predicted and the opposite of
+    // increment 7's 26 / 24 / 28 one-off buffer.
+    expect(advantage[2]).toBeGreaterThan(advantage[0]);
+    // Not merely bigger at the far end: monotone across all three, which a
+    // one-off buffer plus noise is not. This is the bound §4.2 rests §1.1 on.
+    expect(advantage[1]).toBeGreaterThan(advantage[0]);
+    expect(advantage[2]).toBeGreaterThan(advantage[1]);
+  }, 300000);
+
+  it('the fourth horizon is clean because its workforce is young, not because 4,000 is short', async () => {
+    const [plain, depot] = await horizonPair(YOUNG_HORIZON, BALANCE.lifeBands.matureTicks);
+
+    // The same control as the three horizons above, and it is the only thing
+    // that licenses reading this row: 4,000 ticks is 1,000 past the DEFAULT
+    // fixture's retirement, so without the override this pair would be
+    // comparing two differently-aged colonies (§4.5, OBS-7-05).
+    expect(plain.deaths + plain.retirements).toBe(0);
+    expect(depot.deaths + depot.retirements).toBe(0);
+    // A zero-valued control is indistinguishable from a counter that never
+    // fires, and the discrimination for THIS one is taken once, in 'a run
+    // reports the deaths and retirements inside its own window': the same
+    // harness at 3,900 ticks and the default starting age reports retirements
+    // and deaths above zero, and reports both back at zero when handed
+    // `matureTicks`. Re-taking it here would cost two more 4,000-tick runs to
+    // learn what that test already establishes about the same field.
+    expect(depot.transfers).toBeGreaterThan(0);
+    expect(depot.stages[1].made).toBeGreaterThan(plain.stages[1].made);
+  }, 300000);
+
+  it('prints the §4.2 horizon readings when BALANCE_REPORT is set', async () => {
+    if (!process.env.BALANCE_REPORT) return;
+    const lines = ['', '§4.2 horizons — corner chain, forester crew 3 -> sawmill crew 2, 3 haulers',
+      '  ticks  age      depot  planks  wood  st0  wt1  stored  peak  full%  turnover  xfers  stag  drain  idle  deaths  retires'];
+    const advantages: string[] = ['', '  the advantage per horizon, absolute and as a percentage',
+      '  ticks  age      no depot  depot  advantage  advantage%'];
+    for (const [ticks, ageTicks, age] of [
+      ...HORIZONS.map((t) => [t, undefined, 'default'] as const),
+      [YOUNG_HORIZON, BALANCE.lifeBands.matureTicks, 'young'] as const,
+    ]) {
+      const [plain, depot] = await horizonPair(ticks, ageTicks);
+      lines.push(horizonRow(ticks, age, false, plain), horizonRow(ticks, age, true, depot));
+      const [a, b] = [plain.stages[1].made, depot.stages[1].made];
+      advantages.push(
+        `  ${String(ticks).padStart(5)}  ${age.padEnd(7)}  ${String(a).padStart(8)}  ${String(b).padStart(5)}  ` +
+        `${String(b - a).padStart(9)}  ${(((b - a) / a) * 100).toFixed(1).padStart(10)}`,
+      );
+    }
+    console.log([...lines, ...advantages].join('\n'));
+  }, 900000);
+
+  it('prints the camp-fed processor and OBS-7-02 readings when BALANCE_REPORT is set', async () => {
+    if (!process.env.BALANCE_REPORT) return;
+    // TWO questions on one fixture family, and they are the same runs read for
+    // different columns.
+    //
+    // §4.2's cost column: the camp-fed processor is the configuration §1.2
+    // committed in advance to reporting including worse, and §2.13 puts the
+    // obvious remedy out of scope. `%ceiling`, `fetch%` and the transfer split
+    // are what say WHY, and the fetch-leg share is the named suspect.
+    //
+    // §4.4's answer: this is the fixture that established `inputBufferCap: 12`
+    // as the binding constraint (OBS-7-02) — a far-corner sawmill fed from the
+    // camp, plateauing at 71-72% of ceiling however many haulers it hires. The
+    // depot rows are the re-run the issue was waiting for: a staging transfer
+    // is the one mechanism that could feed this building without occupying its
+    // in-tray, so if the cap has stopped binding it shows up here.
+    const lines = ['', 'camp-fed sawmill (23,15) crew 2 — §4.2\'s cost and §4.4\'s answer',
+      '  haulers  depot  made  deliv  %ceil  wait%  in-tray  idle  fetch%  collect%  supply%  xfer%  xfers  stag  drain  stagTk  drainTk  stored'];
+    for (const haulers of [2, 3, 4]) {
       for (const storehouses of [undefined, [CORNER_DEPOT]]) {
-        const r = await cornerChain(3, storehouses, ticks);
-        lines.push(
-          `  ${String(ticks).padStart(5)}  ${(storehouses === undefined ? 'no' : 'yes').padStart(5)}  ` +
-          `${String(r.stages[1].made).padStart(6)}  ${(r.stages[1].made / ticks).toFixed(3).padStart(8)}  ${String(r.storedAtEnd).padStart(6)}`,
-        );
+        lines.push(processorRow(haulers, storehouses !== undefined, await campFedSawmill(23, 15, haulers, storehouses)));
       }
     }
+    console.log(lines.join('\n'));
+  }, 900000);
+
+  it('prints the constant sweep fixtures when BALANCE_REPORT is set', async () => {
+    if (!process.env.BALANCE_REPORT) return;
+    // §4.2's last bullet. This block is run ONCE PER VALUE of the constant under
+    // test, by editing `src/engine/content/balance.ts` between runs and putting
+    // the shipped value back afterwards — the constants are swept, never tuned,
+    // and the header line prints all three so a sweep row cannot be filed under
+    // the wrong value.
+    //
+    // The no-depot arm is deliberately absent: all three constants are read only
+    // through a BOUNDED site (`siteDemandFrom` and `ledgerOf` in
+    // haul-transfer.ts, `drainCandidates` in haul-dispatch.ts), so a run with no
+    // storehouse cannot see any of them and its figures are the same at every
+    // value by construction. §4.2 quotes the horizon block's plain arm.
+    //
+    // Four fixtures, because the three constants govern different halves of the
+    // mechanic: the corner chain dispatches DRAINS only (`storehouseFreeFloor`,
+    // and `minTransferUnits` on the drain's exemption), the staged chain is the
+    // only fixture in the file that reaches STAGING at all (`siteStagingTarget`,
+    // `minTransferUnits`), and the camp-fed processor is where staging would
+    // have to pay if it paid anywhere.
+    const lines = ['', 'constant sweep — ' +
+      `siteStagingTarget=${BALANCE.siteStagingTarget} minTransferUnits=${BALANCE.minTransferUnits} ` +
+      `storehouseFreeFloor=${BALANCE.storehouseFreeFloor}`,
+      'fixture                       made1  made0  stored  peak  xfers  stag  drain  stagTk  drainTk  idle  wait%'];
+    lines.push(sweepRow('corner chain 600, depot', await cornerChain(3, [CORNER_DEPOT], 600)));
+    lines.push(sweepRow('corner chain 2400, depot', await cornerChain(3, [CORNER_DEPOT], 2400)));
+    lines.push(sweepRow('staged chain, depot', await stagedChain()));
+    lines.push(sweepRow('camp-fed far 3h, depot', await campFedSawmill(23, 15, 3, [CORNER_DEPOT])));
     console.log(lines.join('\n'));
   }, 900000);
 });
@@ -1315,16 +1552,25 @@ describe('dispatch order under a drained ledger', () => {
     // the plain ones because the fetch leg is the term a depot moves — a hauler
     // that banked at a depot starts its next fetch there, and the camp is the
     // only site holding a seeded input.
+    //
+    // THE TWO TRANSFER CLASSES ARE PRINTED APART (§4.2), because since the
+    // dispatch order changed they are paid for out of different budgets and one
+    // `transfer%` column can no longer answer the question that is being asked
+    // of it. Staging is offered LAST, behind collect, so §2.6's "paid for out of
+    // idle time" claim is now a claim about `stag%` against `idle` and about
+    // nothing else. A drain is offered AHEAD of collect, so `drain%` is by
+    // construction taken from `collect%` — that is the occupancy cost §2.6
+    // names, and this split is the only instrument in the file that can see it.
     const lines = ['', 'hauler-tick split — percentages of WORKING (non-idle) hauler ticks',
-      'fixture              haulers  made0  made1   idle  working  collect%  supply%  transfer%  fetch%  out%  return%  supplyReturns  loaded%'];
+      'fixture              haulers  made0  made1   idle  working  collect%  supply%  transfer%  drain%  stag%  fetch%  out%  return%  supplyReturns  loaded%'];
     const emit = (label: string, haulers: number, r: BalanceResult) => {
       const t = r.haulerTicks;
       const working = t.fetching + t.outbound + t.returning;
       const pct = (n: number, width: number) => ((n / working) * 100).toFixed(0).padStart(width);
       lines.push(
-        `${label.padEnd(20)} ${String(haulers).padStart(7)}  ${String(r.stages[0].made).padStart(5)}  ${String(r.stages[1].made).padStart(5)}  ` +
+        `${label.padEnd(20)} ${String(haulers).padStart(7)}  ${String(r.stages[0].made).padStart(5)}  ${String(r.stages.at(-1)!.made).padStart(5)}  ` +
         `${String(t.idle).padStart(5)}  ${String(working).padStart(7)}  ${pct(t.collect, 8)}  ${pct(t.supply, 7)}  ` +
-        `${pct(t.transfer, 9)}  ` +
+        `${pct(t.transfer, 9)}  ${pct(r.transferTicks.drain, 6)}  ${pct(r.transferTicks.staging, 5)}  ` +
         `${pct(t.fetching, 6)}  ${pct(t.outbound, 4)}  ${pct(t.returning, 7)}  ${String(r.supplyReturns).padStart(13)}  ` +
         `${((r.supplyReturnsLoaded / Math.max(1, r.supplyReturns)) * 100).toFixed(0).padStart(7)}`,
       );
@@ -1338,6 +1584,11 @@ describe('dispatch order under a drained ledger', () => {
       }));
     }
     for (const haulers of [1, 2, 3, 4]) emit('forester->sawmill', haulers, await cornerChain(haulers));
+    // The depot arm of §4.2's own fixture, which is the row that measurement is
+    // read off, and the staged chain — the only fixture in the file that
+    // dispatches BOTH classes, so the only one where `stag%` is not zero.
+    for (const haulers of [1, 2, 3, 4]) emit('forester->sawmill+depot', haulers, await cornerChain(haulers, [CORNER_DEPOT]));
+    emit('staged chain', 4, await stagedChain());
     console.log(lines.join('\n'));
   }, 900000);
 });

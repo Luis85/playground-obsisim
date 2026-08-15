@@ -127,6 +127,8 @@ it('COMPONENT_TYPES includes Construction', () => {
   refuse unless ∀r: colonyStock[r] ≥ outstanding[r] + def.cost[r]
   ```
 
+  **The Σ must skip `ctx.demolishedIds`.** Removal is deferred to the end of the drain, so a site demolished earlier in this same drain is still sitting in `ctx.buildings` with its `Construction` and its in-tray intact. Summed naively, that ghost's shortfall is charged against the very order meant to replace it, and a demolish-then-rebuild pair in one drain is refused for materials the colony demonstrably has — the refund from the demolish having already landed. This is not a new mechanism: `placement-handlers.ts:23-31` already carries a helper that filters exactly this set, with a comment saying why, and `findBuilding` (`command-handlers.ts:88`) applies the same exclusion. Use it. **Fixture: demolish a site and order its replacement in ONE drain, and require the second order to be ACCEPTED.**
+
   Derived from live components at every call, stored nowhere, reserving nothing. Deliberately conservative by the amount in transit — a picked-up load has left `Stockpile` and not yet reached `held`, so it is counted twice against the player. That is the safe direction, and increment 10 deletes the check entirely.
 
   **It is an ORDER-TIME check and guarantees nothing about completion** (§2.3). It writes nothing down, so a trip already dispatched to fetch wood for a sawmill still has that wood in `colonyStock` when the check reads it, and an accepted site can be left short a few ticks later. **Do not fix this with a reservation** — reserving strongly enough to guarantee completion would mean holding materials against meals. The queue can stall; it is bounded, and cancellation recovers it.

@@ -488,8 +488,15 @@ constructionTicks: number;
 - **Migration v6 → v7 sets it to 0 for every building.** Every building in a v6
   save is finished by construction — the concept did not exist — so the migration
   is total and lossless, and needs no heuristic.
-- **The guard** is `isTickCounter`, the same non-negative-safe-integer check
-  `relocatingTicks` and `starvingTicks` already use. **That is necessary and not
+- **The guard** is `isTickCounter` (`save.ts:263`), the non-negative-safe-integer
+  check `starvingTicks` and `ageTicks` already use (`save.ts:277-278`). **Not the
+  one `relocatingTicks` uses** — that field is guarded by a bare
+  `Number.isFinite((b as SavedBuildingV4).relocatingTicks)` (`save.ts:397`), which
+  accepts negatives and fractions and is strictly weaker. Earlier drafts of both
+  this spec and the plan claimed `relocatingTicks` used `isTickCounter`; it does
+  not, and copying that framing would give `constructionTicks` the weaker guard
+  and quietly fail the "a negative or fractional `constructionTicks` is rejected"
+  test's whole purpose. **That is necessary and not
   sufficient**: `relocatingTicks` is *also* clamped on restore by
   `clampedRelocation` (`spawn.ts:67`) against the current `BALANCE.maxRelocationTicks`,
   because a save written under a larger constant must not restore a countdown

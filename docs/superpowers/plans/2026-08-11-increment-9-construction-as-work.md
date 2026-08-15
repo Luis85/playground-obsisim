@@ -35,7 +35,7 @@ The exclusions depend only on Task 1's component and Task 2's sites, never on de
   | `src/engine/systems/haul-dispatch.ts` | 395 | Task 3 |
   | `src/engine/components.ts` | 350 | Task 1 |
   | `src/engine/systems/placement-handlers.ts` | 327 | Task 2, Task 7 |
-  | `src/engine/snapshot-builder.ts` | 379 | Task 2b |
+  | `src/engine/snapshot-builder.ts` | 368 | Task 2b |
 
   Check with `grep -cve '^\s*$' <file>` after every task that touches one.
 - **Every task's tests must be greenable by that task's own changes.** `check:all` is required green at the end of every task, so a test asserting behaviour a *later* task enables cannot be committed — the implementer must then skip it, weaken it, or pull the later task forward, and all three are worse than writing the right assertion now. **This plan broke that rule three times in review** (Task 1's save round-trip needs Task 8's schema; Task 3 asserted completion, which needs Task 5's system; and a stalled-queue recovery test sat in a dispatch task that had neither completion nor cancellation), so before starting any task, check its tests against its own file list. Where the strong assertion belongs to a later task, the earlier one asserts the strongest thing it *can* reach and names the task that finishes the job.
@@ -71,7 +71,7 @@ Two commits, deliberately separable: the extraction that unblocks the file, then
 
 **Files:**
 - Create: `src/engine/initial-save.ts`, and move `initialSave` there
-- Modify: `src/engine/world.ts`, `src/engine/components.ts`, `src/engine/spawn.ts`, `src/shared/placement.ts`
+- Modify: `src/engine/world.ts`, `src/engine/components.ts`, `src/engine/spawn.ts`, `src/shared/placement.ts`, **`src/engine/content/balance.ts`** (`buildTicks`)
 - Test: `tests/engine/world.test.ts`, `tests/engine/components.test.ts`, `tests/shared/placement.test.ts`
 
 **Interfaces:**
@@ -191,12 +191,14 @@ Mutations: restore the `pay` call; delete the check entirely; **replace the cumu
 §2.7's table. **Six exclusions, six fixtures** — this is the task the compound-boolean rule was written for.
 
 **Files:**
-- Modify: `src/engine/systems/population-handlers.ts` (rehome), `src/engine/systems/command-system.ts:105` and `src/engine/systems/population-system.ts:72` (the two runtime shelter-row builders), `src/engine/snapshot-builder.ts:223` (the published bed total), `src/engine/systems/haul-sites.ts` (`storeSitesOf`), `src/engine/systems/production-system.ts`, `src/engine/systems/command-handlers.ts:140` (worker assignment), `src/engine/snapshot-buildings.ts`
+- Modify: `src/engine/systems/population-handlers.ts` (rehome), `src/engine/systems/command-system.ts:105` and `src/engine/systems/population-system.ts:72` (the two runtime shelter-row builders), `src/engine/snapshot-builder.ts:223` (the published bed total), `src/engine/systems/haul-sites.ts` (`storeSitesOf`), **`src/engine/systems/haul-dispatch.ts`** (`storeSitesFrom`, `StoreRow`), **`src/engine/systems/haul-system.ts`** (its `buildings` query), `src/engine/systems/production-system.ts`, `src/engine/systems/command-handlers.ts:140` (worker assignment + `BuildingRow`), `src/engine/snapshot-buildings.ts`
 - Test: the matching suites
 
 **The store-site exclusion needs `Construction` THREADED to it, and `haul-sites.ts` alone cannot do it.** `storeSitesOf` takes `StoreSiteRow`, which `storeSitesFrom` (`haul-dispatch.ts`) builds from `Building`, `Position` and `Relocation` — and `HaulSystem`'s own `buildings` query does not read `Construction` at all. So the predicate has nothing to test and an unfinished storehouse stays a live destination however the exclusion is written. Add the component to the query, to `StoreRow`/`StoreSiteRow`, and to the two other row builders (`command-system.ts:105`, `population-system.ts:72`) that construct the same shape. Files: `haul-sites.ts`, `haul-dispatch.ts`, `haul-system.ts`.
 
-**"An unfinished house has no beds" has FIVE call sites**, three of them here and two in Task 8. `grep -rn "relocatingTicks === 0\|isRelocating(\|state !== 'relocating'" src/` finds them: `command-system.ts:105` and `population-system.ts:72` build the runtime shelter rows, `snapshot-builder.ts:223` computes the **published** bed total, and `restore.ts:123` / `save-guard.ts:95` are load-time. Fixing only the rehome path leaves a colonist seated in a site by whichever of the others ran first.
+**"An unfinished house has no beds" has FIVE call sites**, three of them here and two in Task 8: `command-system.ts:105` and `population-system.ts:72` build the runtime shelter rows, `snapshot-builder.ts:223` computes the **published** bed total, and `restore.ts:123` / `save-guard.ts:95` are load-time. Fixing only the rehome path leaves a colonist seated in a site by whichever of the others ran first.
+
+`grep -rn "relocatingTicks === 0\|isRelocating(\|state !== 'relocating'" src/` is how they were found, but it **returns thirteen hits, not five** — the rest are haul and production paths that are not about beds. It also returns a *sixth* bed-related one, `save-migration.ts:156` (`savedShelterIds`, whose own comment says "A house mid-relocation offers no bed today"), which is deliberately left alone for the reason Task 8 records: the v6 → v7 migration is total, so no migration step can ever see an unfinished building. Treat the grep as a way to confirm this list, not as a list.
 
 `snapshot-builder.ts:223` is the one that is not about occupancy at all: `buildingSnaps.filter((b) => b.state !== 'relocating')`. It governs what the Population view *advertises*, and the comment directly above it states the principle a site would violate — "`total` therefore means beds you can actually sleep in tonight, which is the only number a player can act on." Without it the view reads spare capacity while the birth and nomad gates correctly refuse it, which is the display contradicting the rule it exists to explain. Add `src/engine/snapshot-builder.ts` to this task's files and assert a site's beds are absent from `snapshot.beds.total`.
 
@@ -204,7 +206,9 @@ Mutations: restore the `pay` call; delete the check entirely; **replace the cumu
 
 **The one that is an addition rather than an exclusion:** `handleAssignWorker` (`command-handlers.ts:140`) gates on `found.slots.max`, and a site carries its def's `workerSlots` like any other building — a mill site has two. So it accepts workers today and the refusal must be **added**, not preserved. With no builder role (§1.2) a colonist assigned to a site would stand in it doing nothing, which `ProductionSystem`'s exclusion makes silent rather than visible.
 
-- [ ] **Step 1: Write six failing tests, one per row**
+- [ ] **Step 1: Write five failing tests, one per exclusion**
+
+(§2.7 has six rows; the sixth is a projection, not an exclusion, and Task 9 owns it — see the note after the list.)
 
 ```ts
 it('a house under construction shelters nobody, including on its own construction tick', async () => {});
@@ -220,6 +224,13 @@ it('a site runs no recipe and produces nothing', async () => {});
 it('a site cannot be assigned a worker', async () => {});
 it('a site is not counted as colony wealth', async () => {
   // Not in the ledger it left AND not in the building it has not become.
+  //
+  // EXPECT THIS TO PASS UNCHANGED, and do not manufacture a change to justify
+  // it. `colonyWealth` sums the `Stockpile` ledger alone — `snapshot-system.ts`
+  // for the live tick, `initial-snapshot.ts` for the paused one — and a site's
+  // delivered materials sit in an `InputBuffer`, which never enters that sum.
+  // The exclusion is structural already. This is a regression pin on that
+  // structure, which is why neither of those two files is in this task's list.
 });
 ```
 
@@ -257,14 +268,16 @@ Five mutations, one per exclusion, each reddening exactly one test.
 **Interfaces:**
 - `needOf` branches on `isUnderConstruction`: a site's wanted map is `BUILDINGS[defId].cost` and its per-resource room is `cost[r] − held[r]`, **not** `BALANCE.inputBufferCap`.
 - **`Claims.input` must become resource-aware** (`haul-claims.ts:241`), and multi-input construction costs are the first content that makes this matter. It sums `plannedAmount + amount` over every supply trip targeting a building **with no resource filter** — harmless while every recipe has one input, wrong the moment a consumer wants two: wood already walking to a mill site subtracts from that site's *plank* room. Add the resource to the lookup and to `needOf`'s `claimedIn`.
-- **`needOf` must pick the shortest resource that still has UNCLAIMED room**, not simply the shortest. `shortestOf` ignores claims, so once wood's room is fully claimed the site keeps selecting wood, computes `room <= 0`, and returns null — dropping out of dispatch entirely while its planks go unserved. That serializes a multi-material site's delivery into one resource at a time and would bias the one-versus-four-hauler readings in §4.1. Walk the cost by proportional shortfall and take the first resource with unclaimed room left.
+- **`needOf` must pick the shortest resource that still has UNCLAIMED room**, not simply the shortest. `shortestOf` ignores claims, so once wood's room is fully claimed the site keeps selecting wood, computes `room <= 0`, and returns null — dropping out of dispatch entirely while its planks go unserved.
+
+  **Do this without editing `shortestOf`.** It is a method on `InputBuffer` (`components.ts:179`), and `src/engine/components.ts` is not in this task's file list — Task 1 owns that file and every other caller of the method would inherit the change. Its second parameter is the resource `order` it walks, and it skips any id absent from that array, so `needOf` (`haul-dispatch.ts:113`) can pre-filter: compute per-resource unclaimed room first, pass only the resources that still have room, and let the existing method pick among them. Reimplementing the proportional walk locally in `needOf` is equally acceptable. Changing the method's signature is not. That serializes a multi-material site's delivery into one resource at a time and would bias the one-versus-four-hauler readings in §4.1. Walk the cost by proportional shortfall and take the first resource with unclaimed room left.
 - `supplyCandidates` (line 172) checks `staffed.has(id)` **before** calling `needOf`, so the branch above is unreachable for a site until this gate exempts one. A site is never staffed: Task 2b forbids assigning workers, and a house or storehouse def has `workerSlots: 0` regardless.
 - `unload` (`haul-system.ts:221–222`) does **both** remaining halves — it rechecks staffing, and it caps placement at `row.input.room(BALANCE.inputBufferCap)`. Exempt the first and make the second cost-aware, or a mill site accepts 12 of its 30 units while dispatch offers the remaining 18 forever. That is a livelock, not a shortfall.
 - **Dispatch and arrival must be exempted together** — `staffed` is derived once per tick and handed to both readers precisely so they cannot drift (§2.5 of increment 7). Exempting only dispatch is worse than exempting neither: haulers walk to a site that refuses the load, the goods walk back, and the conservation sentinel stays at zero the whole time.
 
 **Why the exemption is principled, and this belongs in the code comment:** increment 7 §2.6 gates on staffing because goods in an `InputBuffer` are out of the spendable ledger and die with the building. Neither half holds for a site — §2.6 refunds its materials in full on cancellation, and it consumes them by completing rather than by working. If a later increment adds a builder role or removes that refund, this exemption must be revisited.
 
-Everything else downstream is unchanged. Do not add a parallel candidate builder — that is the second delivery mechanism the backlog note warns doing this before increment 7 would have required.
+Everything else **inside the dispatch-and-arrival path** is unchanged — scoped deliberately, because the sister spec (§2.2) records "everything else is unchanged" as an earlier draft's claim that was false, and the four changes above are the corrections. Two of that draft's six exceptions are still outstanding and are *not* Task 3's: `GoodsAudit`'s construction sink is Task 10, and `storeSitesFrom` / `HaulSystem`'s query is Task 2b. Do not add a parallel candidate builder — that is the second delivery mechanism the backlog note warns doing this before increment 7 would have required.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -519,7 +532,7 @@ If nothing breaks, the deliverable is the suite and a commit message saying so. 
 **One hit of the `relocatingTicks === 0` proxy is deliberately left alone:** `save-migration.ts:156` needs no construction term, because the v6 → v7 migration is total — every building in a pre-v7 save is finished, so no migration step can see an unfinished one. Record that in a comment rather than adding a term that can never fire.
 
 **Interfaces:**
-- `LATEST_SAVE_VERSION = 7`. The current `SavedBuilding` gains `constructionTicks: number`, guarded with `isTickCounter` — the same check `relocatingTicks` and `starvingTicks` use.
+- `LATEST_SAVE_VERSION = 7`. The current `SavedBuilding` gains `constructionTicks: number`, guarded with `isTickCounter` (`save.ts:263`) — the check `starvingTicks` and `ageTicks` use (`save.ts:277-278`). **Not the one `relocatingTicks` uses.** That field is guarded by a bare `Number.isFinite(...)` (`save.ts:397`), which accepts negatives and fractions; reaching for "whatever `relocatingTicks` does" gives `constructionTicks` the weaker guard and the rejection test below then proves nothing.
 - **FREEZE the v6 building record first, and follow the pattern the file already sets.** `SaveGameV6.buildings` is typed `SavedBuilding[]` (`save.ts:228`), so adding a required field to that interface silently claims every v6 save has it — and `isSavedBuildingV6Shape` (`save.ts:404`) casts to `SavedBuilding` to read its fields. A brief that says "SavedBuilding gains `constructionTicks`, guarded with `isTickCounter`" invites putting that check where v6 validation reaches it, and then **every genuine v6 save is rejected before the migration can supply the zero.** The migration would be correct and unreachable.
 
   `save.ts:220` already states the rule for exactly this case — `SaveGameV6` redeclares `buildings` rather than inheriting because "it is the one field whose record type moves, and the version literal has to move with it". So: introduce a frozen `SavedBuildingV6`, point `SaveGameV6.buildings` at it, leave `isSavedBuildingV6Shape` checking that shape, and let the *current* `SavedBuilding` carry the new field for v7.
@@ -534,7 +547,9 @@ If nothing breaks, the deliverable is the suite and a commit message saying so. 
 
   **And the trimmed excess must be RETURNED, not dropped.** This is the half that makes the clamp itself a conservation bug rather than a display one. A site's in-tray lives outside `Stockpile`, so units the clamp declines to keep do not fall back anywhere — they cease to exist at load, which is precisely the failure this task exists to prevent, arriving through its own fix. Every existing `clampedBuffer` caller can drop silently because it trims a save the engine itself wrote and the cap has not moved; `clampedToCost` is the first one whose bound can legitimately *shrink* between save and load, because `cost` is content and content gets rebalanced.
 
-  So the restore must bank the per-resource excess to the camp through the restore-only path that records no delivery — the same one seeded stock uses — and a fixture must assert the **colony total is unchanged across the round trip**, not merely that the tray was trimmed. A test that checks only the kept amount passes against an implementation that deletes the rest.
+  So the restore must bank the per-resource excess to the camp through the restore-only path that records no delivery — the same one seeded stock uses, `Stockpile.refund` (`stockpile.ts:137`), which `seedStoredGoods` (`restore.ts:234`) already calls for its own storehouse-capacity spill — and a fixture must assert the **colony total is unchanged across the round trip**, not merely that the tray was trimmed. A test that checks only the kept amount passes against an implementation that deletes the rest.
+
+  **And the PAUSED snapshot must show the banked excess too, which is a second projection and a second fixture.** `restoredStock` (`initial-snapshot.ts:147-152`) derives published stock as `save.stockpile[r] + Σ building.stored[r]` — it never reads `inputBuffer`, correctly, because in-tray goods are outside the ledger. But the trimmed excess *becomes* ledger at load, and this sum cannot see it. A restored colony would then show the refunded wood missing from `stockpile` and from `colonyWealth` until the first tick rebuilt the snapshot from the live `Stockpile`. That is exactly the failure the function's own comment (`initial-snapshot.ts:139-144`) already documents for `stored` — it sums from the SAVED maps precisely so `seedStoredGoods`' spill stays in the total — so this is that same rule applied to a second spill, not a new principle. Add the per-resource excess to `restoredStock` and assert the refunded resource **before any tick runs**.
 - `usableBeds` (`restore.ts:118`) gates on `count > 0 && b.relocatingTicks === 0` — relocation being the only way a house could exist unusable. An unfinished house otherwise seats colonists at load, and the **paused initial snapshot reports them housed** until the first tick evicts them.
 
 - [ ] **Step 1: Write the failing tests, then implement, then mutation-test, commit**
@@ -560,6 +575,13 @@ it('the 10 wood that clamp declined is in the camp, not gone', async () => {
   //
   // Assert too that deliveredRate did NOT move: this is a restore, not a
   // delivery, so it goes through the restore-only path seeded stock uses.
+});
+it('the banked excess is in the PAUSED snapshot, before the first tick', async () => {
+  // The second projection. `restoredStock` sums save.stockpile + stored and
+  // never reads inputBuffer, so the refunded 10 wood is invisible to it while
+  // the live Stockpile already holds it. Assert snapshot.stockpile.wood.stock
+  // AND colonyWealth with ZERO ticks run — after a step this passes against the
+  // unfixed projection, because the tick rebuilds from the live ledger.
 });
 it('an unfinished house houses nobody at load, in the paused snapshot', async () => {
   // Before any tick runs. Asserting after a step passes against the runtime
@@ -601,8 +623,10 @@ it('a countdown saved under a larger buildTicks is clamped to the current one', 
 ### Task 9: Snapshot and surfaces
 
 **Files:**
-- Modify: `src/engine/snapshot-buildings.ts`, `src/shared/snapshot.ts`, the Buildings table, the Economy view, `src/app/world/layout.ts`
+- Modify: `src/engine/snapshot-buildings.ts`, `src/shared/snapshot.ts`, `src/app/views/BuildingsView.vue` (the Buildings table), `src/app/views/EconomyView.vue` (the Economy view), `src/app/world/layout.ts`, **`src/app/labels.ts`** (`BUILDING_STATE_LABELS`), **`src/app/world/theme.ts`** (`stateRing`), **`src/app/stores/game-store.ts`** (`affordableDefs`), **`src/app/components/SelectionPanel.vue`**, **`src/app/components/WorldLegend.vue`**
 - Test: `tests/app/buildings-view.test.ts`, `tests/app/economy-view.test.ts`, `tests/app/world-layout.test.ts`, `npm run smoke:world`
+
+**The last five were absent from this list through fifteen review rounds** while the prose below required three of them by name. `labels.ts` and `theme.ts` are the two exhaustive `Record<BuildingState, …>` definitions the prose already argues force themselves on the compiler; `game-store.ts:172` is where `affordableDefs` lives. `SelectionPanel.vue:29` (a `relocatingTicks > 0` countdown) and `WorldLegend.vue:30` (a `stateRing.relocating` legend chip) are what Step 1's prescribed `grep -rn "relocating" src/app` actually returns — they are named here so the grep confirms a list rather than discovering one.
 
 **Interfaces:**
 - State `'underConstruction'`, ahead of `'relocating'` in the precedence chain.

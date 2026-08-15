@@ -90,11 +90,11 @@ export function inputRoomOf(row: HaulBuildingRow, resource: ResourceId): number 
  * May a supply load be aimed at this building, and put into it on arrival?
  *
  * ONE DERIVATION, TWO READERS, the same shape `StaffedSet` itself is: dispatch
- * asks it in `supplyCandidates` below and arrival asks it in `unload`
- * (haul-system.ts). Exempting only dispatch is worse than exempting neither —
- * haulers walk to a site that refuses the load and the goods walk back — and
- * two verbatim copies of this expression is how the recheck stops matching
- * what it rechecks (§2.5 of increment 7).
+ * asks it in `supplyCandidates` (haul-dispatch.ts) and arrival asks it in
+ * `unload` (haul-system.ts). Exempting only dispatch is worse than exempting
+ * neither — haulers walk to a site that refuses the load and the goods walk
+ * back — and two verbatim copies of this expression is how the recheck stops
+ * matching what it rechecks (§2.5 of increment 7).
  *
  * WHY THE SITE EXEMPTION IS PRINCIPLED, rather than a hole punched in a rule
  * that was in the way: increment 7 §2.6 gates supply on staffing because goods

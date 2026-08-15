@@ -158,6 +158,8 @@ Mutations: restore the `pay` call; spawn with `ticksLeft = 0`; move the tile che
 - Modify: `src/engine/systems/population-handlers.ts` (rehome), `src/engine/systems/command-system.ts:105` and `src/engine/systems/population-system.ts:72` (the two runtime shelter-row builders), `src/engine/snapshot-builder.ts:223` (the published bed total), `src/engine/systems/haul-sites.ts` (`storeSitesOf`), `src/engine/systems/production-system.ts`, `src/engine/systems/command-handlers.ts:140` (worker assignment), `src/engine/snapshot-buildings.ts`
 - Test: the matching suites
 
+**The store-site exclusion needs `Construction` THREADED to it, and `haul-sites.ts` alone cannot do it.** `storeSitesOf` takes `StoreSiteRow`, which `storeSitesFrom` (`haul-dispatch.ts`) builds from `Building`, `Position` and `Relocation` — and `HaulSystem`'s own `buildings` query does not read `Construction` at all. So the predicate has nothing to test and an unfinished storehouse stays a live destination however the exclusion is written. Add the component to the query, to `StoreRow`/`StoreSiteRow`, and to the two other row builders (`command-system.ts:105`, `population-system.ts:72`) that construct the same shape. Files: `haul-sites.ts`, `haul-dispatch.ts`, `haul-system.ts`.
+
 **"An unfinished house has no beds" has FIVE call sites**, three of them here and two in Task 8. `grep -rn "relocatingTicks === 0\|isRelocating(\|state !== 'relocating'" src/` finds them: `command-system.ts:105` and `population-system.ts:72` build the runtime shelter rows, `snapshot-builder.ts:223` computes the **published** bed total, and `restore.ts:123` / `save-guard.ts:95` are load-time. Fixing only the rehome path leaves a colonist seated in a site by whichever of the others ran first.
 
 `snapshot-builder.ts:223` is the one that is not about occupancy at all: `buildingSnaps.filter((b) => b.state !== 'relocating')`. It governs what the Population view *advertises*, and the comment directly above it states the principle a site would violate — "`total` therefore means beds you can actually sleep in tonight, which is the only number a player can act on." Without it the view reads spare capacity while the birth and nomad gates correctly refuse it, which is the display contradicting the rule it exists to explain. Add `src/engine/snapshot-builder.ts` to this task's files and assert a site's beds are absent from `snapshot.beds.total`.
@@ -173,6 +175,10 @@ it('a house under construction shelters nobody, including on its own constructio
 it('a storehouse under construction is not a store destination', async () => {
   // And the second-order proof: loads route PAST it to the camp, exactly as
   // they did before it was ordered.
+  //
+  // Exercise it on a LATER TICK, not the order tick. On the order tick
+  // `pending` masks it; the predicate is what must reject it afterwards, and a
+  // same-tick fixture passes with the predicate unchanged.
 });
 it('a site runs no recipe and produces nothing', async () => {});
 it('a site cannot be assigned a worker', async () => {});
@@ -550,6 +556,14 @@ it('an unfinished house houses nobody at load, in the paused snapshot', async ()
 it('a v6 save loads with every building finished', async () => {});
 it('a negative or fractional constructionTicks is rejected', async () => {});
 
+// PREREQUISITE for the clamp test below: `BuildingSnapshot` must publish the
+// NUMERIC `constructionTicks`, analogous to `relocatingTicks`, and this task
+// adds it — not Task 9, which only adds the `underConstruction` state. A
+// boolean-like state cannot tell a clamped countdown from an unclamped one:
+// both publish `underConstruction`, so the mutation survives and the assertion
+// proves nothing. That is `agent-workflow.md`'s "indistinguishable fixture
+// values" failure exactly.
+
 it('a countdown saved under a larger buildTicks is clamped to the current one', async () => {
   // `isTickCounter` is necessary and NOT sufficient. relocatingTicks is also
   // clamped on restore by clampedRelocation against the CURRENT constant
@@ -606,7 +620,11 @@ The test that matters here is a **UI-level** one: with an empty ledger, the pale
 **Interfaces:**
 - `Scenario` gains construction: sites ordered at given tiles at given ticks.
 - `BalanceResult` gains `completions: { buildingId, defId, tick }[]` — **completion order is the reading**, not a count, because §4.1's convergence question is about order and a count cannot express it.
-- The conservation sentinel must count a site's in-tray and a site's refund.
+- **The conservation sentinel needs a construction SINK, not just in-tray coverage.** `GoodsAudit`'s law is `predicted = opening + made − recipeInputs − eaten + commandFlow + removalFlow` (`goods-audit.ts:219`) and there is no construction term. Goods sitting in a site's in-tray are conserved — the audit already counts input buffers — but `ConstructionSystem` **empties that tray at completion**, so those units leave `final` with nothing subtracting them and every scenario that completes a site reports `conservationError` equal to the negative construction cost.
+
+  Add a cumulative construction-inputs term and subtract it in `predicted`. **The fixture must COMPLETE a supplied site**, not merely deliver to one — a test that only checks goods sitting in the tray passes against the missing sink, which is the whole defect.
+
+  This lands in Task 10 rather than Task 5 because `GoodsAudit` runs only under the balance harness, and no balance scenario can order a site until this task adds construction to `Scenario`. Task 5's own unit tests complete sites without touching the audit.
 
 - [ ] **Step 1: Test the instruments before trusting them**
 

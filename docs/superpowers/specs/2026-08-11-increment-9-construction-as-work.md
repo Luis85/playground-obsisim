@@ -179,15 +179,43 @@ that is nearly complete has *little* room, therefore *small* `movable`, therefor
 sites round-robin, each one's last material delivered last, and none of them
 finishes until nearly all of them do.
 
-**The rule, in two parts, and it is narrower than an earlier draft made it:**
+**The rule, in two parts:**
 
-1. **When BOTH candidates are sites, age ascending decides, ahead of every other
-   term.** Lower building id wins.
-2. **A site is never in the starvation band.**
+1. **A site is never in the starvation band.**
+2. **Site selection is a separate phase, not a comparator term.**
+   `nextSupplyTarget` picks the lowest-age site among sites, picks the best
+   candidate among non-sites by the existing comparator, and then chooses between
+   those two winners with one ordinary comparison.
 
-Everything else is untouched: a site against a finished building is ranked by the
-existing terms — starvation, `movable`, route, ids — exactly as two finished
-buildings are.
+`compareSupplyCandidates` itself gains **only** part 1. It stays a single total
+order and no age term is added to it.
+
+**Why age cannot be a comparator term, which an earlier draft got wrong.** That
+draft applied age "when both candidates are sites". That makes the comparator
+**non-transitive**, and `nextSupplyTarget` is a reduction (`compare(candidate, best) < 0`),
+so a cycle makes its winner depend on candidate iteration order — the one
+property every selection in this codebase commits to *not* having. The cycle,
+with nothing starving:
+
+| pair | decided by | winner |
+| --- | --- | --- |
+| old site (movable 1) vs new site (movable 6) | age | **old site** |
+| new site (movable 6) vs a finished building (movable 4) | `movable` | **new site** |
+| finished building (movable 4) vs old site (movable 1) | `movable` | **finished building** |
+
+Old beats new, new beats the building, the building beats old. Feed those three
+in the order building, old, new and the *newest* site wins.
+
+The two-phase form is transitive by construction: each phase is a total order
+over a disjoint set, and the final step is a single pairwise comparison rather
+than a reduction over a mixed set. It also mirrors what this section already says
+conceptually — "which site did the player order first?" and "which producer is
+blocked?" are two questions, so they are answered by two selections rather than
+by one comparator asked to hold both.
+
+Everything else is untouched: the cross-comparison between the two winners uses
+the existing terms — starvation, `movable`, route, ids — exactly as two finished
+buildings are compared.
 
 **Age needs no new state.** `IdCounter.take()` is monotone, so a lower building
 id *is* an earlier order. The tie-break chain already ends at building id; this
@@ -390,7 +418,18 @@ constructionTicks: number;
   save is finished by construction — the concept did not exist — so the migration
   is total and lossless, and needs no heuristic.
 - **The guard** is `isTickCounter`, the same non-negative-safe-integer check
-  `relocatingTicks` and `starvingTicks` already use.
+  `relocatingTicks` and `starvingTicks` already use. **That is necessary and not
+  sufficient**: `relocatingTicks` is *also* clamped on restore by
+  `clampedRelocation` (`spawn.ts:67`) against the current `BALANCE.maxRelocationTicks`,
+  because a save written under a larger constant must not restore a countdown
+  longer than the game can now produce. `constructionTicks` needs the identical
+  treatment — a `clampedConstruction` bounded by the current `BALANCE.buildTicks`
+  — or a site saved before the constant was lowered keeps more build time than a
+  freshly ordered one. **Both restore projections must apply it**, for the reason
+  `clampedInputBuffer`'s own doc comment already gives about
+  `buildInitialSnapshot`: the paused projection and the live component must agree.
+  The fixture's saved countdown must exceed the current constant, or it passes
+  unclamped.
 - **No new field is needed for the materials, but the restore path must be made
   site-aware.** An earlier draft of this section claimed `SavedBuilding.inputBuffer`
   "already round-trips" and stopped there. **That claim is false above 12 units.**

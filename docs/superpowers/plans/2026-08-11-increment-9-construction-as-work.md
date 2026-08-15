@@ -12,7 +12,11 @@
 
 ## The branch is playable throughout, with one visible oddity
 
-No window where the colony is broken. But between Task 2 and Task 5, **ordering a building creates a site that never finishes** — the countdown does not exist yet, so it sits at its tile forever, providing nothing. That is the increment's whole feature arriving in two halves, it is obvious rather than subtle, and Task 5 closes it. Stated here so nobody bisects into it and files a bug.
+Between Task 2 and Task 5, **ordering a building creates a site that never finishes** — the countdown does not exist yet, so it sits at its tile forever, providing nothing. That is the increment's whole feature arriving in two halves, it is obvious rather than subtle, and Task 5 closes it. Stated here so nobody bisects into it and files a bug.
+
+**"Providing nothing" is why Task 2b sits where it does, immediately after site creation and before the delivery work.** An earlier draft ran the exclusions as Task 6, after delivery and the countdown, and that made the claim above false in the worst way: a never-finishing site would still shelter colonists (`pending.constructed` seats them the same tick), still act as a store site, and still be staffable and run its recipe. Tasks 2–5 would have shipped buildings that work without being built — which is the exact bug this increment exists to remove, introduced by the increment removing it.
+
+The exclusions depend only on Task 1's component and Task 2's sites, never on delivery or the countdown, so nothing is lost by moving them early. **A site must provide nothing from the first commit in which a site can exist.**
 
 ## Global Constraints
 
@@ -31,6 +35,7 @@ No window where the colony is broken. But between Task 2 and Task 5, **ordering 
   | `src/engine/systems/haul-dispatch.ts` | 395 | Task 3, Task 4 |
   | `src/engine/components.ts` | 350 | Task 1 |
   | `src/engine/systems/placement-handlers.ts` | 327 | Task 2, Task 7 |
+  | `src/engine/snapshot-builder.ts` | 379 | Task 2b |
 
   Check with `grep -cve '^\s*$' <file>` after every task that touches one.
 - **Every task's tests must be greenable by that task's own changes.** `check:all` is required green at the end of every task, so a test asserting behaviour a *later* task enables cannot be committed — the implementer must then skip it, weaken it, or pull the later task forward, and all three are worse than writing the right assertion now. **This plan broke that rule three times in review** (Task 1's save round-trip needs Task 8's schema; Tasks 3 and 4 asserted completion, which needs Task 5's system), so before starting any task, check its tests against its own file list. Where the strong assertion belongs to a later task, the earlier one asserts the strongest thing it *can* reach and names the task that finishes the job.
@@ -145,6 +150,43 @@ Mutations: restore the `pay` call; spawn with `ticksLeft = 0`; move the tile che
 
 ---
 
+### Task 2b: A site provides nothing
+
+§2.7's table. **Six exclusions, six fixtures** — this is the task the compound-boolean rule was written for.
+
+**Files:**
+- Modify: `src/engine/systems/population-handlers.ts` (rehome), `src/engine/systems/command-system.ts:105` and `src/engine/systems/population-system.ts:72` (the two runtime shelter-row builders), `src/engine/snapshot-builder.ts:223` (the published bed total), `src/engine/systems/haul-sites.ts` (`storeSitesOf`), `src/engine/systems/production-system.ts`, `src/engine/systems/command-handlers.ts:140` (worker assignment), `src/engine/snapshot-buildings.ts`
+- Test: the matching suites
+
+**"An unfinished house has no beds" has FIVE call sites**, three of them here and two in Task 8. `grep -rn "relocatingTicks === 0\|isRelocating(\|state !== 'relocating'" src/` finds them: `command-system.ts:105` and `population-system.ts:72` build the runtime shelter rows, `snapshot-builder.ts:223` computes the **published** bed total, and `restore.ts:123` / `save-guard.ts:95` are load-time. Fixing only the rehome path leaves a colonist seated in a site by whichever of the others ran first.
+
+`snapshot-builder.ts:223` is the one that is not about occupancy at all: `buildingSnaps.filter((b) => b.state !== 'relocating')`. It governs what the Population view *advertises*, and the comment directly above it states the principle a site would violate — "`total` therefore means beds you can actually sleep in tonight, which is the only number a player can act on." Without it the view reads spare capacity while the birth and nomad gates correctly refuse it, which is the display contradicting the rule it exists to explain. Add `src/engine/snapshot-builder.ts` to this task's files and assert a site's beds are absent from `snapshot.beds.total`.
+
+**The one that will be missed:** `pending.constructed` is folded into homing precisely so a colonist can be sheltered on the tick a house appears — `shelters` in `command-system.ts:107`, verified. That now shelters them in a hole in the ground. It is the only entry in the table where the *existing* behaviour is a deliberate same-tick optimisation rather than an incidental lookup.
+
+**The one that is an addition rather than an exclusion:** `handleAssignWorker` (`command-handlers.ts:140`) gates on `found.slots.max`, and a site carries its def's `workerSlots` like any other building — a mill site has two. So it accepts workers today and the refusal must be **added**, not preserved. With no builder role (§1.2) a colonist assigned to a site would stand in it doing nothing, which `ProductionSystem`'s exclusion makes silent rather than visible.
+
+- [ ] **Step 1: Write six failing tests, one per row**
+
+```ts
+it('a house under construction shelters nobody, including on its own construction tick', async () => {});
+it('a storehouse under construction is not a store destination', async () => {
+  // And the second-order proof: loads route PAST it to the camp, exactly as
+  // they did before it was ordered.
+});
+it('a site runs no recipe and produces nothing', async () => {});
+it('a site cannot be assigned a worker', async () => {});
+it('a site reports underConstruction, not relocating or waitingForInput', async () => {});
+it('a site is not counted as colony wealth', async () => {
+  // Not in the ledger it left AND not in the building it has not become.
+});
+```
+
+- [ ] **Step 2: Implement, mutation-test each exclusion separately, commit**
+
+Six mutations, one per exclusion, each reddening exactly one test.
+
+---
 ### Task 3: A site's demand is its cost, and three gates must let it through
 
 **Without all four changes in this task, no material can ever reach a site and the feature does not work at all.** Three of them are outside `haul-dispatch.ts`, and a brief scoped to `needOf` alone — as an earlier draft of this plan was — ships a site that is offered materials and can never receive them.
@@ -155,7 +197,7 @@ Mutations: restore the `pay` call; spawn with `ticksLeft = 0`; move the tile che
 
 **Interfaces:**
 - `needOf` branches on `isUnderConstruction`: a site's wanted map is `BUILDINGS[defId].cost` and its per-resource room is `cost[r] − held[r]`, **not** `BALANCE.inputBufferCap`.
-- `supplyCandidates` (line 172) checks `staffed.has(id)` **before** calling `needOf`, so the branch above is unreachable for a site until this gate exempts one. A site is never staffed: Task 6 forbids assigning workers, and a house or storehouse def has `workerSlots: 0` regardless.
+- `supplyCandidates` (line 172) checks `staffed.has(id)` **before** calling `needOf`, so the branch above is unreachable for a site until this gate exempts one. A site is never staffed: Task 2b forbids assigning workers, and a house or storehouse def has `workerSlots: 0` regardless.
 - `unload` (`haul-system.ts:221–222`) does **both** remaining halves — it rechecks staffing, and it caps placement at `row.input.room(BALANCE.inputBufferCap)`. Exempt the first and make the second cost-aware, or a mill site accepts 12 of its 30 units while dispatch offers the remaining 18 forever. That is a livelock, not a shortfall.
 - **Dispatch and arrival must be exempted together** — `staffed` is derived once per tick and handed to both readers precisely so they cannot drift (§2.5 of increment 7). Exempting only dispatch is worse than exempting neither: haulers walk to a site that refuses the load, the goods walk back, and the conservation sentinel stays at zero the whole time.
 
@@ -235,11 +277,15 @@ Mutations, one per change: point a site's want at `recipe`; cap a site's room at
 
 **Interfaces:**
 - `SupplyCandidate` gains `siteAge: number | null` — the building id for a site, `null` for a finished building. **No new state**: `IdCounter.take()` is monotone, so a lower id *is* an earlier order, and the tie-break chain already ends at this field.
-- `compareSupplyCandidates` gains exactly two things:
-  1. **when both candidates are sites**, age ascending decides ahead of every other term;
-  2. **a site is never in the starvation band.**
+- `compareSupplyCandidates` gains **exactly one** thing: **a site is never in the starvation band.** No age term is added to it. **Do not add a "sites first" clause** either — see below.
+- `nextSupplyTarget` becomes **two-phase**, and this is where age lives:
+  1. lowest `siteAge` among site candidates;
+  2. best non-site by the existing comparator;
+  3. one ordinary comparison between those two winners.
 
-  A site against a finished building is ranked by the existing terms, unchanged. **Do not add a "sites first" clause** — see below.
+**Age must NOT be a comparator term, and this is the subtle half.** Applying age "when both candidates are sites" makes `compareSupplyCandidates` **non-transitive**, and `nextSupplyTarget` is a reduction — so the winner depends on candidate iteration order, the one property every selection in this codebase commits to not having. With nothing starving: an old site (movable 1) beats a newer site (movable 6) on age; the newer site beats a finished building (movable 4) on `movable`; the building beats the old site on `movable`. Feed them in the order building, old, new and the *newest* site wins.
+
+Two phases are transitive by construction — each is a total order over a disjoint set, and step 3 is a single comparison rather than a reduction over a mixed set.
 
 **Why, restated because the code will not show it:** `movable` is bounded by remaining room, so a nearly-complete site has small `movable` and **loses** to a newer empty one. Twenty sites round-robin and none finishes.
 
@@ -271,8 +317,17 @@ it('a queue of sites does not starve the producer that makes what they need', as
 });
 
 it('a site is never in the starvation band', () => {
-  // Part 2 of the rule, as a unit test. A site holding zero must NOT be
-  // promoted the way a producer holding zero is.
+  // A site holding zero must NOT be promoted the way a producer holding zero is.
+});
+
+it('the winner does not depend on candidate order — mixed three-candidate permutations', () => {
+  // THE TRANSITIVITY TEST, and it must use a MIXED set: one old site with small
+  // movable, one newer site with large movable, one finished building in
+  // between. Feed all SIX permutations and require the same winner every time.
+  //
+  // A same-kind shuffle test cannot catch this: the cycle only exists across the
+  // site/non-site boundary. An earlier draft made the comparator non-transitive
+  // and every existing order-independence test stayed green.
 });
 
 it('among finished buildings nothing has changed', () => {
@@ -353,43 +408,6 @@ Mutations: count down regardless of materials; complete at `ticksLeft === 1`; re
 
 ---
 
-### Task 6: The six places "exists" meant "works"
-
-§2.7's table. **Six exclusions, six fixtures** — this is the task the compound-boolean rule was written for.
-
-**Files:**
-- Modify: `src/engine/systems/population-handlers.ts` (rehome), `src/engine/systems/command-system.ts:105` and `src/engine/systems/population-system.ts:72` (the two runtime shelter-row builders), `src/engine/snapshot-builder.ts:223` (the published bed total), `src/engine/systems/haul-sites.ts` (`storeSitesOf`), `src/engine/systems/production-system.ts`, `src/engine/systems/command-handlers.ts:140` (worker assignment), `src/engine/snapshot-buildings.ts`
-- Test: the matching suites
-
-**"An unfinished house has no beds" has FIVE call sites**, three of them here and two in Task 8. `grep -rn "relocatingTicks === 0\|isRelocating(\|state !== 'relocating'" src/` finds them: `command-system.ts:105` and `population-system.ts:72` build the runtime shelter rows, `snapshot-builder.ts:223` computes the **published** bed total, and `restore.ts:123` / `save-guard.ts:95` are load-time. Fixing only the rehome path leaves a colonist seated in a site by whichever of the others ran first.
-
-`snapshot-builder.ts:223` is the one that is not about occupancy at all: `buildingSnaps.filter((b) => b.state !== 'relocating')`. It governs what the Population view *advertises*, and the comment directly above it states the principle a site would violate — "`total` therefore means beds you can actually sleep in tonight, which is the only number a player can act on." Without it the view reads spare capacity while the birth and nomad gates correctly refuse it, which is the display contradicting the rule it exists to explain. Add `src/engine/snapshot-builder.ts` to this task's files and assert a site's beds are absent from `snapshot.beds.total`.
-
-**The one that will be missed:** `pending.constructed` is folded into homing precisely so a colonist can be sheltered on the tick a house appears — `shelters` in `command-system.ts:107`, verified. That now shelters them in a hole in the ground. It is the only entry in the table where the *existing* behaviour is a deliberate same-tick optimisation rather than an incidental lookup.
-
-**The one that is an addition rather than an exclusion:** `handleAssignWorker` (`command-handlers.ts:140`) gates on `found.slots.max`, and a site carries its def's `workerSlots` like any other building — a mill site has two. So it accepts workers today and the refusal must be **added**, not preserved. With no builder role (§1.2) a colonist assigned to a site would stand in it doing nothing, which `ProductionSystem`'s exclusion makes silent rather than visible.
-
-- [ ] **Step 1: Write six failing tests, one per row**
-
-```ts
-it('a house under construction shelters nobody, including on its own construction tick', async () => {});
-it('a storehouse under construction is not a store destination', async () => {
-  // And the second-order proof: loads route PAST it to the camp, exactly as
-  // they did before it was ordered.
-});
-it('a site runs no recipe and produces nothing', async () => {});
-it('a site cannot be assigned a worker', async () => {});
-it('a site reports underConstruction, not relocating or waitingForInput', async () => {});
-it('a site is not counted as colony wealth', async () => {
-  // Not in the ledger it left AND not in the building it has not become.
-});
-```
-
-- [ ] **Step 2: Implement, mutation-test each exclusion separately, commit**
-
-Six mutations, one per exclusion, each reddening exactly one test.
-
----
 
 ### Task 7: Cancellation and conservation
 
@@ -502,6 +520,15 @@ it('an unfinished house houses nobody at load, in the paused snapshot', async ()
 });
 it('a v6 save loads with every building finished', async () => {});
 it('a negative or fractional constructionTicks is rejected', async () => {});
+
+it('a countdown saved under a larger buildTicks is clamped to the current one', async () => {
+  // `isTickCounter` is necessary and NOT sufficient. relocatingTicks is also
+  // clamped on restore by clampedRelocation against the CURRENT constant
+  // (spawn.ts:67); constructionTicks needs the same, or a site saved before
+  // buildTicks was lowered keeps more build time than a freshly ordered one.
+  // The saved value must EXCEED the current constant or the fixture passes
+  // unclamped. Assert BOTH projections — live component and paused snapshot.
+});
 ```
 
 ---

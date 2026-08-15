@@ -112,8 +112,10 @@ it('COMPONENT_TYPES includes Construction', () => {
 ### Task 2: Ordering creates a site
 
 **Files:**
-- Modify: `src/engine/systems/placement-handlers.ts`, **`src/engine/systems/command-system.ts`** (the `buildings` query), **`src/engine/systems/command-handlers.ts`** (`BuildingRow`, `CommandContext`)
+- Modify: `src/engine/systems/placement-handlers.ts`, **`src/engine/systems/command-system.ts`** (the `buildings` query), **`src/engine/systems/command-handlers.ts`** (`BuildingRow`, `CommandContext`), **`src/engine/spawn.ts`** (`BuildingSpec`, `buildingComponents`)
 - Test: `tests/engine/systems/command-system.test.ts`
+
+**`spawn.ts` is here because Task 1 left `buildingComponents` hardcoding `new Construction()`** (`spawn.ts:145`) — zero ticks, which is correct for every existing caller and useless to this task. `BuildingSpec` has no construction input, so ordering through the shared spawn path produces a building at zero ticks (not a site), and appending a second `Construction` alongside it would attach the component twice. Thread it the way the file already threads the analogous countdown: `BuildingSpec` carries `relocatingTicks?: number` (`spawn.ts:129`), so add `constructionTicks?: number` beside it and have line 145 read it. Every existing caller omits it and keeps today's zero.
 
 **The cumulative check cannot be written from `placement-handlers.ts` alone**, and this is the trap in this task's file list. `command-system.ts:72` builds each row from `{ entity, building, slots, position, buffer, input, relocation }` — **no `Construction`** — so the handler cannot tell an unfinished site from a finished building that happens to hold inputs. Neither fallback works: counting `pending.constructed` sees only sites ordered this tick and misses every one from a previous tick, and counting every building with an in-tray reserves finished producers' stock forever. The component has to reach the row.
 
@@ -133,6 +135,11 @@ it('COMPONENT_TYPES includes Construction', () => {
 
   **It is an ORDER-TIME check and guarantees nothing about completion** (§2.3). It writes nothing down, so a trip already dispatched to fetch wood for a sawmill still has that wood in `colonyStock` when the check reads it, and an accepted site can be left short a few ticks later. **Do not fix this with a reservation** — reserving strongly enough to guarantee completion would mean holding materials against meals. The queue can stall; it is bounded, and cancellation recovers it.
 - The id-exhaustion and tile checks stay, and stay **before** the spawn — neither is recoverable later, and the affordability check joins them there.
+- **Cancelling a site must stop refunding the cost, and that branch lands HERE rather than in Task 7.** `handleDemolishBuilding`'s refund loop (`placement-handlers.ts:144`) pays back `def.cost` unconditionally, which was exactly right while this task's `pay(def.cost)` charged it at order. The moment payment goes, that loop **mints the cost from nothing** for every cancelled site — a conservation break shipped in this commit and live until Task 7, which this plan's own "the branch is playable throughout" claim does not permit.
+
+  It also destroys the fixture below. Demolish a site and order its replacement in one drain: the unbranched loop mints the ghost's full cost into the ledger, and that minted stock covers the ghost's outstanding demand *and* the replacement — so the second order is accepted whether or not `demolishedIds` is excluded, and the test proves nothing. **A non-discriminating fixture is worse than no fixture**, because it reads as coverage.
+
+  So this task adds the site half of the branch — **a site refunds no cost, a finished building refunds as it always did** — plus the conservation assertion. Task 7 keeps the rest: refunding the delivered in-tray through `refundAt` (impossible before Task 3 puts anything in a tray), the site-aware `demolitionNotice`, and refusing to relocate a site.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -179,6 +186,29 @@ it('a site occupies its tile', async () => {
 it('id exhaustion and an unbuildable tile are still refused', async () => {
   // All three rejections survive. Separate fixtures — one test covering several
   // passes with any one of them deleted.
+});
+
+it('cancelling a site with nothing delivered refunds nothing', async () => {
+  // THE MINTING TEST, pulled forward from Task 7 because this task is where the
+  // minting starts. Order a mill, demolish it, assert the colony total is
+  // UNCHANGED. Against the unbranched loop it reports +20 wood +10 planks from
+  // nowhere. Task 7 still owns the in-tray refund and the notice.
+});
+
+it('demolishing a FINISHED building still refunds its cost', async () => {
+  // The other side of the branch, and the regression guard for every increment
+  // before this one. Without it the branch can be written as "never refund".
+});
+
+it('a site demolished and replaced in ONE drain accepts the replacement', async () => {
+  // The demolishedIds exclusion. Removal is deferred to the end of the drain, so
+  // the ghost is still in ctx.buildings with its Construction and its in-tray.
+  //
+  // This fixture only discriminates because the two tests above landed first: an
+  // unbranched refund mints the ghost's whole cost, which covers its outstanding
+  // demand and the replacement both, and the order is accepted with the
+  // exclusion missing. Write it AFTER them, and mutation-test it by deleting
+  // ONLY the demolishedIds filter.
 });
 ```
 
@@ -441,7 +471,9 @@ Mutations: count down regardless of materials; complete at `ticksLeft === 1`; re
 - Test: `tests/engine/systems/command-system.test.ts`
 
 **Interfaces:**
-- **The existing `def.cost` refund loop (`placement-handlers.ts:144`) must branch on construction state.** It refunds the full cost unconditionally, which was right while Task 2's `pay(def.cost)` charged it at order. With that payment gone, cancelling a site **mints the cost from nothing**, and cancelling a partly-supplied site refunds the cost *and* the in-tray — the same goods twice. Both are conservation failures.
+- **The `def.cost` refund branch ALREADY LANDED IN TASK 2** — do not write it again, and do not assume it is missing. Task 2 removes the payment, so leaving the loop unconditional would have minted the cost from every cancelled site for four tasks running, and it would also have made Task 2's own same-drain fixture non-discriminating. Task 2 therefore carries the site half (a site refunds no cost), the finished-building regression guard, and their conservation assertions. **Confirm that against `placement-handlers.ts` before starting; if the branch is absent, the earlier task is wrong and you should stop and report.**
+
+  What is still outstanding here is the *other* half of the same conservation problem: cancelling a partly-supplied site must also return its **in-tray**, or the delivered materials vanish. That could not be written in Task 2 because nothing could reach a tray until Task 3.
 
   | demolished | cost refund | in-tray |
   | --- | --- | --- |
@@ -455,12 +487,10 @@ Mutations: count down regardless of materials; complete at `ticksLeft === 1`; re
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
-it('cancelling a site with NOTHING delivered refunds nothing', async () => {
-  // THE MINTING TEST, and the one an implementation reading only "sites refund
-  // their materials" will not think to write. Order a mill, demolish it before
-  // a single hauler arrives, assert the colony total is UNCHANGED. Against the
-  // unbranched loop this reports +20 wood +10 planks from nowhere.
-});
+// 'cancelling a site with NOTHING delivered refunds nothing' and 'demolishing a
+// FINISHED building still refunds its cost' are ALREADY GREEN — they landed with
+// the branch in Task 2. Do not duplicate them. Re-run them, and if either is
+// missing, stop and report rather than writing it here.
 
 it('cancelling a partly supplied site refunds only what arrived', async () => {
   // The double-refund case. 6 wood delivered of 20: the total rises by 6, not

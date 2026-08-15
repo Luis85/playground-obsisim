@@ -293,8 +293,21 @@ an entry. That is deliberate: both carry comments saying so, dating from when
 `check:all` every task requires.
 
 Between this task and Task 9 a site reports whatever the existing precedence
-chain yields (`unstaffed`, in practice). Nothing asserts otherwise in that
-window, and Task 9 is where it becomes wrong to.
+chain yields, and that is **not** a single state — `buildingState`
+(`snapshot-buildings.ts`) tests storage before recipe before staffing, so a
+storehouse site reads `storing`, a house site reads `housing`, and only a
+producer site reads `unstaffed`. All three publish their *finished* capacities
+alongside, and the Buildings view offers a producer site's assign button, which
+the engine now refuses. Nothing asserts otherwise in that window, and Task 9 is
+where it becomes wrong to.
+
+**That is a real window and it is deferred on a technical constraint, not a
+preference** — unlike the refund and the notice, which moved earlier in this
+increment precisely because they could. `BuildingState` is a union in
+`shared/snapshot.ts`, and two exhaustive `Record<BuildingState, …>` definitions
+fail typecheck the moment a member is added without an entry, so the state
+cannot land in any task that does not also own `labels.ts` and `theme.ts`.
+Task 9 owns all three. Do not attempt it here.
 
 - [ ] **Step 2: Implement, mutation-test each exclusion separately, commit**
 
@@ -728,7 +741,8 @@ it('a countdown saved under a larger buildTicks is clamped to the current one', 
 **The last five were absent from this list through fifteen review rounds** while the prose below required three of them by name. `labels.ts` and `theme.ts` are the two exhaustive `Record<BuildingState, …>` definitions the prose already argues force themselves on the compiler; `game-store.ts:172` is where `affordableDefs` lives. `SelectionPanel.vue:29` (a `relocatingTicks > 0` countdown) and `WorldLegend.vue:30` (a `stateRing.relocating` legend chip) are what Step 1's prescribed `grep -rn "relocating" src/app` actually returns — they are named here so the grep confirms a list rather than discovering one.
 
 **Interfaces:**
-- State `'underConstruction'`, ahead of `'relocating'` in the precedence chain.
+- State `'underConstruction'`, ahead of `'relocating'` in the precedence chain — which puts it first overall, and that is the point. `buildingState` (`snapshot-buildings.ts`) tests storage, then recipe, then staffing, so **all three building kinds currently mis-report a site**: a storehouse site reads `storing`, a house site reads `housing`, a producer site reads `unstaffed`. Fixtures for all three, not just the producer.
+- **A site must also publish the capacities it does not have.** `buildingSnapshotsOf` currently derives `beds` and `storage` for a site exactly as for a finished building, so the Buildings view offers a site's full capacity and enables a producer site's assign button, which the engine refuses. Task 2b zeroed the *aggregate* bed total (`snapshot-builder.ts:223`); the per-building projection is this task's.
 - **Adding the union member is three files, not one**, and this task owns all
   three: the member in `shared/snapshot.ts`, a label in `BUILDING_STATE_LABELS`
   (`labels.ts:6`), and a ring color in the theme's `stateRing` (`theme.ts:12`).

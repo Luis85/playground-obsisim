@@ -342,10 +342,25 @@ it('a STARVING producer outranks a site', () => {
 });
 
 it('a queue of sites does not starve the producer that makes what they need', async () => {
-  // The integration form: three plank-costing sites and a staffed sawmill with
-  // an empty in-tray, wood in the camp. The sawmill must receive wood and
-  // produce planks. Against a "sites first" ordering the sawmill never runs and
-  // no site ever completes — which is exactly what an earlier draft specified.
+  // The integration form. Sites must cost BOTH wood and planks — a plank-only
+  // fixture cannot catch the stall below, because those sites never compete
+  // with the sawmill for wood at all.
+  //
+  // Three wood-and-plank sites, a staffed sawmill with an empty in-tray, wood
+  // in the camp. Against a "sites first" ordering the sawmill never runs.
+  //
+  // KNOWN LIMITATION, and this test pins its BOUNDARY rather than its absence
+  // (spec §2.4): the starvation band clears on the sawmill's FIRST claim
+  // (`claimedIn === 0`), so protection is one load deep and a long enough queue
+  // still stalls. Assert what the shipped rule guarantees — the sawmill is
+  // served before any site — and leave the stall to the §4.1 measurement.
+});
+
+it('cancelling a younger site recovers a stalled queue', async () => {
+  // The recovery path §2.4 leans on, tested rather than asserted. Drive the
+  // fixture above into the stall, cancel the newest site, and require the
+  // oldest to complete. If this does not hold, the limitation is a deadlock
+  // rather than a stall and the increment does not ship as specified.
 });
 
 it('a site is never in the starvation band', () => {

@@ -140,8 +140,22 @@ Two differences that follow, and both matter:
   increment 8 had to work around with a fixture-local def. Construction costs
   make the multi-input path real, and §2.11 requires it be tested as such.
 
-Everything downstream — `supplyCandidates`, claims, the round trip, the
-conservation sentinel — is unchanged. A site is a building that needs things.
+**The round trip itself is unchanged — a site is a building that needs things —
+but "everything downstream is unchanged" was an earlier draft's claim and it is
+false.** It is corrected here rather than deleted, because an implementer reading
+only this paragraph would leave exactly the defects the sections below identify:
+
+| downstream | why it is not unchanged |
+| --- | --- |
+| `supplyCandidates` | staffing gate skips a site before `needOf` is reached (§2.7.1) |
+| `unload` | staffing recheck, and an `inputBufferCap` placement cap (§2.7.1) |
+| `Claims.input` | sums across every resource, so wood in flight eats a site's plank room (§2.11) |
+| `needOf`'s resource choice | `shortestOf` ignores claims, so a site can select a claimed-out material and drop out of dispatch entirely |
+| `GoodsAudit` | no construction sink, so completing a site breaks conservation (§2.11) |
+| `storeSitesFrom` / `HaulSystem`'s query | never read `Construction`, so the store-site exclusion has nothing to test (§2.7.2) |
+
+What *is* unchanged is the shape: fetch, walk, unload, bank; the reservation
+model; and the flow-accounting rules. No second delivery mechanism appears.
 
 ### 2.3 Ordering a building is a request
 
@@ -254,13 +268,40 @@ send every log to the sites, so the sawmill never produces, so the oldest site
 waits on planks that can never arrive. A continuously extended queue starves the
 producer indefinitely.
 
-Removing that clause fixes it **without any dependency machinery**, and the second
-part of the rule is what makes it work: a sawmill with an empty in-tray *is*
-starving, sites are *never* starving, so **a blocked producer outranks a queue of
-sites automatically.** The chain that unblocks the queue is served first, by the
-mechanism increment 8 already shipped for exactly this reason. Two questions —
-"which producer is blocked?" and "which site did the player order first?" — asked
-in two disjoint comparisons, neither needing to know about the other.
+Removing that clause fixes the *immediate* inversion without any dependency
+machinery, and part 1 of the rule is what makes it work: a sawmill with an empty
+in-tray *is* starving, sites are *never* starving, so a blocked producer outranks
+a queue of sites. Two questions — "which producer is blocked?" and "which site
+did the player order first?" — asked in two disjoint comparisons, neither needing
+to know about the other.
+
+**That protection is one load deep, and the residual hazard is recorded rather
+than solved.** The predicate is
+`!batchActive && couldStartBatch && holdsNoneOf(input, resource) && claimedIn === 0`
+(`haul-dispatch.ts:236`), so the *first* claim toward a producer clears it. With
+several sites whose cost includes both wood and planks:
+
+1. the sawmill is empty, so it is starving and wins one 6-unit wood claim;
+2. `claimedIn` is now non-zero, so it stops being starving;
+3. the sites, with large `movable`, take every remaining log;
+4. the sawmill turns its 6 wood into 6 planks, and the oldest site needs 10;
+5. the rest of the wood is consumed inside younger sites' in-trays.
+
+**It is a stall, not an unrecoverable deadlock**, and the recovery is §2.6:
+cancelling a younger site refunds its materials in full, returning that wood to
+the ledger. That is a real and discoverable player action, and it is why this
+ships as a limitation rather than a blocker. But it is reachable by doing exactly
+what §2.3 invites — queueing more than the colony can currently afford — so a
+player must not be the first to find it.
+
+**Fixing it properly is a decision rather than a patch**, and the options are
+recorded because a successor will want them: reserve a producer's inputs against
+the demand of sites needing its output (a dependency graph); cap the share of a
+resource all sites may hold at once (a global throttle — one constant, no graph);
+or make the starvation band survive until a producer can actually run a batch
+rather than until its first claim (deeper, and it changes dispatch for producers
+generally). §4.1 measures how reachable the stall is at realistic queue lengths,
+so the choice is made against a number rather than an intuition.
 
 ### 2.5 Completion
 
@@ -491,6 +532,17 @@ constructionTicks: number;
 - Building state gains `'underConstruction'`, ahead of `'relocating'` in the same
   precedence chain — a site cannot be relocating (§2.6), so the two are mutually
   exclusive and the order is a formality, but it is written down.
+
+  **That exclusivity is enforced by the move command alone, which is not enough
+  for a save.** `handleMoveBuilding` refuses a site, but a hand-edited or corrupt
+  v7 file can carry a positive `constructionTicks` *and* a positive
+  `relocatingTicks`, and per-field `isTickCounter` guards both accept it. Loading
+  it gives a building whose two countdowns run at once and whose relocation is
+  hidden behind `underConstruction` in the snapshot. **The save guard needs a
+  cross-field invariant** — the two counters may not both be positive — beside
+  the per-field checks, with a fixture that supplies both. This is the same class
+  as the guard's existing colonist-reference rules: a per-record check that no
+  single field can express.
 - **A site publishes what it still needs.** The Buildings table shows the
   shortfall per material, which is what replaces the affordability refusal §2.3
   removes: the player sees "needs 14 wood" rather than being told they cannot
@@ -610,6 +662,13 @@ Unmeasured, and §4.1 says so.
 - **Convergence.** N sites ordered simultaneously, completion order recorded, at
   one hauler and at four. Acceptance criterion 4 is the bound; the *shape* of the
   completion curve is the reading, and a flat one is the failure §2.4 predicts.
+- **How reachable the §2.4 stall is.** Sites costing both wood and planks, queued
+  against a chain that makes the planks, at queue lengths of 1 / 3 / 5 / 10. The
+  reading is the queue length at which the first completion stops happening —
+  which is the number that decides whether the residual hazard needs the
+  dependency graph, the global throttle, or nothing at all. Report it even if it
+  is "never at any length this fixture can express", because that is the result
+  that would close the question.
 - **What a colony pays to grow.** The first real measurement of expansion cost:
   ticks from order to first output, for a producer built near the camp and one
   built at the far corner. Increment 5's distance gradient priced *delivery*;

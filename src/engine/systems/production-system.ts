@@ -1,4 +1,4 @@
-import { createSystem, queryComponents, Read, ReadResource, Write, WriteResource } from 'sim-ecs';
+import { createSystem, queryComponents, Read, Write, WriteResource } from 'sim-ecs';
 import type { CostMap, RecipeDef, ResourceId } from '../../shared/content-types';
 import { isUnderConstruction, relocatingIdsOf, type TileRef } from '../../shared/placement';
 import { commuteFactor } from '../../shared/population';
@@ -8,7 +8,7 @@ import { commuteTiles } from '../snapshot-builder';
 import {
   Building, Construction, Efficiency, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage,
 } from '../components';
-import { PendingChanges, ProductionLedger } from '../resources';
+import { ProductionLedger } from '../resources';
 
 /**
  * All-or-nothing draw against the building's OWN input buffer — never the
@@ -125,23 +125,20 @@ export const ProductionSystem = () => createSystem({
     buffer: Write(OutputBuffer), relocation: Write(Relocation), construction: Read(Construction),
   }),
   workers: queryComponents({ job: Read(JobAssignment), efficiency: Read(Efficiency), coverage: Read(ToolCoverage), home: Read(Home) }),
-  pending: ReadResource(PendingChanges),
 })
   .withName('ProductionSystem')
-  .withRunFunction(({ ledger, buildings, workers, pending }) => {
+  .withRunFunction(({ ledger, buildings, workers }) => {
     // Materialized because the rows are needed twice: once to map every
     // building's tile (a worker's commute is measured against their HOUSE's
     // tile, which is another row in this same query) and once to advance them.
     const buildingRows = [...buildings.iter()];
+    // The live rows are the WHOLE map, with no `pending.constructed` fold for a
+    // building ordered earlier this tick. Both ways in are closed since §2.5: a
+    // home tile can only name a live row (homing refuses to seat anyone in a
+    // construction site), and a workplace tile can only name one too
+    // (`handleAssignWorker` refuses a site). An entry folded in here could
+    // therefore only ever be a site nobody is standing in.
     const tileById = new Map(buildingRows.map((row): [number, TileRef] => [row.building.id, row.position]));
-    // Buildings constructed earlier THIS tick are absent from the query until
-    // the post-step sync, but homing has already seated colonists in them, so
-    // resolving a homeId against the query alone would charge a colonist
-    // homelessFactor on the very tick they were housed. Folded into the map
-    // rather than handled at each lookup: placementFactorOf resolves a home
-    // tile and a workplace tile, and neither has any business knowing which
-    // side of the sync its building came from.
-    for (const built of pending.constructed) tileById.set(built.id, { col: built.col, row: built.row });
     // Read BEFORE the loop below, which decrements: this is therefore the
     // PRE-decrement answer, the same one `relocation.ticksLeft > 0` gave when
     // asked inside the loop, since each building is visited exactly once.

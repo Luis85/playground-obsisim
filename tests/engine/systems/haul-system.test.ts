@@ -376,15 +376,14 @@ describe('HaulSystem', () => {
     expect(stockpile.get('wood')).toBe(2 * reduced);
   });
 
-  // OBS-6-07 path 2. `homeTileOf` falls back to `PendingChanges.tileOf` for a
-  // home the `buildings` query cannot see yet, and this is the only test that
-  // reaches it. ProductionSystem's twin of the same lookup is pinned by
-  // population-system.test.ts's 'charges a colonist housed by a same-tick
-  // construction as housed, not homeless'; this is the haulage half, and it has
-  // to assert on the LOAD, for the same reason that one asserts on the batch:
-  // the published `carrying`/commute figures are built after the post-step sync
-  // and could always see the new house, so they were never the broken reader.
-  // REVERSED by task 2b (spec §2.5). Before construction existed,
+  // OBS-6-07 path 2, REVERSED by task 2b (spec §2.5). `homeTileOf` used to fall
+  // back to `PendingChanges.tileOf` for a home the `buildings` query cannot see
+  // yet, and this was the only test that reached it; the fallback is gone with
+  // the same-tick housing that was its only way in, so the query alone answers
+  // now. The assertion is still on the LOAD rather than the published
+  // `carrying`/commute figures: those are built after the post-step sync and
+  // could always see the new house, so they were never the interesting reader.
+  // Before construction existed,
   // `pending.constructed` folded a same-tick house straight into homing so a
   // hauler landing on the very tick it was ordered could be housed — and
   // therefore loaded at full capacity — immediately. Since §2.5 an ordered

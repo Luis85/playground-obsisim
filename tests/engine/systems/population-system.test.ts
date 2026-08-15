@@ -615,15 +615,22 @@ describe('PopulationSystem — homing', () => {
   // house under construction shelters nobody...' above, which rides a site out
   // over several ticks the same way this test rode a relocation out over one.
   //
+  // What that test does NOT carry over is this one's incidental second job:
+  // it was the only thing that reddened when `PendingChanges.clear()` stopped
+  // emptying `constructed`, because a stale copy is exactly what it staged.
+  // `clear()` is still load-bearing — `outstandingMaterials`
+  // (placement-handlers.ts) charges every entry's whole cost against the next
+  // order — so that invariant was re-pinned, on the consequence rather than
+  // the mechanism, by command-system.test.ts's 'charges a standing site once,
+  // not once more for every tick since it was ordered'.
+  //
   // RETIRED alongside it: 'charges a colonist housed by a same-tick
   // construction as housed, not homeless' pinned ProductionSystem's pre-sync
   // homeId-to-tile lookup against the SAME same-tick housing this task
   // removes — a colonist can no longer be housed by construction on the order
   // tick at all, so there is nothing left for that lookup to resolve early.
-  // ProductionSystem's `pending.constructed` fold (production-system.ts) still
-  // exists and is still exercised, but now only for a WORKPLACE tile (a
-  // worker's own `buildingId`), never a home tile — a materially different
-  // claim this task's file list does not touch.
+  // ProductionSystem's `pending.constructed` fold is gone with it: a workplace
+  // tile cannot reach it either, since `handleAssignWorker` refuses a site.
 });
 
 /** Shelters in ascending id — the order every seating rule here walks. */
@@ -1155,7 +1162,7 @@ describe('PopulationSystem — births and the nomad gate', () => {
     // `contested` is asked of the second regime alone, and it is the number
     // that stopped this test being decoration: it counts the ticks on which an
     // arrival and a relocation actually drained together, recruit first. It
-    // reads (at most) ONE for the first regime against 8 for the second — with
+    // reads exactly ONE for the first regime against 8 for the second — with
     // every other number there healthy — so the interaction stays overwhelmingly
     // the second regime's, even though it is no longer strictly impossible under
     // the first. Before task 2b it read exactly zero: a bed only ever opened
@@ -1168,7 +1175,10 @@ describe('PopulationSystem — births and the nomad gate', () => {
     // land together across 600 ticks — a timing shift, not a housing defect:
     // the fifth clause (no stranded bed) holds throughout this same run either
     // way.
-    expect(always.contested).toBeLessThanOrEqual(1);
+    // Pinned exactly, not bounded: the run is deterministic and 1 is what it
+    // measures, so `<= 1` would silently readmit the 0 this comment says is no
+    // longer reachable — the very shift task 2b made.
+    expect(always.contested).toBe(1);
     expect(saved.contested).toBeGreaterThan(3);
     // And the conjunction, which is the one the fifth clause actually needs: a
     // contested drain WITH a bed free elsewhere. Guarding `contested > 3` and

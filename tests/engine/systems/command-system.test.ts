@@ -300,6 +300,36 @@ describe('CommandSystem', () => {
       expect(snapshot().buildings).toHaveLength(1);
     });
 
+    it('charges a standing site once, not once more for every tick since it was ordered', async () => {
+      // The pin on `PendingChanges.clear()` emptying `constructed`
+      // (resources.ts). That list is THIS drain's own record of sites ordered a
+      // moment ago, and `outstandingMaterials` charges each entry its WHOLE
+      // cost — on top of the shortfall it charges the live site row the
+      // post-step sync has since published. A list that survived its tick would
+      // therefore charge every standing site twice from the tick after its
+      // order onwards, and the colony would progressively refuse orders it can
+      // plainly afford.
+      //
+      // Until task 2b this was pinned incidentally, through the same-tick
+      // shelter fold a stale `constructed` also corrupted; §2.5 removed that
+      // fold, and with it the only test that reddened when `clear()` stopped
+      // clearing.
+      //
+      // Exactly two houses' materials, so the second order has no slack for a
+      // double charge to hide in: 30 >= 15 (the standing site) + 15 (this
+      // order) passes, and 30 >= 15 + 15 + 15 does not. No hauler is assigned
+      // and no site is a source, so nothing is delivered across the ticks
+      // below — the first site still owes its whole cost when the second order
+      // is judged, exactly once.
+      const { tick, dispatch, snapshot } = await setup({ ...houselessSave(), stockpile: { wood: 30, planks: 10 } });
+      await dispatch({ type: 'constructBuilding', buildingDefId: 'house' });
+      for (let i = 0; i < 3; i++) await tick();
+      await dispatch({ type: 'constructBuilding', buildingDefId: 'house' });
+      expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Started building a House.' }]);
+      await tick();
+      expect(snapshot().buildings).toHaveLength(2);
+    });
+
     it('counts sites only — a FINISHED building is not charged against a new order', async () => {
       // The distinction the row's `Construction` exists for. A finished
       // building's cost was paid off long ago; counting it as outstanding would

@@ -40,18 +40,17 @@ export function haulerCapacity(homeTile: TileRef | null): number {
 
 /** Where a hauler sleeps, or null when nowhere — the input haulerCapacity
  * charges. Resolved against the same building rows the haul targets come from,
- * so a house is just another row here. */
-function homeTileOf(homeId: number | null, byId: ReadonlyMap<number, HaulBuildingRow>, pending: PendingChanges): TileRef | null {
+ * so a house is just another row here.
+ *
+ * The query is the WHOLE answer, with no `pending.constructed` fallback for a
+ * house built earlier this tick: since §2.5 an ordered house is a construction
+ * site that shelters nobody, and homing only ever seats a colonist into a live
+ * row (`shelters`, population-system.ts). So a `homeId` naming a building this
+ * query cannot see no longer arises, and "absent" means what it says — no home
+ * this tick, hence the homeless carry capacity. */
+function homeTileOf(homeId: number | null, byId: ReadonlyMap<number, HaulBuildingRow>): TileRef | null {
   if (homeId === null) return null;
-  const row = byId.get(homeId);
-  // A house built earlier THIS tick is absent from the query until the
-  // post-step sync, yet homing has already seated its residents. Without this
-  // fallback a hauler housed on the construction tick resolves to no tile and
-  // takes the homeless carry capacity, while the snapshot published moments
-  // later reports them housed. ProductionSystem folds the same pending tiles
-  // into its own map; here byId carries whole rows a pending building has no
-  // counterpart for, so the tile is resolved on its own.
-  return row === undefined ? pending.tileOf(homeId) : row.position;
+  return byId.get(homeId)?.position ?? null;
 }
 
 /** Everything the leg handlers below read, gathered once per tick. */
@@ -361,7 +360,7 @@ export const HaulSystem = () => createSystem({
     // from under it, which is a question about a site's LIVE tile. One map,
     // read by that claim and by every arrival handler.
     const siteById = new Map(sites.map((site) => [site.id, site]));
-    const capacityOf = (row: HaulWorkerRow) => haulerCapacity(homeTileOf(row.home.buildingId, byId, pending));
+    const capacityOf = (row: HaulWorkerRow) => haulerCapacity(homeTileOf(row.home.buildingId, byId));
     const claims = claimsOf(workerRows, stockpile, siteById, capacityOf);
     // ONE derivation, read by the dispatch filter and by the arrival recheck.
     // They are the same rule seen from two ends of a leg, so a second copy of

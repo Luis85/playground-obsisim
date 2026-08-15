@@ -234,10 +234,18 @@ Mutations, one per change: point a site's want at `recipe`; cap a site's room at
 - Test: `tests/shared/haul.test.ts`, `tests/engine/systems/haul-dispatch.test.ts`
 
 **Interfaces:**
-- `SupplyCandidate` gains `siteAge: number | null` — the building id for a site, `null` for a finished building. **No new state**: `IdCounter.take()` is monotone, so a lower id *is* an earlier order, and the tie-break chain already ends at this field. This promotes it to the front for sites only.
-- `compareSupplyCandidates` puts **sites before finished buildings, then age ascending**, ahead of the starvation band, `movable`, and route. Existing order is otherwise untouched.
+- `SupplyCandidate` gains `siteAge: number | null` — the building id for a site, `null` for a finished building. **No new state**: `IdCounter.take()` is monotone, so a lower id *is* an earlier order, and the tie-break chain already ends at this field.
+- `compareSupplyCandidates` gains exactly two things:
+  1. **when both candidates are sites**, age ascending decides ahead of every other term;
+  2. **a site is never in the starvation band.**
 
-**Why, restated because the code will not show it:** `movable` is bounded by remaining room, so a nearly-complete site has small `movable` and **loses** to a newer empty one. Twenty sites round-robin and none finishes. The starvation band makes it worse rather than better — a site at zero is not blocked, it is merely newer, so promoting it is the same failure arriving through the fairness fix.
+  A site against a finished building is ranked by the existing terms, unchanged. **Do not add a "sites first" clause** — see below.
+
+**Why, restated because the code will not show it:** `movable` is bounded by remaining room, so a nearly-complete site has small `movable` and **loses** to a newer empty one. Twenty sites round-robin and none finishes.
+
+**And why the rule stops there.** An earlier draft put sites ahead of finished buildings unconditionally, which is a priority inversion: a site's cost is planks, planks come from a sawmill, the sawmill needs wood — sites outranking the sawmill send every log to the sites, the sawmill never produces, and the oldest site waits on planks that can never arrive. A continuously extended queue starves the producer indefinitely.
+
+The two-part rule fixes that **with no dependency machinery**, and part 2 is what does it: a sawmill with an empty in-tray *is* starving, a site never is, so a blocked producer outranks a queue of sites automatically — through the band increment 8 already shipped for exactly this purpose.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -248,8 +256,23 @@ it('an older site outranks a newer one that is emptier and nearer', () => {
   // fixture where it also wins on one of them proves nothing.
 });
 
-it('a site outranks a finished building that is starving', () => {
-  // Sites before producers. Its own fixture.
+it('a STARVING producer outranks a site', () => {
+  // The priority inversion, guarded from the direction that matters. A sawmill
+  // with an empty in-tray beats a queue of sites that need its planks — which
+  // is what stops the queue starving the chain that supplies it. Reverse this
+  // and the fixture below deadlocks.
+});
+
+it('a queue of sites does not starve the producer that makes what they need', async () => {
+  // The integration form: three plank-costing sites and a staffed sawmill with
+  // an empty in-tray, wood in the camp. The sawmill must receive wood and
+  // produce planks. Against a "sites first" ordering the sawmill never runs and
+  // no site ever completes — which is exactly what an earlier draft specified.
+});
+
+it('a site is never in the starvation band', () => {
+  // Part 2 of the rule, as a unit test. A site holding zero must NOT be
+  // promoted the way a producer holding zero is.
 });
 
 it('among finished buildings nothing has changed', () => {
@@ -383,6 +406,7 @@ Six mutations, one per exclusion, each reddening exactly one test.
   | a site | **no** — nothing was paid | **refunded** via `refundAt` |
 
 - Demolishing a site refunds its delivered materials through `destinationFor` with the reservation-aware `heldAt`.
+- **`demolitionNotice` (`placement-handlers.ts:101`) must become site-aware**, and this is OBS-4-07 repeating rather than a cosmetic edit. It opens with a hardcoded `` `Demolished the ${name} — cost refunded` `` and describes the in-tray as *lost* — for a site, both halves are exactly backwards: no cost is refunded and the materials come back. OBS-4-07 is filed against precisely this failure, a notice claiming "cost refunded" while goods were silently deleted, and shipping the inverse of it here would be the same defect with the sign flipped.
 - `handleMoveBuilding` **refuses a site**, with a notice (§2.6, §2.12).
 
 - [ ] **Step 1: Write the failing tests**
@@ -408,6 +432,14 @@ it('cancelling a site refunds what was delivered to it', async () => {
 it('demolishing a FINISHED building still refunds its cost', async () => {
   // The other side of the branch, and the regression guard for every increment
   // before this one. Without it the branch can be written as "never refund".
+});
+
+it('cancelling a partly supplied site says what actually happened', async () => {
+  // The NOTICE, asserted on its text. It must not claim a cost refund and must
+  // not describe the returned materials as lost. OBS-4-07 exists because a
+  // notice said "cost refunded" while goods were deleted; shipping its inverse
+  // here is the same defect with the sign flipped, and the ledger assertions
+  // above all pass while the player is told the opposite of the truth.
 });
 
 it('a finished building is unchanged by this', async () => {

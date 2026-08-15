@@ -179,26 +179,44 @@ that is nearly complete has *little* room, therefore *small* `movable`, therefor
 sites round-robin, each one's last material delivered last, and none of them
 finishes until nearly all of them do.
 
-**The rule.** For construction candidates, **age ascending outranks every other
-term** — before the starvation band, before `movable`, before route.
+**The rule, in two parts, and it is narrower than an earlier draft made it:**
+
+1. **When BOTH candidates are sites, age ascending decides, ahead of every other
+   term.** Lower building id wins.
+2. **A site is never in the starvation band.**
+
+Everything else is untouched: a site against a finished building is ranked by the
+existing terms — starvation, `movable`, route, ids — exactly as two finished
+buildings are.
 
 **Age needs no new state.** `IdCounter.take()` is monotone, so a lower building
 id *is* an earlier order. The tie-break chain already ends at building id; this
-promotes that same field to the front for sites, and the "no memory between
-ticks" property of §2.6 survives untouched.
+promotes that same field to the front when both sides are sites, and the "no
+memory between ticks" property of §2.6 survives untouched.
 
-**The starvation band is actively wrong for sites, and this is the subtle half.**
-§2.1 of increment 8 promotes a building holding zero of what it needs, because a
-producer at zero produces nothing while one holding some is working. A *site* at
-zero is not blocked — it is merely newer. Applying the starvation floor to sites
-promotes the newest site over the one closest to completion, which is the
-round-robin failure again, arriving through the fairness fix rather than through
-`movable`.
+**Why a site is never starving.** The band promotes a building holding zero of
+what it needs, because a producer at zero produces nothing while one holding some
+is working — it means *blocked*. A site produces nothing by definition. It is not
+blocked, it is unbuilt, and there is no output being lost while it waits. Reading
+"holds zero" as starvation for a site would also promote the newest site over the
+one closest to completion, which is the round-robin failure arriving through the
+fairness fix rather than through `movable`.
 
-So: **two questions, two orderings, discriminated by whether the building is
-under construction.** For a producer, "which is blocked?". For a site, "which did
-the player order first?". Both are derived from live components and neither
-touches the other.
+**What an earlier draft got wrong, because the failure it causes is worse than
+the one it fixes.** That draft put *sites ahead of finished buildings*
+unconditionally. That is a priority inversion: a site's cost is planks, planks
+come from a sawmill, the sawmill needs wood — and sites outranking the sawmill
+send every log to the sites, so the sawmill never produces, so the oldest site
+waits on planks that can never arrive. A continuously extended queue starves the
+producer indefinitely.
+
+Removing that clause fixes it **without any dependency machinery**, and the second
+part of the rule is what makes it work: a sawmill with an empty in-tray *is*
+starving, sites are *never* starving, so **a blocked producer outranks a queue of
+sites automatically.** The chain that unblocks the queue is served first, by the
+mechanism increment 8 already shipped for exactly this reason. Two questions —
+"which producer is blocked?" and "which site did the player order first?" — asked
+in two disjoint comparisons, neither needing to know about the other.
 
 ### 2.5 Completion
 

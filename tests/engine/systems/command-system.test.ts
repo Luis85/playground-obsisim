@@ -139,12 +139,12 @@ const FINISHED_FORESTER_ID = 90;
  * building somebody actually paid for, and until Task 8 gives sites a save
  * field the restore path is the only way to get one.
  */
-function saveWithFinishedForester(): SaveGameV6 {
+function saveWithFinishedForester(col = 5, row = 5): SaveGameV6 {
   const base = houselessSave();
   return {
     ...base,
     buildings: [
-      { inputBuffer: {}, stored: {}, id: FINISHED_FORESTER_ID, defId: 'forester', col: 5, row: 5, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 },
+      { inputBuffer: {}, stored: {}, id: FINISHED_FORESTER_ID, defId: 'forester', col, row, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 },
     ],
     nextEntityId: 100,
   };
@@ -236,13 +236,8 @@ describe('CommandSystem', () => {
   it('demolishing a FINISHED building still refunds its cost', async () => {
     // The other side of the branch: without this it can be written as "never
     // refund", which silently repeals `Demolition Keeps Its Full Refund`.
-    const save = houselessSave();
-    save.buildings = [
-      { inputBuffer: {}, stored: {}, id: 90, defId: 'forester', col: 5, row: 3, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 },
-    ];
-    save.nextEntityId = 100;
-    const { world, dispatch, snapshot } = await setup(save);
-    await dispatch({ type: 'demolishBuilding', buildingId: 90 });
+    const { world, dispatch, snapshot } = await setup(saveWithFinishedForester(5, 3));
+    await dispatch({ type: 'demolishBuilding', buildingId: FINISHED_FORESTER_ID });
     expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Demolished the Forester — cost refunded.' }]);
     expect(world.getResource(Stockpile).get('wood')).toBe(40); // 30 + the forester's 10
   });
@@ -648,7 +643,7 @@ describe('CommandSystem', () => {
     const { world, tick, dispatch, snapshot } = await setup(save);
     await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
     expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'Cannot create more entities: id space exhausted.' }]);
-    expect(world.getResource(Stockpile).get('wood')).toBe(30); // cost not paid
+    expect(world.getResource(Stockpile).get('wood')).toBe(30); // untouched: an order never charges the ledger, rejected or not
     await dispatch({ type: 'recruitWorker' });
     expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'Cannot create more entities: id space exhausted.' }]);
     await tick();
@@ -879,7 +874,7 @@ describe('CommandSystem', () => {
       { type: 'demolishBuilding', buildingId },
     );
     expect(snapshot().notices).toEqual([
-      { kind: 'success', message: 'Demolished the Forester — cost refunded.' },
+      { kind: 'success', message: 'Cancelled the Forester — nothing was charged.' },
       { kind: 'rejection', message: 'Building not found.' },
       { kind: 'rejection', message: 'Building not found.' },
       { kind: 'rejection', message: 'Building not found.' },
@@ -908,7 +903,7 @@ describe('CommandSystem', () => {
     // notice happens to be a success" — a stray rejection elsewhere would slip
     // past an index-1-only assertion.
     expect(snapshot().notices).toEqual([
-      { kind: 'success', message: 'Demolished the Forester — cost refunded.' },
+      { kind: 'success', message: 'Cancelled the Forester — nothing was charged.' },
       { kind: 'success', message: "Started building a Gatherer's Hut." },
     ]);
     await tick();
@@ -931,7 +926,7 @@ describe('CommandSystem', () => {
       { type: 'moveBuilding', buildingId: moverId, to: { col: 5, row: 5 } },
     );
     expect(snapshot().notices).toEqual([
-      { kind: 'success', message: 'Demolished the Forester — cost refunded.' },
+      { kind: 'success', message: 'Cancelled the Forester — nothing was charged.' },
       { kind: 'success', message: "Moved the Gatherer's Hut." },
     ]);
     // Position is a component mutation, not a deferred entity command — the

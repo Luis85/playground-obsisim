@@ -519,14 +519,10 @@ describe('a remote depot is reachable by anyone', () => {
 });
 
 describe('what a leg cannot assume', () => {
-  it('a construction ordered mid-fetch cannot make the hauler create goods', async () => {
-    // WOOD, because the resource has to be both a recipe input and a
-    // construction cost or the fixture cannot discriminate at all: no building
-    // costs wheat, so a wheat-fetching hauler's source can never be drained by
-    // a build order.
+  it('a ledger spend mid-fetch cannot make the hauler create goods', async () => {
     const { world, haulers, step, stockpile } = await setup(
       [{ defId: 'storehouse', ...DEPOT, stored: { wood: 12 } }, { defId: 'sawmill', ...BESIDE_DEPOT, crew: 1 }], 1,
-      { systems: [CommandSystem, ProductionSystem, HaulSystem] },
+      { systems: [ProductionSystem, HaulSystem] },
     );
     expect(colonyTotal(world, 'wood')).toBe(12);
     const out = legTicks(CAMP_TILE, DEPOT);

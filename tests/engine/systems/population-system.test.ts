@@ -764,7 +764,12 @@ function tally(seen: Exercised, snap: Snapshot, recruitFirst: boolean, spare: nu
   const reached: Record<keyof Exercised, boolean> = {
     joined,
     moved,
-    demolished: said(/Demolished the/),
+    // Matches either wording a demolishBuilding success can land on: a
+    // FINISHED house ("Demolished the...— cost refunded") or a SITE one still
+    // under construction ("Cancelled the...— nothing was charged", added
+    // alongside Task 2's cost-refund branch). This tally is about the command
+    // being accepted, not about which of the two it hit.
+    demolished: said(/(Demolished|Cancelled) the/),
     saturated: snap.beds.total <= snap.population,
     contested,
     spare: spare > 0,

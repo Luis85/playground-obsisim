@@ -236,7 +236,12 @@ describe('isLoadableSave', () => {
         // is the whole interaction under test.
         expect({
           built: said(/Started building a House/), joined: said(/joined the colony/), moved: said(/Moved the/),
-          assigned: said(/Assigned a worker/), demolished: said(/Demolished the/),
+          assigned: said(/Assigned a worker/),
+          // Either wording a demolishBuilding success can land on: a FINISHED
+          // house or a SITE still under construction (the latter reads
+          // "Cancelled the...— nothing was charged" since Task 2). This
+          // assertion is about the command being accepted, not the wording.
+          demolished: said(/(Demolished|Cancelled) the/),
         }).toEqual({ built: true, joined: true, moved: true, assigned: true, demolished: true });
         // Past the recruit cooldown before the second drain, so its nomad is
         // gated on beds — the thing under test — and not on patience.

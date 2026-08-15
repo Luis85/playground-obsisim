@@ -184,9 +184,19 @@ function heldText(amountOf: (id: ResourceId) => number): string {
  * OBS-4-07 fixed: a zero-units clause would be noise on the common case, so
  * nothing held means the plain sentence, byte-identical to before §2.7 gave
  * the storehouse a second outcome.
+ *
+ * `wasSite` picks the opening clause: a FINISHED building was actually paid
+ * for, so "cost refunded" is true; a SITE never was (§2.3), and `refundCostOf`
+ * hands nothing back for one, so claiming a refund here would be OBS-4-07's
+ * exact defect with the sign flipped — a false receipt instead of a silent
+ * loss. This covers only the construction-cost half of that claim. A site can
+ * also hold delivered materials in its in-tray once Task 3 ships supply to
+ * one; naming THEIR loss in this notice, the way `lost` already does for a
+ * finished building's buffer, is Task 7's half — nothing can reach a site's
+ * tray yet, so there is nothing for this function to say about it today.
  */
-function demolitionNotice(name: string, lost: string, moved: string, displaced: number): string {
-  let notice = `Demolished the ${name} — cost refunded`;
+function demolitionNotice(name: string, lost: string, moved: string, displaced: number, wasSite: boolean): string {
+  let notice = wasSite ? `Cancelled the ${name} — nothing was charged` : `Demolished the ${name} — cost refunded`;
   if (lost !== '') notice += `, ${lost} lost`;
   if (moved !== '') notice += `, ${moved} moved to the camp`;
   notice += '.';
@@ -248,6 +258,11 @@ export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Com
     return;
   }
   const def = BUILDINGS[found.building.defId];
+  // Read before `refundCostOf` — nothing mutates `found.construction` between
+  // here and the notice below, and this is the same test that function uses
+  // to decide whether there is anything to hand back, so the notice's opening
+  // clause tracks its actual behaviour rather than guessing at it separately.
+  const wasSite = isUnderConstruction(found.construction.ticksLeft);
   refundCostOf(ctx, found);
   // Whatever was waiting in either tray dies with the building — decided in
   // OBS-4-07 for the out-tray, and extended to the IN-tray by §2.7 for the same
@@ -340,7 +355,7 @@ export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Com
   // pending.demolished — re-seating any earlier would hand the arrival a bed in
   // the very house being removed.
   reseatArrivalsOf(ctx, command.buildingId);
-  ctx.notices.succeed(demolitionNotice(def.name, lost, moved, displaced));
+  ctx.notices.succeed(demolitionNotice(def.name, lost, moved, displaced, wasSite));
 }
 
 /**

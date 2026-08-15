@@ -18,6 +18,13 @@ Between Task 2 and Task 5, **ordering a building creates a site that never finis
 
 The exclusions depend only on Task 1's component and Task 2's sites, never on delivery or the countdown, so nothing is lost by moving them early. **A site must provide nothing from the first commit in which a site can exist.**
 
+**Two windows this branch really does have, stated honestly rather than papered over.** Both were raised against Task 2's commit and both are consequences of the task split, not defects in it — but the sentence above overstates its own guarantee by one commit, and a reader deserves the real granularity.
+
+- **Task 2's own commit ships sites that still provide service.** The exclusions land in Task 2b, the very next commit, because they are a different file list and their own five fixtures. So the guarantee above holds from **2b**, not from 2. Anyone bisecting into exactly Task 2's commit sees a house that shelters colonists it never cost anything to build.
+- **From Task 2 until Task 8, saving and reloading completes every site for free.** `savedBuildingOf` writes a v6 record with no countdown, so `spawnBuilding` restores the site at zero ticks — a finished building, its cost never delivered, and its demand gone from `outstandingMaterials` so further orders are accepted too. Task 8's round-trip is what closes it, and that is the task's real justification: not "the save carries a new number" but "without the number, a reload mints buildings."
+
+Neither is a reason to reorder — 2b follows 2 immediately, and moving the save schema ahead of the delivery path would invert the increment. They are a reason not to ship the branch half-merged, and the PR lands whole.
+
 ## Global Constraints
 
 - **The new component must be attached in TWO places**: `buildingComponents` in `src/engine/spawn.ts` (the single shared spawn list) *and* `COMPONENT_TYPES` in `src/engine/world.ts` for save round-tripping. Forgetting either is silent and has bitten twice (OBS-4-02). This increment adds exactly one component, in Task 1.
@@ -34,10 +41,12 @@ The exclusions depend only on Task 1's component and Task 2's sites, never on de
   | `src/shared/save-migration.ts` | 415 | Task 8 |
   | `src/engine/systems/haul-dispatch.ts` | 395 | Task 3 |
   | `src/engine/components.ts` | 350 | Task 1 |
-  | `src/engine/systems/placement-handlers.ts` | 327 | Task 2, Task 7 |
+  | `src/engine/systems/placement-handlers.ts` | **429 after Task 2** | Task 2, Task 3, Task 7 |
   | `src/engine/snapshot-builder.ts` | 368 | Task 2b |
 
   Check with `grep -cve '^\s*$' <file>` after every task that touches one.
+
+  **`placement-handlers.ts` is now the file to watch, not `world.ts`.** Task 2 took it from 327 to 429 of 500, and two more tasks add to it — Task 3's in-tray refund and Task 7's site-aware notice. There is not room for both to be careless. Contingency, in preference order: extract the demolition path (`demolitionNotice`, `heldText`, `refundCostOf` and the refund branch) into `src/engine/systems/demolition.ts`, which is a coherent seam rather than a size-driven split; failing that, extract the construction path. Do it as its own commit, before the feature change, exactly as Task 1 did for `world.ts`.
 - **Every task's tests must be greenable by that task's own changes.** `check:all` is required green at the end of every task, so a test asserting behaviour a *later* task enables cannot be committed — the implementer must then skip it, weaken it, or pull the later task forward, and all three are worse than writing the right assertion now. **This plan broke that rule three times in review** (Task 1's save round-trip needs Task 8's schema; Task 3 asserted completion, which needs Task 5's system; and a stalled-queue recovery test sat in a dispatch task that had neither completion nor cancellation), so before starting any task, check its tests against its own file list. Where the strong assertion belongs to a later task, the earlier one asserts the strongest thing it *can* reach and names the task that finishes the job.
 - **Grep for the three "a building is a producer" proxies and justify every hit.** Every shipped predicate and constant in this engine was written when a building was one of exactly three things: a producer, a shelter, or a store. A site is none of them. Two rounds of review on this plan found **six** places that assumed a fourth kind could not exist, across these proxies — and enumerating them one review round at a time is not a method. §2.7 has the table; the search is:
 
@@ -126,8 +135,10 @@ it('COMPONENT_TYPES includes Construction', () => {
 
   ```
   outstanding[r] = Σ over sites of max(0, cost[r] − held[r])
-  refuse unless ∀r: colonyStock[r] ≥ outstanding[r] + def.cost[r]
+  refuse unless ∀r ∈ def.cost: colonyStock[r] ≥ outstanding[r] + def.cost[r]
   ```
+
+  **`∀r` ranges over the resources the NEW order spends, not the whole catalog** — and this is a correction, not a shortcut. Taken over every resource the rule is self-detonating, because `outstanding` counts material in transit twice (see the paragraph below): the instant a hauler picks up the last 10 planks for a mill site, `colonyStock.planks` is 0 while `outstanding.planks` is still 10, so **every order of every building type is refused colony-wide until that load lands** — a lockout the player cannot clear by not ordering. Nothing the check exists for is lost by narrowing: for any resource the new order actually spends, `outstanding[r]` is still summed in full, so two orders against one building's materials are still refused. Implemented and commented as a decision in Task 2.
 
   **The Σ must skip `ctx.demolishedIds`.** Removal is deferred to the end of the drain, so a site demolished earlier in this same drain is still sitting in `ctx.buildings` with its `Construction` and its in-tray intact. Summed naively, that ghost's shortfall is charged against the very order meant to replace it, and a demolish-then-rebuild pair in one drain is refused for materials the colony demonstrably has — the refund from the demolish having already landed. This is not a new mechanism: `placement-handlers.ts:23-31` already carries a helper that filters exactly this set, with a comment saying why, and `findBuilding` (`command-handlers.ts:88`) applies the same exclusion. Use it. **Fixture: demolish a site and order its replacement in ONE drain, and require the second order to be ACCEPTED.**
 

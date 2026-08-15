@@ -33,6 +33,16 @@ No window where the colony is broken. But between Task 2 and Task 5, **ordering 
   | `src/engine/systems/placement-handlers.ts` | 327 | Task 2, Task 7 |
 
   Check with `grep -cve '^\s*$' <file>` after every task that touches one.
+- **Grep for the four "a building is a producer" proxies and justify every hit.** Every shipped predicate and constant in this engine was written when a building was one of exactly three things: a producer, a shelter, or a store. A site is none of them. Two rounds of review on this plan found **six** places that assumed a fourth kind could not exist, across four proxies — and enumerating them one review round at a time is not a method. §2.7 has the table; the search is:
+
+  ```bash
+  grep -rn "inputBufferCap" src/          # "an in-tray belongs to a recipe, so 12 is enough"
+  grep -rn "staffed\|StaffedSet" src/     # "a building worth feeding has workers"
+  grep -rn "relocatingTicks\|isRelocating" src/   # "the only non-working building is a moving one"
+  grep -rn "affordableDefs\|canAfford" src/       # "you cannot order what you cannot pay for"
+  ```
+
+  Each hit is either a site exemption, a site exclusion, or deliberately neither — and the third case needs a sentence saying why. The tasks below name the hits two reviews found; they are not a complete list, and a task that finds a new one should fix it and say so rather than deferring it.
 - **Mutation-test every test.** Back up by copy, `sed`, `diff -q` against **the backup** to confirm it applied, restore **by copy** — never `git checkout <file>`, which restores from HEAD and destroys uncommitted work.
 - **Every clause of a compound boolean needs its own fixture.** §2.7 is six separate exclusions and §2.4 is an ordering with a new term ahead of the existing chain. Both are the shape where a whole-condition mutation reddens a gated path and looks like coverage.
 - **Any quantity a dispatch spends must be tested with more than one hauler, and §2.4 needs more than one SITE.** Increment 8's over-claim family all passed single-hauler fixtures. The convergence rule is a *many* problem by construction and cannot be observed with one of either.
@@ -372,10 +382,24 @@ If nothing breaks, the deliverable is the suite and a commit message saying so. 
 - **No new field for the materials.** `SavedBuilding.inputBuffer` already round-trips.
 - The bump is self-policing — `SaveGameV6.version` is the literal `6`, so raising the constant fails typecheck at both producers until the type is updated.
 
+**Two restore-path defects that the "no new field needed" framing hides.** `SavedBuilding.inputBuffer` does round-trip, and that is not sufficient:
+
+- `buildingComponents` restores through `clampedInputBuffer` (`spawn.ts:113`), which is `clampedBuffer(saved, BALANCE.inputBufferCap)`. **A 30-unit mill site saved mid-countdown reloads holding 12**, destroying 18 units the ledger already recorded as consumed. The clamp must take the site's cost as its bound, as `needOf` and `unload` do.
+- `usableBeds` (`restore.ts:118`) gates on `count > 0 && b.relocatingTicks === 0` — relocation being the only way a house could exist unusable. An unfinished house otherwise seats colonists at load, and the **paused initial snapshot reports them housed** until the first tick evicts them.
+
 - [ ] **Step 1: Write the failing tests, then implement, then mutation-test, commit**
 
 ```ts
-it('a site mid-build round-trips its countdown and its delivered materials', async () => {});
+it('a site mid-build round-trips its countdown and its delivered materials', async () => {
+  // The in-tray fixture MUST exceed BALANCE.inputBufferCap — 30 units, not 6.
+  // Below the cap it passes against the unfixed clamp and proves nothing, which
+  // is the whole reason this defect survived a draft that said the field
+  // "already round-trips".
+});
+it('an unfinished house houses nobody at load, in the paused snapshot', async () => {
+  // Before any tick runs. Asserting after a step passes against the runtime
+  // rehome eviction and misses the restore predicate entirely.
+});
 it('a v6 save loads with every building finished', async () => {});
 it('a negative or fractional constructionTicks is rejected', async () => {});
 ```
@@ -392,10 +416,22 @@ it('a negative or fractional constructionTicks is rejected', async () => {});
 - State `'underConstruction'`, ahead of `'relocating'` in the precedence chain.
 - **A site publishes what it still needs, per material.** This is what replaces the affordability refusal Task 2 removed: the player sees "needs 14 wood" instead of being told they cannot order it.
 - The Economy view names a **build backlog** beside the input and output backlogs.
+- **The affordability gates come out of all three build surfaces.** Task 2 removes the refusal in the command handler, and without this the queue-without-materials behaviour is **unreachable through the UI** — acceptance criterion 5 passes in the engine and the player still cannot order the site:
+
+  | surface | today |
+  | --- | --- |
+  | `src/app/components/BuildPalette.vue:28` | `:disabled` unless `affordableDefs[id]` — cannot arm placement |
+  | `src/app/views/WorldView.vue:66` | placement predicate returns `affordableDefs[m.defId]` — rejects the tile |
+  | `src/app/views/BuildingsView.vue:70` | `:disabled` on the table button, tooltip "Not enough resources" |
+  | `src/app/stores/game-store.ts:172` | `affordableDefs` — the getter all three read |
+
+  `affordableDefs` is **not deleted**: it stops gating and starts informing. What it tells the player remains true and worth showing, so the tooltip becomes advisory rather than a refusal.
 
 - [ ] **Step 1: Find the surfaces before writing anything**
 
-`grep -rn "relocating" src/app` — every place that special-cases the relocating state is a place that probably needs this one. Pre-flight the brief against the real files.
+`grep -rn "relocating" src/app` for the state, and `grep -rn "affordableDefs" src/app` for the gates — the four rows above are what review found, and the grep is what confirms there is no fifth. Pre-flight the brief against the real files.
+
+The test that matters here is a **UI-level** one: with an empty ledger, the palette arms, the tile is accepted, and the order goes through. An engine-level test of criterion 5 already exists in Task 2 and passes regardless of these gates, which is exactly how this was missed.
 
 - [ ] **Step 2: Tests, implement, mutation-test the smoke checks, commit**
 

@@ -244,11 +244,31 @@ build countdown is two countdowns on one entity for no gameplay gain. §2.12.
 
 ### 2.7 Where a site must be excluded, and where it must be let in
 
-Two halves, and the second is the one an implementation misses because §2.7's
-title only describes the first. **A site is not merely a building that provides
-nothing — it is also a building that must be fed**, and three conditions in the
-delivery path currently use "is this building staffed" as a proxy for "is this a
-legitimate delivery target". A site is never staffed and must be fed anyway.
+**The rule, before the lists, because the lists have twice proved incomplete.**
+Every shipped predicate and constant in this engine was written when a building
+was one of exactly three things: a producer, a shelter, or a store. A
+construction site is none of them, and **every place that assumed a fourth kind
+could not exist is a defect this increment must find.** Two rounds of review
+found six such places; enumerating them one round at a time is not a method.
+
+Four proxies carry that assumption, and each is grep-able:
+
+| proxy | what it silently means | where it has already bitten |
+| --- | --- | --- |
+| `BALANCE.inputBufferCap` | "an in-tray belongs to a recipe, so 12 is enough" | `needOf`, `unload`, **and `clampedInputBuffer` on restore** (§2.9) |
+| `StaffedSet` / `staffed.has(id)` | "a building worth feeding has workers" | `supplyCandidates`, `unload`, `demandSourcesOf` (§4.2) |
+| `relocatingTicks === 0` | "the only way a building exists without working is that it is moving" | `usableBeds` at restore (§2.9), and the §2.7.2 list |
+| `canAfford` / `affordableDefs` | "you cannot order what you cannot pay for" | three UI surfaces (§2.10) |
+
+**The implementer's task is to grep for all four and justify every hit**, not to
+work the two lists below and stop. The lists are what two reviews found; the
+table is how to find the rest.
+
+Two halves follow, and the second is the one an implementation misses because
+§2.7's title only describes the first. **A site is not merely a building that
+provides nothing — it is also a building that must be fed**, and three conditions
+in the delivery path use staffing as a proxy for "is this a legitimate delivery
+target". A site is never staffed and must be fed anyway.
 
 #### 2.7.1 Three conditions that must let a site in
 
@@ -328,9 +348,26 @@ constructionTicks: number;
   is total and lossless, and needs no heuristic.
 - **The guard** is `isTickCounter`, the same non-negative-safe-integer check
   `relocatingTicks` and `starvingTicks` already use.
-- **No new field is needed for the materials.** `SavedBuilding.inputBuffer`
-  already round-trips, so a save taken mid-delivery restores a site with exactly
-  what had arrived.
+- **No new field is needed for the materials, but the restore path must be made
+  site-aware.** An earlier draft of this section claimed `SavedBuilding.inputBuffer`
+  "already round-trips" and stopped there. **That claim is false above 12 units.**
+  `buildingComponents` restores through `clampedInputBuffer`
+  (`spawn.ts:113`), which is `clampedBuffer(saved, BALANCE.inputBufferCap)` — so a
+  fully supplied mill site holding 30 units, saved mid-countdown, reloads holding
+  **12**, and 18 units the ledger has already recorded as consumed are destroyed
+  by a save/load round trip.
+
+  The clamp must take the site's cost as its bound, exactly as `needOf` and
+  `unload` do (§2.2). The round-trip fixture must hold **more than
+  `inputBufferCap`**, or it passes against the unfixed clamp and proves nothing —
+  which is why the field is not the problem and the fixture value is.
+- **`usableBeds` must exclude an unfinished house** (`restore.ts:118`). Its
+  predicate is `count > 0 && b.relocatingTicks === 0`, and relocation is
+  currently the only way a house can exist without being usable. A save
+  containing an unfinished house and homeless colonists otherwise seats them in
+  it at load, and the **paused initial snapshot reports them housed** until the
+  first tick evicts them — a contradiction the player can see in a single frame,
+  which is the same standard §2.3 of increment 7 applies to homing.
 
 ### 2.10 Snapshot and surfaces
 
@@ -341,6 +378,23 @@ constructionTicks: number;
   shortfall per material, which is what replaces the affordability refusal §2.3
   removes: the player sees "needs 14 wood" rather than being told they cannot
   order it.
+- **The affordability gates come out of every build surface**, and there are
+  three of them plus the store getter behind them. §2.3 removes the refusal in
+  the command handler; leaving these makes acceptance criterion 5 pass in the
+  engine and be **unreachable through the UI** — the worst of both, since the
+  model allows a queue and the player cannot express one.
+
+  | surface | today |
+  | --- | --- |
+  | `src/app/components/BuildPalette.vue:28` | `:disabled` unless `affordableDefs[id]` — cannot arm placement |
+  | `src/app/views/WorldView.vue:66` | the placement predicate returns `affordableDefs[m.defId]` — rejects the tile |
+  | `src/app/views/BuildingsView.vue:70` | `:disabled` on the table button, tooltip "Not enough resources" |
+  | `src/app/stores/game-store.ts:172` | `affordableDefs` itself — the getter all three read |
+
+  `affordableDefs` is not deleted: it stops *gating* and starts *informing*. What
+  it tells the player is still true and still worth showing — this order will not
+  start moving until the goods exist — so the tooltip becomes advisory rather
+  than a refusal.
 - The Economy view names a **build backlog** beside the input and output backlogs
   it already names — the same shape, a different consumer.
 - The canvas draws a site distinctly from a finished building. No new glyph is

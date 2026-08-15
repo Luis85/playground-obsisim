@@ -6,7 +6,7 @@ import { BALANCE } from '../../../src/engine/content/balance';
 import { BUILDINGS } from '../../../src/engine/content/buildings';
 import { RESOURCE_IDS } from '../../../src/engine/content/resources';
 import {
-  Building, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Production, Relocation,
+  Building, Construction, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Production, Relocation,
 } from '../../../src/engine/components';
 import { Stockpile } from '../../../src/engine/resources';
 import type { DispatchInputs, HaulBuildingRow, StaffedSet } from '../../../src/engine/systems/haul-dispatch';
@@ -73,6 +73,10 @@ function consumer(defId: BuildingDefId, at: TileRef): HaulBuildingRow {
     input: new InputBuffer(),
     relocation: new Relocation(0),
     production: new Production(),
+    // FINISHED, not a site: a construction site is exempt from the staffing
+    // gate that `demandSourcesOf` still applies, and this file's whole subject
+    // is what a STAFFED consumer pulls toward a store site.
+    construction: new Construction(0),
   };
 }
 

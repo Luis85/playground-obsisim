@@ -18,11 +18,12 @@ import type { BuildingRow, CommandContext } from './command-handlers';
  * is worth a clause of its own.
  *
  * Takes a lookup rather than a map because the two clauses below count
- * different things: the goods DESTROYED are the in-tray and the out-tray
- * summed (a mill demolished mid-batch loses both, and one clause naming only
- * the flour would be a false receipt for the wheat), while the goods MOVED are
- * a storehouse's share of the ledger, which lives in the Stockpile and not on
- * the entity at all. */
+ * different things: the goods DESTROYED are the out-tray plus, for a FINISHED
+ * building, its in-tray (a mill demolished mid-batch loses both, and one
+ * clause naming only the flour would be a false receipt for the wheat), while
+ * the goods MOVED are a storehouse's share of the ledger — which lives in the
+ * Stockpile and not on the entity at all — plus, for a SITE, the materials
+ * `refundInTrayOf` has just handed back to the camp. */
 export function heldText(amountOf: (id: ResourceId) => number): string {
   const parts: string[] = [];
   for (const id of RESOURCE_IDS) {
@@ -42,11 +43,17 @@ export function heldText(amountOf: (id: ResourceId) => number): string {
  * for, so "cost refunded" is true; a SITE never was (§2.3), and `refundCostOf`
  * hands nothing back for one, so claiming a refund here would be OBS-4-07's
  * exact defect with the sign flipped — a false receipt instead of a silent
- * loss. This covers only the construction-cost half of that claim. A site can
- * also hold delivered materials in its in-tray once Task 3 ships supply to
- * one; naming THEIR loss in this notice, the way `lost` already does for a
- * finished building's buffer, is Task 7's half — nothing can reach a site's
- * tray yet, so there is nothing for this function to say about it today.
+ * loss.
+ *
+ * A SITE'S DELIVERED MATERIALS RIDE THE `moved` CLAUSE, not the `lost` one,
+ * and that is the same rule rather than a second one. `refundInTrayOf` banks
+ * them at the camp exactly as a demolished storehouse's stock is banked there,
+ * so "moved to the camp" is literally what happened to them — while calling
+ * them `lost`, which is what this sentence said about every in-tray back when
+ * nothing could reach a site's, would be OBS-4-07's defect with the sign
+ * flipped the other way: the ledger conserves the wood and the receipt tells
+ * the player it burned. The caller decides which lookup feeds each clause,
+ * because only it knows whether this was a site.
  */
 export function demolitionNotice(name: string, lost: string, moved: string, displaced: number, wasSite: boolean): string {
   let notice = wasSite ? `Cancelled the ${name} — nothing was charged` : `Demolished the ${name} — cost refunded`;
@@ -70,12 +77,49 @@ export function demolitionNotice(name: string, lost: string, moved: string, disp
  * the rest of cancellation: the cost was never charged at the order, so paying
  * it back would MINT it out of nothing every time a player cancelled a build.
  * What a site does owe back is the materials actually DELIVERED to it, which
- * is a later task's half — nothing can reach an in-tray until dispatch learns
- * to supply a site.
+ * `refundInTrayOf` below hands over. The two may not be summed into one loop:
+ * this one pays back a PRICE the colony was charged, that one pays back GOODS
+ * the colony still owns, and a site is owed exactly one of them.
  */
 export function refundCostOf(ctx: CommandContext, found: BuildingRow): void {
   if (isUnderConstruction(found.construction.ticksLeft)) return;
   for (const [resource, amount] of Object.entries(BUILDINGS[found.building.defId].cost)) {
     ctx.stockpile.refund(resource as ResourceId, amount);
   }
+}
+
+/**
+ * The materials haulers actually delivered to a construction site, handed back
+ * to the colony when the player cancels it.
+ *
+ * WITHOUT THIS, CANCELLING A PARTLY SUPPLIED SITE DESTROYS EVERYTHING
+ * DELIVERED, and it ships with the task that first lets a material reach a
+ * site's tray rather than after it. The rule for a demolished building empties
+ * both trays into nothing, and §2.7's argument for that is sound for a
+ * FINISHED building: a building left full of goods should be expensive to
+ * bulldoze, because that pressure is what haulers exist to relieve, and a
+ * player who wants the goods kept has the non-destructive `moveBuilding`.
+ * Neither half survives the move to a site. There is nothing to move — a site
+ * is a hole in the ground — and cancelling is the only way out of a misplaced
+ * build order, so the pressure would fall on the one action the player has.
+ *
+ * `refund`, never `add`: nobody hauled these to the camp, and `add` records a
+ * delivery, which would inflate the Economy view's Delivered/t for a round
+ * trip that moved nothing (Stockpile.add's doc comment). To the CAMP, which is
+ * where `refundCostOf` already pays a finished building's cost back and where
+ * `spillTo` already sends a demolished storehouse's stock — one destination
+ * for everything a demolition returns, rather than three rules for three piles.
+ *
+ * Returns what it handed back so the caller can word the notice from the same
+ * figures it banked rather than re-reading a tray it is about to clear.
+ */
+export function refundInTrayOf(ctx: CommandContext, found: BuildingRow): Map<ResourceId, number> {
+  const returned = new Map<ResourceId, number>();
+  if (!isUnderConstruction(found.construction.ticksLeft)) return returned;
+  for (const [resource, amount] of found.input.amounts) {
+    if (amount <= 0) continue;
+    returned.set(resource, amount);
+    ctx.stockpile.refund(resource, amount);
+  }
+  return returned;
 }

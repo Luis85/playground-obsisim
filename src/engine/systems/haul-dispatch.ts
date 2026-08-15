@@ -1,4 +1,4 @@
-import type { ResourceId } from '../../shared/content-types';
+import type { RecipeDef, ResourceId } from '../../shared/content-types';
 import type { HaulCandidate, StoreSite, SupplyCandidate } from '../../shared/haul';
 import { CAMP_SITE_ID, nextHaulTarget, nextSupplyTarget, sitesHolding } from '../../shared/haul';
 import { isRelocating, isUnderConstruction, type TileRef } from '../../shared/placement';
@@ -9,6 +9,7 @@ import type { HaulKind } from '../components';
 import { Building, Construction, HaulTrip, InputBuffer, OutputBuffer, Position, Production, Relocation } from '../components';
 import type { PendingChanges } from '../resources';
 import type { Claims } from './haul-claims';
+import { acceptsSupply, inputRoomOf, siteNeedOf } from './haul-construction';
 import { storeSitesOf, type StoreSiteRow } from './haul-sites';
 import {
   drainCandidates, nextTransferTarget, stagingCandidates,
@@ -36,6 +37,12 @@ export interface HaulBuildingRow {
    * in-tray means nothing on its own, because `payFrom` empties it at batch
    * start. See `supplyCandidates`. */
   production: Production;
+  /** Whether this row is a construction SITE rather than a finished building
+   * (§2.5). Read by `acceptsSupply` and `inputRoomOf` (haul-construction.ts),
+   * which is to say by both ends of a supply leg — the same component
+   * `StoreRow` already carries for the site list, off the same query, rather
+   * than a second way of asking the same question. */
+  construction: Construction;
 }
 
 /** The building fields a store site is derived from — a subset of
@@ -106,17 +113,30 @@ function collectCandidates(buildings: readonly HaulBuildingRow[], claims: Claims
  * `starving` derivation there for what the field means.
  */
 function needOf(
-  row: HaulBuildingRow, claimedIn: number, capacity: number,
+  row: HaulBuildingRow, claims: Claims, claimedIn: number, capacity: number,
 ): { resource: ResourceId; room: number; couldStartBatch: boolean } | null {
-  const { recipe } = BUILDINGS[row.building.defId];
-  if (recipe === null || Object.keys(recipe.inputs).length === 0) return null;
   if (isRelocating(row.relocation.ticksLeft)) return null;
+  const { recipe } = BUILDINGS[row.building.defId];
+  const found = isUnderConstruction(row.construction.ticksLeft)
+    ? siteNeedOf(row, claims)
+    : recipeNeedOf(row, recipe, claimedIn);
+  if (found === null) return null;
+  const couldStartBatch = row.buffer.room(BALANCE.outputBufferCap) >= batchOutputUnits(recipe);
+  return { resource: found.resource, room: Math.min(found.room, capacity), couldStartBatch };
+}
+
+/** A FINISHED building's want: its recipe's proportionally shortest input, and
+ * whatever is left of the one shared in-tray cap once every claim of every
+ * material against it has been counted. Unchanged from increment 7 apart from
+ * asking `inputRoomOf` for the room instead of `input.room` directly. */
+function recipeNeedOf(
+  row: HaulBuildingRow, recipe: RecipeDef | null, claimedIn: number,
+): { resource: ResourceId; room: number } | null {
+  if (recipe === null || Object.keys(recipe.inputs).length === 0) return null;
   const resource = row.input.shortestOf(recipe, RESOURCE_IDS);
   if (resource === null) return null;
-  const room = row.input.room(BALANCE.inputBufferCap) - claimedIn;
-  if (room <= 0) return null;
-  const couldStartBatch = row.buffer.room(BALANCE.outputBufferCap) >= batchOutputUnits(recipe);
-  return { resource, room: Math.min(room, capacity), couldStartBatch };
+  const room = inputRoomOf(row, resource) - claimedIn;
+  return room <= 0 ? null : { resource, room };
 }
 
 /**
@@ -162,7 +182,8 @@ function worthMoving(movable: number, held: number): boolean {
  * Staffing is a condition rather than an optimisation: goods in an InputBuffer
  * are out of the spendable ledger and die with the building, so without it a
  * colony short of adults would watch its stock drain into a mill that cannot
- * use it.
+ * use it. `acceptsSupply` holds that condition and the one thing it exempts —
+ * a construction site, which is never staffed and must still be fed.
  */
 function supplyCandidates(
   buildings: readonly HaulBuildingRow[], sites: readonly StoreSite[], staffed: StaffedSet,
@@ -170,13 +191,13 @@ function supplyCandidates(
 ): SupplyCandidate[] {
   const candidates: SupplyCandidate[] = [];
   for (const row of buildings) {
-    if (!staffed.has(row.building.id)) continue;
+    if (!acceptsSupply(row, staffed)) continue;
     // Computed once per building rather than once inside `needOf` and again at
     // `starving` below: `chooseJob` rebuilds this whole candidate list per
     // idle hauler, so a second traversal here would be O(haulers² x
     // buildings) instead of O(haulers x buildings).
     const claimedIn = claims.input(row.building.id);
-    const need = needOf(row, claimedIn, capacity);
+    const need = needOf(row, claims, claimedIn, capacity);
     if (need === null) continue;
     const unclaimedAt = (siteId: number) => claims.unclaimedAt(siteId, need.resource);
     // Nothing in hand, nothing in progress, nothing on the way, and a batch

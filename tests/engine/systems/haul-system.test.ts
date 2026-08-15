@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { IEntity, IPreptimeWorld, IRuntimeWorld } from 'sim-ecs';
 import type { TileRef } from '../../../src/shared/placement';
-import { Building, Construction, HaulTrip, Home, JobAssignment, OutputBuffer, Colonist } from '../../../src/engine/components';
+import { Building, Construction, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Colonist } from '../../../src/engine/components';
 import { IdCounter, Stockpile } from '../../../src/engine/resources';
 import { BALANCE } from '../../../src/engine/content/balance';
 import { BUILDINGS } from '../../../src/engine/content/buildings';
@@ -486,6 +486,14 @@ describe('HaulSystem — construction sites', () => {
       defId: 'storehouse', progress: 0, batchActive: false, col: 5, row: 3, relocatingTicks: 0,
     });
     site.getComponent(Construction)!.ticksLeft = BALANCE.buildTicks;
+    // ITS WOOD ALREADY DELIVERED. Since Task 3 a site is a supply target for
+    // its own cost, and a storehouse costs 20 wood — so an empty-trayed site
+    // would pull the collected load straight back out of the camp and this
+    // case would be measuring supply instead of the store list. With its wood
+    // met and no planks anywhere in this colony, the site wants nothing and
+    // the only question left is the one the case is named for. Written past
+    // `BALANCE.inputBufferCap` on purpose: a site's tray holds its bill.
+    site.getComponent(InputBuffer)!.amounts.set('wood', BUILDINGS.storehouse.cost.wood!);
     const idle = spawnColonist(prep, ids, { hauling: true });
     const world = await prep.prepareRun();
 

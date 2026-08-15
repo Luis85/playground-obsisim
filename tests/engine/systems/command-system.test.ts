@@ -236,7 +236,7 @@ describe('CommandSystem', () => {
     // which was right only while the order charged it — with the payment gone
     // it hands back goods that never left, and the colony total is where that
     // shows up. Two resources, so a loop that refunds the first key alone is
-    // caught too. (Task 7 owns the in-tray half; nothing can reach a tray yet.)
+    // caught too. (The in-tray half is the two cases below.)
     const save = houselessSave();
     save.stockpile = { ...save.stockpile, planks: 10 };
     const { world, tick, dispatch, snapshot } = await setup(save);
@@ -247,6 +247,65 @@ describe('CommandSystem', () => {
     expect(held()).toEqual(before); // nothing paid at the order either
     await dispatch({ type: 'demolishBuilding', buildingId: snapshot().buildings[0].id });
     expect(held()).toEqual(before);
+  });
+
+  /**
+   * A mill site with six of its twenty wood already standing in its in-tray —
+   * the state Task 3 makes reachable for the first time, reached here by
+   * writing the tray directly rather than by running a hauler across the map,
+   * so the quantity under test is stated rather than accumulated.
+   */
+  async function partlySuppliedSite(delivered = 6) {
+    const save = houselessSave();
+    save.stockpile = { ...save.stockpile, planks: 10 };
+    const fixture = await setup(save);
+    await fixture.dispatch({ type: 'constructBuilding', buildingDefId: 'mill' }); // 20 wood, 10 planks
+    await fixture.tick();
+    const id = fixture.snapshot().buildings[0].id;
+    [...fixture.world.getEntities()].find((e) => e.getComponent(Building)?.id === id)!
+      .getComponent(InputBuffer)!.add('wood', delivered);
+    return { ...fixture, id, delivered };
+  }
+
+  it('cancelling a partly supplied site refunds only what arrived', async () => {
+    // THE IN-TRAY HALF, and it belongs with the task that first puts anything
+    // in a tray: the shipped rule empties both trays into nothing on
+    // demolition, so without this a cancelled site permanently destroys every
+    // material hauled to it — the conservation break this increment exists to
+    // close, arriving inside the task that opens the delivery path.
+    //
+    // SIX, not twenty-six and not twenty: the site was never charged its cost
+    // (§2.3), so only what physically arrived may come back.
+    const { world, dispatch, id, delivered } = await partlySuppliedSite();
+    const stockpile = world.getResource(Stockpile);
+    const wood = () => colonyTotal(world, 'wood');
+    const banked = stockpile.get('wood');
+    const conserved = wood();
+    // `refundAt`, not `addAt`: nobody hauled these to the camp, so Delivered/t
+    // must not move. The colony TOTAL alone passes against `add`, which is why
+    // this is asserted separately.
+    const deliveredBefore = stockpile.producedThisTick.get('wood') ?? 0;
+
+    await dispatch({ type: 'demolishBuilding', buildingId: id });
+    expect(wood()).toBe(conserved);                              // nothing lost
+    expect(stockpile.get('wood')).toBe(banked + delivered);      // and nothing minted
+    expect(stockpile.producedThisTick.get('wood') ?? 0).toBe(deliveredBefore);
+    expect(colonyTotal(world, 'planks')).toBe(10);               // the unpaid cost stays unpaid
+  });
+
+  it('cancelling a partly supplied site says what actually happened', async () => {
+    // THE NOTICE, on its text, shipping with the refund above rather than four
+    // tasks later. Every ledger assertion in the case above passes while this
+    // sentence tells the player the exact opposite of what happened: OBS-4-07
+    // exists because a notice said "cost refunded" while goods were deleted,
+    // and describing a site's returned materials as `lost` is that defect with
+    // the sign flipped. The cost half of this wording landed in Task 2 — this
+    // extends it, and leaves the finished-building sentence alone.
+    const { dispatch, snapshot, id } = await partlySuppliedSite();
+    await dispatch({ type: 'demolishBuilding', buildingId: id });
+    expect(snapshot().notices).toEqual([
+      { kind: 'success', message: 'Cancelled the Mill — nothing was charged, 6 Wood moved to the camp.' },
+    ]);
   });
 
   it('demolishing a FINISHED building still refunds its cost', async () => {
@@ -1155,6 +1214,11 @@ describe('CommandSystem', () => {
     await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 23, row: 15 } });
     await tick();
     const buildingId = snapshot().buildings[0].id;
+    // FINISHED, so the only work in this colony is the collect below. Since
+    // Task 3 a construction site is a supply candidate for its own cost, and
+    // supply outranks collect — an unfinished forester would take both haulers
+    // out to it with wood and this case would never see a loaded return leg.
+    finishSite(world, buildingId);
     for (const entity of world.getEntities()) {
       // Exactly one load: the first hauler empties the buffer, so the second has
       // nothing to fetch and stays idle at the camp instead of going outbound.
@@ -1187,6 +1251,9 @@ describe('CommandSystem', () => {
     await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 23, row: 15 } });
     await tick();
     const buildingId = snapshot().buildings[0].id;
+    // FINISHED, for the reason above: an unfinished forester wants 10 wood of
+    // its own, and a supply job would beat the collect this case is about.
+    finishSite(world, buildingId);
     const before = world.getResource(Stockpile).get('wood'); // 30 starting - 10 forester cost
     for (const entity of world.getEntities()) {
       const building = entity.getComponent(Building);
@@ -1232,6 +1299,9 @@ describe('CommandSystem', () => {
     await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 5, row: 4 } }); // 5 tiles out -> 3 ticks each way
     await tick();
     const buildingId = snapshot().buildings[0].id;
+    // FINISHED, for the reason above: an unfinished forester wants 10 wood of
+    // its own, and a supply job would beat the collect this case is about.
+    finishSite(world, buildingId);
     const before = world.getResource(Stockpile).get('wood'); // 30 starting - 10 forester cost
     for (const entity of world.getEntities()) {
       const building = entity.getComponent(Building);

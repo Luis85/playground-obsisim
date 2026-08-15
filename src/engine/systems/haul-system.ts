@@ -8,6 +8,7 @@ import { RESOURCE_IDS } from '../content/resources';
 import { Building, Construction, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Production, Relocation } from '../components';
 import { PendingChanges, Stockpile } from '../resources';
 import { arrivesAt, claimsOf, type Claims, type HaulWorkerRow } from './haul-claims';
+import { acceptsSupply, inputRoomOf } from './haul-construction';
 import type { DispatchInputs, HaulBuildingRow, StaffedSet } from './haul-dispatch';
 import { chooseJob, storeSitesFrom } from './haul-dispatch';
 import { bankLoad, destinationFor } from './haul-sites';
@@ -214,11 +215,20 @@ function fetchArrival(ctx: TickContext, trip: HaulTrip, capacity: number): void 
  * is demolished mid-relocation: exactly what each rule prevents, defeated by
  * travel time. The load stays in hand instead; `pickedUp` stays false, so it
  * is an undelivered remainder and goes home to its source.
+ *
+ * BOTH CONDITIONS ARE ASKED THROUGH THE SAME FUNCTIONS DISPATCH ASKED THEM
+ * WITH — `acceptsSupply` for staffing, `inputRoomOf` for the cap — because a
+ * construction site answers each of them differently from a finished building
+ * and it must answer them the same way at both ends of the leg. A recheck that
+ * still asked `staffed.has(id)` would refuse every load dispatched to a site,
+ * which is never staffed; one that still capped at `BALANCE.inputBufferCap`
+ * would take 12 of a mill site's 30 units and refuse the rest while dispatch
+ * went on offering them, which is a livelock rather than a shortfall.
  */
 function unload(ctx: TickContext, trip: HaulTrip, row: HaulBuildingRow): void {
   if (trip.kind !== 'supply' || trip.resource === null || trip.amount === 0) return;
-  if (!ctx.staffed.has(row.building.id) || isRelocating(row.relocation.ticksLeft)) return;
-  const placed = Math.min(trip.amount, row.input.room(BALANCE.inputBufferCap));
+  if (!acceptsSupply(row, ctx.staffed) || isRelocating(row.relocation.ticksLeft)) return;
+  const placed = Math.min(trip.amount, inputRoomOf(row, trip.resource));
   if (placed <= 0) return;
   row.input.add(trip.resource, placed);
   // Consumption is recorded HERE, not when the load left its site: this is the

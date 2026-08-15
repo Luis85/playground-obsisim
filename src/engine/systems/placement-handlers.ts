@@ -6,7 +6,7 @@ import { BALANCE } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
 import type { HaulTrip } from '../components';
 import { buildingComponents } from '../spawn';
-import { demolitionNotice, heldText, refundCostOf } from './demolition';
+import { demolitionNotice, heldText, refundCostOf, refundInTrayOf } from './demolition';
 import { heldAtOf } from './haul-claims';
 import { destinationFor } from './haul-sites';
 import { shelterWithRoom } from './population-handlers';
@@ -195,21 +195,34 @@ export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Com
   // clause tracks its actual behaviour rather than guessing at it separately.
   const wasSite = isUnderConstruction(found.construction.ticksLeft);
   refundCostOf(ctx, found);
-  // Whatever was waiting in either tray dies with the building — decided in
-  // OBS-4-07 for the out-tray, and extended to the IN-tray by §2.7 for the same
-  // reason: neither is in the ledger, and a building left full of goods should
-  // be expensive to bulldoze, since that is exactly the pressure haulers exist
-  // to relieve, and a player who wants the goods kept already has the
+  // A SITE's in-tray is handed back instead — the goods a hauler delivered
+  // toward a build the player has now cancelled. Banked at the camp before the
+  // clear below empties the tray, and returned so both the `moved` clause and
+  // this branch read one set of figures.
+  const returned = refundInTrayOf(ctx, found);
+  // Whatever ELSE was waiting in either tray dies with the building — decided
+  // in OBS-4-07 for the out-tray, and extended to the IN-tray by §2.7 for the
+  // same reason: neither is in the ledger, and a building left full of goods
+  // should be expensive to bulldoze, since that is exactly the pressure haulers
+  // exist to relieve, and a player who wants the goods kept already has the
   // non-destructive moveBuilding. The notice below names both losses instead of
   // hiding them — a mill holding only delivered wheat used to report that its
   // cost was refunded while silently deleting the wheat. Read here, before the
-  // clear, purely to word that notice — the stockpile loop above is untouched
+  // clear, purely to word that notice — the stockpile loops above are untouched
   // either way. Emptying the trays HERE rather than letting the entity carry
   // them off at the post-step sync is load-bearing for an unrelated reason:
   // HaulSystem runs later in this same tick and still sees the not-yet-removed
   // entity, so a buffer left full would have it dispatch a hauler at a building
   // that is already gone.
-  const lost = heldText((id) => (found.buffer.amounts.get(id) ?? 0) + (found.input.amounts.get(id) ?? 0));
+  //
+  // `returned` is subtracted rather than the in-tray simply being skipped for a
+  // site: a site's OUT-tray is empty by construction (it produces nothing), so
+  // the two piles are disjoint today — and writing it this way keeps `lost`
+  // meaning "what this demolition destroyed" whatever a future task puts in
+  // either tray, instead of meaning it only while that stays true.
+  const lost = heldText((id) => (
+    (found.buffer.amounts.get(id) ?? 0) + (found.input.amounts.get(id) ?? 0) - (returned.get(id) ?? 0)
+  ));
   found.buffer.amounts.clear();
   found.input.amounts.clear();
   // A storehouse's contents go the OTHER way, and the distinction is OBS-4-07's
@@ -223,7 +236,10 @@ export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Com
   // Delivered/t. BEFORE the pending-ledger writes below only incidentally —
   // what matters is that it runs before any later command in this drain can
   // resolve sites, so no site outlives its building even for one command.
-  const moved = heldText((id) => ctx.stockpile.getAt(command.buildingId, id));
+  // A cancelled site's delivered materials join this clause rather than the
+  // `lost` one: `refundInTrayOf` put them at the camp, which is where a
+  // demolished storehouse's stock goes too, so one sentence describes both.
+  const moved = heldText((id) => ctx.stockpile.getAt(command.buildingId, id) + (returned.get(id) ?? 0));
   ctx.stockpile.spillTo(CAMP_SITE_ID, command.buildingId);
   // Read BEFORE the loop below nulls every matching home: this counts exactly
   // who the demolition displaces, for the notice.

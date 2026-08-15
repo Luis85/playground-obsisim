@@ -611,13 +611,15 @@ modes increment 8 added. Three bind unusually hard:
 3. **Materials are carried.** A site at a distant tile receives its cost by
    hauler, leg by leg, with the conservation sentinel at zero throughout.
 4. **Several sites ordered at once all complete.** Three affordable sites ordered
-   together each reach completion, with the conservation sentinel at zero
-   throughout. **No criterion about the order or the timing**, deliberately:
+   together each reach completion, losing no goods. **No criterion about the
+   order or the timing**, deliberately:
    §2.4 leaves dispatch ordering alone, so round-robin filling is the expected
    behaviour and a test asserting anything sharper would be asserting a
    requirement this increment does not have. What must hold is that round-robin
    is *slow* and not *broken* — nothing stalls, nothing is lost, every site
-   finishes.
+   finishes. Criterion 9 is where the sentinel itself is asserted, because the
+   audit gains its construction sink with the balance instruments and not with
+   the countdown.
 5. **Ordering still refuses what the colony cannot pay for**, unchanged from
    today, at the command handler and at all four UI surfaces. This is a
    regression criterion rather than a feature one: §2.3 moves the *payment* and

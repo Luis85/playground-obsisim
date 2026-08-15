@@ -362,12 +362,18 @@ it('three affordable sites ordered at once ALL complete', async () => {
   // in this increment, so round-robin filling is the EXPECTED behaviour and any
   // sharper assertion would pin a requirement §2.4 explicitly declines to make.
   //
-  // What this must prove is that round-robin is slow rather than broken —
-  // every site reaches completion, nothing stalls, and the conservation
-  // sentinel stays at zero throughout. Give the fixture enough ticks that a
-  // round-robin fill still finishes; a tick budget tuned to sequential
-  // delivery would fail here for the wrong reason and invite someone to
-  // "fix" it with the ordering rule increment 10 owns.
+  // What this must prove is that round-robin is slow rather than broken:
+  // every site reaches completion and nothing stalls. Give the fixture enough
+  // ticks that a round-robin fill still finishes; a tick budget tuned to
+  // sequential delivery would fail here for the wrong reason and invite
+  // someone to "fix" it with the ordering rule increment 10 owns.
+  //
+  // NO CONSERVATION-SENTINEL ASSERTION HERE. GoodsAudit gets its construction
+  // sink in Task 10 and runs only under the balance harness; until then it
+  // reports every completed cost as lost, so a sentinel assertion in this task
+  // is red through no fault of the code under test. Assert colony totals
+  // directly if this fixture wants a conservation claim, and leave the
+  // sentinel to Task 10's completed-site scenario.
 });
 ```
 

@@ -214,6 +214,11 @@ it('with five sites, no younger site is served while an older one has unclaimed 
   // increment 9's UNMODIFIED ranking and fails — confirm that before
   // implementing, because it is the whole justification for this increment.
   //
+  // GIVE EVERY SITE THE SAME MATERIAL. A site whose needed resource exists
+  // nowhere emits NO candidate at all (`sitesHolding`, haul-dispatch.ts:240),
+  // so a mixed-cost fixture can legitimately serve a younger site and this test
+  // would fail against correct code. One material, present in the camp.
+  //
   // NOT "every dispatch serves the oldest site": `needOf` correctly drops a
   // site once its remaining room is fully claimed, so the next-oldest is served
   // while the first one's materials are still walking. An "always the oldest"
@@ -239,7 +244,10 @@ Mutations: add a site-before-building term; reverse age; move age into the compa
 ### Task 3: Measure
 
 **Files:**
-- Modify: `tests/engine/balance.test.ts`, `tests/support/balance-harness.ts` (only if the queue fixtures need a knob increment 9's `Scenario` does not have), the spec's §4
+- Modify: **`src/engine/systems/haul-transfer.ts`** (`demandSourcesOf`, Step 4a), `tests/engine/balance.test.ts`, `tests/support/balance-harness.ts` (only if the queue fixtures need a knob increment 9's `Scenario` does not have), the spec's §4
+- Test: **`tests/engine/systems/haul-transfer.test.ts`** — the focused proof that a depot acquires demand from a nearby site, separate from any balance reading
+
+**This task contains a code change, and the file list must say so.** Step 4a is not instrumentation-adjacent — it edits dispatch. A file inventory of "balance tests and the spec" is exactly how an implementer arrives at Step 4b with the instrument still disconnected and reports a confident zero.
 
 - [ ] **Step 1: Convergence, against increment 9's baseline.** N sites ordered simultaneously, at one hauler and at four, reporting completion order and the completion *curve*. **The reading is the DIFFERENCE from increment 9's §4.1 figure**, not the absolute shape — that comparison is the only evidence this increment did what it exists to do. A curve that has not changed shape means the ordering rule is not reaching the case it was written for, and that is a finding to report rather than to tune away.
 - [ ] **Step 2: How reachable is the §2.3 stall?** Sites costing **both wood and planks**, queued against a chain that makes the planks, at queue lengths of 1 / 3 / 5 / 10. Report the queue length at which the first completion stops happening.

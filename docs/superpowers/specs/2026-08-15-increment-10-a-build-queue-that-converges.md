@@ -99,9 +99,9 @@ records the notice as started — all exactly as increment 9 left it, minus the
   consumption recorded at unload. Increment 9 built that and nothing here
   disturbs it.
 
-**The affordability gates come out of every build surface**, and there are three
-plus the store getter behind them. Removing the engine refusal alone makes the
-behaviour **unreachable through the UI** — the worst of both, since the model
+**The affordability gates come out of every build surface** — three views plus
+the store getter they all read, and each view gates independently. Removing the
+engine refusal alone makes the behaviour **unreachable through the UI** — the worst of both, since the model
 allows a queue and the player cannot express one:
 
 | surface | today |
@@ -162,13 +162,28 @@ Two steps, each a total order, and the second one is the machinery increment 7
 and 8 already built and tested. No new tie-break is invented here.
 
 **What this guarantees, stated exactly, because a looser phrasing is an
-overclaim.** The rule is *the oldest site **with unclaimed room** is served
-first* — not *the oldest site is always the one served*. `needOf` returns null
-once a site's remaining room is fully spoken for by in-flight deliveries
-(`room − claimedIn <= 0`), so the oldest site legitimately leaves the candidate
-set while its materials are still walking, and the next-oldest is served. That is
-correct rather than a leak: there is nothing useful left to send the oldest site,
-and sending more would overfill it.
+overclaim.** The rule is *the oldest site **that has a candidate this tick** is
+served first* — not *the oldest site is always the one served*. A site leaves the
+candidate set for **two** distinct reasons, and both are correct rather than
+leaks:
+
+- **Its room is fully claimed.** `needOf` returns null once remaining room is
+  spoken for by in-flight deliveries (`room − claimedIn <= 0`), so the oldest
+  site drops out while its materials are still walking and the next-oldest is
+  served. There is nothing useful left to send it; sending more would overfill
+  it.
+- **Nothing in the colony holds what it needs.** `needOf` names ONE resource —
+  the proportionally shortest — and `supplyCandidates` only emits pairs for
+  sites *holding* that resource (`sitesHolding`, `haul-dispatch.ts:240`). So an
+  older site short of planks, with no planks anywhere, emits **nothing**, while a
+  younger site short of wood emits candidates and is served.
+
+**The second case must not be "fixed" by blocking the younger site.** Holding
+haulers idle in front of a site that cannot be helped, while goods exist that
+another site can use, costs throughput to buy an ordering nobody asked for — and
+it would not even speed the older site up, because the thing it waits on is
+production, not haulage. Age orders the sites that *can* be served; it does not
+reserve the colony for the oldest one.
 
 **It follows that completion order is the common case and not a hard guarantee.**
 If the oldest site's claimed loads are walking long legs and a younger site's are
@@ -313,16 +328,23 @@ number.
    The engine-level and UI-level tests are both required: an engine test passes
    regardless of the gates, which is exactly how a half-done version of this
    would ship.
-2. **The oldest site with unclaimed room is always the site served.** Five sites
-   ordered at once are filled one at a time rather than round-robin: no younger
-   site receives a load while an older one still has unclaimed room. This is the
-   discriminating test for §2.2 and it **fails against increment 9's unmodified
-   ranking** — confirm that before implementing.
+2. **The oldest servable site is always the site served.** Five sites ordered at
+   once, all needing the same available material, are filled one at a time rather
+   than round-robin: no younger site receives a load while an older one still has
+   unclaimed room **and a candidate**. This is the discriminating test for §2.2
+   and it **fails against increment 9's unmodified ranking** — confirm that
+   before implementing.
+
+   Both qualifiers are load-bearing and §2.2 explains them. "Unclaimed room"
+   because a site drops out once its room is spoken for by walking deliveries;
+   "and a candidate" because a site whose needed resource exists nowhere emits
+   nothing at all, and a younger site is then correctly served ahead of it. The
+   fixture gives every site the same material precisely so the second case
+   cannot fire and confuse the first.
 
    Stated as a serving rule rather than as "they complete in order of ordering",
-   which §2.2 explains is not guaranteed: a site drops out of the candidate set
-   once its remaining room is claimed, and unequal leg lengths can then let a
-   younger site finish first.
+   which §2.2 explains is not guaranteed: unequal leg lengths can let a younger
+   site finish first.
 3. **A blocked producer outranks a queue of sites.** A staffed sawmill with an
    empty in-tray is served before any site, with sites queued that need its
    planks. Fails against a "sites first" ordering.

@@ -46,7 +46,7 @@ Neither is a reason to reorder — 2b follows 2 immediately, and moving the save
 
   Check with `grep -cve '^\s*$' <file>` after every task that touches one.
 
-  **`placement-handlers.ts` is now the file to watch, not `world.ts`.** Task 2 took it from 327 to 429 of 500, and two more tasks add to it — Task 3's in-tray refund and Task 7's site-aware notice. There is not room for both to be careless. Contingency, in preference order: extract the demolition path (`demolitionNotice`, `heldText`, `refundCostOf` and the refund branch) into `src/engine/systems/demolition.ts`, which is a coherent seam rather than a size-driven split; failing that, extract the construction path. Do it as its own commit, before the feature change, exactly as Task 1 did for `world.ts`.
+  **`placement-handlers.ts` is now the file to watch, not `world.ts`.** Task 2 took it from 327 to 429 of 500, and two more tasks add to it — Task 3's in-tray refund together with the notice's returned-materials half, and Task 7's relocation refusal. Task 3 is the one with room to spare. Contingency, in preference order: extract the demolition path (`demolitionNotice`, `heldText`, `refundCostOf` and the refund branch) into `src/engine/systems/demolition.ts`, which is a coherent seam rather than a size-driven split; failing that, extract the construction path. Do it as its own commit, before the feature change, exactly as Task 1 did for `world.ts`.
 - **Every task's tests must be greenable by that task's own changes.** `check:all` is required green at the end of every task, so a test asserting behaviour a *later* task enables cannot be committed — the implementer must then skip it, weaken it, or pull the later task forward, and all three are worse than writing the right assertion now. **This plan broke that rule three times in review** (Task 1's save round-trip needs Task 8's schema; Task 3 asserted completion, which needs Task 5's system; and a stalled-queue recovery test sat in a dispatch task that had neither completion nor cancellation), so before starting any task, check its tests against its own file list. Where the strong assertion belongs to a later task, the earlier one asserts the strongest thing it *can* reach and names the task that finishes the job.
 - **Grep for the three "a building is a producer" proxies and justify every hit.** Every shipped predicate and constant in this engine was written when a building was one of exactly three things: a producer, a shelter, or a store. A site is none of them. Two rounds of review on this plan found **six** places that assumed a fourth kind could not exist, across these proxies — and enumerating them one review round at a time is not a method. §2.7 has the table; the search is:
 
@@ -150,7 +150,9 @@ it('COMPONENT_TYPES includes Construction', () => {
 
   It also destroys the fixture below. Demolish a site and order its replacement in one drain: the unbranched loop mints the ghost's full cost into the ledger, and that minted stock covers the ghost's outstanding demand *and* the replacement — so the second order is accepted whether or not `demolishedIds` is excluded, and the test proves nothing. **A non-discriminating fixture is worse than no fixture**, because it reads as coverage.
 
-  So this task adds the site half of the branch — **a site refunds no cost, a finished building refunds as it always did** — plus the conservation assertion. Task 7 keeps the rest: refunding the delivered in-tray through `refundAt` (impossible before Task 3 puts anything in a tray), the site-aware `demolitionNotice`, and refusing to relocate a site.
+  So this task adds the site half of the branch — **a site refunds no cost, a finished building refunds as it always did** — plus the conservation assertion, and the matching half of the notice, since a cancelled site must stop claiming a refund the moment it stops receiving one.
+
+  The rest is split by what each part first becomes possible: **Task 3** takes refunding the delivered in-tray through `refundAt` and the notice's returned-materials wording (neither is writable before Task 3 puts anything in a tray, and deferring either would make Tasks 3–6 destroy delivered materials or misreport them). **Task 7** takes refusing to relocate a site, and the recovery property that needs Task 5's countdown.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -203,7 +205,8 @@ it('cancelling a site with nothing delivered refunds nothing', async () => {
   // THE MINTING TEST, pulled forward from Task 7 because this task is where the
   // minting starts. Order a mill, demolish it, assert the colony total is
   // UNCHANGED. Against the unbranched loop it reports +20 wood +10 planks from
-  // nowhere. Task 7 still owns the in-tray refund and the notice.
+  // nowhere. Task 3 owns the in-tray refund and the notice's returned-materials
+  // half; the notice's cost half belongs to this task, beside this branch.
 });
 
 it('demolishing a FINISHED building still refunds its cost', async () => {

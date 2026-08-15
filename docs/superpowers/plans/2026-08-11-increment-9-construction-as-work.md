@@ -658,9 +658,14 @@ it('a site carrying an ACTIVE production batch is rejected', async () => {
   // batchActive: true passes every per-field guard; ProductionSystem SKIPS a
   // site rather than clearing it, so the batch thaws at completion and produces
   // output against inputs that were never consumed. Assert REFUSED, not
-  // repaired — and use a fixture with progress mid-batch, so an implementation
-  // checking only `progress === 0` and an implementation checking only
-  // `batchActive` are told apart.
+  // repaired.
+  //
+  // TWO fixtures, because one cannot separate the clauses. A batch legitimately
+  // BEGINS at zero progress, so `batchActive: true, progress: 0` is a reachable
+  // corrupt state and is the only shape that proves `batchActive` itself is
+  // rejected — a guard written as `progress !== 0` passes a mid-batch fixture
+  // while still admitting that record, and it thaws into free production. Pair
+  // it with `batchActive: false, progress > 0` for the other clause.
 });
 
 // PREREQUISITE for the clamp test below: `BuildingSnapshot` must publish the

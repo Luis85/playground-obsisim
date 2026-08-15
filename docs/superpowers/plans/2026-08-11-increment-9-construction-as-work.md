@@ -33,6 +33,7 @@ No window where the colony is broken. But between Task 2 and Task 5, **ordering 
   | `src/engine/systems/placement-handlers.ts` | 327 | Task 2, Task 7 |
 
   Check with `grep -cve '^\s*$' <file>` after every task that touches one.
+- **Every task's tests must be greenable by that task's own changes.** `check:all` is required green at the end of every task, so a test asserting behaviour a *later* task enables cannot be committed — the implementer must then skip it, weaken it, or pull the later task forward, and all three are worse than writing the right assertion now. **This plan broke that rule three times in review** (Task 1's save round-trip needs Task 8's schema; Tasks 3 and 4 asserted completion, which needs Task 5's system), so before starting any task, check its tests against its own file list. Where the strong assertion belongs to a later task, the earlier one asserts the strongest thing it *can* reach and names the task that finishes the job.
 - **Grep for the four "a building is a producer" proxies and justify every hit.** Every shipped predicate and constant in this engine was written when a building was one of exactly three things: a producer, a shelter, or a store. A site is none of them. Two rounds of review on this plan found **six** places that assumed a fourth kind could not exist, across four proxies — and enumerating them one review round at a time is not a method. §2.7 has the table; the search is:
 
   ```bash
@@ -78,12 +79,21 @@ Two commits, deliberately separable: the extraction that unblocks the file, then
 
 - [ ] **Step 2: Add the component, attached in both places**
 
-`buildingComponents` in `spawn.ts` **and** `COMPONENT_TYPES` in `world.ts`. The test that catches a miss is a save round-trip of a building carrying a non-default value, not a spawn test — a component missing from `COMPONENT_TYPES` spawns fine and silently fails to persist.
+`buildingComponents` in `spawn.ts` **and** `COMPONENT_TYPES` in `world.ts`.
+
+**The test that would really catch a miss here is a save round-trip, and it cannot be written yet** — `buildSaveFromWorld` serializes through `savedBuildingOf` (`game-engine.ts:43`) and the save record has no construction field until Task 8. Registering the component does not persist its value on its own. So Task 1 asserts registration directly, and **Task 8 carries the round-trip that actually proves persistence**:
 
 ```ts
-it('a building under construction round-trips its countdown', async () => {
-  // Non-default ticksLeft, saved and restored. Mutating COMPONENT_TYPES to
-  // drop Construction must redden this and nothing else.
+it('a spawned building carries a Construction component', async () => {
+  // The spawn half. Weak on its own — a component attached in spawn.ts and
+  // missing from COMPONENT_TYPES passes this.
+});
+
+it('COMPONENT_TYPES includes Construction', () => {
+  // The registration half, asserted directly because the behavioural version
+  // needs Task 8's schema. Deliberately a structural assertion: it is the only
+  // thing this task's own changes can make true, and OBS-4-02's two-spawn-site
+  // trap is exactly what it guards.
 });
 ```
 
@@ -246,10 +256,18 @@ it('among finished buildings nothing has changed', () => {
   // The regression guard for increments 7 and 8's ranking work.
 });
 
-it('five sites ordered at once complete in the order they were ordered', async () => {
-  // ACCEPTANCE CRITERION 4, and the integration test the unit tests cannot
-  // replace. Runs against an UNMODIFIED ranking and fails — confirm that
-  // before implementing, because it is the whole justification for this task.
+it('with five sites, every dispatch serves the oldest incomplete one', async () => {
+  // ACCEPTANCE CRITERION 4 expressed in terms this task can reach, and the
+  // integration test the unit tests cannot replace. Runs against an UNMODIFIED
+  // ranking and fails — confirm that before implementing, because it is the
+  // whole justification for this task.
+  //
+  // DISPATCH order, not COMPLETION order: ConstructionSystem does not exist
+  // until Task 5, so no site can finish here and a completion assertion cannot
+  // go green. The round-robin is still fully visible — assert that site 1's
+  // in-tray fills before site 2 receives anything. Task 5 adds the completion-
+  // order test that criterion 4 is finally stated in.
+  //
   // At one hauler and at four: the round-robin is worse with more haulers, so
   // a single-hauler fixture understates it.
 });
@@ -297,6 +315,13 @@ it('completion records no consumption', async () => {
 it('a house completes and is then homed by the ordinary pass', async () => {
   // No special case in completion. rehome seats a colonist the next tick.
 });
+
+it('five sites ordered at once complete in the order they were ordered', async () => {
+  // ACCEPTANCE CRITERION 4, finally statable: Task 4 proved the DISPATCH order
+  // and this proves it produces the completion order it was chosen for. Both
+  // are needed — dispatch order without completion order does not rule out a
+  // countdown that reorders them, which is precisely what this task adds.
+});
 ```
 
 - [ ] **Step 2: Implement, mutation-test, commit**
@@ -310,10 +335,12 @@ Mutations: count down regardless of materials; complete at `ticksLeft === 1`; re
 §2.7's table. **Six exclusions, six fixtures** — this is the task the compound-boolean rule was written for.
 
 **Files:**
-- Modify: `src/engine/systems/population-handlers.ts` (rehome), `src/engine/systems/command-system.ts:105` and `src/engine/systems/population-system.ts:72` (the two runtime shelter-row builders), `src/engine/systems/haul-sites.ts` (`storeSitesOf`), `src/engine/systems/production-system.ts`, `src/engine/systems/command-handlers.ts:140` (worker assignment), `src/engine/snapshot-buildings.ts`
+- Modify: `src/engine/systems/population-handlers.ts` (rehome), `src/engine/systems/command-system.ts:105` and `src/engine/systems/population-system.ts:72` (the two runtime shelter-row builders), `src/engine/snapshot-builder.ts:223` (the published bed total), `src/engine/systems/haul-sites.ts` (`storeSitesOf`), `src/engine/systems/production-system.ts`, `src/engine/systems/command-handlers.ts:140` (worker assignment), `src/engine/snapshot-buildings.ts`
 - Test: the matching suites
 
-**"An unfinished house has no beds" has four call sites**, two of them here and two in Task 8. `grep -rn "relocatingTicks === 0\|isRelocating(" src/` finds all four: `command-system.ts:105` and `population-system.ts:72` build the runtime shelter rows, while `restore.ts:123` and `save-guard.ts:95` are load-time. Fixing only the rehome path leaves a colonist seated in a site by whichever of the other three ran first.
+**"An unfinished house has no beds" has FIVE call sites**, three of them here and two in Task 8. `grep -rn "relocatingTicks === 0\|isRelocating(\|state !== 'relocating'" src/` finds them: `command-system.ts:105` and `population-system.ts:72` build the runtime shelter rows, `snapshot-builder.ts:223` computes the **published** bed total, and `restore.ts:123` / `save-guard.ts:95` are load-time. Fixing only the rehome path leaves a colonist seated in a site by whichever of the others ran first.
+
+`snapshot-builder.ts:223` is the one that is not about occupancy at all: `buildingSnaps.filter((b) => b.state !== 'relocating')`. It governs what the Population view *advertises*, and the comment directly above it states the principle a site would violate — "`total` therefore means beds you can actually sleep in tonight, which is the only number a player can act on." Without it the view reads spare capacity while the birth and nomad gates correctly refuse it, which is the display contradicting the rule it exists to explain. Add `src/engine/snapshot-builder.ts` to this task's files and assert a site's beds are absent from `snapshot.beds.total`.
 
 **The one that will be missed:** `pending.constructed` is folded into homing precisely so a colonist can be sheltered on the tick a house appears — `shelters` in `command-system.ts:107`, verified. That now shelters them in a hole in the ground. It is the only entry in the table where the *existing* behaviour is a deliberate same-tick optimisation rather than an incidental lookup.
 

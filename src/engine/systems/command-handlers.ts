@@ -95,6 +95,32 @@ export function findBuilding(ctx: CommandContext, buildingId: number): BuildingR
   return ctx.buildings.find((row) => row.building.id === buildingId) ?? null;
 }
 
+/**
+ * `findBuilding`, plus the "still a site" refusal two callers share:
+ * `handleAssignWorker` (spec §2.5 — a site has def's `workerSlots` like any
+ * finished building, so without the check a colonist could be assigned into a
+ * hole in the ground) and `handleMoveBuilding` (§2.6, §2.12 — a site cannot be
+ * relocated). Both reject "not found" identically and differ only in the
+ * wording of the site refusal, which is why that half is a callback rather
+ * than a second parameter this function would have to phrase itself.
+ * Rejects and returns null on either failure; the caller's only job left is
+ * `if (found === null) return;`.
+ */
+export function findBuildingOrRejectSite(
+  ctx: CommandContext, buildingId: number, siteMessage: (row: BuildingRow) => string,
+): BuildingRow | null {
+  const found = findBuilding(ctx, buildingId);
+  if (found === null) {
+    ctx.notices.reject('Building not found.');
+    return null;
+  }
+  if (isUnderConstruction(found.construction.ticksLeft)) {
+    ctx.notices.reject(siteMessage(found));
+    return null;
+  }
+  return found;
+}
+
 // Only unassign needs to go from a bare id to a name without already holding
 // a findBuilding() result. The 'building' fallback fires when a
 // JobAssignment points at a building that no longer exists — fixture-only in
@@ -144,20 +170,16 @@ export function handleRecruitWorker(ctx: CommandContext): void {
 }
 
 export function handleAssignWorker(ctx: CommandContext, command: Extract<Command, { type: 'assignWorker' }>): void {
-  const found = findBuilding(ctx, command.buildingId);
-  if (found === null) {
-    ctx.notices.reject('Building not found.');
-    return;
-  }
   // ADDED, not preserved (spec §2.5): a site carries its def's `workerSlots`
-  // like any finished building — a mill site accepts two — so without this a
-  // colonist could be assigned into a hole in the ground and stand there
-  // doing nothing, since it has no builder role yet and ProductionSystem's
-  // own site guard makes that silent rather than visible.
-  if (isUnderConstruction(found.construction.ticksLeft)) {
-    ctx.notices.reject(`${BUILDINGS[found.building.defId].name} is still under construction.`);
-    return;
-  }
+  // like any finished building — a mill site accepts two — so without the
+  // site refusal `findBuildingOrRejectSite` folds in, a colonist could be
+  // assigned into a hole in the ground and stand there doing nothing, since
+  // it has no builder role yet and ProductionSystem's own site guard makes
+  // that silent rather than visible.
+  const found = findBuildingOrRejectSite(
+    ctx, command.buildingId, (row) => `${BUILDINGS[row.building.defId].name} is still under construction.`,
+  );
+  if (found === null) return;
   let assigned = 0;
   let idle: JobAssignment | null = null;
   for (const { job, stage } of ctx.workers) {

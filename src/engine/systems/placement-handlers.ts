@@ -10,7 +10,7 @@ import { demolitionNotice, heldText, refundCostOf, refundInTrayOf } from './demo
 import { heldAtOf } from './haul-claims';
 import { destinationFor } from './haul-sites';
 import { shelterWithRoom } from './population-handlers';
-import { findBuilding, type CommandContext } from './command-handlers';
+import { findBuilding, findBuildingOrRejectSite, type CommandContext } from './command-handlers';
 
 // The three commands that put a building somewhere, take it away again, or move
 // it — split out of command-handlers.ts because that file was approaching the
@@ -338,11 +338,16 @@ function reseatArrivalsOf(ctx: CommandContext, buildingId: number): void {
 }
 
 export function handleMoveBuilding(ctx: CommandContext, command: Extract<Command, { type: 'moveBuilding' }>): void {
-  const found = findBuilding(ctx, command.buildingId);
-  if (found === null) {
-    ctx.notices.reject('Building not found.');
-    return;
-  }
+  // A SITE cannot be relocated (§2.6, §2.12): moving a hole in the ground is
+  // meaningless, the relocation price below is derived from a WORKING
+  // building's downtime, and running a move countdown and a build countdown
+  // on the same entity at once is a state Task 8's save guard is specified to
+  // reject as impossible for the engine to have produced — this refusal,
+  // folded into `findBuildingOrRejectSite`, is what keeps that true. Asked
+  // before the tile checks below: a refused relocation must change nothing,
+  // tile occupancy included.
+  const found = findBuildingOrRejectSite(ctx, command.buildingId, () => 'Cannot move a building under construction.');
+  if (found === null) return;
   const { to } = command;
   // Own tile first: it IS occupied (by the mover), so isTileBuildable would
   // reject it anyway — the explicit check just makes the no-op reject

@@ -239,6 +239,18 @@ describe('layoutWorld', () => {
     expect(layout.tile).toBe(TILE);
   });
 
+  // The fill gauge's own guard (PlacedBuilding's doc comment: storage === 0
+  // is how the renderer knows there is nothing to draw) genuinely reads 0 for
+  // a storehouse site, not merely for a producer — proving `placeBuildings`
+  // passes the projection's zeroed `storage`/`stored` straight through rather
+  // than re-deriving anything from `defId`.
+  it('carries a storehouse site\'s state and its suppressed fill gauge through', () => {
+    const layout = layoutWorld(makeSnapshot({
+      buildings: [makeBuilding(1, { defId: 'storehouse', state: 'underConstruction', storage: 0, stored: 0, constructionTicks: 12 })],
+    }));
+    expect(layout.buildings[0]).toMatchObject({ state: 'underConstruction', storage: 0, stored: 0 });
+  });
+
   it('reports each worker\'s post: the building id, or null at the camp', () => {
     const layout = layoutWorld(makeSnapshot({
       buildings: [makeBuilding(1)],
@@ -297,6 +309,38 @@ describe('layoutWorld', () => {
     expect(lines.join(' ')).toContain('24/60 stored');
     expect(lines.join(' ')).not.toContain('workers');
     expect(lines.join(' ')).not.toContain('batch');
+  });
+
+  // §2.10: a site's beds/storage are zeroed by the SNAPSHOT projection (task
+  // 9's own change to buildingSnapshotsOf), not by a state check here — this
+  // is what proves describeBuilding's existing `beds > 0`/`storage > 0` split
+  // (chosen, per its own comment, over `state === 'housing'`/`'storing'`)
+  // still does the right thing once those fields read genuinely zero for a
+  // site: a house site and a storehouse site both fall through to the
+  // producer wording rather than reading "3/4 residents" or "24/60 stored"
+  // for capacity they do not have yet.
+  it('describes a house or storehouse site by workers, not by capacity it does not have yet', () => {
+    const snapshot = makeSnapshot({
+      buildings: [
+        makeBuilding(1, {
+          defId: 'house', state: 'underConstruction', beds: 0, storage: 0, workerSlots: 0, occupants: 0,
+          constructionTicks: 20,
+        }),
+        makeBuilding(2, {
+          defId: 'storehouse', state: 'underConstruction', beds: 0, storage: 0, workerSlots: 0, stored: 0,
+          constructionTicks: 20,
+        }),
+      ],
+    });
+    const house = describePick(snapshot, { kind: 'building', id: 1 });
+    expect(house[0]).toBe('House');
+    expect(house.join(' ')).toContain('0/0 workers — underConstruction');
+    expect(house.join(' ')).not.toContain('residents');
+
+    const store = describePick(snapshot, { kind: 'building', id: 2 });
+    expect(store[0]).toBe('Storehouse');
+    expect(store.join(' ')).toContain('0/0 workers — underConstruction');
+    expect(store.join(' ')).not.toContain('stored');
   });
 
   it('still describes a producer by its crew and its batch', () => {

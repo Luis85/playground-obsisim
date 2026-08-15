@@ -2086,9 +2086,15 @@ describe('live-world projections agree', () => {
     // defId (BUILDINGS[b.defId].storage), never a per-building save fact, so a
     // retuned storehouseCapacity moves every existing depot rather than
     // grandfathering the one it was built under.
+    // constructionNeeds (task 9) is derived exactly like inputBuffered is a
+    // derived SUM of the persisted inputBuffer map: it is `cost - inputBuffer`
+    // per resource, computed fresh from BUILDINGS[b.defId].cost (a catalog
+    // constant, same as beds/storage above) and the persisted inputBuffer map
+    // — never itself a save fact, or a retuned build cost would silently
+    // change what an already-saved site owes on the next load.
     const derivedBuilding = [
       'workers', 'workerSlots', 'state', 'progressPct', 'tooledWorkers', 'workPower', 'buffered', 'inputBuffered',
-      'storage', 'beds', 'occupants',
+      'storage', 'beds', 'occupants', 'constructionNeeds',
     ];
     const factKeys = Object.keys(foresterOf(engine)).filter((k) => !derivedBuilding.includes(k));
     const savedKeys = Object.keys(engine.serialize().buildings[0]);

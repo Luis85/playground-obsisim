@@ -3,7 +3,8 @@ import type { HaulKind, HaulPhase } from './haul';
 import type { LifeStage } from './population';
 import type { WorldMapSize } from './placement';
 
-export type BuildingState = 'producing' | 'waitingForInput' | 'unstaffed' | 'outputFull' | 'relocating' | 'housing' | 'storing';
+export type BuildingState =
+  | 'producing' | 'waitingForInput' | 'unstaffed' | 'outputFull' | 'underConstruction' | 'relocating' | 'housing' | 'storing';
 
 export type NoticeKind = 'success' | 'rejection';
 
@@ -77,11 +78,35 @@ export interface BuildingSnapshot {
    * `Construction` component holds.
    */
   constructionTicks: number;
-  /** Sleeping places this building provides (0 for a producer). */
+  /** Sleeping places this building provides (0 for a producer, and 0 for
+   * ANY building — house included — while `constructionTicks > 0`: a site
+   * has none of the capacities its def names yet, this one included). */
   beds: number;
   /** Colonists currently homed here. Derived from who points at it, never
    * stored — so it cannot disagree with the colonists. */
   occupants: number;
+  /**
+   * What this SITE still owes, per material, to complete — `max(0, cost[r] -
+   * inputBuffer[r])` for each resource its own def's cost names (spec §2.10's
+   * "needs 14 wood"). `{}` for a finished building: a finished building's
+   * `inputBuffered` holds recipe inputs, not construction cost, and there is
+   * nothing left to ask for.
+   *
+   * The only way to tell a site that is WAITING from a site that is STUCK —
+   * both read `underConstruction` and both read `constructionTicks` at
+   * whatever `BALANCE.buildTicks` was ordered against, since the countdown
+   * does not move until this reaches zero. Minutes after the order, once
+   * meals and other builds have spent the ledger, this is the figure that
+   * still answers the question.
+   *
+   * Also what `affordableDefs` (game-store.ts) sums across every site to
+   * subtract the colony's outstanding queue from a fresh order's cost — the
+   * SAME per-material shortfall the Buildings table reads, not a second
+   * derivation of it, which is what keeps the getter and the engine's own
+   * `outstandingMaterials` (placement-handlers.ts) agreeing without a new
+   * engine field.
+   */
+  constructionNeeds: Partial<Record<ResourceId, number>>;
 }
 
 export interface ColonistSnapshot {

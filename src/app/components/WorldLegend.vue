@@ -27,6 +27,7 @@ onMounted(() => {
       <span><i class="obsisim-chip is-ghost" :style="{ background: theme.accent }" /> ghost: buildable</span>
       <span><i class="obsisim-chip is-ghost" :style="{ background: theme.danger }" /> ghost: blocked</span>
       <span><i class="obsisim-chip" :style="{ borderColor: theme.stateRing.outputFull }" /> output full</span>
+      <span><i class="obsisim-chip" :style="{ borderColor: theme.stateRing.underConstruction }" /> under construction</span>
       <span><i class="obsisim-chip" :style="{ borderColor: theme.stateRing.relocating }" /> relocating</span>
       <span><i class="obsisim-chip is-round" :style="{ background: theme.carriedLoad }" /> carrying out</span>
       <!-- One entry, not two: a store-to-store transfer is drawn with exactly

@@ -1,7 +1,7 @@
-import type { BuildingDefId, RecipeDef, ResourceId } from '../shared/content-types';
+import type { BuildingDefId, CostMap, RecipeDef, ResourceId } from '../shared/content-types';
 import type { SavedBuilding } from '../shared/save';
 import type { BuildingSnapshot, BuildingState } from '../shared/snapshot';
-import { isRelocating } from '../shared/placement';
+import { isRelocating, isUnderConstruction } from '../shared/placement';
 import { BALANCE } from './content/balance';
 import { batchOutputUnits, BUILDINGS, unitsOf } from './content/buildings';
 import { Building, Construction, InputBuffer, OutputBuffer, Position, Production, Relocation, WorkerSlots } from './components';
@@ -67,11 +67,16 @@ function isOutputBlocked(recipe: RecipeDef | null, buffered: number): boolean {
 }
 
 /**
- * The state ladder for one building. Relocating dominates everything: it is
- * the reason nothing is happening, and it is also why a relocating house
- * shelters nobody and a relocating storehouse stores nothing. A shelter or a
- * store has no other state to be in — neither is ever unstaffed (no slots)
- * or producing.
+ * The state ladder for one building. Construction dominates even relocation
+ * (spec §2.5, §2.10): a site cannot be relocating (`handleMoveBuilding`
+ * refuses one), so the two are mutually exclusive in practice, but the order
+ * is written down anyway — `underConstruction` is checked first because it is
+ * first in the precedence chain, a formality that stays true even if that
+ * exclusivity ever broke. Relocating dominates everything below it: it is the
+ * reason nothing is happening, and it is also why a relocating house shelters
+ * nobody and a relocating storehouse stores nothing. A shelter or a store has
+ * no other state to be in — neither is ever unstaffed (no slots) or
+ * producing.
  *
  * Storage is checked BEFORE housing, and both are derived from the def
  * (`storage`/`recipe`) rather than from `recipe === null` alone: a storehouse
@@ -86,13 +91,35 @@ function isOutputBlocked(recipe: RecipeDef | null, buffered: number): boolean {
  */
 function buildingState(
   recipe: RecipeDef | null, storage: number, relocatingTicks: number, staffed: number, outputBlocked: boolean, batchActive: boolean,
+  constructionTicks: number,
 ): BuildingState {
+  if (isUnderConstruction(constructionTicks)) return 'underConstruction';
   if (isRelocating(relocatingTicks)) return 'relocating';
   if (storage > 0) return 'storing';
   if (recipe === null) return 'housing';
   if (staffed === 0) return 'unstaffed';
   if (outputBlocked) return 'outputFull';
   return batchActive ? 'producing' : 'waitingForInput';
+}
+
+/**
+ * What THIS site still owes, per material — `max(0, cost[r] - inputBuffer[r])`
+ * for each resource its own def's `cost` names. Mirrors `outstandingMaterials`'s
+ * `owe` closure (placement-handlers.ts) one building at a time rather than
+ * summed across the colony's whole queue — that colony-wide sum is
+ * `affordableDefs`'s job (game-store.ts), reading this per-building figure
+ * back rather than recomputing it a third time. Resources already fully
+ * delivered are OMITTED, not zeroed, so a partial-record consumer (`costLabel`,
+ * `unitsOf`) reads "what is still short" without a caller filtering zeros out.
+ */
+function constructionNeedsOf(cost: CostMap, inputBuffer: Partial<Record<ResourceId, number>>): CostMap {
+  const needs: CostMap = {};
+  for (const [resource, amount] of Object.entries(cost)) {
+    const id = resource as ResourceId;
+    const short = amount - (inputBuffer[id] ?? 0);
+    if (short > 0) needs[id] = short;
+  }
+  return needs;
 }
 
 /** 0-100 display progress; a shelter has no batch to show progress on. */
@@ -107,13 +134,20 @@ export function buildingSnapshotsOf(buildings: readonly BuildingFacts[], tallies
       const def = BUILDINGS[b.defId];
       const staffed = tallies.staffed.get(b.id) ?? 0;
       const outputBlocked = isOutputBlocked(def.recipe, b.buffered);
-      const state = buildingState(def.recipe, def.storage, b.relocatingTicks, staffed, outputBlocked, b.batchActive);
+      const state = buildingState(def.recipe, def.storage, b.relocatingTicks, staffed, outputBlocked, b.batchActive, b.constructionTicks);
+      const site = isUnderConstruction(b.constructionTicks);
       return {
         id: b.id,
         defId: b.defId,
         col: b.col, row: b.row,
         workers: staffed,
-        workerSlots: b.workerSlots,
+        // A site's def carries its finished `workerSlots` like any other
+        // (`command-handlers.ts`'s own comment on `handleAssignWorker`), so
+        // publishing it unguarded would enable a producer site's assign
+        // button for a command the engine refuses outright (spec §2.10) — the
+        // same "capacity it does not have" `beds`/`storage` are zeroed for
+        // below.
+        workerSlots: site ? 0 : b.workerSlots,
         state,
         progress: b.progress,
         batchActive: b.batchActive,
@@ -128,12 +162,20 @@ export function buildingSnapshotsOf(buildings: readonly BuildingFacts[], tallies
         stored: unitsOf(b.stored),
         // From the DEF, never from what is standing there: a depot's fill ring
         // and the table's `held / capacity` both need the denominator, and an
-        // empty depot still has one.
-        storage: def.storage,
+        // empty depot still has one — EXCEPT a site, which is not a store
+        // destination yet (§2.5) and must not offer the finished building's
+        // capacity while it is still a hole in the ground.
+        storage: site ? 0 : def.storage,
         relocatingTicks: b.relocatingTicks,
         constructionTicks: b.constructionTicks,
-        beds: def.beds,
+        // Same "capacity it does not have" rule as `storage` just above: a
+        // house site shelters nobody (spec §2.5's acceptance criterion 2),
+        // and `beds.total` (snapshot-builder.ts) already excludes it from the
+        // colony-wide count — this is that same exclusion, per building.
+        beds: site ? 0 : def.beds,
         occupants: tallies.occupants.get(b.id) ?? 0,
+        // {} for a finished building — see the field's own doc comment.
+        constructionNeeds: site ? constructionNeedsOf(def.cost, b.inputBuffer) : {},
       };
     })
     .sort((a, b) => a.id - b.id);

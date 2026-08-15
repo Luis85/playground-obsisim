@@ -138,7 +138,7 @@ describe('useGameStore', () => {
     const base = {
       col: 0, row: 0, workers: 0, workerSlots: 2, progress: 0, batchActive: false,
       progressPct: 0, tooledWorkers: 0, workPower: 0, buffered: 0, inputBuffered: 0, stored: 0, storage: 0,
-      relocatingTicks: 0, constructionTicks: 0, beds: 0, occupants: 0,
+      relocatingTicks: 0, constructionTicks: 0, beds: 0, occupants: 0, constructionNeeds: {},
     };
     store.ingest(makeSnapshot({
       buildings: [
@@ -168,6 +168,93 @@ describe('useGameStore', () => {
 
   it('affordableDefs is all-false before the first snapshot', () => {
     expect(useGameStore().affordableDefs.forester).toBe(false);
+  });
+
+  // The UI half of acceptance criterion 5 (§2.3/§2.10) at the getter itself,
+  // the ONE place all three gating surfaces (BuildPalette, WorldView,
+  // BuildingsView) read from. Published stock is UNCHANGED at order time
+  // (Task 2 deliberately leaves it alone), so a getter comparing a fresh
+  // def's cost against `snapshot.stockpile` alone would still call a second
+  // house affordable — this is what proves the getter subtracts the queued
+  // site's own `constructionNeeds` instead, matching the engine's
+  // `affordableWithQueue`.
+  it('affordableDefs subtracts a queued site\'s own shortfall from a fresh order of the same def', () => {
+    const store = useGameStore();
+    store.ingest(makeSnapshot({
+      stockpile: stockedWith({ wood: 15, planks: 5 }), // exactly one house's cost, and nothing more
+      buildings: [makeBuilding(1, {
+        defId: 'house', state: 'underConstruction', constructionTicks: 20,
+        constructionNeeds: { wood: 15, planks: 5 }, // nothing delivered yet: the site's whole cost
+      })],
+    }), status);
+    expect(store.affordableDefs.house).toBe(false); // the queue already claims every unit in stock
+  });
+
+  it('affordableDefs still offers the same def once the stock covers the queue AND a fresh order', () => {
+    const store = useGameStore();
+    store.ingest(makeSnapshot({
+      stockpile: stockedWith({ wood: 30, planks: 10 }), // two houses' worth
+      buildings: [makeBuilding(1, {
+        defId: 'house', state: 'underConstruction', constructionTicks: 20,
+        constructionNeeds: { wood: 15, planks: 5 },
+      })],
+    }), status);
+    expect(store.affordableDefs.house).toBe(true);
+  });
+
+  // The quantifier ranges over the ORDERING def's own cost resources, not the
+  // whole catalog (placement-handlers.ts's own warning: over the catalog it
+  // self-detonates, since outstanding demand double-counts material in
+  // transit). A site owing planks it does not have must not refuse a
+  // forester, which costs only wood and has plenty of it.
+  it('affordableDefs does not let one def\'s outstanding demand block an unrelated def', () => {
+    const store = useGameStore();
+    store.ingest(makeSnapshot({
+      stockpile: stockedWith({ wood: 100, planks: 0 }),
+      buildings: [makeBuilding(1, {
+        defId: 'workshop', state: 'underConstruction', constructionTicks: 20,
+        constructionNeeds: { planks: 20 }, // the workshop's whole cost, entirely planks
+      })],
+    }), status);
+    expect(store.affordableDefs.forester).toBe(true); // costs 10 wood, no planks named
+    expect(store.affordableDefs.workshop).toBe(false); // still owes its own queued shortfall
+  });
+
+  // Two sites owing the SAME resource: outstanding demand must be SUMMED
+  // across sites, not read off whichever site the reduction visits last. With
+  // 20 wood in stock and 17 (14 + 3) already owed, only 3 is genuinely spare
+  // — not enough for a forester's 10 — so a getter that overwrote instead of
+  // accumulated (reading only the second site's 3) would wrongly call the
+  // forester affordable.
+  it('sums outstanding demand across multiple sites owing the same resource, rather than reading the last one', () => {
+    const store = useGameStore();
+    store.ingest(makeSnapshot({
+      stockpile: stockedWith({ wood: 20 }),
+      buildings: [
+        makeBuilding(1, { defId: 'mill', state: 'underConstruction', constructionNeeds: { wood: 14, planks: 10 } }),
+        makeBuilding(2, { defId: 'house', state: 'underConstruction', constructionNeeds: { wood: 3 } }),
+      ],
+    }), status);
+    expect(store.affordableDefs.forester).toBe(false); // 20 - 17 = 3, short of the 10 wood a forester costs
+  });
+
+  it('buildingsUnderConstruction and unitsNeededForConstruction sum the published shortfalls', () => {
+    const store = useGameStore();
+    store.ingest(makeSnapshot({
+      buildings: [
+        makeBuilding(1, { defId: 'mill', state: 'underConstruction', constructionNeeds: { wood: 14, planks: 10 } }),
+        makeBuilding(2, { defId: 'house', state: 'underConstruction', constructionNeeds: { wood: 3 } }),
+        makeBuilding(3, { defId: 'forester', state: 'producing' }),
+      ],
+    }), status);
+    expect(store.buildingsUnderConstruction).toBe(2);
+    expect(store.unitsNeededForConstruction).toBe(27); // 14 + 10 + 3
+  });
+
+  it('buildingsUnderConstruction and unitsNeededForConstruction are zero before the first snapshot', () => {
+    const store = useGameStore();
+    expect(store.buildingsUnderConstruction).toBe(0);
+    expect(store.unitsNeededForConstruction).toBe(0);
   });
 
   it('counts haulers, waiting units, and stalled buildings', () => {

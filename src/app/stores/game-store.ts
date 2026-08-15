@@ -5,7 +5,7 @@ import type { EngineStatus, NoticeKind, Snapshot } from '../../shared/snapshot';
 // delegates to, and the alias keeps the two readable side by side.
 import { nomadBlocker as blockerForNomad, type PopulationBlocker } from '../../shared/population';
 import {
-  BALANCE, batchInputUnits, BUILDINGS, BUILDING_IDS, MEAL_WEIGHTS, RESOURCE_IDS, RESOURCES,
+  BALANCE, batchInputUnits, BUILDINGS, BUILDING_IDS, MEAL_WEIGHTS, RESOURCE_IDS, RESOURCES, unitsOf,
   type BuildingDefId, type ResourceId,
 } from '../../engine/content';
 
@@ -57,6 +57,26 @@ function stockAmounts(snapshot: Snapshot | null): Record<string, number> {
   const stock: Record<string, number> = {};
   for (const id of RESOURCE_IDS) stock[id] = snapshot?.stockpile[id].stock ?? 0;
   return stock;
+}
+
+/**
+ * What every construction site the colony already has going still needs, per
+ * resource — summed straight off `BuildingSnapshot.constructionNeeds`, the
+ * SAME per-material shortfall the Buildings table reads, not a second
+ * derivation of it. This is the app-side half of `outstandingMaterials`
+ * (`placement-handlers.ts`): the engine sums a site's shortfall off its own
+ * live `InputBuffer`, this sums the identical figure off the published
+ * snapshot, so the two agree without a new engine field (spec §2.10).
+ */
+function outstandingSiteDemand(snapshot: Snapshot | null): Partial<Record<ResourceId, number>> {
+  const outstanding: Partial<Record<ResourceId, number>> = {};
+  for (const b of snapshot?.buildings ?? []) {
+    for (const [resource, amount] of Object.entries(b.constructionNeeds)) {
+      const id = resource as ResourceId;
+      outstanding[id] = (outstanding[id] ?? 0) + amount;
+    }
+  }
+  return outstanding;
 }
 
 // The single read-model store the whole app layer subscribes to: GameEngine
@@ -167,16 +187,32 @@ export const useGameStore = defineStore('game', {
       }
       return statuses;
     },
-    /** One affordability flag per catalog def — the construct table and the
-     * build palette bind to this, so the check exists exactly once. */
+    /**
+     * One affordability flag per catalog def — the construct table and the
+     * build palette bind to this, so the check exists exactly once.
+     *
+     * CUMULATIVE, matching `affordableWithQueue` (`placement-handlers.ts`):
+     * ordering a building deliberately leaves `snapshot.stockpile` untouched
+     * (§2.3), so a getter comparing a fresh def's cost against stock alone
+     * would keep offering a second house after the first has already claimed
+     * that exact stock. `outstandingSiteDemand` is subtracted first — the
+     * colony's whole queue, summed once — and then each def is checked
+     * against ONLY ITS OWN cost resources, never the whole catalog: the
+     * engine's own comment on why is worth repeating here, because getting
+     * this backwards self-detonates. Outstanding demand already counts
+     * material in transit twice (picked up, not yet delivered) as a
+     * safety margin; spreading that margin across resources a def does not
+     * even want would refuse orders the colony can plainly afford.
+     */
     affordableDefs(state): Record<BuildingDefId, boolean> {
       const snapshot = state.snapshot;
+      const outstanding = outstandingSiteDemand(snapshot);
       return Object.fromEntries(
         BUILDING_IDS.map((id) => [
           id,
           snapshot !== null &&
             Object.entries(BUILDINGS[id].cost).every(
-              ([res, amount]) => snapshot.stockpile[res as ResourceId].stock >= amount,
+              ([res, amount]) => snapshot.stockpile[res as ResourceId].stock >= (outstanding[res as ResourceId] ?? 0) + amount,
             ),
         ]),
       ) as Record<BuildingDefId, boolean>;
@@ -228,6 +264,25 @@ export const useGameStore = defineStore('game', {
           : sum),
         0,
       );
+    },
+    /**
+     * Sites currently under construction — the Economy view's build backlog,
+     * beside the input and output backlogs above (§2.10). Symmetric with
+     * `buildingsWaitingForInput`: a straight count, gated on the engine's own
+     * `underConstruction` verdict rather than a re-derivation of it.
+     */
+    buildingsUnderConstruction(state): number {
+      return state.snapshot?.buildings.filter((b) => b.state === 'underConstruction').length ?? 0;
+    },
+    /**
+     * Units the colony still owes every site — `unitsShort`'s build-backlog
+     * twin, and the SAME per-material figure `outstandingSiteDemand` sums for
+     * `affordableDefs` above, just totalled across resources instead of kept
+     * per-resource. One source (`constructionNeeds`), two reductions of it,
+     * never two derivations.
+     */
+    unitsNeededForConstruction(state): number {
+      return (state.snapshot?.buildings ?? []).reduce((sum, b) => sum + unitsOf(b.constructionNeeds), 0);
     },
   },
   actions: {

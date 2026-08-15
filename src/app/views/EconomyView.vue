@@ -29,6 +29,17 @@ const inputPressure = computed(() => {
   return `${store.unitsShort} units short — ${buildings} waiting for input.`;
 });
 
+// The build-side third of the same shape (§2.10, beside haulPressure and
+// inputPressure above): what the colony's construction QUEUE still owes,
+// read off the same per-material shortfall the Buildings table's Needs
+// column publishes, never a second derivation of it.
+const buildPressure = computed(() => {
+  if (store.buildingsUnderConstruction === 0) return 'Nothing is under construction.';
+  const count = store.buildingsUnderConstruction;
+  const sites = `${count} site${count === 1 ? '' : 's'}`;
+  return `${store.unitsNeededForConstruction} units needed — ${sites} under construction.`;
+});
+
 const chains = computed(() => {
   const snapshot = store.snapshot;
   if (!snapshot) return [];
@@ -81,6 +92,15 @@ const chains = computed(() => {
       :class="{ 'obsisim-negative': store.buildingsWaitingForInput > 0 }"
     >
       {{ inputPressure }}
+    </p>
+    <!-- No obsisim-negative here, deliberately: unlike the two backlogs
+         above, a site under construction is not a stall — it is the queue
+         doing exactly what the player asked for. Nothing about count alone
+         tells "waiting" from "stuck" (that is what constructionNeeds is
+         for, per building, in the table below); this line states the
+         figure without editorializing on it. -->
+    <p class="obsisim-haul-pressure" data-test="build-pressure">
+      {{ buildPressure }}
     </p>
     <section v-for="chain in chains" :key="chain.name">
       <h3>{{ chain.name }} chain</h3>

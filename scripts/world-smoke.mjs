@@ -313,7 +313,19 @@ const transferArrived = await shot();
 // Without this, a transfer that vanished entirely would satisfy phase 32.
 check('a transfer\'s dot advances along its own frozen leg though it names no building', !transferArrived.equals(transfer));
 
-await step(34); // dispose()
+// §2.10's own precedent for how a state is drawn — the same move the
+// relocating check above already makes: ONLY `state` (plus a countdown
+// nothing on the canvas reads) changes between these two frames.
+await step(34); // baseline — a plain unstaffed mill site, no colonists
+await wait(400);
+const millUnstaffed = await shot();
+
+await step(35); // ONLY change: state, unstaffed -> underConstruction
+await wait(400);
+const millSite = await shot();
+check('a construction site has a ring colour of its own (only the building\'s state differs)', !millSite.equals(millUnstaffed));
+
+await step(36); // dispose()
 await wait(300);
 check('dispose() raises no errors', pageErrors.length === 0);
 

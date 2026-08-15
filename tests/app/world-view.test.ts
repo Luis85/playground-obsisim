@@ -208,6 +208,7 @@ describe('WorldView', () => {
     expect(legend.text()).toContain('ghost: buildable');
     expect(legend.text()).toContain('ghost: blocked');
     expect(legend.text()).toContain('output full');
+    expect(legend.text()).toContain('under construction');
     expect(legend.text()).toContain('relocating');
     // Both halves of the direction pair, and both halves of the store's
     // encoding: an entry per addition (spec §2.10 — the legend explains every
@@ -236,12 +237,14 @@ describe('WorldView', () => {
     // swatch. Checked across every entry, not just those two, so increment 5
     // cannot reintroduce the same collapse.
     //
-    // Exact counts, not thresholds: 21 entries, 20 with a swatch ("idle camp"
+    // Exact counts, not thresholds: 22 entries, 21 with a swatch ("idle camp"
     // is a literal glyph with no encoded color). A >= bound stayed green when
     // WorldLegend's "relocating" entry (added for increment 5's Relocation
-    // state) was deleted outright, because 13 and 12 still satisfied it.
+    // state) was deleted outright, because 13 and 12 still satisfied it. Task
+    // 9 adds "under construction" (its own stateRing swatch), taking both
+    // counts up by exactly one.
     const entries = legend.findAll('span');
-    expect(entries.length).toBe(21);
+    expect(entries.length).toBe(22);
     let withSwatch = 0;
     for (const entry of entries) {
       const ownsChipClass = entry.classes().includes('obsisim-chip');
@@ -252,7 +255,7 @@ describe('WorldView', () => {
       expect(swatch.text()).toBe(''); // …carrying no label text of its own
       withSwatch += 1;
     }
-    expect(withSwatch).toBe(20);
+    expect(withSwatch).toBe(21);
   });
 
   it('falls back when the renderer reports an async fatal failure', async () => {
@@ -291,6 +294,33 @@ describe('WorldView interaction', () => {
       type: 'constructBuilding', buildingDefId: 'forester', at: { col: 8, row: 4 },
     });
     expect(wrapper.find('[data-test="palette-forester"]').classes()).toContain('is-armed');
+  });
+
+  // The ghost's half of acceptance criterion 5 (§2.3/§2.10): armed while
+  // affordable (rich stock, as every other arming test here is), then the
+  // stockpile drops to exactly one house's cost with a house already queued
+  // against it — published stock UNCHANGED at order time (Task 2), so a
+  // ghost reading stock alone would still preview `valid: true`. Proves
+  // `tileValid`'s `store.affordableDefs[m.defId]` read picks up the
+  // cumulative getter rather than a stale one.
+  it('a queued site\'s outstanding demand invalidates the placement ghost for the same materials', async () => {
+    const { renderer, wrapper } = armedHarness();
+    await nextTick();
+    await wrapper.find('[data-test="palette-house"]').trigger('click');
+    useGameStore().ingest(makeSnapshot({
+      tick: 1, // a genuinely later tick — tick 0 again would read as a timeline reset and disarm the mode
+      buildings: [
+        makeBuilding(7, { defId: 'bakery', col: 6, row: 3 }),
+        makeBuilding(8, {
+          defId: 'house', state: 'underConstruction', constructionTicks: 20,
+          constructionNeeds: { wood: 15, planks: 5 }, // the site's whole cost, undelivered
+        }),
+      ],
+      stockpile: stockedWith({ wood: 15, planks: 5 }), // exactly one house's worth, all already owed
+    }), { paused: false, speed: 1, error: null });
+    await nextTick();
+    await wrapper.find('[data-test="world-host"]').trigger('pointermove', { pageX: 40, pageY: 40 });
+    expect(renderer.setGhost).toHaveBeenLastCalledWith({ defId: 'house', col: 8, row: 4, valid: false });
   });
 
   it('switching armed definitions over a parked pointer swaps the ghost in place', async () => {

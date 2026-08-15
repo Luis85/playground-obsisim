@@ -107,4 +107,26 @@ describe('SelectionPanel', () => {
     await wrapper.vm.$nextTick();
     expect(wrapper.find('[data-test="selection-relocating"]').exists()).toBe(false);
   });
+
+  // The construction countdown, alongside the relocating one above for the
+  // same reason Step 1's grep pairs the two files. constructionTicks (14) is
+  // distinct from every other numeric field on the fixture, and the shortfall
+  // is asserted alongside it — the only way this panel can tell a site that
+  // is waiting from one that is stuck.
+  it('shows the construction countdown and the per-material shortfall for a site', async () => {
+    const wrapper = mountPanel(7, {
+      state: 'underConstruction', constructionTicks: 14, constructionNeeds: { wood: 9, planks: 2 },
+    });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-test="selection-construction"]').text()).toBe('Under construction: 14t left');
+    expect(wrapper.find('[data-test="selection-needs"]').text()).toBe('Needs: 9 Wood, 2 Planks');
+    expect(wrapper.text()).toContain('Under construction'); // the state label too, via BUILDING_STATE_LABELS
+  });
+
+  it('shows no construction lines for a settled building', async () => {
+    const wrapper = mountPanel(7, { state: 'producing', constructionTicks: 0 });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-test="selection-construction"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="selection-needs"]').exists()).toBe(false);
+  });
 });

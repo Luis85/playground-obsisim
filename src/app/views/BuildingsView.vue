@@ -7,7 +7,7 @@ import { BUILDINGS, BUILDING_IDS } from '../../engine/content';
 // (used in the State cell below) is a Record keyed by the BuildingState union,
 // so a state added to the union without a matching label is a type error here,
 // not a silently-raw string in the rendered table.
-import { batchLabel, BUILDING_STATE_LABELS, costLabel, downtimeLabel, recipeLabel, waitingLabel } from '../labels';
+import { batchLabel, BUILDING_STATE_LABELS, costLabel, downtimeLabel, needsLabel, recipeLabel, waitingLabel } from '../labels';
 import TwoStepButton from '../components/TwoStepButton.vue';
 
 const engine = inject(ENGINE_KEY)!;
@@ -19,7 +19,7 @@ const store = useGameStore();
     <h3>Buildings</h3>
     <table class="obsisim-table">
       <thead>
-        <tr><th>Building</th><th>Tile</th><th>Waiting</th><th>In</th><th>Downtime</th><th>Workers</th><th>State</th><th>Batch / Beds</th><th>Work power</th><th>Tools</th><th /></tr>
+        <tr><th>Building</th><th>Tile</th><th>Waiting</th><th>In</th><th>Needs</th><th>Downtime</th><th>Workers</th><th>State</th><th>Batch / Beds</th><th>Work power</th><th>Tools</th><th /></tr>
       </thead>
       <tbody>
         <tr v-for="b in store.snapshot.buildings" :key="b.id" :data-test="`building-row-${b.id}`">
@@ -27,6 +27,12 @@ const store = useGameStore();
           <td>({{ b.col }}, {{ b.row }})</td>
           <td :data-test="`waiting-${b.id}`">{{ waitingLabel(b.storage, b.stored, b.buffered) }}</td>
           <td :data-test="`in-${b.id}`">{{ b.inputBuffered }}</td>
+          <!-- A site's shortfall, per material (§2.10's "needs 14 wood") — the
+               only way to tell a site that is WAITING from one that is
+               STUCK, both of which read `underConstruction` alike. `{}` for
+               everything that is not a site, which needsLabel renders as
+               the same em dash `downtimeLabel` uses for "nothing to show". -->
+          <td :data-test="`needs-${b.id}`">{{ needsLabel(b.constructionNeeds) }}</td>
           <td :data-test="`downtime-${b.id}`">{{ downtimeLabel(b.relocatingTicks) }}</td>
           <td>
             <button :data-test="`unassign-${b.id}`" :disabled="b.workers === 0" @click="engine.dispatch({ type: 'unassignWorker', buildingId: b.id })">−</button>
@@ -45,7 +51,7 @@ const store = useGameStore();
           </td>
         </tr>
         <tr v-if="store.snapshot.buildings.length === 0">
-          <td colspan="11">
+          <td colspan="12">
             No buildings yet. Start with a Forester or Gatherer's Hut (10 wood each) from the
             list below, then assign your idle workers with <strong>+</strong>.
           </td>

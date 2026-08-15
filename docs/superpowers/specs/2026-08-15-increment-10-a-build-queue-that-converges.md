@@ -137,9 +137,29 @@ finishes until nearly all of them do.
 
 1. **A site is never in the starvation band.**
 2. **Site selection is a separate phase, not a comparator term.**
-   `nextSupplyTarget` picks the lowest-age site among sites, picks the best
+   `nextSupplyTarget` picks the best site candidate among sites, picks the best
    candidate among non-sites by the existing comparator, and then chooses between
    those two winners with one ordinary comparison.
+
+**Phase 1 is two steps, not one, and collapsing it reintroduces the bug this
+design exists to prevent.** A `SupplyCandidate` is a **building-source pair** —
+it carries `buildingId` *and* `siteId` (`haul.ts:355`) — so one site with its
+material available at both the camp and a depot produces *several* candidates
+with the **same `siteAge`**. "Lowest age wins" leaves those tied, and a tie
+resolved by whichever came first in the array is exactly the
+iteration-order dependence the two-phase form was introduced to eliminate. It
+would be a quieter bug than the non-transitive comparator, not a smaller one:
+the *site* served would be right every time, and only the *route* would wobble.
+
+So phase 1 is:
+
+1. **the lowest `siteAge`** — which site the player ordered first;
+2. **then the existing comparator among that site's own candidates** — which
+   source to fetch from, decided by the terms that already decide it for every
+   finished building: `movable`, route, ids.
+
+Two steps, each a total order, and the second one is the machinery increment 7
+and 8 already built and tested. No new tie-break is invented here.
 
 **What this guarantees, stated exactly, because a looser phrasing is an
 overclaim.** The rule is *the oldest site **with unclaimed room** is served
@@ -306,11 +326,19 @@ number.
 3. **A blocked producer outranks a queue of sites.** A staffed sawmill with an
    empty in-tray is served before any site, with sites queued that need its
    planks. Fails against a "sites first" ordering.
-4. **The winner does not depend on candidate order.** All six permutations of a
-   mixed three-candidate set — an old site with small `movable`, a newer site
-   with large `movable`, and a finished building between them — select the same
-   winner. This is the transitivity criterion and a same-kind shuffle cannot
-   substitute for it.
+4. **The winner does not depend on candidate order**, and this must be proved in
+   **two** shapes, because they fail for different reasons:
+
+   - **Mixed kinds.** All six permutations of an old site with small `movable`, a
+     newer site with large `movable`, and a finished building between them select
+     the same winner. This is the transitivity criterion — the cycle in §2.2 only
+     exists across the site/non-site boundary.
+   - **Multiple sources for one site.** All permutations of several candidates
+     for the **same** oldest site — its material available at the camp and at a
+     depot — select the same source. A candidate is a building-source pair, so
+     phase 1's age term alone leaves these tied; only the second step of phase 1
+     breaks it. The mixed-kind fixture uses one candidate per building and cannot
+     catch this.
 5. **Among finished buildings, nothing has changed.** Every existing dispatch
    test passes untouched.
 6. **Conservation is exact** across every balance scenario, long queues included.

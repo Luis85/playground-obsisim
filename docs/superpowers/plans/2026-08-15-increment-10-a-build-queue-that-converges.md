@@ -4,7 +4,7 @@
 
 **Goal:** Make a build order a *request*. The player queues what the colony cannot yet afford, and the queue fills oldest-first so it converges instead of crawling.
 
-**Architecture:** No new components, no new systems, no new save fields. This increment removes a check and reorders one selection: `nextSupplyTarget` becomes two-phase (oldest site among sites, best non-site by the existing comparator, one comparison between the winners), and `compareSupplyCandidates` gains exactly one term — a site is never in the starvation band.
+**Architecture:** No new components, no new systems, no new save fields. This increment removes a check and reorders one selection: `nextSupplyTarget` becomes two-phase (best site — oldest, then its best source by the existing comparator; best non-site by that same comparator; one comparison between the winners), and `compareSupplyCandidates` gains exactly one term — a site is never in the starvation band.
 
 **Tech Stack:** TypeScript, sim-ecs 0.6.4, Vue 3 + Pinia, Vitest, Excalibur (canvas only), fallow (quality gates).
 
@@ -41,7 +41,9 @@ Between Task 1 and Task 2, **the player can queue more than the colony can feed 
 
 **Files:**
 - Modify: `src/engine/systems/placement-handlers.ts`, `src/app/components/BuildPalette.vue`, `src/app/views/WorldView.vue`, `src/app/views/BuildingsView.vue`, `src/app/stores/game-store.ts`
-- Test: `tests/engine/systems/command-system.test.ts`, `tests/app/build-palette.test.ts`, `tests/app/buildings-view.test.ts`
+- Test: `tests/engine/systems/command-system.test.ts`, `tests/app/build-palette.test.ts`, `tests/app/buildings-view.test.ts`, **`tests/app/world-view.test.ts`**
+
+**Four surfaces, four test files.** `WorldView.vue`'s gate lives in its own `tileValid` predicate — `if (m.kind === 'place') return store.affordableDefs[m.defId]` — which no palette or table test can reach. It is also the **primary canvas flow**: leave it (or restore it later) and a player still cannot place an unaffordable order while every other listed test stays green.
 
 **Interfaces:**
 - `handleConstructBuilding` **drops the `canAfford` refusal** increment 9 kept. The id-exhaustion and tile checks stay, and stay before the spawn.
@@ -67,11 +69,26 @@ it('a colony that cannot afford a building can still order it', async () => {
   // product decision changing hands.
 });
 
-it('the palette arms, the tile is accepted, and the order goes through on an empty ledger', async () => {
+it('the palette arms on an empty ledger', async () => {
   // UI level, and REQUIRED SEPARATELY — acceptance criterion 1 says so. The
-  // engine test above passes regardless of the four gates, so on its own it
+  // engine test above passes regardless of all four gates, so on its own it
   // would let a version ship where the model allows a queue the player cannot
-  // express. Exercise all three surfaces, not one.
+  // express.
+});
+
+it('WorldView accepts the tile for an unaffordable def', async () => {
+  // ITS OWN TEST, in tests/app/world-view.test.ts, because `tileValid` is an
+  // INDEPENDENT gate that the palette and table fixtures cannot exercise — and
+  // it is the primary canvas flow, so this is the one whose absence hurts most.
+  //
+  // The existing WorldView placement fixture uses a RICH snapshot, which passes
+  // the gate whether it is there or not. Build an EMPTY-ledger snapshot or this
+  // test proves nothing.
+});
+
+it('the Buildings table button is enabled on an empty ledger', async () => {
+  // The third surface. Separate fixtures per surface — one test spanning
+  // several passes with any one gate restored.
 });
 
 it('the tooltip still says what is missing', async () => {
@@ -87,7 +104,7 @@ it('id exhaustion and an unbuildable tile are still refused', async () => {
 
 - [ ] **Step 3: Implement, mutation-test, commit**
 
-Mutations: restore the `canAfford` refusal; restore each `:disabled` binding separately; delete `affordableDefs` entirely (must redden the tooltip test).
+Mutations: restore the `canAfford` refusal; restore each gate separately — **including `tileValid`'s**, which is the one a rich-snapshot fixture would not catch; delete `affordableDefs` entirely (must redden the tooltip test).
 
 ---
 
@@ -103,9 +120,13 @@ Mutations: restore the `canAfford` refusal; restore each `:disabled` binding sep
 - `SupplyCandidate` gains `siteAge: number | null` — the building id for a site, `null` for a finished building. **No new state**: `IdCounter.take()` is monotone, so a lower id *is* an earlier order, and the tie-break chain already ends at this field.
 - `compareSupplyCandidates` gains **exactly one** thing: **a site is never in the starvation band.** No age term is added to it. **Do not add a "sites first" clause** either — see below.
 - `nextSupplyTarget` becomes **two-phase**, and this is where age lives:
-  1. lowest `siteAge` among site candidates;
+  1. best **site** candidate — see below, it is two steps;
   2. best non-site by the existing comparator;
   3. one ordinary comparison between those two winners.
+
+**Phase 1 is TWO steps and collapsing it reintroduces iteration-order dependence.** A `SupplyCandidate` is a **building-source pair** — `buildingId` *and* `siteId`, `haul.ts:355` — so one site whose material sits at both the camp and a depot yields several candidates with the **same `siteAge`**. "Lowest age wins" leaves them tied and the winner falls to array order. So: lowest `siteAge` first, **then the existing comparator among that site's own candidates** to choose the source. No new tie-break is invented — step 2 is the machinery increments 7 and 8 already built.
+
+This failure is quieter than the non-transitive comparator, not smaller: the *site* served is right every time and only the *route* wobbles, so it survives every test that asserts which building got the load.
 
 **Age must NOT be a comparator term, and this is the subtle half.** Applying age "when both candidates are sites" makes `compareSupplyCandidates` **non-transitive**, and `nextSupplyTarget` is a reduction — so the winner depends on candidate iteration order, the one property every selection in this codebase commits to not having. With nothing starving: an old site (movable 1) beats a newer site (movable 6) on age; the newer site beats a finished building (movable 4) on `movable`; the building beats the old site on `movable`. Feed them in the order building, old, new and the *newest* site wins.
 
@@ -161,7 +182,7 @@ it('a site is never in the starvation band', () => {
 });
 
 it('the winner does not depend on candidate order — mixed three-candidate permutations', () => {
-  // ACCEPTANCE CRITERION 4, THE TRANSITIVITY TEST, and it must use a MIXED set:
+  // ACCEPTANCE CRITERION 4a, THE TRANSITIVITY TEST, and it must use a MIXED set:
   // one old site with small movable, one newer site with large movable, one
   // finished building in between. Feed all SIX permutations and require the
   // same winner every time.
@@ -169,6 +190,18 @@ it('the winner does not depend on candidate order — mixed three-candidate perm
   // A same-kind shuffle test cannot catch this: the cycle only exists across the
   // site/non-site boundary. An earlier draft made the comparator non-transitive
   // and every existing order-independence test stayed green.
+});
+
+it('the SOURCE chosen for the oldest site does not depend on candidate order', () => {
+  // ACCEPTANCE CRITERION 4b, and it fails for a DIFFERENT reason than 4a — one
+  // fixture cannot serve both. Several candidates for the SAME oldest site: its
+  // material at the camp and at a depot, different routes and movable. Permute
+  // and require the same SOURCE every time.
+  //
+  // The mixed-kind fixture above uses one candidate per building, so every
+  // siteAge is distinct and the tie never arises. Here they are all equal by
+  // construction, which is the only shape that reddens a phase 1 that stops at
+  // the age term.
 });
 
 it('among finished buildings nothing has changed', () => {
@@ -199,7 +232,7 @@ it('with five sites, no younger site is served while an older one has unclaimed 
 
 - [ ] **Step 2: Implement, mutation-test, commit**
 
-Mutations: add a site-before-building term; reverse age; move age into the comparator; apply the starvation band to sites. **The third is the one that matters** — it leaves a plausible-looking ordering that still round-robins, and only the five-site integration test catches it.
+Mutations: add a site-before-building term; reverse age; move age into the comparator; apply the starvation band to sites; **drop phase 1's second step so it returns the first lowest-age candidate it finds**. **The third is the one that matters** — it leaves a plausible-looking ordering that still round-robins, and only the five-site integration test catches it.
 
 ---
 

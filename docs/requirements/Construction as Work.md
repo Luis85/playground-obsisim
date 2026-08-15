@@ -61,9 +61,19 @@ sections and nowhere near the rest, which is what the seam was drawn from.
 **What the split costs, stated because it is real.** Increment 9 ships with
 several sites filling round-robin, so a player who orders three buildings at once
 sees them finish late and together. That is bounded by the affordability check —
-a queue is limited to what the colony could pay for, so every site still
-completes — and increment 9 §4.1 measures how bad it is, which is the sizing
-input for increment 10.
+a queue is limited to what the colony could have paid for at the moment each
+order was accepted — and increment 9 §4.1 measures how bad it is, which is the
+sizing input for increment 10.
+
+**Bounded is not the same as guaranteed, and the difference is deliberate.** The
+check is order-time only: it writes nothing down and reserves nothing, so goods
+it counted can leave for a meal or a producer before a hauler collects them, and
+an accepted site can be left short. Increment 9 §2.3 says so explicitly and
+declines to fix it with a reservation, because reserving strongly enough to
+guarantee completion would mean holding materials against food. A stalled queue
+is recoverable — cancelling a site returns its materials for another to use —
+and increment 9 §4.1 Step 2b measures how often the stall actually happens,
+which is what increment 10 needs before it removes the check.
 
 The **builder role** listed under "What it would take" above is in neither
 increment. Both complete a site on materials plus a fixed time; labour as a

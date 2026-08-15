@@ -513,7 +513,9 @@ Mutations: count down regardless of materials; complete at `ticksLeft === 1`; re
   | a site | **no** — nothing was paid | **refunded** via `refundAt` |
 
 - Demolishing a site refunds its delivered materials through `destinationFor` with the reservation-aware `heldAt` — **landed in Task 3, verify rather than rewrite.**
-- **`demolitionNotice` (`placement-handlers.ts:101`) must become site-aware**, and this is OBS-4-07 repeating rather than a cosmetic edit. It opens with a hardcoded `` `Demolished the ${name} — cost refunded` `` and describes the in-tray as *lost* — for a site, both halves are exactly backwards: no cost is refunded and the materials come back. OBS-4-07 is filed against precisely this failure, a notice claiming "cost refunded" while goods were silently deleted, and shipping the inverse of it here would be the same defect with the sign flipped.
+- **`demolitionNotice`'s COST half already landed in Task 2** — a cancelled site no longer claims a refund it never got. It moved for the same reason the refund branch did: the false receipt appeared the moment payment was removed, and three separate reviews flagged it. What is left here is the **in-tray half** — a cancelled site's delivered materials come *back*, and the notice still describes a demolished building's trays as lost. Verify the cost half rather than rewriting it; add the returned-materials clause.
+
+  The rest of this bullet is why that half matters, and this is OBS-4-07 repeating rather than a cosmetic edit. It opens with a hardcoded `` `Demolished the ${name} — cost refunded` `` and describes the in-tray as *lost* — for a site, both halves are exactly backwards: no cost is refunded and the materials come back. OBS-4-07 is filed against precisely this failure, a notice claiming "cost refunded" while goods were silently deleted, and shipping the inverse of it here would be the same defect with the sign flipped.
 - `handleMoveBuilding` **refuses a site**, with a notice (§2.6, §2.12).
 
 - [ ] **Step 1: Write the failing tests**

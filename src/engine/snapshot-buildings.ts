@@ -4,7 +4,7 @@ import type { BuildingSnapshot, BuildingState } from '../shared/snapshot';
 import { isRelocating } from '../shared/placement';
 import { BALANCE } from './content/balance';
 import { batchOutputUnits, BUILDINGS, unitsOf } from './content/buildings';
-import { Building, InputBuffer, OutputBuffer, Position, Production, Relocation, WorkerSlots } from './components';
+import { Building, Construction, InputBuffer, OutputBuffer, Position, Production, Relocation, WorkerSlots } from './components';
 
 /**
  * The building half of the snapshot builder: one building's plain facts, the
@@ -35,6 +35,14 @@ export interface BuildingFacts {
   inputBuffer: Partial<Record<ResourceId, number>>;
   stored: Partial<Record<ResourceId, number>>;
   relocatingTicks: number;
+  /** Ticks left before this building stops being a construction site (spec
+   * §2.5), threaded exactly like `relocatingTicks` above — except OPTIONAL:
+   * `SavedBuilding` carries no field for it until Task 8, so
+   * `buildInitialSnapshot`'s save projection (the one caller that does not
+   * have one) cannot supply one yet. Absent is read as 0 (finished) wherever
+   * this is consumed, the same default a restored site would get if it
+   * existed. */
+  constructionTicks?: number;
 }
 
 /**
@@ -141,6 +149,12 @@ export function buildingSnapshotsOf(buildings: readonly BuildingFacts[], tallies
 export function buildingFactsOf(
   building: Building, slots: WorkerSlots, production: Production, position: Position, buffer: OutputBuffer, relocation: Relocation,
   input: InputBuffer, stored: Partial<Record<ResourceId, number>>,
+  // Optional, like `BuildingFacts.constructionTicks` it feeds: the live
+  // callers (`SnapshotSystem`, `gatherEntityFacts` below) both pass one, but
+  // `buildInitialSnapshot`'s save projection (initial-snapshot.ts) cannot —
+  // `SavedBuilding` carries no field for it until Task 8 — and a required
+  // parameter here would force that unrelated file into this task's diff.
+  construction?: Construction,
 ): BuildingFacts {
   return {
     id: building.id,
@@ -155,6 +169,7 @@ export function buildingFactsOf(
     inputBuffer: Object.fromEntries(input.amounts) as Partial<Record<ResourceId, number>>,
     stored,
     relocatingTicks: relocation.ticksLeft,
+    constructionTicks: construction?.ticksLeft,
   };
 }
 

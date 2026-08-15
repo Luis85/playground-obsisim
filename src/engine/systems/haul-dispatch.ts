@@ -1,12 +1,12 @@
 import type { ResourceId } from '../../shared/content-types';
 import type { HaulCandidate, StoreSite, SupplyCandidate } from '../../shared/haul';
 import { CAMP_SITE_ID, nextHaulTarget, nextSupplyTarget, sitesHolding } from '../../shared/haul';
-import { isRelocating, type TileRef } from '../../shared/placement';
+import { isRelocating, isUnderConstruction, type TileRef } from '../../shared/placement';
 import { BALANCE } from '../content/balance';
 import { batchOutputUnits, BUILDINGS } from '../content/buildings';
 import { RESOURCE_IDS } from '../content/resources';
 import type { HaulKind } from '../components';
-import { Building, HaulTrip, InputBuffer, OutputBuffer, Position, Production, Relocation } from '../components';
+import { Building, Construction, HaulTrip, InputBuffer, OutputBuffer, Position, Production, Relocation } from '../components';
 import type { PendingChanges } from '../resources';
 import type { Claims } from './haul-claims';
 import { storeSitesOf, type StoreSiteRow } from './haul-sites';
@@ -41,7 +41,7 @@ export interface HaulBuildingRow {
 /** The building fields a store site is derived from — a subset of
  * `HaulBuildingRow`, so a command handler can build the site list without
  * materialising the two buffers it has no use for. */
-export interface StoreRow { building: Building; position: Position; relocation: Relocation; }
+export interface StoreRow { building: Building; position: Position; relocation: Relocation; construction: Construction; }
 
 /**
  * The site list, straight from live building rows: the catalog lookup that
@@ -62,6 +62,7 @@ export function storeSitesFrom(rows: readonly StoreRow[], pending: PendingChange
       row: row.position.row,
       capacity: BUILDINGS[row.building.defId].storage,
       relocating: isRelocating(row.relocation.ticksLeft),
+      underConstruction: isUnderConstruction(row.construction.ticksLeft),
     }));
   return storeSitesOf(stores, pending);
 }

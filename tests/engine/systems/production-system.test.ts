@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SystemError, type IEntity } from 'sim-ecs';
-import { Building, InputBuffer, OutputBuffer, Production } from '../../../src/engine/components';
+import { Building, Construction, InputBuffer, OutputBuffer, Production } from '../../../src/engine/components';
 import { IdCounter, SnapshotStore, Stockpile } from '../../../src/engine/resources';
 import { ProductionSystem } from '../../../src/engine/systems/production-system';
 import { SnapshotSystem } from '../../../src/engine/systems/snapshot-system';
@@ -385,6 +385,41 @@ describe('ProductionSystem', () => {
     expect(systemErrors).toBe(0);
     expect(snap.state).toBe('housing');
     expect(snap.buffered).toBe(0);
+    expect(snap.progress).toBe(0);
+  });
+
+  // §2.7's table, exclusion 3 of 5 (task 2b): a construction site runs no
+  // recipe. Forester, not mill: its recipe's `inputs` are `{}`, so a FINISHED
+  // forester bags a batch by tick 3 with nothing else in play (no wheat to
+  // deliver, no starvation to wait out) — a pass here can only come from the
+  // construction guard itself, the same discriminating shape as 'a house
+  // never produces' above.
+  it('a site runs no recipe and produces nothing', async () => {
+    const save = { ...initialSave(), colonists: [], buildings: [], stockpile: {}, nextEntityId: 100 };
+    const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
+    const ids = getPrepResource(prep, IdCounter);
+    const site = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 5, row: 3, relocatingTicks: 0 });
+    site.getComponent(Construction)!.ticksLeft = BALANCE.buildTicks;
+    const siteId = site.getComponent(Building)!.id;
+    // Assigned directly to the row, bypassing `handleAssignWorker`'s own
+    // refusal (this task's fourth exclusion) — the scenario this guard has to
+    // survive regardless of how a worker ended up on a site's row, since a
+    // saved assignment predating this task could still name one.
+    spawnColonist(prep, ids, { id: 1, ageTicks: BALANCE.lifeBands.matureTicks, buildingId: siteId });
+    const world = await prep.prepareRun();
+    // Load-bearing the same way 'a house never produces' subscribes: without
+    // the guard running BEFORE `advanceBatches` reads `BUILDINGS[...].recipe!`,
+    // a crash there is swallowed by sim-ecs's scheduler and republished as a
+    // SystemError instead of failing the tick, while the pre-mutation snapshot
+    // still reads as if nothing happened.
+    let systemErrors = 0;
+    world.eventBus.subscribe(SystemError, () => { systemErrors++; });
+    for (let i = 0; i < 10; i++) await stepTick(world);
+
+    const snap = world.getResource(SnapshotStore).latest!.buildings.find((b) => b.id === siteId)!;
+    expect(systemErrors).toBe(0);
+    expect(snap.buffered).toBe(0);
+    expect(snap.batchActive).toBe(false);
     expect(snap.progress).toBe(0);
   });
 });

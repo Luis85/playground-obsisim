@@ -5,7 +5,9 @@ import { CAMP_SITE_ID, CAMP_TILE, haulTicksBetween, legPositionOf, type StoreSit
 import type { TileRef } from '../../../src/shared/placement';
 import { lifespanFor } from '../../../src/shared/population';
 import { BALANCE } from '../../../src/engine/content/balance';
-import { Age, Building, Colonist, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Relocation } from '../../../src/engine/components';
+import {
+  Age, Building, Colonist, Construction, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Relocation,
+} from '../../../src/engine/components';
 import { IdCounter, SnapshotStore, Stockpile } from '../../../src/engine/resources';
 import { CommandSystem } from '../../../src/engine/systems/command-system';
 import { PopulationSystem } from '../../../src/engine/systems/population-system';
@@ -503,6 +505,10 @@ describe('a remote depot is reachable by anyone', () => {
     enqueue(world, { type: 'constructBuilding', buildingDefId: 'storehouse', at: DEPOT });
     await step(2); // built, and the entity is in the world
     const depot = [...world.getEntities()].find((e) => e.getComponent(Building)?.defId === 'storehouse')!;
+    // A SITE since spec §2.5 — `ConstructionSystem` (Task 5) does not exist
+    // yet to finish it on its own, and this case is about a depot built
+    // during play being reachable, not about construction itself.
+    depot.getComponent(Construction)!.ticksLeft = 0;
     stockpile.refundAt(siteOf(depot), 'wheat', 30);
     await step(RUN);
     expect(produced(world)).toBeGreaterThan(0);

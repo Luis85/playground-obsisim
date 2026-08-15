@@ -91,6 +91,22 @@ function ticker(world: IRuntimeWorld) {
   };
 }
 
+/**
+ * `constructBuilding` now spawns a SITE (spec §2.5), and most of this file's
+ * cases predate that — they care about worker assignment, moving, hauling,
+ * anything BUT construction, and only need a FINISHED building to test it
+ * against. `ConstructionSystem`, the thing that would count a site down to 0,
+ * is a later task's and does not exist yet, so this reaches straight into the
+ * component the same way 'does not charge a site demolished earlier in the
+ * same drain against its replacement' above already does — finishing the site
+ * instantly rather than leaving every one of these cases blocked on a system
+ * this repo does not have.
+ */
+function finishSite(world: IRuntimeWorld, buildingId: number): void {
+  [...world.getEntities()].find((e) => e.getComponent(Building)?.id === buildingId)!
+    .getComponent(Construction)!.ticksLeft = 0;
+}
+
 async function setup(save: SaveGameV6 = houselessSave(), systems: readonly TColonySystemFactory[] = [CommandSystem, HaulSystem, SnapshotSystem]) {
   const prep = buildColonyPrepWorld({ save, systems });
   const world = await prep.prepareRun();
@@ -600,11 +616,29 @@ describe('CommandSystem', () => {
     });
   });
 
-  it('assigns and unassigns workers within slot limits', async () => {
+  // §2.7's table, exclusion 4 of 5 (task 2b), and the one addition rather
+  // than an exclusion: a mill site carries its def's `workerSlots` (2) like
+  // any finished building, so `handleAssignWorker` would accept it today —
+  // the refusal below is new, not preserved. Forester, not mill: it has the
+  // same two worker slots and costs only wood, which `houselessSave`'s
+  // default stockpile (no planks) can actually afford.
+  it('a site cannot be assigned a worker', async () => {
     const { tick, dispatch, snapshot } = await setup();
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' }); // workerSlots: 2
+    await tick();
+    const buildingId = snapshot().buildings[0].id;
+    await dispatch({ type: 'assignWorker', buildingId });
+    expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'Forester is still under construction.' }]);
+    expect(snapshot().buildings[0].workers).toBe(0);
+    expect(snapshot().idleAdults).toBe(3); // nobody was actually moved
+  });
+
+  it('assigns and unassigns workers within slot limits', async () => {
+    const { world, tick, dispatch, snapshot } = await setup();
     await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
     await tick();
     const buildingId = snapshot().buildings[0].id;
+    finishSite(world, buildingId);
     await dispatch({ type: 'assignWorker', buildingId });
     expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Assigned a worker to Forester.' }]);
     await dispatch({ type: 'assignWorker', buildingId });
@@ -652,13 +686,14 @@ describe('CommandSystem', () => {
   });
 
   it('notices when assigning to a missing building or with no idle workers, or unassigning from an unstaffed one', async () => {
-    const { tick, dispatch, snapshot } = await setup();
+    const { world, tick, dispatch, snapshot } = await setup();
     await dispatch({ type: 'assignWorker', buildingId: 999 });
     expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'Building not found.' }]);
 
     await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
     await tick();
     const buildingId = snapshot().buildings[0].id;
+    finishSite(world, buildingId);
 
     // a real building nobody has been assigned to yet
     await dispatch({ type: 'unassignWorker', buildingId });
@@ -668,6 +703,7 @@ describe('CommandSystem', () => {
     await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
     await tick();
     const secondBuildingId = snapshot().buildings.find((b) => b.id !== buildingId)!.id;
+    finishSite(world, secondBuildingId);
 
     // 3 starting workers, 2 slots per forester: fill building 1 (2 workers),
     // send the last idle worker to building 2 (1/2 slots) -- one open slot
@@ -935,10 +971,11 @@ describe('CommandSystem', () => {
   });
 
   it('moves a building in place — same id, workers and batch intact, visible same tick', async () => {
-    const { tick, dispatch, snapshot } = await setup();
+    const { world, tick, dispatch, snapshot } = await setup();
     await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 5, row: 5 } });
     await tick();
     const buildingId = snapshot().buildings[0].id;
+    finishSite(world, buildingId);
     await dispatch({ type: 'assignWorker', buildingId });
     await dispatch({ type: 'moveBuilding', buildingId, to: { col: 9, row: 6 } });
     expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Moved the Forester.' }]);
@@ -1014,10 +1051,11 @@ describe('CommandSystem', () => {
   });
 
   it('never takes a building worker for hauling', async () => {
-    const { tick, dispatch, snapshot } = await setup();
+    const { world, tick, dispatch, snapshot } = await setup();
     await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
     await tick();
     const buildingId = snapshot().buildings[0].id;
+    finishSite(world, buildingId);
     await dispatch({ type: 'assignWorker', buildingId }, { type: 'assignWorker', buildingId });
     await dispatch({ type: 'assignHauler' }); // one idle worker left
     await dispatch({ type: 'assignHauler' }); // none left
@@ -1026,10 +1064,11 @@ describe('CommandSystem', () => {
   });
 
   it('assigning a building worker never poaches a hauler', async () => {
-    const { tick, dispatch, snapshot } = await setup();
+    const { world, tick, dispatch, snapshot } = await setup();
     await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
     await tick();
     const buildingId = snapshot().buildings[0].id;
+    finishSite(world, buildingId);
     // Turn every starting worker into a hauler (3 workers total)
     await dispatch({ type: 'assignHauler' });
     await dispatch({ type: 'assignHauler' });
@@ -1250,10 +1289,11 @@ describe('CommandSystem', () => {
   });
 
   it('a moved building stops producing for a distance-scaled downtime', async () => {
-    const { tick, dispatch, snapshot } = await setupWithProduction();
+    const { world, tick, dispatch, snapshot } = await setupWithProduction();
     await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 5, row: 4 } });
     await tick();
     const buildingId = snapshot().buildings[0].id;
+    finishSite(world, buildingId);
     await dispatch({ type: 'assignWorker', buildingId });
     await dispatch({ type: 'assignWorker', buildingId });
     for (let i = 0; i < 10; i++) await tick(); // it is genuinely producing

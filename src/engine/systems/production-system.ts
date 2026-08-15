@@ -1,11 +1,13 @@
 import { createSystem, queryComponents, Read, ReadResource, Write, WriteResource } from 'sim-ecs';
 import type { CostMap, RecipeDef, ResourceId } from '../../shared/content-types';
-import { relocatingIdsOf, type TileRef } from '../../shared/placement';
+import { isUnderConstruction, relocatingIdsOf, type TileRef } from '../../shared/placement';
 import { commuteFactor } from '../../shared/population';
 import { BALANCE, workerWorkPower } from '../content/balance';
 import { batchOutputUnits, BUILDINGS } from '../content/buildings';
 import { commuteTiles } from '../snapshot-builder';
-import { Building, Efficiency, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage } from '../components';
+import {
+  Building, Construction, Efficiency, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage,
+} from '../components';
 import { PendingChanges, ProductionLedger } from '../resources';
 
 /**
@@ -120,7 +122,7 @@ export const ProductionSystem = () => createSystem({
   ledger: WriteResource(ProductionLedger),
   buildings: queryComponents({
     building: Read(Building), position: Read(Position), production: Write(Production), input: Write(InputBuffer),
-    buffer: Write(OutputBuffer), relocation: Write(Relocation),
+    buffer: Write(OutputBuffer), relocation: Write(Relocation), construction: Read(Construction),
   }),
   workers: queryComponents({ job: Read(JobAssignment), efficiency: Read(Efficiency), coverage: Read(ToolCoverage), home: Read(Home) }),
   pending: ReadResource(PendingChanges),
@@ -160,7 +162,15 @@ export const ProductionSystem = () => createSystem({
       completeBatches(production, input, buffer, recipe, perBatch, ledger);
     };
 
-    for (const { building, production, input, buffer, relocation } of buildingRows) {
+    for (const { building, production, input, buffer, relocation, construction } of buildingRows) {
+      // A construction site provides none of its service yet (spec §2.5) —
+      // no batch has ever started, and a worker standing in one (unreachable
+      // through the assign command since this task, but not through a saved
+      // JobAssignment left dangling from before) must bank nothing. Checked
+      // BEFORE the relocating skip below: a site's `Relocation.ticksLeft` is
+      // always 0 (nothing has ever moved it), so a mutation to this guard
+      // alone cannot hide behind the relocating one.
+      if (isUnderConstruction(construction.ticksLeft)) continue;
       // A relocating building is out of action: its crew are carrying it, not
       // working. Haulers still collect from its buffer — goods already made
       // exist regardless of whether the crew is working.

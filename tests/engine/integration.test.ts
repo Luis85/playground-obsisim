@@ -1,9 +1,27 @@
 import { describe, expect, it } from 'vitest';
+import type { IRuntimeWorld } from 'sim-ecs';
+import { Construction } from '../../src/engine/components';
 import { SnapshotStore } from '../../src/engine/resources';
 import { createColonyWorld, initialSave } from '../../src/engine/world';
 import { BALANCE } from '../../src/engine/content/balance';
 import { enqueue as dispatch, stepTick } from './fixtures';
 import type { SaveGameV6 } from '../../src/shared/save';
+
+/**
+ * `constructBuilding` now spawns a SITE (spec §2.5), and this end-to-end
+ * fixture is about whether the two production chains bootstrap and hold
+ * steady, not about the construction system that gates a site's completion —
+ * `ConstructionSystem` is a later task's and does not exist yet. Finishing
+ * every standing site straight through its own component, once, right after
+ * the seven orders below have synced, is what keeps the rest of this test
+ * exercising the chains it always has.
+ */
+function finishEverySite(world: IRuntimeWorld): void {
+  for (const entity of world.getEntities()) {
+    const construction = entity.getComponent(Construction);
+    if (construction !== undefined) construction.ticksLeft = 0;
+  }
+}
 
 /**
  * `stepTick`, not a bare `world.step()` with the clock nudged by hand, which
@@ -80,6 +98,7 @@ describe('full colony integration', () => {
       { type: 'constructBuilding', buildingDefId: 'workshop' },
     );
     await run(world, 2); // construct, then entities appear
+    finishEverySite(world);
     const snapshot = () => world.getResource(SnapshotStore).latest!;
     const byDef = Object.fromEntries(snapshot().buildings.map((b) => [b.defId, b.id]));
     dispatch(

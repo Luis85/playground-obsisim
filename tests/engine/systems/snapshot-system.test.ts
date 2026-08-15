@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Building, OutputBuffer, Production } from '../../../src/engine/components';
+import { Building, Construction, OutputBuffer, Production } from '../../../src/engine/components';
 import { IdCounter, NoticeBoard, SnapshotStore, Stockpile } from '../../../src/engine/resources';
 import { HaulSystem } from '../../../src/engine/systems/haul-system';
 import { ProductionSystem } from '../../../src/engine/systems/production-system';
@@ -47,6 +47,37 @@ describe('SnapshotSystem', () => {
 
     expect(snapshot.colonists.map((w) => w.buildingId)).toEqual([buildingId, null]);
     expect(snapshot.colonists[0].toolTicks).toBe(10);
+  });
+
+  // §2.7's table, exclusion 5 of 5 (task 2b) — a PIN, not a change.
+  // `colonyWealth` sums the `Stockpile` ledger alone, and a site's delivered
+  // materials sit in an `InputBuffer`, which never enters that sum: the
+  // exclusion is structural already, on both counts this test names — not in
+  // the ledger the materials left (never added to `Stockpile` here) AND not in
+  // the building they have not become (the site is not finished, so nothing
+  // it holds is `stored` either). No production-code change backs this test;
+  // it exists to catch a FUTURE change that folds `InputBuffer` into the
+  // wealth sum without noticing a site is not a purchase.
+  it('a site is not counted as colony wealth', async () => {
+    const save = initialSave();
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
+    save.stockpile = { wood: 10 };
+    const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
+    const ids = getPrepResource(prep, IdCounter);
+    const site = spawnBuilding(prep, ids, {
+      defId: 'house', progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 0,
+      inputBuffer: { planks: 50 },
+    });
+    site.getComponent(Construction)!.ticksLeft = BALANCE.buildTicks;
+    const world = await prep.prepareRun();
+    await world.step();
+    const snapshot = world.getResource(SnapshotStore).latest!;
+
+    // 50 planks at value 3 would be 150 — dwarfing the 10 wood@1 below — so a
+    // wealth sum that reached into InputBuffer could not pass this by
+    // coincidence.
+    expect(snapshot.colonyWealth).toBe(10 * 1); // wood@1 alone
   });
 
   it('counts food standing in a storehouse toward meals per head', async () => {

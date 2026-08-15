@@ -2,14 +2,14 @@ import type { IRuntimeWorld } from 'sim-ecs';
 import type { ResourceId } from '../shared/content-types';
 import type { SavedColonist } from '../shared/save';
 import type { BuildingSnapshot, ColonistSnapshot } from '../shared/snapshot';
-import { relocatingIdsOf, type TileRef } from '../shared/placement';
+import { isUnderConstruction, relocatingIdsOf, type TileRef } from '../shared/placement';
 import { CAMP_TILE } from '../shared/haul';
 import { commuteFactor, mealsPerHead, stageOf } from '../shared/population';
 import { BALANCE, workerWorkPower } from './content/balance';
 import { MEAL_WEIGHTS } from './content/resources';
 import {
-  Age, Building, Efficiency, HaulTrip, Home, Hunger, InputBuffer, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage,
-  Colonist, WorkerSlots,
+  Age, Building, Construction, Efficiency, HaulTrip, Home, Hunger, InputBuffer, JobAssignment, OutputBuffer, Position, Production,
+  Relocation, ToolCoverage, Colonist, WorkerSlots,
 } from './components';
 import type { BuildingFacts } from './snapshot-buildings';
 import { buildingFactsOf, buildingSnapshotsOf } from './snapshot-buildings';
@@ -166,6 +166,19 @@ export function buildEntitySections(
   const deliveredById = new Map(workers.map((w): [number, number | null] => [
     w.id, deliveredWorkPowerOf(w, factorOf(w.id), relocatingIds),
   ]));
+  // Read ONLY by `beds.total` below: `BuildingSnapshot.state` cannot carry
+  // this boundary the way it carries `relocating` (a house or storehouse site
+  // reports `housing`/`storing` exactly like a finished one — see
+  // `buildingState` in snapshot-buildings.ts), so the published state alone
+  // cannot tell a bed-bearing site apart from a bed-bearing finished house.
+  // `constructionTicks` — optional exactly where `relocatingTicks` above is
+  // not, since `SnapshotSystem`'s own live query does not carry `Construction`
+  // (this function's OTHER caller, the post-step refresh, always does) —
+  // defaults to 0 (finished) wherever it is absent, the same reading an
+  // omitted field gets everywhere else in this file.
+  const underConstructionIds = new Set(
+    buildings.filter((b) => isUnderConstruction(b.constructionTicks ?? 0)).map((b) => b.id),
+  );
 
   for (const w of workers) {
     if (w.buildingId === null) continue;
@@ -215,12 +228,17 @@ export function buildEntitySections(
     homeless: workerSnaps.filter((c) => c.homeId === null).length,
     beds: {
       // Relocating houses are excluded, because homing and both admission
-      // gates already exclude them. Counting their beds here would let the
-      // Population view read "0 / 4 free" while the engine refuses a nomad
-      // for want of a bed — the display contradicting the rule it exists to
-      // explain. `total` therefore means beds you can actually sleep in
-      // tonight, which is the only number a player can act on.
-      total: buildingSnaps.filter((b) => b.state !== 'relocating').reduce((sum, b) => sum + b.beds, 0),
+      // gates already exclude them — and so, since spec §2.5, is a house that
+      // is still a construction site: homing and both gates refuse those too
+      // (population-handlers.ts's `unavailable`). Counting either one's beds
+      // here would let the Population view read spare capacity while the
+      // engine refuses a nomad for want of a bed — the display contradicting
+      // the rule it exists to explain. `total` therefore means beds you can
+      // actually sleep in tonight, which is the only number a player can act
+      // on.
+      total: buildingSnaps
+        .filter((b) => b.state !== 'relocating' && !underConstructionIds.has(b.id))
+        .reduce((sum, b) => sum + b.beds, 0),
       occupied: buildingSnaps.reduce((sum, b) => sum + b.occupants, 0),
     },
     // Spec 2.13's stage counts. Aggregated here beside the other cross-entity
@@ -363,6 +381,7 @@ export function gatherEntityFacts(world: IRuntimeWorld): EntityFacts {
         entity.getComponent(Relocation)!,
         entity.getComponent(InputBuffer)!,
         stockpile.siteJSON(building.id),
+        entity.getComponent(Construction)!,
       ));
       continue;
     }

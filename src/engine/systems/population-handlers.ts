@@ -34,6 +34,23 @@ export interface ShelterRow {
   row: number;
   /** A house in transit shelters nobody until it lands. */
   relocating: boolean;
+  /** A house that is still a construction site shelters nobody either
+   * (spec §2.5) — a hole in the ground has no beds regardless of what its
+   * def promises. Optional so a raw `ShelterRow` literal written before this
+   * task (a test fixture, `spareBeds`'s own doc example) still type-checks;
+   * `unavailable` below treats the absence exactly like `false`. */
+  underConstruction?: boolean;
+}
+
+/**
+ * A shelter offers no beds at all right now — mid-move or still a
+ * construction site. `freeBeds`, `settleExistingHome`, `spareBeds` and
+ * `shelterWithRoom` all read exactly this boundary, so it is one function
+ * rather than the same `||` written out four times where a fifth reader
+ * could copy three clauses and miss the fourth.
+ */
+function unavailable(shelter: ShelterRow): boolean {
+  return shelter.relocating || (shelter.underConstruction ?? false);
 }
 
 export interface PopulationContext {
@@ -211,7 +228,7 @@ function freeBeds(ctx: PopulationContext): Map<number, number> {
     // post-step sync — see PendingChanges above. Counting its beds would let
     // homing put the residents handleDemolishBuilding just evicted straight
     // back into a building that no longer exists.
-    if (shelter.relocating || ctx.pending.demolished.has(shelter.id)) continue;
+    if (unavailable(shelter) || ctx.pending.demolished.has(shelter.id)) continue;
     free.set(shelter.id, shelter.beds);
   }
   // Arrivals hold reserved beds too, and since Task 8 they genuinely occur: a
@@ -235,7 +252,7 @@ function settleExistingHome(row: ColonistRow, byId: ReadonlyMap<number, ShelterR
   const homeId = row.home.buildingId;
   if (homeId === null) return;
   const shelter = byId.get(homeId);
-  if (shelter === undefined || shelter.relocating) {
+  if (shelter === undefined || unavailable(shelter)) {
     row.home.buildingId = null;
     return;
   }
@@ -315,7 +332,7 @@ export function rehome(ctx: PopulationContext): void {
  */
 export function spareBeds(shelters: readonly ShelterRow[], population: number, pending: PendingChanges): number {
   const total = shelters
-    .filter((s) => !s.relocating && !pending.demolished.has(s.id))
+    .filter((s) => !unavailable(s) && !pending.demolished.has(s.id))
     .reduce((sum, s) => sum + s.beds, 0);
   return total - population - pending.arrivals.length;
 }
@@ -341,9 +358,9 @@ export function shelterWithRoom(
     if (home.buildingId !== null) spokenFor.set(home.buildingId, (spokenFor.get(home.buildingId) ?? 0) + 1);
   }
   for (const shelter of [...shelters].sort((a, b) => a.id - b.id)) {
-    // Both exclusions, or a nomad drained on the same tick as a demolition
-    // gets a bed in a house that vanishes at the sync.
-    if (shelter.relocating || pending.demolished.has(shelter.id)) continue;
+    // All three exclusions, or a nomad drained on the same tick as a
+    // demolition gets a bed in a house that vanishes at the sync.
+    if (unavailable(shelter) || pending.demolished.has(shelter.id)) continue;
     if ((spokenFor.get(shelter.id) ?? 0) < shelter.beds) return shelter.id;
   }
   return null;

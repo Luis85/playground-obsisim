@@ -5,7 +5,7 @@ import type { StoreSite } from '../../shared/haul';
 // the same sentence beside its disabled button before the click, and one list
 // beside the union it explains is what keeps the two from drifting apart.
 import { nomadBlocker, NOMAD_REJECTIONS, SALT, spreadFor, type LifeStage, type NomadGate } from '../../shared/population';
-import type { TileRef } from '../../shared/placement';
+import { isUnderConstruction, type TileRef } from '../../shared/placement';
 import { BALANCE } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
 import { Building, Construction, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Relocation, WorkerSlots } from '../components';
@@ -147,6 +147,15 @@ export function handleAssignWorker(ctx: CommandContext, command: Extract<Command
   const found = findBuilding(ctx, command.buildingId);
   if (found === null) {
     ctx.notices.reject('Building not found.');
+    return;
+  }
+  // ADDED, not preserved (spec §2.5): a site carries its def's `workerSlots`
+  // like any finished building — a mill site accepts two — so without this a
+  // colonist could be assigned into a hole in the ground and stand there
+  // doing nothing, since it has no builder role yet and ProductionSystem's
+  // own site guard makes that silent rather than visible.
+  if (isUnderConstruction(found.construction.ticksLeft)) {
+    ctx.notices.reject(`${BUILDINGS[found.building.defId].name} is still under construction.`);
     return;
   }
   let assigned = 0;

@@ -120,6 +120,24 @@ function dispatchMixedDrain(engine: GameEngine, snap: Snapshot, recruitFirst: bo
   for (const command of drain) engine.dispatch(command);
 }
 
+/**
+ * `constructBuilding` now spawns a SITE (spec §2.5), and `ConstructionSystem`
+ * — the thing that would count one down to 0 — is a later task's, not built
+ * yet. `dispatchMixedDrain` above constructs a house it does not otherwise
+ * care about (its own point is the relocate/recruit/assign/demolish
+ * interaction); finishing it straight through the component, the same way
+ * `command-system.test.ts`'s own `finishSite` does, keeps a second drain's bed
+ * arithmetic exactly what it always was instead of quietly losing a house's
+ * worth of capacity to a site that will never complete on its own.
+ */
+function finishEverySite(engine: GameEngine): void {
+  const world = (engine as unknown as { world: IRuntimeWorld }).world;
+  for (const entity of world.getEntities()) {
+    const construction = entity.getComponent(Construction);
+    if (construction !== undefined) construction.ticksLeft = 0;
+  }
+}
+
 describe('isLoadableSave', () => {
   it('accepts a fresh initial save', () => {
     expect(isLoadableSave(initialSave())).toBe(true);
@@ -243,6 +261,7 @@ describe('isLoadableSave', () => {
           // assertion is about the command being accepted, not the wording.
           demolished: said(/(Demolished|Cancelled) the/),
         }).toEqual({ built: true, joined: true, moved: true, assigned: true, demolished: true });
+        finishEverySite(engine);
         // Past the recruit cooldown before the second drain, so its nomad is
         // gated on beds — the thing under test — and not on patience.
         for (let i = 0; i < BALANCE.recruitCooldownTicks + 1; i++) await step();
@@ -1671,6 +1690,11 @@ describe('live-world projections agree', () => {
     const engine = await GameEngine.create(save);
     engine.dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
     await engine.stepOnce();
+    // A SITE since spec §2.5, and `ConstructionSystem` (the thing that would
+    // finish one) is a later task's — finish it straight through the
+    // component so the assignment right below succeeds the way this whole
+    // describe block has always relied on.
+    finishEverySite(engine);
     // By defId, not buildings[0]: the starter house sorts ahead of the
     // forester, and assigning a worker to a shelter is refused outright.
     engine.dispatch({ type: 'assignWorker', buildingId: foresterOf(engine).id });

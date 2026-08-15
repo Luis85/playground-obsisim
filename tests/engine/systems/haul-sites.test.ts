@@ -10,7 +10,7 @@ import { PendingChanges } from '../../../src/engine/resources';
 // (CAMP_TILE), and none coinciding with each other — so a test that asserts
 // "site X is present/absent" cannot pass by accident of a shared value.
 function row(overrides: Partial<StoreSiteRow> = {}): StoreSiteRow {
-  return { id: 7, col: 11, row: 6, capacity: 60, relocating: false, ...overrides };
+  return { id: 7, col: 11, row: 6, capacity: 60, relocating: false, underConstruction: false, ...overrides };
 }
 
 describe('storeSitesOf', () => {

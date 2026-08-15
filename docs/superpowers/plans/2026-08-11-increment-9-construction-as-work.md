@@ -308,7 +308,9 @@ Five mutations, one per exclusion, each reddening exactly one test.
 
 **This task owns the in-tray refund, because this task is what makes a partly supplied site possible.** Task 2 already branched the *cost* refund (a site refunds none). The in-tray half could not be written there — nothing could reach a tray. It cannot wait for Task 7 either: the moment materials land in a site's `InputBuffer`, the existing rule destroys them on demolition ("whatever was waiting in either tray dies with the building", `placement-handlers.ts`), so Tasks 3 and 5 would ship a cancellation path that permanently loses everything delivered. Refund the delivered materials through `destinationFor` with the reservation-aware `heldAt`, and assert conservation here.
 
-Task 7 keeps what genuinely needs later tasks: the site-aware `demolitionNotice`, refusing to relocate a site, and the recovery property (cancel one site so another *completes* on the returned materials — which needs Task 5's countdown).
+**The notice's in-tray half ships with the refund, here.** Task 2 already made a cancelled site stop claiming a cost refund. What `demolitionNotice` still does is describe a demolished building's trays as *lost* — true for a finished building, and the exact inverse of the truth for a site the moment this task lets materials reach one. Deferring it would give the Task 3 to Task 6 commits a false receipt while the ledger conserves correctly, which is the OBS-4-07 shape with the sign flipped and is why the cost half moved too. Assert the notice text alongside the refund: the ledger assertions all pass while the player is told the opposite of what happened.
+
+Task 7 keeps what genuinely needs later tasks: refusing to relocate a site, and the recovery property (cancel one site so another *completes* on the returned materials — which needs Task 5's countdown).
 
 **`haul-claims.ts` is where the resource filter lives**, and neither of the other two files can recover a per-resource figure once `Claims.input` has returned its aggregate. Omitting it leaves wood in flight consuming a site's plank room, which is exactly the defect the interface note below describes and the concurrent-material fixture is written to catch.
 
@@ -394,6 +396,18 @@ it('cancelling a partly supplied site refunds only what arrived', async () => {
   // Without this, Tasks 3 and 5 ship a cancellation that destroys every
   // delivered material, which is the conservation break this increment exists
   // to close, arriving inside the task that opens the delivery path.
+});
+
+it('cancelling a partly supplied site says what actually happened', async () => {
+  // The NOTICE, asserted on its text, and it ships with the refund above rather
+  // than four tasks later. It must not describe the returned materials as lost —
+  // the inverse of the truth for a site the moment anything can reach a tray.
+  // OBS-4-07 exists because a notice said "cost refunded" while goods were
+  // deleted; this is that defect with the sign flipped, and every ledger
+  // assertion above passes while the player is told the opposite of the truth.
+  //
+  // The cost half of this notice already landed in Task 2. Extend it, do not
+  // replace it, and leave the finished-building wording alone.
 });
 
 it('a mill site receives its full 30-unit cost', async () => {
@@ -513,9 +527,9 @@ Mutations: count down regardless of materials; complete at `ticksLeft === 1`; re
   | a site | **no** — nothing was paid | **refunded** via `refundAt` |
 
 - Demolishing a site refunds its delivered materials through `destinationFor` with the reservation-aware `heldAt` — **landed in Task 3, verify rather than rewrite.**
-- **`demolitionNotice`'s COST half already landed in Task 2** — a cancelled site no longer claims a refund it never got. It moved for the same reason the refund branch did: the false receipt appeared the moment payment was removed, and three separate reviews flagged it. What is left here is the **in-tray half** — a cancelled site's delivered materials come *back*, and the notice still describes a demolished building's trays as lost. Verify the cost half rather than rewriting it; add the returned-materials clause.
+- **`demolitionNotice` is DONE — both halves, and neither is yours.** The cost half landed in Task 2 (a cancelled site stopped claiming a refund it never got, the moment payment was removed) and the in-tray half in Task 3 (a site's delivered materials come back, so describing them as lost inverted the truth the moment anything could reach a tray). Each moved to sit with the behaviour it describes. **Verify both and stop and report if either is missing — do not rewrite them.**
 
-  The rest of this bullet is why that half matters, and this is OBS-4-07 repeating rather than a cosmetic edit. It opens with a hardcoded `` `Demolished the ${name} — cost refunded` `` and describes the in-tray as *lost* — for a site, both halves are exactly backwards: no cost is refunded and the materials come back. OBS-4-07 is filed against precisely this failure, a notice claiming "cost refunded" while goods were silently deleted, and shipping the inverse of it here would be the same defect with the sign flipped.
+  The rest of this bullet is why they mattered, and it is OBS-4-07 repeating rather than a cosmetic edit. It opens with a hardcoded `` `Demolished the ${name} — cost refunded` `` and describes the in-tray as *lost* — for a site, both halves are exactly backwards: no cost is refunded and the materials come back. OBS-4-07 is filed against precisely this failure, a notice claiming "cost refunded" while goods were silently deleted, and shipping the inverse of it here would be the same defect with the sign flipped.
 - `handleMoveBuilding` **refuses a site**, with a notice (§2.6, §2.12). **Task 8 depends on this and must not be reordered ahead of it:** its cross-field save invariant rejects a record carrying both countdowns on the grounds that the engine can never write one. Until this refusal lands, the engine *can* — order a building, wait for the site, move it, and both countdowns run at once. The guard would then be rejecting saves the engine itself produced. Between Task 2 and here the state is reachable and harmless (nothing consumes it, and `ConstructionSystem` does not exist before Task 5); from here on it is unreachable, which is what makes Task 8's rejection correct rather than punitive.
 
 - [ ] **Step 1: Write the failing tests**
@@ -547,13 +561,10 @@ it('demolishing a FINISHED building still refunds its cost', async () => {
   // before this one. Without it the branch can be written as "never refund".
 });
 
-it('cancelling a partly supplied site says what actually happened', async () => {
-  // The NOTICE, asserted on its text. It must not claim a cost refund and must
-  // not describe the returned materials as lost. OBS-4-07 exists because a
-  // notice said "cost refunded" while goods were deleted; shipping its inverse
-  // here is the same defect with the sign flipped, and the ledger assertions
-  // above all pass while the player is told the opposite of the truth.
-});
+// 'cancelling a partly supplied site says what actually happened' is ALREADY
+// GREEN — the notice's cost half landed in Task 2 and its in-tray half in Task 3,
+// each with the behaviour it describes. Re-run it. Do not rewrite it, and stop
+// and report if it is missing.
 
 it('a finished building is unchanged by this', async () => {
   // The asymmetry is deliberate (§2.6). Pin the existing behaviour so a future

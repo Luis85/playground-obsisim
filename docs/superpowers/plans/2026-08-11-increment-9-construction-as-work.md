@@ -126,6 +126,8 @@ it('COMPONENT_TYPES includes Construction', () => {
   ```
 
   Derived from live components at every call, stored nowhere, reserving nothing. Deliberately conservative by the amount in transit — a picked-up load has left `Stockpile` and not yet reached `held`, so it is counted twice against the player. That is the safe direction, and increment 10 deletes the check entirely.
+
+  **It is an ORDER-TIME check and guarantees nothing about completion** (§2.3). It writes nothing down, so a trip already dispatched to fetch wood for a sawmill still has that wood in `colonyStock` when the check reads it, and an accepted site can be left short a few ticks later. **Do not fix this with a reservation** — reserving strongly enough to guarantee completion would mean holding materials against meals. The queue can stall; it is bounded, and cancellation recovers it.
 - The id-exhaustion and tile checks stay, and stay **before** the spawn — neither is recoverable later, and the affordability check joins them there.
 
 - [ ] **Step 1: Write the failing tests**
@@ -156,8 +158,14 @@ it('the SECOND of two orders sharing one building\'s materials is refused', asyn
   // ledger twice.
   //
   // Without this, increment 9 ships the broken queue it claims belongs to
-  // increment 10, and §2.4's "slow rather than broken" is simply false.
+  // increment 10, and §2.4's bounded-queue claim is simply false.
 });
+
+// NO test that an accepted site is GUARANTEED to complete. §2.3 is explicit
+// that the check writes nothing down, so goods it counted can leave for a
+// sawmill or a meal before a hauler collects them. Task 11 measures how often
+// that happens; asserting it cannot would be asserting a guarantee this
+// increment deliberately does not make.
 
 it('a site occupies its tile', async () => {
   // A second building cannot be placed on it. The site is an obstruction from
@@ -603,11 +611,22 @@ it('a countdown saved under a larger buildTicks is clamped to the current one', 
   underConstruction, not relocating or waitingForInput'* is a test of this task.
 - **A site publishes what it still needs, per material** — "needs 14 wood". Not a replacement for the affordability refusal (Task 2 keeps that): it is the only way to tell a site that is waiting from a site that is stuck, several minutes after the order, once meals and other builds have spent the ledger.
 - The Economy view names a **build backlog** beside the input and output backlogs.
-- **The affordability gates STAY, all four of them.** `BuildPalette.vue:28`, `WorldView.vue:66`, `BuildingsView.vue:70` and the `affordableDefs` getter at `game-store.ts:172` keep gating exactly as they do today, because Task 2 keeps the engine check they mirror. Removing them is increment 10's first task. Doing it here would leave the UI permitting an order the engine then refuses, which is worse than either end alone.
+- **The affordability gates STAY — and `affordableDefs` must become CUMULATIVE to match Task 2.** The three views keep gating, but the getter behind them cannot stay as it is: it compares each def against `snapshot.stockpile` alone (`game-store.ts:172`), and Task 2 deliberately leaves that stock untouched at order time. So after one house is ordered against exactly one house's materials, all three surfaces keep offering a second while the engine now refuses it — the UI promising what the engine denies, the mirror image of the failure increment 10's Task 1 exists to prevent.
+
+  Subtract outstanding site demand, summed from the per-material shortfalls the row above already publishes. No new engine field. **The gate and the refusal must come from one rule**, and the fixture that proves it has a site already queued. Removing the gates altogether is increment 10's first task, not this one's.
 
 - [ ] **Step 1: Find the state surfaces before writing anything**
 
 `grep -rn "relocating" src/app` — every place that special-cases the relocating state is a place that probably needs the construction one. Pre-flight the brief against the real files.
+
+```ts
+it('the palette refuses a second house once one is queued against the same materials', async () => {
+  // THE UI HALF of acceptance criterion 5, and it fails against today's
+  // affordableDefs. Order one house against exactly one house's materials;
+  // published stock is UNCHANGED (Task 2), so a getter reading stock alone
+  // still says affordable while the engine refuses. Assert all three surfaces.
+});
+```
 
 **Do not grep for `affordableDefs` looking for work here.** It is untouched this increment; the four surfaces are enumerated above only so that increment 10 inherits a list that has already been checked against the code.
 
@@ -672,6 +691,7 @@ it('a scenario that COMPLETES a supplied site reports conservationError === 0', 
 
 - [ ] **Step 1: The build time sweep** — at least three values of `buildTicks`, on a fixture where delivery is fast and one where it is slow. The question is whether the countdown does anything the delivery leg does not already do. If it is invisible next to the walk, say so.
 - [ ] **Step 2: Does build time want to scale with cost?** A house and a workshop take the same time at a flat constant. Build several of each and report whether flat reads as wrong.
+- [ ] **Step 2b: Does a bounded queue actually stall?** §2.3's check is order-time only, so goods it counted can leave for a producer or a meal before a hauler collects them. Run a queue alongside a hungry colony and a staffed producer competing for the same resource; report how often an accepted site is left short and for how long. If it is routine, the check buys less than this increment claims — which increment 10 needs to know before it removes the check.
 - [ ] **Step 3: How bad is the round-robin?** N sites ordered at once, at one hauler and at four, reporting the completion *curve*. **This measurement sizes increment 10; it is not a pass/fail.** §2.4 predicts a flat curve — everything finishing at once, late — and the question is how flat, and at what N it starts to hurt. A reading of "three is fine, six is miserable" is the most valuable thing this task can produce.
 
   **Do not fix what this finds.** The ordering rule is specified, reviewed and waiting in increment 10's plan; reaching for it here would ship the change this split exists to separate, and unmeasured.

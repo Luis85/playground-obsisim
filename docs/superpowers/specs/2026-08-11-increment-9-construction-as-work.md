@@ -222,10 +222,29 @@ it would mean reaching for `claims.input` from the command handler, which is
 dispatch state that has no business there. Increment 10 deletes the whole check,
 so the drift has a short life.
 
-**What this buys, stated exactly.** Every site in the queue is fundable from
-present stock. That is what makes §2.4's round-robin *slow* rather than *broken*,
-and it is the sentence the whole split rests on — without a cumulative check it
-is simply false.
+**What this buys, stated exactly — and it is an ORDER-TIME guarantee, not a
+completion one.** At the moment each order is accepted, the colony holds enough
+for it and for every site already queued. That is the whole of the claim.
+
+**It does not survive contact with the rest of the colony, and that is not
+fixable here.** The check writes nothing down, so goods it counted can leave for
+another consumer before a hauler collects them: a trip already dispatched to
+fetch six wood for a sawmill has not yet called `takeAt`, so that wood is still in
+`colonyStock` when the check reads it, and vanishes from under the accepted site
+a few ticks later. Producer dispatches after acceptance do the same.
+
+**Reserving would not close it either**, which is why this is a relaxed claim
+rather than a missing feature. Colonists eat. Any reservation strong enough to
+guarantee a site completes would have to hold materials against meals, and a
+colony that starves its people to finish a warehouse is a worse game than one
+whose build queue occasionally stalls.
+
+So the honest statement is: **a queue can stall under contention, it is bounded,
+and it is recoverable.** Bounded because the check caps it at what the colony held
+when the orders were placed — not at nothing, which is what a request model
+allows. Recoverable because cancelling a site refunds its materials in full and
+they re-enter the ordinary supply path (§2.6, and Task 7 tests exactly that).
+§4.1 reports whether it happens in practice rather than leaving it as a worry.
 
 **Why not a reservation.** It is the third option — check *and* hold the
 materials — and it is declined for both increments: it would be the fifth claim
@@ -249,16 +268,24 @@ houses at once and they fill round-robin: each one's last material arrives last,
 and none of them finishes appreciably before the others.
 
 **Why that is acceptable here and would not be under a request model.** §2.3's
-check is cumulative, so a queue can never contain more than present stock funds.
-Three sites ordered together are three sites the colony can pay for *at once*, so
-every one of them completes — round-robin makes them finish *late and together*
-rather than *early and in order*. Slow is a fair cost for an increment whose
-subject is that materials are carried at all.
+check is cumulative, so a queue never contains more than the colony held when it
+was ordered. Three sites ordered together are three the colony could pay for at
+once; round-robin makes them finish *late and together* rather than *early and in
+order*. Slow is a fair cost for an increment whose subject is that materials are
+carried at all.
 
-**This rests entirely on the check being cumulative.** With an instantaneous one,
-N sites can share one building's worth of materials, round-robin splits it, and
-none completes — the broken queue, inside increment 9. §2.3 says why the naive
-check does not survive the removal of `pay`.
+**The difference from a request model is bounded-versus-unbounded, not
+stall-versus-no-stall.** §2.3 is explicit that an accepted site can still be left
+short when another consumer spends the goods first, so a queue here *can* stall.
+What it cannot do is start out impossible: twenty sites ordered against an empty
+ledger, round-robin, none ever finishing, is unreachable while the check exists
+and is the default under a request model. The recovery is the same in both —
+cancel a site, its materials return — which is why increment 9 tests that path
+(Task 7) and increment 10 leans on it.
+
+**And it rests on the check being cumulative.** With an instantaneous one, N sites
+share one building's materials from the very first tick and none completes. §2.3
+says why the naive check does not survive the removal of `pay`.
 
 Remove the check — increment 10 — and the same ordering stops being slow and
 starts being broken: a queue of twenty sites the colony cannot afford round-robins
@@ -548,6 +575,15 @@ constructionTicks: number;
   shortfall per material — "needs 14 wood" — because a site that is waiting is
   otherwise indistinguishable from a site that is stuck, and the player has no
   other way to tell which.
+- **`affordableDefs` must count the queue too, or the UI and the engine
+  disagree.** It compares each def against `snapshot.stockpile` alone
+  (`game-store.ts:172`), and §2.3 deliberately leaves that stock untouched at
+  order time — so after one house is ordered against exactly one house's
+  materials, all three surfaces still offer a second while the engine now refuses
+  it. The getter subtracts outstanding site demand, summed from the per-material
+  shortfalls the row above publishes, so no new engine field is needed. **The
+  gates and the refusal must be computed from the same rule**, and a fixture with
+  a site already queued is what proves they are.
 
   This is worth doing here even though §2.3 keeps the affordability check. The
   check tells the player they *could* pay at the moment they ordered; the
@@ -662,6 +698,10 @@ modes increment 8 added. Three bind unusually hard:
    case. Both orders must be attempted, and the fixture must not let a hauler
    reach a source in between — that is what distinguishes a cumulative check from
    a check that merely has not noticed yet.
+
+   **The UI must refuse the second order too.** `affordableDefs` reads the
+   published stockpile, which §2.3 leaves untouched at order time, so without
+   §2.10's change the palette offers what the engine rejects.
 6. **Cancelling a site refunds every material delivered to it**, and does not
    move `Delivered/t`.
 7. **OBS-5-03 closes.** Demolish-and-rebuild elsewhere now costs the full
@@ -692,6 +732,12 @@ Unmeasured, and §4.1 says so.
 - **Whether build time should scale with cost.** A house (15 wood, 5 planks) and
   a workshop (20 planks) take the same time at a flat constant. Measure a chain
   that builds several of each and report whether the flat rate reads as wrong.
+- **Whether a bounded queue actually stalls.** §2.3 accepts that goods counted at
+  order time can leave for another consumer before a hauler collects them. Run a
+  queue alongside a hungry colony and a staffed producer competing for the same
+  resource, and report how often an accepted site is left short, and for how
+  long. If the answer is "routinely", the order-time check is buying less than
+  this increment claims and increment 10 should know that before removing it.
 - **How bad the round-robin actually is.** N sites ordered simultaneously, at one
   hauler and at four, reporting the completion *curve*. This is the measurement
   that sizes increment 10 rather than a pass/fail: §2.4 predicts a flat curve —

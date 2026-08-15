@@ -13,6 +13,8 @@ import {
 import { buildSaveFromWorld } from '../../src/engine/game-engine';
 import { CommandSystem } from '../../src/engine/systems/command-system';
 import { HaulSystem } from '../../src/engine/systems/haul-system';
+import { ConstructionSystem } from '../../src/engine/systems/construction-system';
+import { StatsSystem } from '../../src/engine/systems/stats-system';
 import { SnapshotSystem } from '../../src/engine/systems/snapshot-system';
 import type { SavedColonist, SaveGameV6 } from '../../src/shared/save';
 import { isSaveGameV4, MAX_SAVED_ENTITIES } from '../../src/shared/save';
@@ -1946,5 +1948,25 @@ describe('buildColonyPrepWorld system order', () => {
 
   it('accepts ALL_SYSTEMS itself — the order production actually runs', () => {
     expect(() => buildColonyPrepWorld({ systems: ALL_SYSTEMS })).not.toThrow();
+  });
+
+  // Task 5: ConstructionSystem must run AFTER HaulSystem (a delivery landing
+  // this tick counts toward this tick's countdown) and BEFORE StatsSystem (a
+  // completion this tick is folded into the flows StatsSystem reads before
+  // clearing them). Pinned by name, not merely inherited from the generic
+  // subset tests above, so a mutation that moves ConstructionSystem's entry
+  // in ALL_SYSTEMS to either side of its two neighbours is caught here.
+  it('rejects ConstructionSystem scheduled before HaulSystem', () => {
+    expect(() => buildColonyPrepWorld({ systems: [ConstructionSystem, HaulSystem] }))
+      .toThrow(/HaulSystem runs after ConstructionSystem/);
+  });
+
+  it('rejects StatsSystem scheduled before ConstructionSystem', () => {
+    expect(() => buildColonyPrepWorld({ systems: [StatsSystem, ConstructionSystem] }))
+      .toThrow(/ConstructionSystem runs after StatsSystem/);
+  });
+
+  it('accepts ConstructionSystem between HaulSystem and StatsSystem', () => {
+    expect(() => buildColonyPrepWorld({ systems: [HaulSystem, ConstructionSystem, StatsSystem] })).not.toThrow();
   });
 });

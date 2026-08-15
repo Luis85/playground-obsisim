@@ -28,6 +28,7 @@ import { PopulationSystem } from './systems/population-system';
 import { EfficiencySystem } from './systems/efficiency-system';
 import { ProductionSystem } from './systems/production-system';
 import { HaulSystem } from './systems/haul-system';
+import { ConstructionSystem } from './systems/construction-system';
 import { StatsSystem } from './systems/stats-system';
 import { SnapshotSystem } from './systems/snapshot-system';
 
@@ -54,6 +55,7 @@ export const ALL_SYSTEMS: TColonySystemFactory[] = [
   EfficiencySystem,
   ProductionSystem,
   HaulSystem,
+  ConstructionSystem,
   StatsSystem,
   SnapshotSystem,
 ];

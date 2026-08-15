@@ -50,14 +50,23 @@ export function isStockpileValid(stockpile: SaveGameV7['stockpile']): boolean {
  * rule sees the pairing. Loading it gives a building whose two countdowns both
  * advance, with the relocation hidden behind `underConstruction` in the snapshot.
  *
- * A SITE CARRYING PRODUCTION STATE, and that half is worse. `ProductionSystem`
+ * A SITE CARRYING AN ACTIVE BATCH, and that half is worse. `ProductionSystem`
  * SKIPS a site rather than clearing its batch, so an impossible one sits frozen
  * for the whole countdown and then resumes at completion, yielding output the
  * site never consumed inputs for — goods minted from a hand-edited file,
- * through a path that looks like ordinary production. Both clauses are required:
- * a batch legitimately BEGINS at zero progress, so `batchActive` alone is a
- * reachable corrupt state, and idle progress is the same rule `isBuildingsValid`
- * already applies to a finished building.
+ * through a path that looks like ordinary production. `batchActive` is the
+ * clause with teeth, and it needs stating on its own: a batch legitimately
+ * BEGINS at zero progress, so `batchActive: true, progress: 0` is a reachable
+ * corrupt state that a `progress !== 0` test would wave through.
+ *
+ * The `progress === 0` half is DEFENCE IN DEPTH, not a live rejector, and is
+ * kept for the reason `migrateSaveToLatest`'s final guard call is: idle
+ * progress is already refused for EVERY building by the balance-independent
+ * invariant below ("stalled/idle buildings never bank progress"), so no
+ * guard-reaching record can fail this clause and not that one — which is also
+ * why no fixture can redden it alone. Retune that rule and this stops being
+ * redundant, at which point a site quietly banking progress is exactly the
+ * thing you want refused rather than discovered.
  *
  * REFUSED, not repaired, and that is the asymmetry this file exists for: no
  * BALANCE retune can produce either record, so there is no "current" value to

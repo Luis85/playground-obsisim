@@ -645,12 +645,17 @@ describe('migrateSaveToLatest (v6 -> v7)', () => {
   it('a migrated v6 colony restores with every building in service', async () => {
     // The migration's zero has to reach the live component, not just the
     // record: a building restored under construction provides nothing.
-    const world = await createColonyWorld(prepareLoadedSave(v6WithAMill())!);
+    const prepared = prepareLoadedSave(v6WithAMill());
+    expect(prepared).not.toBeNull(); // or createColonyWorld falls back to initialSave() and this is vacuous
+    const world = await createColonyWorld(prepared!);
+    const ids: number[] = [];
     for (const entity of world.getEntities()) {
       const building = entity.getComponent(Building);
       if (building === undefined) continue;
+      ids.push(building.id);
       expect(entity.getComponent(Construction)!.ticksLeft, `building ${building.id}`).toBe(0);
     }
+    expect(ids.sort((a, b) => a - b)).toEqual([1, 2]); // the FIXTURE's colony, not a fresh one
   });
 
   it('does not mutate the v6 save it was handed', () => {

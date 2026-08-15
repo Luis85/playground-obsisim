@@ -1531,6 +1531,12 @@ describe('cross-field invariants a v7 save is REFUSED for, not repaired', () => 
     // is a reachable corrupt state and is the only shape that proves
     // `batchActive` itself is rejected — a guard written as `progress !== 0`
     // passes a mid-batch fixture while still admitting that record.
+    //
+    // The second fixture (`batchActive: false, progress > 0`) is pinned by the
+    // pre-existing balance-independent rule as well, which the control below
+    // states explicitly: a FINISHED building carrying idle progress is refused
+    // too. Deleting `isConstructionValid`'s own `progress === 0` clause
+    // therefore reddens nothing — see the comment there on why it is kept.
     const site = { id: 70, defId: 'mill' as const, col: 6, row: 1, buffer: {}, inputBuffer: {}, stored: {}, relocatingTicks: 0 };
     for (const production of [{ batchActive: true, progress: 0 }, { batchActive: false, progress: 4 }]) {
       const save = initialSave();

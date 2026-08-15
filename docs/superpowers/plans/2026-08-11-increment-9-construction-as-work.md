@@ -540,6 +540,8 @@ If nothing breaks, the deliverable is the suite and a commit message saying so. 
   `save.ts:220` already states the rule for exactly this case — `SaveGameV6` redeclares `buildings` rather than inheriting because "it is the one field whose record type moves, and the version literal has to move with it". So: introduce a frozen `SavedBuildingV6`, point `SaveGameV6.buildings` at it, leave `isSavedBuildingV6Shape` checking that shape, and let the *current* `SavedBuilding` carry the new field for v7.
 - Migration v6 → v7 sets it to **0 for every building**: every building in a v6 save is finished by construction, so the migration is total and needs no heuristic.
 - **The save guard needs a CROSS-FIELD invariant, which no per-field check can express** (§2.10). `handleMoveBuilding` refuses to relocate a site, so the two countdowns are mutually exclusive in every save the engine writes — but a hand-edited or corrupt v7 file can carry `constructionTicks > 0` *and* `relocatingTicks > 0`, and `isTickCounter` accepts each of them independently. Loading it gives a building whose two countdowns both advance, with the relocation hidden behind `underConstruction` in the snapshot. Reject the record. This is the same class as the guard's existing colonist-reference rules: a per-record check that no single field can express.
+
+  **The same invariant must cover production state, and that half is worse.** `SavedBuilding` carries `progress: number` and `batchActive: boolean`, guarded only per-field (`save.ts:236-237` — `Number.isFinite` and `typeof === 'boolean'`), so `constructionTicks > 0` alongside `batchActive: true` passes every check here. Task 2b's exclusion makes `ProductionSystem` *skip* a site rather than reject its state, so the impossible batch sits frozen for the whole countdown and then **resumes at completion and yields output the site never consumed inputs for** — goods minted from a hand-edited file, through a path that looks like ordinary production. Require an under-construction building to have idle production state (`batchActive === false`, and `progress` at zero), and refuse the record otherwise.
 - **No new field for the materials.** `SavedBuilding.inputBuffer` already round-trips.
 - The bump is self-policing — `SaveGameV6.version` is the literal `6`, so raising the constant fails typecheck at both producers until the type is updated.
 
@@ -600,6 +602,16 @@ it('a record with BOTH countdowns positive is rejected', async () => {
   // The CROSS-FIELD invariant. Every per-field guard accepts this record —
   // isTickCounter passes on both numbers independently — so only a per-record
   // check reddens it. Assert the save is REFUSED, not repaired.
+});
+it('a site carrying an ACTIVE production batch is rejected', async () => {
+  // The second half of the same invariant, and the one with a goods-minting
+  // consequence rather than a display one. constructionTicks > 0 with
+  // batchActive: true passes every per-field guard; ProductionSystem SKIPS a
+  // site rather than clearing it, so the batch thaws at completion and produces
+  // output against inputs that were never consumed. Assert REFUSED, not
+  // repaired — and use a fixture with progress mid-batch, so an implementation
+  // checking only `progress === 0` and an implementation checking only
+  // `batchActive` are told apart.
 });
 
 // PREREQUISITE for the clamp test below: `BuildingSnapshot` must publish the

@@ -222,9 +222,34 @@ here.
 
 ### 2.6 Cancellation, and what happens to delivered materials
 
-**Demolishing a site refunds every material delivered to it**, through
-`refundAt` — not `addAt`, because nothing was produced and a cancelled build must
-not inflate `Delivered/t` (§2.4 of increment 7's flow table, last row).
+**Cancelling a site refunds its delivered materials and NOT its def's cost**, and
+getting only the first half right mints goods out of nothing.
+
+`handleDemolishBuilding` today refunds every entry in `def.cost` unconditionally
+(`placement-handlers.ts:144`), which was correct while §2.3's `pay(def.cost)`
+charged it at order time. **§2.3 removes that payment.** So without a branch here:
+
+- cancelling a site with **nothing delivered** refunds a cost the colony never
+  paid — goods created from nothing;
+- cancelling a **partly supplied** site refunds the full cost *and* the in-tray —
+  the same goods twice.
+
+Both are conservation failures, and conservation is the invariant this increment
+is most able to break. The rule:
+
+| demolished | cost refund | in-tray |
+| --- | --- | --- |
+| a finished building | **yes**, unchanged | destroyed, unchanged (increment 7 §2.7) |
+| a site | **no** — nothing was paid | **refunded** — it is the only thing that was spent |
+
+The two rows are one branch on `isUnderConstruction` in an existing loop, not a
+new path. The zero-delivery cancellation is the fixture that catches the minting
+case, and it is the one an implementation reading only "sites refund their
+materials" will not think to write.
+
+The site refund goes through `refundAt` — not `addAt`, because nothing was
+produced and a cancelled build must not inflate `Delivered/t` (§2.4 of increment
+7's flow table, last row).
 
 **This is deliberately asymmetric with a finished building's in-tray**, which
 increment 7 §2.7 destroys on demolition, and the asymmetry is the point rather
@@ -361,13 +386,32 @@ constructionTicks: number;
   `unload` do (§2.2). The round-trip fixture must hold **more than
   `inputBufferCap`**, or it passes against the unfixed clamp and proves nothing —
   which is why the field is not the problem and the fixture value is.
-- **`usableBeds` must exclude an unfinished house** (`restore.ts:118`). Its
-  predicate is `count > 0 && b.relocatingTicks === 0`, and relocation is
-  currently the only way a house can exist without being usable. A save
-  containing an unfinished house and homeless colonists otherwise seats them in
-  it at load, and the **paused initial snapshot reports them housed** until the
-  first tick evicts them — a contradiction the player can see in a single frame,
-  which is the same standard §2.3 of increment 7 applies to homing.
+- **`clampedInputBuffer` is called from TWO restore projections**, and fixing one
+  leaves them disagreeing. `buildingComponents` (`spawn.ts:140`) builds the live
+  entity; `buildInitialSnapshot` (`initial-snapshot.ts:118`) builds the **paused
+  snapshot the player sees before the first tick**. Fix only the first and a
+  restored 30-unit site holds 30 while the screen says 12 until something
+  refreshes it. Both must be site-aware, and the fixture must assert on the
+  paused snapshot.
+- **"An unfinished house has no beds" has FOUR call sites**, not one. This is what
+  the §2.7 table's `relocatingTicks === 0` row is for, and a grep finds them all:
+
+  | site | what it feeds |
+  | --- | --- |
+  | `command-system.ts:105` | `CommandContext.shelters` — runtime homing |
+  | `population-system.ts:72` | `PopulationContext` — runtime rehome |
+  | `restore.ts:123` (`usableBeds`) | load-time seating; without it a save with an unfinished house and homeless colonists seats them, and the **paused snapshot reports them housed** until the first tick evicts them |
+  | `save-guard.ts:95` (`colonistTargets`) | whether a save's `homeId` reference is even loadable |
+
+  `save-guard.ts` needs the workplace half too: `colonistTargets` adds every
+  building with a recipe to `workplaces` regardless of construction, so a
+  hand-edited v7 save can assign a worker to a site and pass the guard.
+- **One hit of that proxy is deliberately left alone**, and it is recorded here so
+  the next reader does not "fix" it: `save-migration.ts:156` filters
+  `defId === 'house' && relocatingTicks === 0` while seeding v5 homes. It needs no
+  construction term **because the v6 → v7 migration is total** — every building in
+  a pre-v7 save is finished, so no migration step can ever see an unfinished one.
+  That is the same fact that makes the migration lossless, used twice.
 
 ### 2.10 Snapshot and surfaces
 

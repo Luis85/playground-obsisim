@@ -194,9 +194,16 @@ it('a site accepts a delivery larger than inputBufferCap', async () => {
   // two limits apart.
 });
 
-it('a mill site reaches its full 30-unit cost and completes', async () => {
+it('a mill site receives its full 30-unit cost', async () => {
   // The end-to-end proof that all four changes compose. This is the test that
   // fails if any single one of them is missed, and the one to write FIRST.
+  //
+  // It asserts the in-tray reaches 30 and STOPS THERE. It must NOT assert
+  // completion: ConstructionSystem does not exist until Task 5, and this plan's
+  // own preamble says sites never finish between Tasks 2 and 5 — so a
+  // completion assertion here cannot go green, and `check:all` is required
+  // green at the end of every task. An earlier draft asserted completion and
+  // was self-contradictory. Task 5 carries the completion half.
 });
 ```
 
@@ -303,8 +310,10 @@ Mutations: count down regardless of materials; complete at `ticksLeft === 1`; re
 §2.7's table. **Six exclusions, six fixtures** — this is the task the compound-boolean rule was written for.
 
 **Files:**
-- Modify: `src/engine/systems/population-handlers.ts` (rehome), `src/engine/systems/haul-sites.ts` (`storeSitesOf`), `src/engine/systems/production-system.ts`, `src/engine/systems/command-handlers.ts` (worker assignment), `src/engine/snapshot-buildings.ts`
+- Modify: `src/engine/systems/population-handlers.ts` (rehome), `src/engine/systems/command-system.ts:105` and `src/engine/systems/population-system.ts:72` (the two runtime shelter-row builders), `src/engine/systems/haul-sites.ts` (`storeSitesOf`), `src/engine/systems/production-system.ts`, `src/engine/systems/command-handlers.ts:140` (worker assignment), `src/engine/snapshot-buildings.ts`
 - Test: the matching suites
+
+**"An unfinished house has no beds" has four call sites**, two of them here and two in Task 8. `grep -rn "relocatingTicks === 0\|isRelocating(" src/` finds all four: `command-system.ts:105` and `population-system.ts:72` build the runtime shelter rows, while `restore.ts:123` and `save-guard.ts:95` are load-time. Fixing only the rehome path leaves a colonist seated in a site by whichever of the other three ran first.
 
 **The one that will be missed:** `pending.constructed` is folded into homing precisely so a colonist can be sheltered on the tick a house appears — `shelters` in `command-system.ts:107`, verified. That now shelters them in a hole in the ground. It is the only entry in the table where the *existing* behaviour is a deliberate same-tick optimisation rather than an incidental lookup.
 
@@ -339,15 +348,39 @@ Six mutations, one per exclusion, each reddening exactly one test.
 - Test: `tests/engine/systems/command-system.test.ts`
 
 **Interfaces:**
-- Demolishing a site **refunds every delivered material** via `refundAt`, resolved through `destinationFor` with the reservation-aware `heldAt`.
+- **The existing `def.cost` refund loop (`placement-handlers.ts:144`) must branch on construction state.** It refunds the full cost unconditionally, which was right while Task 2's `pay(def.cost)` charged it at order. With that payment gone, cancelling a site **mints the cost from nothing**, and cancelling a partly-supplied site refunds the cost *and* the in-tray — the same goods twice. Both are conservation failures.
+
+  | demolished | cost refund | in-tray |
+  | --- | --- | --- |
+  | a finished building | yes, unchanged | destroyed, unchanged |
+  | a site | **no** — nothing was paid | **refunded** via `refundAt` |
+
+- Demolishing a site refunds its delivered materials through `destinationFor` with the reservation-aware `heldAt`.
 - `handleMoveBuilding` **refuses a site**, with a notice (§2.6, §2.12).
 
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
+it('cancelling a site with NOTHING delivered refunds nothing', async () => {
+  // THE MINTING TEST, and the one an implementation reading only "sites refund
+  // their materials" will not think to write. Order a mill, demolish it before
+  // a single hauler arrives, assert the colony total is UNCHANGED. Against the
+  // unbranched loop this reports +20 wood +10 planks from nowhere.
+});
+
+it('cancelling a partly supplied site refunds only what arrived', async () => {
+  // The double-refund case. 6 wood delivered of 20: the total rises by 6, not
+  // by 26 and not by 20.
+});
+
 it('cancelling a site refunds what was delivered to it', async () => {
   // Assert the COLONY TOTAL, and separately that deliveredRate did NOT move —
   // refundAt not addAt. The total alone passes against addAt.
+});
+
+it('demolishing a FINISHED building still refunds its cost', async () => {
+  // The other side of the branch, and the regression guard for every increment
+  // before this one. Without it the branch can be written as "never refund".
 });
 
 it('a finished building is unchanged by this', async () => {
@@ -373,8 +406,16 @@ If nothing breaks, the deliverable is the suite and a commit message saying so. 
 ### Task 8: Save v7
 
 **Files:**
-- Modify: `src/shared/save.ts`, `src/shared/save-migration.ts`, `src/engine/game-engine.ts`, `src/engine/restore.ts`
-- Test: `tests/shared/save.test.ts`, `tests/shared/save-migration.test.ts`
+- Modify: `src/shared/save.ts`, `src/shared/save-migration.ts`, `src/engine/game-engine.ts`, `src/engine/restore.ts`, `src/engine/spawn.ts` (`clampedInputBuffer`), `src/engine/initial-snapshot.ts`, `src/engine/save-guard.ts`
+- Test: `tests/shared/save.test.ts`, `tests/shared/save-migration.test.ts`, `tests/engine/world.test.ts` (the paused-snapshot projection), `tests/engine/save-guard.test.ts`
+
+**Four files beyond the obvious two**, because "the save carries a new number" understates what restore touches:
+- `spawn.ts` — `clampedInputBuffer` clamps the live entity to `inputBufferCap`
+- `initial-snapshot.ts:118` — the **same clamp** on the paused snapshot, a *second* projection; fix one and a restored 30-unit site holds 30 while the screen says 12
+- `restore.ts:123` — `usableBeds`
+- `save-guard.ts:95` — `colonistTargets`, both halves: `shelters` gates on `relocatingTicks === 0`, and `workplaces` adds every recipe building regardless of construction, so a hand-edited v7 save can assign a worker to a site and pass the guard
+
+**One hit of the `relocatingTicks === 0` proxy is deliberately left alone:** `save-migration.ts:156` needs no construction term, because the v6 → v7 migration is total — every building in a pre-v7 save is finished, so no migration step can see an unfinished one. Record that in a comment rather than adding a term that can never fire.
 
 **Interfaces:**
 - `LATEST_SAVE_VERSION = 7`. `SavedBuilding` gains `constructionTicks: number`, guarded with `isTickCounter` — the same check `relocatingTicks` and `starvingTicks` use.

@@ -112,8 +112,10 @@ it('COMPONENT_TYPES includes Construction', () => {
 ### Task 2: Ordering creates a site
 
 **Files:**
-- Modify: `src/engine/systems/placement-handlers.ts`
+- Modify: `src/engine/systems/placement-handlers.ts`, **`src/engine/systems/command-system.ts`** (the `buildings` query), **`src/engine/systems/command-handlers.ts`** (`BuildingRow`, `CommandContext`)
 - Test: `tests/engine/systems/command-system.test.ts`
+
+**The cumulative check cannot be written from `placement-handlers.ts` alone**, and this is the trap in this task's file list. `command-system.ts:72` builds each row from `{ entity, building, slots, position, buffer, input, relocation }` — **no `Construction`** — so the handler cannot tell an unfinished site from a finished building that happens to hold inputs. Neither fallback works: counting `pending.constructed` sees only sites ordered this tick and misses every one from a previous tick, and counting every building with an in-tray reserves finished producers' stock forever. The component has to reach the row.
 
 **Interfaces:**
 - `handleConstructBuilding` **stops calling `ctx.stockpile.pay(def.cost)`**, spawns with `Construction(BALANCE.buildTicks)`, and its notice says *started* rather than *built*.
@@ -247,8 +249,10 @@ Five mutations, one per exclusion, each reddening exactly one test.
 **Without all four changes in this task, no material can ever reach a site and the feature does not work at all.** Three of them are outside `haul-dispatch.ts`, and a brief scoped to `needOf` alone — as an earlier draft of this plan was — ships a site that is offered materials and can never receive them.
 
 **Files:**
-- Modify: `src/engine/systems/haul-dispatch.ts` (`needOf`, `supplyCandidates`), `src/engine/systems/haul-system.ts` (`unload`)
-- Test: `tests/engine/systems/haul-dispatch.test.ts`, `tests/engine/systems/haul-system.test.ts`
+- Modify: `src/engine/systems/haul-dispatch.ts` (`needOf`, `supplyCandidates`), `src/engine/systems/haul-system.ts` (`unload`), **`src/engine/systems/haul-claims.ts`** (`Claims.input`, resource-aware — see below)
+- Test: `tests/engine/systems/haul-dispatch.test.ts`, `tests/engine/systems/haul-system.test.ts`, `tests/engine/systems/haul-claims.test.ts`
+
+**`haul-claims.ts` is where the resource filter lives**, and neither of the other two files can recover a per-resource figure once `Claims.input` has returned its aggregate. Omitting it leaves wood in flight consuming a site's plank room, which is exactly the defect the interface note below describes and the concurrent-material fixture is written to catch.
 
 **Interfaces:**
 - `needOf` branches on `isUnderConstruction`: a site's wanted map is `BUILDINGS[defId].cost` and its per-resource room is `cost[r] − held[r]`, **not** `BALANCE.inputBufferCap`.
@@ -628,7 +632,7 @@ it('the palette refuses a second house once one is queued against the same mater
 });
 ```
 
-**Do not grep for `affordableDefs` looking for work here.** It is untouched this increment; the four surfaces are enumerated above only so that increment 10 inherits a list that has already been checked against the code.
+**Do grep for `affordableDefs`** — the getter changes in this task (see above), even though the three view-level gates do not. What increment 10 inherits is the removal of the gates; what this task owes is a getter that refuses what the engine refuses.
 
 - [ ] **Step 2: Tests, implement, mutation-test the smoke checks, commit**
 

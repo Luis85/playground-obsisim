@@ -182,15 +182,30 @@ it('a storehouse under construction is not a store destination', async () => {
 });
 it('a site runs no recipe and produces nothing', async () => {});
 it('a site cannot be assigned a worker', async () => {});
-it('a site reports underConstruction, not relocating or waitingForInput', async () => {});
 it('a site is not counted as colony wealth', async () => {
   // Not in the ledger it left AND not in the building it has not become.
 });
 ```
 
+**Five tests, not six: 'a site reports underConstruction' lives in Task 9.** It is
+the one row of §2.5 that is a *projection* rather than an exclusion, and it cannot
+be asserted from this task's file list. `BuildingState` is a union in
+`shared/snapshot.ts` (Task 9's file), and two exhaustive `Record<BuildingState, …>`
+definitions — `BUILDING_STATE_LABELS` (`labels.ts:6`) and the world theme's
+`stateRing` (`theme.ts:12`) — fail typecheck the moment a member is added without
+an entry. That is deliberate: both carry comments saying so, dating from when
+`relocating` and `housing` joined. So asserting the state here would drag
+`shared/snapshot.ts` and two app files into a task scoped to
+`snapshot-buildings.ts`, and without them this task cannot finish on the green
+`check:all` every task requires.
+
+Between this task and Task 9 a site reports whatever the existing precedence
+chain yields (`unstaffed`, in practice). Nothing asserts otherwise in that
+window, and Task 9 is where it becomes wrong to.
+
 - [ ] **Step 2: Implement, mutation-test each exclusion separately, commit**
 
-Six mutations, one per exclusion, each reddening exactly one test.
+Five mutations, one per exclusion, each reddening exactly one test.
 
 ---
 ### Task 3: A site's demand is its cost, and three gates must let it through
@@ -552,7 +567,7 @@ If nothing breaks, the deliverable is the suite and a commit message saying so. 
 
 **Two restore-path defects that the "no new field needed" framing hides.** `SavedBuilding.inputBuffer` does round-trip, and that is not sufficient:
 
-- `buildingComponents` restores through `clampedInputBuffer` (`spawn.ts:113`), which is `clampedBuffer(saved, BALANCE.inputBufferCap)`. **A 30-unit mill site saved mid-countdown reloads holding 12**, destroying 18 units the ledger already recorded as consumed. The clamp must take the site's cost as its bound, as `needOf` and `unload` do.
+- `buildingComponents` restores through `clampedInputBuffer` (`spawn.ts:113`), which is `clampedBuffer(saved, BALANCE.inputBufferCap)`. **A 30-unit mill site saved mid-countdown reloads holding 12**, destroying 18 units the ledger already recorded as consumed. The clamp must take the site's cost as its bound, as `needOf` and `unload` do — **per resource, not as one total.** `clampedBuffer` takes a single aggregate cap and spends it in catalog order, so the cheapest implementation of "bound by the cost" is to pass `sum(cost)`, and that is wrong in a way no equal-to-cost fixture can see. After a rebalance from 20 wood/10 planks to 10 wood/20 planks, a site saved under the old cost restores holding 20 wood — inside the aggregate 30, over `cost.wood` — accepts 10 more planks, and clears 40 units against a 30-unit cost on completion. A new `clampedToCost` keyed per resource is the fix; reusing `clampedBuffer` with a summed cap is the defect.
 - `usableBeds` (`restore.ts:118`) gates on `count > 0 && b.relocatingTicks === 0` — relocation being the only way a house could exist unusable. An unfinished house otherwise seats colonists at load, and the **paused initial snapshot reports them housed** until the first tick evicts them.
 
 - [ ] **Step 1: Write the failing tests, then implement, then mutation-test, commit**
@@ -563,6 +578,12 @@ it('a site mid-build round-trips its countdown and its delivered materials', asy
   // Below the cap it passes against the unfixed clamp and proves nothing, which
   // is the whole reason this defect survived a draft that said the field
   // "already round-trips".
+});
+it('a site restored over its cost in ONE material is trimmed in that material', async () => {
+  // Deliberately UNEVEN and deliberately not equal to the aggregate: a saved
+  // tray of 20 wood against a cost of 10 wood / 20 planks. Total 20 <= total
+  // cost 30, so a summed-cap clamp keeps all 20 wood and this is the only
+  // shape that reddens it. Assert the kept WOOD is 10.
 });
 it('an unfinished house houses nobody at load, in the paused snapshot', async () => {
   // Before any tick runs. Asserting after a step passes against the runtime
@@ -599,6 +620,13 @@ it('a countdown saved under a larger buildTicks is clamped to the current one', 
 
 **Interfaces:**
 - State `'underConstruction'`, ahead of `'relocating'` in the precedence chain.
+- **Adding the union member is three files, not one**, and this task owns all
+  three: the member in `shared/snapshot.ts`, a label in `BUILDING_STATE_LABELS`
+  (`labels.ts:6`), and a ring color in the theme's `stateRing` (`theme.ts:12`).
+  Both are exhaustive `Record<BuildingState, …>`, so the compiler names the two
+  it needs — which is why Task 2b defers the state assertion here rather than
+  reaching across into these files. The §2.5 row *'a site reports
+  underConstruction, not relocating or waitingForInput'* is a test of this task.
 - **A site publishes what it still needs, per material.** This is what replaces the affordability refusal Task 2 removed: the player sees "needs 14 wood" instead of being told they cannot order it.
 - The Economy view names a **build backlog** beside the input and output backlogs.
 - **The affordability gates come out of all three build surfaces.** Task 2 removes the refusal in the command handler, and without this the queue-without-materials behaviour is **unreachable through the UI** — acceptance criterion 5 passes in the engine and the player still cannot order the site:

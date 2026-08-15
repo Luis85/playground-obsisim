@@ -611,7 +611,23 @@ modes increment 8 added. Three bind unusually hard:
 ## 3. Acceptance criteria
 
 1. **Ordering a building does not move the ledger.** Colony stock is unchanged on
-   the order tick, and falls only as materials land in the site's in-tray.
+   the order tick — that is the whole of what this criterion claims, and the
+   thing it replaces is a *build-time* debit.
+
+   **Afterwards, stock falls at pickup and consumption is recorded at unload,**
+   and these are two different moments that this criterion must not blur.
+   `fetchArrival` calls `Stockpile.takeAt` the tick a hauler reaches the source
+   (`haul-system.ts:188`), so published colony stock drops there, several ticks
+   before the goods reach the site. Only the consumption *statistic* waits for
+   `unload`'s `recordConsumed` (`haul-system.ts:229`). That split is deliberate
+   and pre-dates this increment — `takeAt`'s own comment explains it — and an
+   earlier draft of this criterion said stock "falls only as materials land in
+   the site's in-tray", which describes neither half. Worse, it is the kind of
+   wrong that gets *implemented*: deferring the removal to unload would leave
+   goods spendable by `Stockpile.pay` while they ride on a hauler's back, which
+   is the duplication the conservation sentinel exists to catch.
+
+   So: unchanged on the order tick; down at pickup; consumed at unload.
 2. **A site provides nothing.** A house under construction shelters nobody
    (including on its construction tick), a storehouse under construction is not a
    store destination, and a producer under construction makes nothing.

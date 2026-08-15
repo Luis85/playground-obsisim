@@ -370,9 +370,25 @@ a service the player received, while a site never rendered any service at all.
 OBS-4-07 is the precedent that this repository treats "demolition silently ate
 goods" as a defect worth fixing rather than a rule worth keeping.
 
-The refund resolves through `destinationFor` with the reservation-aware `heldAt`,
-exactly as every other banking path does, so a refund cannot land in room another
-hauler is already walking toward.
+**The refund banks at the camp** — corrected during implementation, because this
+clause originally said it resolves through `destinationFor` with the
+reservation-aware `heldAt`, "exactly as every other banking path does", and both
+halves of that were wrong.
+
+`destinationFor` (`haul-sites.ts:148`) takes a live `HaulTrip` and mutates its
+`destSiteId`; a demolition has no trip, so satisfying the clause would have meant
+fabricating one purely to read a destination out of it. And the appeal to every
+other banking path is backwards: the camp is where `refundCostOf` already returns
+a finished building's cost, and where `spillTo` already sends a demolished
+storehouse's entire stock. Camp is the single destination the engine uses for
+everything a demolition hands back, so routing a site's tray to the nearest
+storehouse would have made construction the exception rather than the rule.
+
+The behavioural cost is real and accepted: materials returned from a site far
+from the camp are banked further from where the next site may want them, which
+can lengthen a later haul. That is exactly what demolishing a remote storehouse
+already does today, and changing it belongs in a task that changes it for every
+demolition path at once, not in the one that adds a fourth.
 
 **A site cannot be relocated.** `handleMoveBuilding` refuses one, with a notice.
 Moving a hole in the ground is meaningless, the relocation price is derived from

@@ -292,8 +292,12 @@ Five mutations, one per exclusion, each reddening exactly one test.
 **Without all four changes in this task, no material can ever reach a site and the feature does not work at all.** Three of them are outside `haul-dispatch.ts`, and a brief scoped to `needOf` alone — as an earlier draft of this plan was — ships a site that is offered materials and can never receive them.
 
 **Files:**
-- Modify: `src/engine/systems/haul-dispatch.ts` (`needOf`, `supplyCandidates`), `src/engine/systems/haul-system.ts` (`unload`), **`src/engine/systems/haul-claims.ts`** (`Claims.input`, resource-aware — see below)
-- Test: `tests/engine/systems/haul-dispatch.test.ts`, `tests/engine/systems/haul-system.test.ts`, `tests/engine/systems/haul-claims.test.ts`
+- Modify: `src/engine/systems/haul-dispatch.ts` (`needOf`, `supplyCandidates`), `src/engine/systems/haul-system.ts` (`unload`), **`src/engine/systems/haul-claims.ts`** (`Claims.input`, resource-aware — see below), **`src/engine/systems/placement-handlers.ts`** (the in-tray refund — see below)
+- Test: `tests/engine/systems/haul-dispatch.test.ts`, `tests/engine/systems/haul-system.test.ts`, `tests/engine/systems/haul-claims.test.ts`, `tests/engine/systems/command-system.test.ts`
+
+**This task owns the in-tray refund, because this task is what makes a partly supplied site possible.** Task 2 already branched the *cost* refund (a site refunds none). The in-tray half could not be written there — nothing could reach a tray. It cannot wait for Task 7 either: the moment materials land in a site's `InputBuffer`, the existing rule destroys them on demolition ("whatever was waiting in either tray dies with the building", `placement-handlers.ts`), so Tasks 3 and 5 would ship a cancellation path that permanently loses everything delivered. Refund the delivered materials through `destinationFor` with the reservation-aware `heldAt`, and assert conservation here.
+
+Task 7 keeps what genuinely needs later tasks: the site-aware `demolitionNotice`, refusing to relocate a site, and the recovery property (cancel one site so another *completes* on the returned materials — which needs Task 5's countdown).
 
 **`haul-claims.ts` is where the resource filter lives**, and neither of the other two files can recover a per-resource figure once `Claims.input` has returned its aggregate. Omitting it leaves wood in flight consuming a site's plank room, which is exactly the defect the interface note below describes and the concurrent-material fixture is written to catch.
 
@@ -364,6 +368,17 @@ it('two materials can be in flight to one site at the same time', async () => {
   // with two haulers and a 20-wood/10-plank site, one may carry wood and the
   // other planks CONCURRENTLY. A `shortestOf` that ignores claims picks wood
   // twice, finds no room, and drops the site out of dispatch entirely.
+});
+
+it('cancelling a partly supplied site refunds only what arrived', async () => {
+  // The in-tray half of the refund, and it belongs here because this task is
+  // what first puts anything in a tray. 6 wood delivered of 20: the colony total
+  // rises by 6, not by 26 and not by 20. Assert separately that deliveredRate did
+  // NOT move — refundAt, not addAt. The total alone passes against addAt.
+  //
+  // Without this, Tasks 3 and 5 ship a cancellation that destroys every
+  // delivered material, which is the conservation break this increment exists
+  // to close, arriving inside the task that opens the delivery path.
 });
 
 it('a mill site receives its full 30-unit cost', async () => {
@@ -473,14 +488,16 @@ Mutations: count down regardless of materials; complete at `ticksLeft === 1`; re
 **Interfaces:**
 - **The `def.cost` refund branch ALREADY LANDED IN TASK 2** — do not write it again, and do not assume it is missing. Task 2 removes the payment, so leaving the loop unconditional would have minted the cost from every cancelled site for four tasks running, and it would also have made Task 2's own same-drain fixture non-discriminating. Task 2 therefore carries the site half (a site refunds no cost), the finished-building regression guard, and their conservation assertions. **Confirm that against `placement-handlers.ts` before starting; if the branch is absent, the earlier task is wrong and you should stop and report.**
 
-  What is still outstanding here is the *other* half of the same conservation problem: cancelling a partly-supplied site must also return its **in-tray**, or the delivered materials vanish. That could not be written in Task 2 because nothing could reach a tray until Task 3.
+  **The in-tray refund ALSO already landed, in Task 3**, for the same reason one task earlier: Task 3 is what first lets a material reach a tray, so leaving the refund until here would have shipped a cancellation that destroys every delivered good across the Task 3 and Task 5 commits. Confirm it too, and stop and report if it is absent.
+
+  What is left for this task is everything that genuinely needed a later task to exist.
 
   | demolished | cost refund | in-tray |
   | --- | --- | --- |
   | a finished building | yes, unchanged | destroyed, unchanged |
   | a site | **no** — nothing was paid | **refunded** via `refundAt` |
 
-- Demolishing a site refunds its delivered materials through `destinationFor` with the reservation-aware `heldAt`.
+- Demolishing a site refunds its delivered materials through `destinationFor` with the reservation-aware `heldAt` — **landed in Task 3, verify rather than rewrite.**
 - **`demolitionNotice` (`placement-handlers.ts:101`) must become site-aware**, and this is OBS-4-07 repeating rather than a cosmetic edit. It opens with a hardcoded `` `Demolished the ${name} — cost refunded` `` and describes the in-tray as *lost* — for a site, both halves are exactly backwards: no cost is refunded and the materials come back. OBS-4-07 is filed against precisely this failure, a notice claiming "cost refunded" while goods were silently deleted, and shipping the inverse of it here would be the same defect with the sign flipped.
 - `handleMoveBuilding` **refuses a site**, with a notice (§2.6, §2.12).
 
@@ -492,15 +509,9 @@ Mutations: count down regardless of materials; complete at `ticksLeft === 1`; re
 // the branch in Task 2. Do not duplicate them. Re-run them, and if either is
 // missing, stop and report rather than writing it here.
 
-it('cancelling a partly supplied site refunds only what arrived', async () => {
-  // The double-refund case. 6 wood delivered of 20: the total rises by 6, not
-  // by 26 and not by 20.
-});
-
-it('cancelling a site refunds what was delivered to it', async () => {
-  // Assert the COLONY TOTAL, and separately that deliveredRate did NOT move —
-  // refundAt not addAt. The total alone passes against addAt.
-});
+// 'cancelling a partly supplied site refunds only what arrived' — INCLUDING the
+// deliveredRate assertion — is ALREADY GREEN from Task 3. Re-run it, do not
+// rewrite it, and stop and report if it is missing.
 
 it('cancelling a site returns its materials to the ledger for another site to use', async () => {
   // The RECOVERY property, and the general form of it. Two sites, the wood
@@ -550,7 +561,9 @@ If nothing breaks, the deliverable is the suite and a commit message saying so. 
 ### Task 8: Save v7
 
 **Files:**
-- Modify: `src/shared/save.ts`, `src/shared/save-migration.ts`, `src/engine/game-engine.ts`, `src/engine/restore.ts`, `src/engine/spawn.ts` (`clampedInputBuffer`), `src/engine/initial-snapshot.ts`, `src/engine/save-guard.ts`, **`src/shared/snapshot.ts`**, **`src/engine/snapshot-buildings.ts`**, **`src/engine/systems/snapshot-system.ts`**
+- Modify: `src/shared/save.ts`, `src/shared/save-migration.ts`, `src/engine/game-engine.ts`, `src/engine/restore.ts`, `src/engine/spawn.ts` (`clampedInputBuffer`), `src/engine/initial-snapshot.ts`, `src/engine/save-guard.ts`, **`src/shared/snapshot.ts`**, **`src/engine/snapshot-buildings.ts`**, **`src/engine/systems/snapshot-system.ts`**, **`src/engine/initial-save.ts`**
+
+**`initial-save.ts` is the second producer the bump fails at**, and it did not exist when this list was written — Task 1 extracted it out of `world.ts`. It returns `SaveGameV6` (`initial-save.ts:12`), assigns `LATEST_SAVE_VERSION` to `version` (line 14), and writes a starter building record with no `constructionTicks` (line 28). Raising the constant breaks its typecheck, and until its return type and starter record move to v7 it cannot emit a loadable fresh save. That is the self-policing this task's last bullet promises, doing its job — but only if the file is in the list. **Assert `initialSave()` round-trips as a valid v7 save**, since a fresh colony is the one save every player has.
 - Test: `tests/shared/save.test.ts`, `tests/shared/save-migration.test.ts`, `tests/engine/world.test.ts` (the paused-snapshot projection), `tests/engine/save-guard.test.ts`, `tests/engine/snapshot.test.ts`
 
 **The last three are not optional and not Task 9's.** This task's clamp test needs the NUMERIC `BuildingSnapshot.constructionTicks` (see the prerequisite note below), and publishing it takes all three: `shared/snapshot.ts` declares the field, `snapshot-buildings.ts` projects it, `snapshot-system.ts` reads the live `Construction` component. Task 9 adds the `underConstruction` STATE, which is a different thing and cannot substitute — a state cannot distinguish a clamped countdown from an unclamped one.

@@ -117,7 +117,15 @@ it('COMPONENT_TYPES includes Construction', () => {
 
 **Interfaces:**
 - `handleConstructBuilding` **stops calling `ctx.stockpile.pay(def.cost)`**, spawns with `Construction(BALANCE.buildTicks)`, and its notice says *started* rather than *built*.
-- **The affordability REFUSAL stays; only the PAYMENT goes.** `pay` today does both — it tests and it debits — so removing the call removes both unless the test is put back explicitly as a `canAfford` check ahead of the spawn. Dropping the refusal is increment 10's opening move and must not happen here by accident: it is a product change, and arriving at it through a refactor is how it would ship unnoticed and unmeasured.
+- **The affordability REFUSAL stays; only the PAYMENT goes.** `pay` today does both — it tests and it debits — so removing the call removes both unless the test is put back explicitly ahead of the spawn. Dropping the refusal is increment 10's opening move and must not happen here by accident: it is a product change, and arriving at it through a refactor is how it would ship unnoticed and unmeasured.
+- **And the replacement check must be CUMULATIVE, not `stockpile.canAfford(def.cost)`.** This is the trap in this task. Payment is what used to make a second order see the first one's cost gone; without it, every order in a drain reads the same untouched ledger. `canAfford` alone accepts two 15-wood houses against 15 wood, round-robin splits it, and neither completes — the broken queue this increment claims is increment 10's. The rule (§2.3):
+
+  ```
+  outstanding[r] = Σ over sites of max(0, cost[r] − held[r])
+  refuse unless ∀r: colonyStock[r] ≥ outstanding[r] + def.cost[r]
+  ```
+
+  Derived from live components at every call, stored nowhere, reserving nothing. Deliberately conservative by the amount in transit — a picked-up load has left `Stockpile` and not yet reached `held`, so it is counted twice against the player. That is the safe direction, and increment 10 deletes the check entirely.
 - The id-exhaustion and tile checks stay, and stay **before** the spawn — neither is recoverable later, and the affordability check joins them there.
 
 - [ ] **Step 1: Write the failing tests**
@@ -130,10 +138,25 @@ it('ordering a building does not move the ledger', async () => {
 });
 
 it('a colony that cannot afford a building is still refused', async () => {
-  // ACCEPTANCE CRITERION 5, and the guard on the split. Empty ledger, order a
-  // mill, get a REFUSAL and no site. Removing `pay` deletes the debit and the
-  // test together unless `canAfford` is put back deliberately, so without this
-  // test increment 10's product change ships silently inside a refactor.
+  // Empty ledger, order a mill, get a REFUSAL and no site. Removing `pay`
+  // deletes the debit and the test together unless the check is put back
+  // deliberately, so without this test increment 10's product change ships
+  // silently inside a refactor.
+});
+
+it('the SECOND of two orders sharing one building\'s materials is refused', async () => {
+  // ACCEPTANCE CRITERION 5, and THE test this task exists to get right. Two
+  // houses at 15 wood each against exactly 15 wood: first accepted, second
+  // REFUSED.
+  //
+  // Run it BOTH ways — both orders in one tick's drain, and one order per tick
+  // — and in neither case let a hauler reach a source in between. A plain
+  // `stockpile.canAfford(def.cost)` passes the single-order test above and
+  // FAILS this one, which is the whole point: it reads the same untouched
+  // ledger twice.
+  //
+  // Without this, increment 9 ships the broken queue it claims belongs to
+  // increment 10, and §2.4's "slow rather than broken" is simply false.
 });
 
 it('a site occupies its tile', async () => {
@@ -149,7 +172,7 @@ it('id exhaustion and an unbuildable tile are still refused', async () => {
 
 - [ ] **Step 2: Implement, mutation-test, commit**
 
-Mutations: restore the `pay` call; **delete the `canAfford` check**; spawn with `ticksLeft = 0`; move the tile check after the spawn.
+Mutations: restore the `pay` call; delete the check entirely; **replace the cumulative check with a plain `stockpile.canAfford(def.cost)`** — the one that must redden the two-order test and nothing else; spawn with `ticksLeft = 0`; move the tile check after the spawn.
 
 ---
 
@@ -470,8 +493,10 @@ If nothing breaks, the deliverable is the suite and a commit message saying so. 
 ### Task 8: Save v7
 
 **Files:**
-- Modify: `src/shared/save.ts`, `src/shared/save-migration.ts`, `src/engine/game-engine.ts`, `src/engine/restore.ts`, `src/engine/spawn.ts` (`clampedInputBuffer`), `src/engine/initial-snapshot.ts`, `src/engine/save-guard.ts`
-- Test: `tests/shared/save.test.ts`, `tests/shared/save-migration.test.ts`, `tests/engine/world.test.ts` (the paused-snapshot projection), `tests/engine/save-guard.test.ts`
+- Modify: `src/shared/save.ts`, `src/shared/save-migration.ts`, `src/engine/game-engine.ts`, `src/engine/restore.ts`, `src/engine/spawn.ts` (`clampedInputBuffer`), `src/engine/initial-snapshot.ts`, `src/engine/save-guard.ts`, **`src/shared/snapshot.ts`**, **`src/engine/snapshot-buildings.ts`**, **`src/engine/systems/snapshot-system.ts`**
+- Test: `tests/shared/save.test.ts`, `tests/shared/save-migration.test.ts`, `tests/engine/world.test.ts` (the paused-snapshot projection), `tests/engine/save-guard.test.ts`, `tests/engine/snapshot.test.ts`
+
+**The last three are not optional and not Task 9's.** This task's clamp test needs the NUMERIC `BuildingSnapshot.constructionTicks` (see the prerequisite note below), and publishing it takes all three: `shared/snapshot.ts` declares the field, `snapshot-buildings.ts` projects it, `snapshot-system.ts` reads the live `Construction` component. Task 9 adds the `underConstruction` STATE, which is a different thing and cannot substitute — a state cannot distinguish a clamped countdown from an unclamped one.
 
 **Four files beyond the obvious two**, because "the save carries a new number" understates what restore touches:
 - `spawn.ts` — `clampedInputBuffer` clamps the live entity to `inputBufferCap`
@@ -482,8 +507,12 @@ If nothing breaks, the deliverable is the suite and a commit message saying so. 
 **One hit of the `relocatingTicks === 0` proxy is deliberately left alone:** `save-migration.ts:156` needs no construction term, because the v6 → v7 migration is total — every building in a pre-v7 save is finished, so no migration step can see an unfinished one. Record that in a comment rather than adding a term that can never fire.
 
 **Interfaces:**
-- `LATEST_SAVE_VERSION = 7`. `SavedBuilding` gains `constructionTicks: number`, guarded with `isTickCounter` — the same check `relocatingTicks` and `starvingTicks` use.
+- `LATEST_SAVE_VERSION = 7`. The current `SavedBuilding` gains `constructionTicks: number`, guarded with `isTickCounter` — the same check `relocatingTicks` and `starvingTicks` use.
+- **FREEZE the v6 building record first, and follow the pattern the file already sets.** `SaveGameV6.buildings` is typed `SavedBuilding[]` (`save.ts:228`), so adding a required field to that interface silently claims every v6 save has it — and `isSavedBuildingV6Shape` (`save.ts:404`) casts to `SavedBuilding` to read its fields. A brief that says "SavedBuilding gains `constructionTicks`, guarded with `isTickCounter`" invites putting that check where v6 validation reaches it, and then **every genuine v6 save is rejected before the migration can supply the zero.** The migration would be correct and unreachable.
+
+  `save.ts:220` already states the rule for exactly this case — `SaveGameV6` redeclares `buildings` rather than inheriting because "it is the one field whose record type moves, and the version literal has to move with it". So: introduce a frozen `SavedBuildingV6`, point `SaveGameV6.buildings` at it, leave `isSavedBuildingV6Shape` checking that shape, and let the *current* `SavedBuilding` carry the new field for v7.
 - Migration v6 → v7 sets it to **0 for every building**: every building in a v6 save is finished by construction, so the migration is total and needs no heuristic.
+- **The save guard needs a CROSS-FIELD invariant, which no per-field check can express** (§2.10). `handleMoveBuilding` refuses to relocate a site, so the two countdowns are mutually exclusive in every save the engine writes — but a hand-edited or corrupt v7 file can carry `constructionTicks > 0` *and* `relocatingTicks > 0`, and `isTickCounter` accepts each of them independently. Loading it gives a building whose two countdowns both advance, with the relocation hidden behind `underConstruction` in the snapshot. Reject the record. This is the same class as the guard's existing colonist-reference rules: a per-record check that no single field can express.
 - **No new field for the materials.** `SavedBuilding.inputBuffer` already round-trips.
 - The bump is self-policing — `SaveGameV6.version` is the literal `6`, so raising the constant fails typecheck at both producers until the type is updated.
 
@@ -524,8 +553,18 @@ it('an unfinished house houses nobody at load, in the paused snapshot', async ()
   // Before any tick runs. Asserting after a step passes against the runtime
   // rehome eviction and misses the restore predicate entirely.
 });
-it('a v6 save loads with every building finished', async () => {});
+it('a v6 save loads with every building finished', async () => {
+  // THE FREEZE TEST. A genuine v6 fixture — no `constructionTicks` anywhere in
+  // it — must pass `isSaveGameV6` and reach the migration. Against a v6 guard
+  // that learned about the new field this is rejected before migrating, which
+  // is the failure the frozen record exists to prevent.
+});
 it('a negative or fractional constructionTicks is rejected', async () => {});
+it('a record with BOTH countdowns positive is rejected', async () => {
+  // The CROSS-FIELD invariant. Every per-field guard accepts this record —
+  // isTickCounter passes on both numbers independently — so only a per-record
+  // check reddens it. Assert the save is REFUSED, not repaired.
+});
 
 // PREREQUISITE for the clamp test below: `BuildingSnapshot` must publish the
 // NUMERIC `constructionTicks`, analogous to `relocatingTicks`, and this task

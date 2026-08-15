@@ -66,9 +66,11 @@ building works".
 
 ### 1.2 Product decisions taken for this increment
 
-- **The affordability rule does not change.** You still cannot order what you
-  cannot pay for — but the payment stops happening at order time and becomes a
-  delivery. §2.3. Making an order a *request* instead is increment 10's whole
+- **The affordability rule does not change in what it promises**: you still
+  cannot order what you cannot pay for. It changes in how it is computed — the
+  payment becomes a delivery, and the check becomes cumulative over the existing
+  queue, because payment was what used to make consecutive orders see each
+  other. §2.3. Making an order a *request* instead is increment 10's whole
   subject, and it is deferred as a unit with the queue ordering it requires.
 - **No builder role.** A site completes on materials plus a fixed build time. A
   fourth call on the same colonists would make this increment about labour
@@ -81,11 +83,12 @@ building works".
 
 ### 1.3 What this makes harder, deliberately
 
-- **The affordability check stops meaning what it says.** It tests the ledger at
-  order time and then nothing is taken, so two orders a tick apart can both pass
-  against the same wood. §2.3 is explicit that this is a weakened guarantee
-  rather than an intact one — it bounds over-ordering by making it take
-  deliberate effort, and it does not prevent it.
+- **The affordability check has to be rebuilt to mean what it says.** Payment was
+  what made a second order see the first one's cost gone; with `pay` removed, the
+  naive check reads the same untouched ledger for every order and stops bounding
+  anything. §2.3 replaces it with a cumulative one — stock must cover this cost
+  *plus* what every existing site still needs — which is a derived walk over live
+  components, not a reservation.
 - **"A building was constructed" stops meaning "a building works."** Six places
   in the engine currently treat those as the same statement, and one of them
   (`pending.constructed`, which homing folds in so a colonist can be sheltered on
@@ -187,18 +190,42 @@ and records the notice as *started* rather than *built*.
   the two rejections that must still happen at order time, because neither is
   recoverable later.
 
-**The check is weaker than it looks, and this is stated rather than papered
-over.** It reads the ledger at order time and takes nothing, so two orders placed
-a tick apart both pass against the same wood, and a determined player can queue
-well past what the colony holds. Increment 9 does not fix that and does not
-pretend to: it keeps the check because removing it is a product change with a
-dispatch problem attached, and both belong to increment 10 together.
+**The check must be CUMULATIVE, not instantaneous, and an earlier draft of this
+section got that wrong.** Payment is what used to make a second order see the
+first one's cost gone. With `pay` removed, an instantaneous `canAfford` reads the
+same untouched ledger for every order in the drain — several commands in one tick
+all pass against the same wood, and so does a second command the next tick,
+before any hauler has reached a source. Fifteen wood then funds two houses that
+each need fifteen, round-robin splits it, and neither finishes. That is precisely
+the broken queue §2.4 claims cannot happen here.
 
-What the check still buys is that **over-ordering takes deliberate effort instead
-of being the default path.** The palette greys out what you cannot afford, so the
-ordinary way to play does not produce a queue longer than the colony can feed —
-which is what makes §2.4's round-robin an acceptable cost here and an
-unacceptable one under a request model.
+So the rule is: **a build order is refused unless the colony holds its cost on
+top of what every existing site still needs.**
+
+```
+outstanding[r] = Σ over sites of max(0, cost[r] − held[r])
+affordable(new) ⟺ ∀r: colonyStock[r] ≥ outstanding[r] + newCost[r]
+```
+
+**Derived each time, never stored.** It is a walk over live components — the same
+rule §2.1 imposes on "are the materials complete", and for the same reason. It is
+not a reservation and adds no claim: nothing is held, nothing is written, and two
+haulers racing for the same log are still resolved by the claim machinery that
+already does that.
+
+**It is deliberately conservative by the amount in transit.** A load already
+picked up has left `Stockpile` *and* has not yet landed in `held`, so it is
+counted as still-needed when it is in fact already paid for. The effect is that a
+colony can occasionally be refused an order it could just afford. That is the
+safe direction — it never permits a queue the colony cannot fund — and correcting
+it would mean reaching for `claims.input` from the command handler, which is
+dispatch state that has no business there. Increment 10 deletes the whole check,
+so the drift has a short life.
+
+**What this buys, stated exactly.** Every site in the queue is fundable from
+present stock. That is what makes §2.4's round-robin *slow* rather than *broken*,
+and it is the sentence the whole split rests on — without a cumulative check it
+is simply false.
 
 **Why not a reservation.** It is the third option — check *and* hold the
 materials — and it is declined for both increments: it would be the fifth claim
@@ -221,12 +248,17 @@ therefore **loses** to a site ordered later that is still empty. Order three
 houses at once and they fill round-robin: each one's last material arrives last,
 and none of them finishes appreciably before the others.
 
-**Why that is acceptable here and would not be under a request model.** The
-affordability check §2.3 keeps means the ordinary way to play does not produce a
-queue longer than the colony can feed. Three sites ordered together are three
-sites the player could pay for, so every one of them completes — round-robin
-makes them finish *late and together* rather than *early and in order*. Slow is
-a fair cost for an increment whose subject is that materials are carried at all.
+**Why that is acceptable here and would not be under a request model.** §2.3's
+check is cumulative, so a queue can never contain more than present stock funds.
+Three sites ordered together are three sites the colony can pay for *at once*, so
+every one of them completes — round-robin makes them finish *late and together*
+rather than *early and in order*. Slow is a fair cost for an increment whose
+subject is that materials are carried at all.
+
+**This rests entirely on the check being cumulative.** With an instantaneous one,
+N sites can share one building's worth of materials, round-robin splits it, and
+none completes — the broken queue, inside increment 9. §2.3 says why the naive
+check does not survive the removal of `pay`.
 
 Remove the check — increment 10 — and the same ordering stops being slow and
 starts being broken: a queue of twenty sites the colony cannot afford round-robins
@@ -620,10 +652,16 @@ modes increment 8 added. Three bind unusually hard:
    finishes. Criterion 9 is where the sentinel itself is asserted, because the
    audit gains its construction sink with the balance instruments and not with
    the countdown.
-5. **Ordering still refuses what the colony cannot pay for**, unchanged from
-   today, at the command handler and at all four UI surfaces. This is a
-   regression criterion rather than a feature one: §2.3 moves the *payment* and
-   must not disturb the *check*.
+5. **Ordering refuses what the colony cannot pay for, counting the queue.** Two
+   houses each costing 15 wood, ordered against 15 wood: the first is accepted
+   and **the second is refused**, in the same tick and on the following one. The
+   four UI surfaces keep gating too.
+
+   This is the criterion the split rests on, and it is the one an implementation
+   passes accidentally with an instantaneous check *only* for the single-order
+   case. Both orders must be attempted, and the fixture must not let a hauler
+   reach a source in between — that is what distinguishes a cumulative check from
+   a check that merely has not noticed yet.
 6. **Cancelling a site refunds every material delivered to it**, and does not
    move `Delivered/t`.
 7. **OBS-5-03 closes.** Demolish-and-rebuild elsewhere now costs the full

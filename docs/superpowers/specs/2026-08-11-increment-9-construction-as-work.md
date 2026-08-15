@@ -187,6 +187,22 @@ finishes until nearly all of them do.
    candidate among non-sites by the existing comparator, and then chooses between
    those two winners with one ordinary comparison.
 
+**What this guarantees, stated exactly, because a looser phrasing is an
+overclaim.** The rule is *the oldest site **with unclaimed room** is served
+first* — not *the oldest site is always the one served*. `needOf` returns null
+once a site's remaining room is fully spoken for by in-flight deliveries
+(`room − claimedIn <= 0`), so the oldest site legitimately leaves the candidate
+set while its materials are still walking, and the next-oldest is served. That is
+correct rather than a leak: there is nothing useful left to send the oldest site,
+and sending more would overfill it.
+
+**It follows that completion order is the common case and not a hard guarantee.**
+If the oldest site's claimed loads are walking long legs and a younger site's are
+walking short ones, the younger can finish first. Forcing strict completion order
+would mean holding haulers idle rather than serving a servable site, which costs
+throughput to buy an ordering the player did not ask for. §3's criterion is
+written against the guarantee this rule actually makes.
+
 `compareSupplyCandidates` itself gains **only** part 1. It stays a single total
 order and no age term is added to it.
 
@@ -549,9 +565,16 @@ modes increment 8 added. Three bind unusually hard:
    store destination, and a producer under construction makes nothing.
 3. **Materials are carried.** A site at a distant tile receives its cost by
    hauler, leg by leg, with the conservation sentinel at zero throughout.
-4. **The oldest site completes first.** Five sites ordered at once complete in
-   order of ordering, not in reverse and not all at the end. This is the
+4. **The oldest site with unclaimed room is always the site served.** Five sites
+   ordered at once are filled one at a time rather than round-robin: no younger
+   site receives a load while an older one still has unclaimed room. This is the
    discriminating test for §2.4 and it fails against an unmodified ranking.
+
+   Stated as a serving rule rather than as "they complete in order of ordering",
+   which §2.4 explains is not guaranteed: a site drops out of the candidate set
+   once its remaining room is claimed, and unequal leg lengths can then let a
+   younger site finish first. The serving rule is what the design actually
+   promises, and it is the one that rules out the round-robin.
 5. **A site can be ordered without the materials existing**, and completes later
    when they do.
 6. **Cancelling a site refunds every material delivered to it**, and does not

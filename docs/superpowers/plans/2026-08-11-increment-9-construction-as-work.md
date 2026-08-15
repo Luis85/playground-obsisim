@@ -197,6 +197,8 @@ Six mutations, one per exclusion, each reddening exactly one test.
 
 **Interfaces:**
 - `needOf` branches on `isUnderConstruction`: a site's wanted map is `BUILDINGS[defId].cost` and its per-resource room is `cost[r] − held[r]`, **not** `BALANCE.inputBufferCap`.
+- **`Claims.input` must become resource-aware** (`haul-claims.ts:241`), and multi-input construction costs are the first content that makes this matter. It sums `plannedAmount + amount` over every supply trip targeting a building **with no resource filter** — harmless while every recipe has one input, wrong the moment a consumer wants two: wood already walking to a mill site subtracts from that site's *plank* room. Add the resource to the lookup and to `needOf`'s `claimedIn`.
+- **`needOf` must pick the shortest resource that still has UNCLAIMED room**, not simply the shortest. `shortestOf` ignores claims, so once wood's room is fully claimed the site keeps selecting wood, computes `room <= 0`, and returns null — dropping out of dispatch entirely while its planks go unserved. That serializes a multi-material site's delivery into one resource at a time and would bias the one-versus-four-hauler readings in §4.1. Walk the cost by proportional shortfall and take the first resource with unclaimed room left.
 - `supplyCandidates` (line 172) checks `staffed.has(id)` **before** calling `needOf`, so the branch above is unreachable for a site until this gate exempts one. A site is never staffed: Task 2b forbids assigning workers, and a house or storehouse def has `workerSlots: 0` regardless.
 - `unload` (`haul-system.ts:221–222`) does **both** remaining halves — it rechecks staffing, and it caps placement at `row.input.room(BALANCE.inputBufferCap)`. Exempt the first and make the second cost-aware, or a mill site accepts 12 of its 30 units while dispatch offers the remaining 18 forever. That is a livelock, not a shortfall.
 - **Dispatch and arrival must be exempted together** — `staffed` is derived once per tick and handed to both readers precisely so they cannot drift (§2.5 of increment 7). Exempting only dispatch is worse than exempting neither: haulers walk to a site that refuses the load, the goods walk back, and the conservation sentinel stays at zero the whole time.
@@ -244,6 +246,20 @@ it('a site accepts a delivery larger than inputBufferCap', async () => {
   // The unload cap. 20 wood into a mill site: all of it lands, not 12.
   // DISCRIMINATING: use a cost ABOVE the cap, or the assertion cannot tell the
   // two limits apart.
+});
+
+it('wood in flight does not consume the site\'s plank room', async () => {
+  // Claims.input's missing resource filter. A hauler carrying wood to a mill
+  // site must not reduce the plank room `needOf` reports. Invisible on every
+  // shipped recipe — they all have one input — and wrong the moment a consumer
+  // wants two.
+});
+
+it('two materials can be in flight to one site at the same time', async () => {
+  // The consequence, and the one that bites the §4.1 hauler-count readings:
+  // with two haulers and a 20-wood/10-plank site, one may carry wood and the
+  // other planks CONCURRENTLY. A `shortestOf` that ignores claims picks wood
+  // twice, finds no room, and drops the site out of dispatch entirely.
 });
 
 it('a mill site receives its full 30-unit cost', async () => {
@@ -296,10 +312,20 @@ The two-part rule fixes that **with no dependency machinery**, and part 2 is wha
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
-it('an older site outranks a newer one that is emptier and nearer', () => {
-  // Unit test on the comparator. DISCRIMINATING: the older site must lose on
-  // EVERY pre-existing term — less movable, farther, and not starving — so a
-  // fixture where it also wins on one of them proves nothing.
+it('nextSupplyTarget picks an older site over a newer one that is emptier and nearer', () => {
+  // Through THE SELECTOR, not the comparator — age no longer lives in
+  // `compareSupplyCandidates` and a comparator-level test of it cannot pass,
+  // and would push an implementer straight back to the non-transitive version
+  // this design exists to avoid.
+  //
+  // DISCRIMINATING: the older site must lose on EVERY comparator term — less
+  // movable, farther, not starving — so a fixture where it also wins on one of
+  // them proves nothing.
+});
+
+it('compareSupplyCandidates is unchanged for two finished buildings', () => {
+  // The comparator's own test is now purely a regression guard. Age must NOT
+  // appear in it.
 });
 
 it('a STARVING producer outranks a site', () => {
@@ -334,20 +360,23 @@ it('among finished buildings nothing has changed', () => {
   // The regression guard for increments 7 and 8's ranking work.
 });
 
-it('with five sites, every dispatch serves the oldest incomplete one', async () => {
-  // ACCEPTANCE CRITERION 4 expressed in terms this task can reach, and the
-  // integration test the unit tests cannot replace. Runs against an UNMODIFIED
-  // ranking and fails — confirm that before implementing, because it is the
-  // whole justification for this task.
+it('with five sites, no younger site is served while an older one has unclaimed room', async () => {
+  // ACCEPTANCE CRITERION 4, in the exact form §2.4 guarantees. Runs against an
+  // UNMODIFIED ranking and fails — confirm that before implementing, because it
+  // is the whole justification for this task.
   //
-  // DISPATCH order, not COMPLETION order: ConstructionSystem does not exist
-  // until Task 5, so no site can finish here and a completion assertion cannot
-  // go green. The round-robin is still fully visible — assert that site 1's
-  // in-tray fills before site 2 receives anything. Task 5 adds the completion-
-  // order test that criterion 4 is finally stated in.
+  // NOT "every dispatch serves the oldest site": `needOf` correctly drops a
+  // site once its remaining room is fully claimed, so the next-oldest is served
+  // while the first one's materials are still walking. An "always the oldest"
+  // assertion is false against a correct implementation at more than one
+  // hauler, which is precisely the fixture that matters.
   //
-  // At one hauler and at four: the round-robin is worse with more haulers, so
-  // a single-hauler fixture understates it.
+  // DISPATCH, not COMPLETION: ConstructionSystem does not exist until Task 5.
+  // The round-robin is fully visible without it — assert site 1's in-tray
+  // fills (or is fully claimed) before site 2 receives anything.
+  //
+  // At one hauler and at four: the round-robin is worse with more haulers, so a
+  // single-hauler fixture understates it.
 });
 ```
 

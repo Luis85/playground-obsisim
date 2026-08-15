@@ -5,8 +5,8 @@ import { migrateSaveToLatest } from '../shared/save-migration';
 import type { SaveGameV6, SavedBuilding } from '../shared/save';
 import type { ResourceId } from '../shared/content-types';
 import {
-  Age, Building, Efficiency, HaulTrip, Home, Hunger, InputBuffer, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage,
-  Colonist, WorkerSlots,
+  Age, Building, Construction, Efficiency, HaulTrip, Home, Hunger, InputBuffer, JobAssignment, OutputBuffer, Position, Production, Relocation,
+  ToolCoverage, Colonist, WorkerSlots,
 } from './components';
 import { isBuffersValid, isBuildingsValid, isIdsValid, isPositionsValid, isStockpileValid, isColonistsValid } from './save-guard';
 import { buildingComponents, colonistComponents } from './spawn';
@@ -85,7 +85,7 @@ export function getPrepResource<T extends object>(prep: IPreptimeWorld, type: ne
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors sim-ecs's own TTypeProto<T> constructor-parameter shape exactly
 export const COMPONENT_TYPES: (new (...args: any[]) => object)[] = [
   Building, WorkerSlots, Production, Colonist, Hunger, JobAssignment, Efficiency, ToolCoverage, Position, OutputBuffer, InputBuffer, HaulTrip,
-  Relocation, Age, Home,
+  Relocation, Age, Home, Construction,
 ];
 
 /**

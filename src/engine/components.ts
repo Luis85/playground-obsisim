@@ -211,6 +211,28 @@ export class Relocation {
 }
 
 /**
+ * Relocation's precedent, applied to a building's birth rather than its move
+ * (spec §2.5, "Construction as Work"): while this exists with `ticksLeft > 0`
+ * (`isUnderConstruction`, src/shared/placement.ts), the building is a
+ * construction site occupying its tile and providing nothing — no
+ * production, no beds, no storage — until material delivery (later tasks)
+ * counts it down to 0. Mirrors `Relocation` field for field: a fresh building
+ * defaults to 0 (settled/finished), the same value a completed relocation
+ * ends at, so an entity that has never been under construction and one that
+ * finished being under construction are indistinguishable — same as
+ * Relocation is for a building that has never moved.
+ *
+ * Registered nowhere else yet: nothing sets this above 0 or reads it below 0
+ * until the tasks that wire construction into the construct command and the
+ * haul system. Attached here only so save/restore and live construct agree on
+ * every building's component set from the start (`buildingComponents`,
+ * spawn.ts) — the same OBS-4-02 reason `Relocation` is unconditional.
+ */
+export class Construction {
+  constructor(public ticksLeft = 0) {}
+}
+
+/**
  * Empty hands, no job, no leg — everything about a trip except where the
  * hauler stands.
  *

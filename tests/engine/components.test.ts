@@ -1,7 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import type { RecipeDef } from '../../src/shared/content-types';
-import { HaulTrip, InputBuffer } from '../../src/engine/components';
+import { Construction, HaulTrip, InputBuffer } from '../../src/engine/components';
 import { RESOURCE_IDS } from '../../src/engine/content';
+
+// Relocation's mirror (spec §4.1's "Construction as Work"): a component that
+// suspends a building's service while it exists. Mirrors Relocation field for
+// field — a plain countdown, defaulting to 0 (finished/settled) the same way
+// a fresh Relocation defaults to "not moving".
+describe('Construction', () => {
+  it('defaults to no time left, the same way a fresh Relocation defaults to settled', () => {
+    expect(new Construction().ticksLeft).toBe(0);
+  });
+
+  it('holds whatever countdown it is given', () => {
+    expect(new Construction(30).ticksLeft).toBe(30);
+  });
+});
 
 describe('InputBuffer.shortestOf', () => {
   it('picks the input the building is proportionally shortest of, not simply the smallest amount held', () => {

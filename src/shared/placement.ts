@@ -187,6 +187,21 @@ export function isRelocating(ticksLeft: number): boolean {
 }
 
 /**
+ * THE construction boundary (spec §2.5's "Construction as Work"): is this
+ * building still a construction site, and therefore providing none of its
+ * service yet — no production, no beds, no storage, same as `isRelocating`
+ * above? `Construction` (src/engine/components.ts) mirrors `Relocation` field
+ * for field precisely so this predicate can mirror `isRelocating` line for
+ * line: a plain `> 0`, not written out at each reader, for the identical
+ * reason — one place to get the boundary right rather than one per caller.
+ * Lives here rather than in the engine because the snapshot publishes the
+ * countdown and `src/shared/**` may not import the engine.
+ */
+export function isUnderConstruction(ticksLeft: number): boolean {
+  return ticksLeft > 0;
+}
+
+/**
  * The buildings out of action right now, by id — the ONE derivation of a
  * relocating crew's zero work power (OBS-6-08).
  *

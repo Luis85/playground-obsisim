@@ -1,11 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import {
-  autoPlacePosition, autoPlaceSequence, CAMP_COLS, DEFAULT_MAP, isTileBuildable, mapThatFits, MAX_MAP, relocationTicks, type TileRef,
+  autoPlacePosition, autoPlaceSequence, CAMP_COLS, DEFAULT_MAP, isTileBuildable, isUnderConstruction, mapThatFits, MAX_MAP, relocationTicks,
+  type TileRef,
 } from '../../src/shared/placement';
 
 // The spatial law all three consumers share (spec §2.2): the engine's
 // authoritative validation, the app's ghost pre-check, and the v1->v2
 // migration's position synthesis.
+
+// isRelocating's mirror (spec §4.1's "Construction as Work"): a construction
+// site provides nothing while its countdown is still running. No production
+// code calls this yet — Task 1 only lands the predicate the later tasks read
+// — so this is its only exercise until then.
+describe('isUnderConstruction', () => {
+  it('is true while ticks remain and false once the countdown reaches zero', () => {
+    expect(isUnderConstruction(1)).toBe(true);
+    expect(isUnderConstruction(30)).toBe(true);
+    expect(isUnderConstruction(0)).toBe(false);
+  });
+});
 
 describe('isTileBuildable', () => {
   it('accepts a free in-bounds tile right of the camp band', () => {

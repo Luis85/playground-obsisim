@@ -3,8 +3,8 @@ import { BALANCE, MAX_AGE_TICKS } from './content/balance';
 import { BUILDINGS } from './content/buildings';
 import { RESOURCE_IDS } from './content/resources';
 import {
-  Age, Building, Efficiency, HaulTrip, Home, Hunger, InputBuffer, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage,
-  Colonist, WorkerSlots,
+  Age, Building, Construction, Efficiency, HaulTrip, Home, Hunger, InputBuffer, JobAssignment, OutputBuffer, Position, Production, Relocation,
+  ToolCoverage, Colonist, WorkerSlots,
 } from './components';
 
 /**
@@ -139,6 +139,10 @@ export function buildingComponents(spec: BuildingSpec): object[] {
     new OutputBuffer(clampedBuffer(spec.buffer ?? {}, BALANCE.outputBufferCap)),
     new InputBuffer(clampedInputBuffer(spec.inputBuffer ?? {})),
     new Relocation(clampedRelocation(spec.relocatingTicks ?? 0)),
+    // Unconditional, like Relocation above: nothing yet sets this above 0 (no
+    // save field until Task 8, no construct-command wiring until later), so
+    // every building — restored or freshly built — spawns settled/finished.
+    new Construction(),
   ];
 }
 

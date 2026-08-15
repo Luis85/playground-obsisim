@@ -115,6 +115,19 @@ export const BALANCE = {
    */
   storehouseFreeFloor: 12,
   relocationTilesPerTick: RELOCATION_TILES_PER_TICK,
+  /**
+   * Ticks a freshly ordered building spends as a construction site — occupying
+   * its tile, providing nothing — before `isUnderConstruction` reads it as
+   * finished. One constant for every def (spec §2.5). An order of magnitude
+   * above a recipe batch and well below a relocation of any distance, so
+   * delivery rather than this countdown is what the player experiences as the
+   * cost of building.
+   *
+   * UNMEASURED, spec §4.1's question: is 30 doing anything the delivery leg is
+   * not already doing on its own, and should build time scale with a
+   * building's cost? Not a tuned value — a starting point for that sweep.
+   */
+  buildTicks: 30,
   yearTicks: YEAR_TICKS,
   /** Age bands in ticks (spec 2.2): child 0-9, adult 10-54, elder 55+,
    * dying at 65 +/- 8 years. */

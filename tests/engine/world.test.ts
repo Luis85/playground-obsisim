@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { BALANCE, MAX_AGE_TICKS } from '../../src/engine/content/balance';
 import { lifespanFor } from '../../src/shared/population';
 import { RESOURCE_IDS } from '../../src/engine/content/resources';
-import { Building, HaulTrip, Hunger, InputBuffer, JobAssignment, Relocation, ToolCoverage, Colonist } from '../../src/engine/components';
+import { Building, Construction, HaulTrip, Hunger, InputBuffer, JobAssignment, Relocation, ToolCoverage, Colonist } from '../../src/engine/components';
 import { IdCounter, RemovalLedger, SimClock, SnapshotStore, Stockpile } from '../../src/engine/resources';
 import type { IRuntimeWorld } from 'sim-ecs';
 import { GameEngine } from '../../src/engine/game-engine';
 import {
-  ALL_SYSTEMS, applyRemovals, buildColonyPrepWorld, createColonyWorld, decideLoad, getPrepResource, initialSave, isLoadableSave,
+  ALL_SYSTEMS, applyRemovals, buildColonyPrepWorld, COMPONENT_TYPES, createColonyWorld, decideLoad, getPrepResource, initialSave, isLoadableSave,
   prepareLoadedSave, refreshEntitySections,
 } from '../../src/engine/world';
 import { buildSaveFromWorld } from '../../src/engine/game-engine';
@@ -1288,6 +1288,19 @@ describe('the seeded snapshot aggregates every site, under the restore path\'s o
   });
 });
 
+// The registration half of Task 1's pin, asserted directly because the
+// behavioural version (a save round trip proving the value persists) needs
+// Task 8's save-record schema. Deliberately structural: it is the only thing
+// THIS task's own changes can make true, and it is exactly what OBS-4-02's
+// two-spawn-site trap (a component attached in spawn.ts but never registered
+// here) would otherwise pass silently — buildWorld().withComponent(...) is
+// what makes sim-ecs willing to build/restore an entity carrying it at all.
+describe('COMPONENT_TYPES', () => {
+  it('includes Construction', () => {
+    expect(COMPONENT_TYPES).toContain(Construction);
+  });
+});
+
 describe('createColonyWorld', () => {
   it('builds a runnable world with resources initialized from the save', async () => {
     const world = await createColonyWorld();
@@ -1304,6 +1317,20 @@ describe('createColonyWorld', () => {
     expect(workers).toHaveLength(3);
     expect(workers.map((w) => w.getComponent(Hunger)!.value).sort((a, b) => b - a)[0]).toBe(42);
     expect(workers.every((w) => w.getComponent(JobAssignment)!.buildingId === null)).toBe(true);
+  });
+
+  // The spawn half of Task 1's registration pin (spec §4.1's "Construction as
+  // Work"). Weak on its own — a component attached in spawn.ts's
+  // buildingComponents and missing from COMPONENT_TYPES below would still
+  // pass this, because sim-ecs's preptime `getEntities()` reads straight off
+  // what buildEntity().with(...) attached, never consulting COMPONENT_TYPES
+  // at all — see 'COMPONENT_TYPES includes Construction', its companion.
+  // Nothing consumes the component's value yet (Task 2 onward), so only its
+  // presence is asserted here.
+  it('a spawned building carries a Construction component', () => {
+    const prep = buildColonyPrepWorld();
+    const house = [...prep.getEntities()].find((e) => e.hasComponent(Building))!;
+    expect(house.getComponent(Construction)).toBeDefined();
   });
 
   it('clamps balance-coupled worker fields above CURRENT balance at load (spec 4.5)', async () => {

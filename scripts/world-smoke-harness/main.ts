@@ -24,7 +24,7 @@ function building(id: number, defId: BuildingSnapshot['defId'], col: number, row
   return {
     id, defId, col, row, workers: 0, workerSlots: 2, state: 'unstaffed',
     progress: 0, batchActive: false, progressPct: 0, tooledWorkers: 0, workPower: 0, buffered: 0,
-    inputBuffered: 0, stored: 0, storage: 0, relocatingTicks: 0,
+    inputBuffered: 0, stored: 0, storage: 0, relocatingTicks: 0, constructionTicks: 0,
     beds: 0, occupants: 0,
     ...overrides,
   };

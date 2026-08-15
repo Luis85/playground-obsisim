@@ -1,6 +1,6 @@
-import type { SaveGameV6 } from '../shared/save';
+import type { SaveGameV7 } from '../shared/save';
 import { MAX_SAVED_COUNTER } from '../shared/save';
-import { CAMP_COLS, isInsideMap } from '../shared/placement';
+import { CAMP_COLS, isInsideMap, isRelocating, isUnderConstruction } from '../shared/placement';
 import { BUILDINGS } from './content/buildings';
 import { RESOURCES, RESOURCE_IDS } from './content/resources';
 
@@ -25,7 +25,7 @@ import { RESOURCES, RESOURCE_IDS } from './content/resources';
 // save): Stockpile.add saturates at that same ceiling, and buildSaveFromWorld's
 // deposit-on-save loop saturates identically, so the engine never banks an
 // amount this guard would refuse.
-export function isStockpileValid(stockpile: SaveGameV6['stockpile']): boolean {
+export function isStockpileValid(stockpile: SaveGameV7['stockpile']): boolean {
   // Key-count cap FIRST (same principle as MAX_SAVED_ENTITIES): a valid
   // stockpile has at most one key per catalog resource, and Object.entries
   // on an adversarially huge object would materialize every entry before
@@ -40,9 +40,39 @@ export function isStockpileValid(stockpile: SaveGameV6['stockpile']): boolean {
   );
 }
 
-export function isBuildingsValid(buildings: SaveGameV6['buildings']): boolean {
+/**
+ * CROSS-FIELD building invariants — records no version of the engine could
+ * write, and which no per-field check can express (§2.10).
+ *
+ * BOTH COUNTDOWNS POSITIVE. `handleMoveBuilding` refuses to relocate a site, so
+ * the two are mutually exclusive in every save the engine writes; `isTickCounter`
+ * and `Number.isFinite` accept each of them independently, so only a per-record
+ * rule sees the pairing. Loading it gives a building whose two countdowns both
+ * advance, with the relocation hidden behind `underConstruction` in the snapshot.
+ *
+ * A SITE CARRYING PRODUCTION STATE, and that half is worse. `ProductionSystem`
+ * SKIPS a site rather than clearing its batch, so an impossible one sits frozen
+ * for the whole countdown and then resumes at completion, yielding output the
+ * site never consumed inputs for — goods minted from a hand-edited file,
+ * through a path that looks like ordinary production. Both clauses are required:
+ * a batch legitimately BEGINS at zero progress, so `batchActive` alone is a
+ * reachable corrupt state, and idle progress is the same rule `isBuildingsValid`
+ * already applies to a finished building.
+ *
+ * REFUSED, not repaired, and that is the asymmetry this file exists for: no
+ * BALANCE retune can produce either record, so there is no "current" value to
+ * grandfather down to (contrast the clamps in spawn.ts).
+ */
+function isConstructionValid(b: SaveGameV7['buildings'][number]): boolean {
+  if (!isUnderConstruction(b.constructionTicks)) return true;
+  if (isRelocating(b.relocatingTicks)) return false;
+  return !b.batchActive && b.progress === 0;
+}
+
+export function isBuildingsValid(buildings: SaveGameV7['buildings']): boolean {
   return buildings.every((b) => {
     if (!Object.hasOwn(BUILDINGS, b.defId)) return false;
+    if (!isConstructionValid(b)) return false;
     if (b.batchActive) {
       // Upper bound intentionally NOT checked against the current recipe's
       // ticksPerBatch: a recipe retuned smaller after this save was written
@@ -65,6 +95,15 @@ export function isBuildingsValid(buildings: SaveGameV6['buildings']): boolean {
  * hand-edited save (the flooded-save principle: cheap checks before expensive
  * walks).
  *
+ * A construction SITE is absent from BOTH sets, on the argument the relocation
+ * exclusion below already makes: a site provides none of its service (spec
+ * §2.5), so it has no bed to sleep in and — since `ProductionSystem` skips it
+ * — no work to be assigned to. `handleAssignWorker` refuses a site and no
+ * command can home anyone into one, so both pairings are records no engine
+ * version could write; without the terms a hand-edited v7 save assigns a
+ * worker to a site who then produces nothing forever, which is exactly the
+ * defect the `workplaces` rule below already names for a house.
+ *
  * A relocating shelter is deliberately absent from `shelters`: a house in
  * transit has no usable beds — `beds.total` excludes it and `rehome` evicts
  * its residents on sight — so a record pairing the two is one no engine
@@ -82,7 +121,7 @@ interface ColonistTargets {
   shelters: ReadonlySet<number>;
 }
 
-function colonistTargets(buildings: SaveGameV6['buildings']): ColonistTargets {
+function colonistTargets(buildings: SaveGameV7['buildings']): ColonistTargets {
   const workplaces = new Set<number>();
   const shelters = new Set<number>();
   for (const b of buildings) {
@@ -90,6 +129,7 @@ function colonistTargets(buildings: SaveGameV6['buildings']): ColonistTargets {
     // isLoadableSave gets here; skipping rather than indexing keeps this
     // total if the composition order ever changes.
     if (!Object.hasOwn(BUILDINGS, b.defId)) continue;
+    if (isUnderConstruction(b.constructionTicks)) continue;
     const def = BUILDINGS[b.defId];
     if (def.recipe !== null) workplaces.add(b.id);
     if (def.beds > 0 && b.relocatingTicks === 0) shelters.add(b.id);
@@ -112,7 +152,7 @@ function isValidToolTicks(toolTicks: number): boolean {
   return Number.isSafeInteger(toolTicks) && toolTicks >= 0 && toolTicks <= MAX_SAVED_COUNTER;
 }
 
-function isColonistRecordValid(c: SaveGameV6['colonists'][number], targets: ColonistTargets): boolean {
+function isColonistRecordValid(c: SaveGameV7['colonists'][number], targets: ColonistTargets): boolean {
   if (!isValidHunger(c.hunger)) return false;
   if (!isValidToolTicks(c.toolTicks)) return false;
   // Present, sheltering AND settled, all three in one membership test — see
@@ -135,7 +175,7 @@ function isColonistRecordValid(c: SaveGameV6['colonists'][number], targets: Colo
   return targets.workplaces.has(c.buildingId);
 }
 
-export function isColonistsValid(data: SaveGameV6): boolean {
+export function isColonistsValid(data: SaveGameV7): boolean {
   const targets = colonistTargets(data.buildings);
   return data.colonists.every((c) => isColonistRecordValid(c, targets));
 }
@@ -146,7 +186,7 @@ export function isColonistsValid(data: SaveGameV6): boolean {
 // The MAX_SAVED_COUNTER ceiling cannot ping-pong (accepted save -> play ->
 // rejected save): IdCounter saturates at that same ceiling, refusing entity
 // creation instead of writing a counter the guard would refuse to load.
-export function isIdsValid(data: SaveGameV6): boolean {
+export function isIdsValid(data: SaveGameV7): boolean {
   const allIds = [...data.buildings.map((b) => b.id), ...data.colonists.map((c) => c.id)];
   // SAFE integers: past 2^53, ++ stops incrementing and ids would collide
   if (!allIds.every((id) => Number.isSafeInteger(id) && id > 0)) return false;
@@ -166,7 +206,7 @@ export function isIdsValid(data: SaveGameV6): boolean {
  * 10,000-building hand-edited save (the flooded-save principle: cheap
  * checks before expensive walks).
  */
-export function isPositionsValid(data: SaveGameV6): boolean {
+export function isPositionsValid(data: SaveGameV7): boolean {
   const tiles = new Set<string>();
   for (const b of data.buildings) {
     if (!isInsideMap(data.map, b.col, b.row) || b.col < CAMP_COLS) return false;
@@ -204,7 +244,7 @@ function isCatalogBuffer(buffer: Partial<Record<string, number>>): boolean {
  * and an over-capacity `stored` spills to the camp (restore.ts), exactly as
  * saved batch progress is clamped rather than rejected.
  */
-export function isBuffersValid(data: SaveGameV6): boolean {
+export function isBuffersValid(data: SaveGameV7): boolean {
   return data.buildings.every(
     (b) => isCatalogBuffer(b.buffer) && isCatalogBuffer(b.inputBuffer) && isCatalogBuffer(b.stored),
   );

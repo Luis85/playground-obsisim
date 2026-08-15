@@ -1,5 +1,5 @@
 import { LATEST_SAVE_VERSION } from '../shared/save';
-import type { SaveGameV6 } from '../shared/save';
+import type { SaveGameV7 } from '../shared/save';
 import { autoPlacePosition, DEFAULT_MAP } from '../shared/placement';
 import { SALT, spreadFor } from '../shared/population';
 import { BALANCE, STARTING_STOCK, STARTING_COLONISTS } from './content/balance';
@@ -9,7 +9,7 @@ import { BALANCE, STARTING_STOCK, STARTING_COLONISTS } from './content/balance';
  * builds still gets the id after the last founder. */
 const STARTER_HOUSE_ID = 1;
 
-export function initialSave(): SaveGameV6 {
+export function initialSave(): SaveGameV7 {
   return {
     version: LATEST_SAVE_VERSION,
     tick: 0,
@@ -26,6 +26,10 @@ export function initialSave(): SaveGameV6 {
     buildings: [{
       id: STARTER_HOUSE_ID, defId: 'house', ...autoPlacePosition(DEFAULT_MAP, [])!,
       progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0, inputBuffer: {}, stored: {},
+      // FINISHED, not a site (save v7): the starter house is a gift, not an
+      // order the player has to pay materials for — and a fresh colony whose
+      // only shelter were a site would open homeless.
+      constructionTicks: 0,
     }],
     colonists: Array.from({ length: STARTING_COLONISTS }, (_, index) => ({
       id: index + 1 + STARTER_HOUSE_ID,

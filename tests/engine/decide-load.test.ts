@@ -33,7 +33,7 @@ describe('decideLoad', () => {
     const decision = decideLoad(v1);
     expect(decision.kind).toBe('restore');
     if (decision.kind !== 'restore') return;
-    expect(decision.save.version).toBe(6);
+    expect(decision.save.version).toBe(7);
     expect(decision.save.map).toEqual({ cols: 24, rows: 16 });
     // The two legacy buildings on the legacy pattern, plus the starter house
     // v4->v5 gives a colony that has never had anywhere to live — on the next
@@ -55,7 +55,7 @@ describe('decideLoad', () => {
 
   it('routes a structurally valid save with an unknown building id to backup', () => {
     const save = initialSave();
-    save.buildings = [{ inputBuffer: {}, stored: {}, id: 99, defId: 'notABuilding' as never, progress: 0, batchActive: false, col: 4, row: 1, buffer: {}, relocatingTicks: 0 }];
+    save.buildings = [{ inputBuffer: {}, stored: {}, id: 99, defId: 'notABuilding' as never, progress: 0, batchActive: false, col: 4, row: 1, buffer: {}, relocatingTicks: 0, constructionTicks: 0}];
     save.nextEntityId = 100;
     expect(decideLoad(save)).toEqual({ kind: 'backup' });
   });

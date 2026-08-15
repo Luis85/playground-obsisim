@@ -171,13 +171,12 @@ export function buildEntitySections(
   // reports `housing`/`storing` exactly like a finished one — see
   // `buildingState` in snapshot-buildings.ts), so the published state alone
   // cannot tell a bed-bearing site apart from a bed-bearing finished house.
-  // `constructionTicks` — optional exactly where `relocatingTicks` above is
-  // not, since `SnapshotSystem`'s own live query does not carry `Construction`
-  // (this function's OTHER caller, the post-step refresh, always does) —
-  // defaults to 0 (finished) wherever it is absent, the same reading an
-  // omitted field gets everywhere else in this file.
+  // `constructionTicks` is carried by every `BuildingFacts` since save v7 —
+  // the two live callers read it off the `Construction` component, the save
+  // projection off the record — so this reads it unguarded, as it does
+  // `relocatingTicks` above.
   const underConstructionIds = new Set(
-    buildings.filter((b) => isUnderConstruction(b.constructionTicks ?? 0)).map((b) => b.id),
+    buildings.filter((b) => isUnderConstruction(b.constructionTicks)).map((b) => b.id),
   );
 
   for (const w of workers) {

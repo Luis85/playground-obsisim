@@ -1,8 +1,9 @@
 import type { ResourceId } from '../shared/content-types';
-import type { SavedBuilding, SavedColonist, SaveGameV6 } from '../shared/save';
+import type { SavedBuilding, SavedColonist, SaveGameV7 } from '../shared/save';
 import { MAX_SAVED_COUNTER } from '../shared/save';
 import type { ResourceStats, Snapshot } from '../shared/snapshot';
 import { stageOf } from '../shared/population';
+import { isUnderConstruction } from '../shared/placement';
 import { BALANCE, colonistEfficiency } from './content/balance';
 import { BUILDINGS } from './content/buildings';
 import { RESOURCES, RESOURCE_IDS } from './content/resources';
@@ -11,7 +12,7 @@ import { OutputBuffer } from './components';
 import type { ColonistFacts } from './snapshot-builder';
 import { buildEntitySections } from './snapshot-builder';
 import type { BuildingFacts } from './snapshot-buildings';
-import { clampedBuffer, clampedInputBuffer, clampedProgress, clampedRelocation } from './spawn';
+import { clampedBuffer, clampedConstruction, clampedProgress, clampedRelocation, clampedToCost, restoredInputBuffer } from './spawn';
 import { restoredColonists } from './restore';
 
 /**
@@ -30,7 +31,7 @@ import { restoredColonists } from './restore';
  * already a self-contained save -> Snapshot projection with no world-building
  * concerns, the same mechanical split save-guard.ts came from.
  */
-export function buildInitialSnapshot(save: SaveGameV6): Snapshot {
+export function buildInitialSnapshot(save: SaveGameV7): Snapshot {
   const colonistFacts = restoredColonists(save).map(colonistFactsOfSaved);
   const buildingFacts = save.buildings.map(buildingFactsOfSaved);
   const stock = colonyStockOfSaved(save);
@@ -93,7 +94,7 @@ function colonistFactsOfSaved(saved: SavedColonist): ColonistFacts {
  * One restored building's facts, under the same clamps the spawn and restore
  * paths apply — so every seeded figure matches what the spawned entity and the
  * seeded ledger actually hold. All three piles go through their own authority:
- * `clampedBuffer` for the out-tray (`buildingComponents`), `clampedInputBuffer`
+ * `clampedBuffer` for the out-tray (`buildingComponents`), `restoredInputBuffer`
  * for the in-tray (the same), and `clampedBuffer` against the def's `storage`
  * for the ledger share (`seedStoredGoods`).
  *
@@ -106,6 +107,7 @@ function colonistFactsOfSaved(saved: SavedColonist): ColonistFacts {
  */
 function buildingFactsOfSaved(saved: SavedBuilding): BuildingFacts {
   const buffer = new OutputBuffer(clampedBuffer(saved.buffer, BALANCE.outputBufferCap));
+  const constructionTicks = clampedConstruction(saved.constructionTicks);
   return {
     id: saved.id,
     defId: saved.defId,
@@ -115,12 +117,20 @@ function buildingFactsOfSaved(saved: SavedBuilding): BuildingFacts {
     batchActive: saved.batchActive,
     buffered: buffer.total(),
     buffer: Object.fromEntries(buffer.amounts) as Partial<Record<ResourceId, number>>,
-    inputBuffer: Object.fromEntries(clampedInputBuffer(saved.inputBuffer)) as Partial<Record<ResourceId, number>>,
+    // Through `restoredInputBuffer`, so a SITE's tray is bounded by its bill
+    // and a finished building's by `inputBufferCap` — the same choice
+    // `buildingComponents` makes for the entity standing beside this row. Fix
+    // one and not the other and a restored 30-unit site holds 30 while the
+    // screen says 12.
+    inputBuffer: Object.fromEntries(
+      restoredInputBuffer(saved.inputBuffer, saved.defId, constructionTicks),
+    ) as Partial<Record<ResourceId, number>>,
     // Trimmed to what this def can hold TODAY — 0 for anything that is not a
     // store, which is what a hand-edited save or a `storage` retuned to nothing
     // leaves behind.
     stored: Object.fromEntries(clampedBuffer(saved.stored, BUILDINGS[saved.defId].storage)) as Partial<Record<ResourceId, number>>,
     relocatingTicks: clampedRelocation(saved.relocatingTicks ?? 0),
+    constructionTicks,
   };
 }
 
@@ -142,15 +152,40 @@ function buildingFactsOfSaved(saved: SavedBuilding): BuildingFacts {
  * the camp is a term of this same sum. The clamp is observable in
  * `BuildingSnapshot.stored`, never in the colony's total — which is exactly the
  * conservation `seedStoredGoods` promises, restated on the reading side.
+ *
+ * `inputBuffer` is deliberately NOT a term: in-tray goods are outside the
+ * ledger. The one exception is `siteExcessOfSaved` below — materials a SITE may
+ * no longer hold BECOME ledger at load, and this sum is the only thing standing
+ * between that refund and a paused colony showing it missing from `stockpile`
+ * and from `colonyWealth` until the first tick rebuilt the snapshot from the
+ * live `Stockpile`. Same rule as `stored`'s spill, applied to the second spill
+ * the restore performs.
  */
-function colonyStockOfSaved(save: SaveGameV6): Record<ResourceId, number> {
+function colonyStockOfSaved(save: SaveGameV7): Record<ResourceId, number> {
   const stock = {} as Record<ResourceId, number>;
   for (const resourceId of RESOURCE_IDS) {
     let total = save.stockpile[resourceId] ?? 0;
-    for (const building of save.buildings) total += building.stored[resourceId] ?? 0;
+    for (const building of save.buildings) {
+      total += building.stored[resourceId] ?? 0;
+      total += siteExcessOfSaved(building, resourceId);
+    }
     stock[resourceId] = total;
   }
   return stock;
+}
+
+/**
+ * One resource's worth of materials `refundTrimmedMaterials` (restore.ts) banks
+ * at the camp for this record — 0 for a finished building, and 0 for a site
+ * whose tray is within its bill. Derived through `clampedToCost`, the same
+ * authority the restore refunds against, so the two cannot disagree about how
+ * much was declined.
+ */
+function siteExcessOfSaved(saved: SavedBuilding, resourceId: ResourceId): number {
+  if (!Object.hasOwn(BUILDINGS, saved.defId)) return 0;
+  if (!isUnderConstruction(clampedConstruction(saved.constructionTicks))) return 0;
+  const kept = clampedToCost(saved.inputBuffer, saved.defId).get(resourceId) ?? 0;
+  return Math.max(0, (saved.inputBuffer[resourceId] ?? 0) - kept);
 }
 
 /** Per-resource stats and the wealth they sum to, from the colony's ledger. */

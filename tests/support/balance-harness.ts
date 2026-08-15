@@ -1,7 +1,7 @@
 import type { IPreptimeWorld, IRuntimeWorld } from 'sim-ecs';
 import type { BuildingDefId, ResourceId } from '../../src/shared/content-types';
 import type { HaulPhase } from '../../src/shared/haul';
-import type { SaveGameV6 } from '../../src/shared/save';
+import type { SaveGameV7 } from '../../src/shared/save';
 import type { ColonistSnapshot, Snapshot } from '../../src/shared/snapshot';
 import { haulTicks } from '../../src/shared/haul';
 import { autoPlacePosition, isTileBuildable, type TileRef, type WorldMapSize } from '../../src/shared/placement';
@@ -795,7 +795,7 @@ export async function runScenario(scenario: Scenario): Promise<BalanceResult> {
   const { ticks, moveTo } = scenario;
   const stages = stagesOf(scenario);
   const seededStockpile = Object.fromEntries(seededResourcesFor(stages).map((id): [ResourceId, number] => [id, FED]));
-  const save: SaveGameV6 = {
+  const save: SaveGameV7 = {
     ...initialSave(),
     // Both, and for different reasons. `colonists` because v5 renamed the
     // roster key — clearing `workers` would leave the real array untouched.

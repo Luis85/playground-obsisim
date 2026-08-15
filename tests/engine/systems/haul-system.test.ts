@@ -659,7 +659,7 @@ describe('HaulSystem lifecycle', () => {
     // restore that carried one across timelines, fails here.
     const save = initialSave();
     save.colonists = save.colonists.map((worker) => ({ ...worker, hauling: true }));
-    save.buildings = [{ inputBuffer: {}, stored: {}, id: 10, defId: 'forester', progress: 0, batchActive: false, col: 5, row: 4, buffer: { wood: 9 }, relocatingTicks: 0 }];
+    save.buildings = [{ inputBuffer: {}, stored: {}, id: 10, defId: 'forester', progress: 0, batchActive: false, col: 5, row: 4, buffer: { wood: 9 }, relocatingTicks: 0, constructionTicks: 0}];
     save.nextEntityId = 11;
     const world = await createColonyWorld(save);
 

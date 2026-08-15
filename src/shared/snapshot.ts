@@ -66,6 +66,17 @@ export interface BuildingSnapshot {
   storage: number;
   /** Ticks until a moved building can work again (0 when not relocating). */
   relocatingTicks: number;
+  /**
+   * Ticks until this building stops being a construction site and enters
+   * service (0 when it already has). NUMERIC, exactly as `relocatingTicks`
+   * above is, rather than folded into `state`: the countdown is clamped on
+   * load against the current `buildTicks`, and a boolean-like state cannot
+   * tell a clamped countdown from an unclamped one — both would read "under
+   * construction". It is also what the paused initial snapshot publishes, so
+   * the figure the player reads before the first tick is the one the live
+   * `Construction` component holds.
+   */
+  constructionTicks: number;
   /** Sleeping places this building provides (0 for a producer). */
   beds: number;
   /** Colonists currently homed here. Derived from who points at it, never

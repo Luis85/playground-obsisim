@@ -36,13 +36,11 @@ export interface BuildingFacts {
   stored: Partial<Record<ResourceId, number>>;
   relocatingTicks: number;
   /** Ticks left before this building stops being a construction site (spec
-   * §2.5), threaded exactly like `relocatingTicks` above — except OPTIONAL:
-   * `SavedBuilding` carries no field for it until Task 8, so
-   * `buildInitialSnapshot`'s save projection (the one caller that does not
-   * have one) cannot supply one yet. Absent is read as 0 (finished) wherever
-   * this is consumed, the same default a restored site would get if it
-   * existed. */
-  constructionTicks?: number;
+   * §2.5), threaded exactly like `relocatingTicks` above — and required
+   * exactly as it is, since save v7 gives every projection of a building a
+   * countdown to read: the two live callers take it off the `Construction`
+   * component, and `buildInitialSnapshot` takes it off the save record. */
+  constructionTicks: number;
 }
 
 /**
@@ -133,6 +131,7 @@ export function buildingSnapshotsOf(buildings: readonly BuildingFacts[], tallies
         // empty depot still has one.
         storage: def.storage,
         relocatingTicks: b.relocatingTicks,
+        constructionTicks: b.constructionTicks,
         beds: def.beds,
         occupants: tallies.occupants.get(b.id) ?? 0,
       };
@@ -148,13 +147,7 @@ export function buildingSnapshotsOf(buildings: readonly BuildingFacts[], tallies
  */
 export function buildingFactsOf(
   building: Building, slots: WorkerSlots, production: Production, position: Position, buffer: OutputBuffer, relocation: Relocation,
-  input: InputBuffer, stored: Partial<Record<ResourceId, number>>,
-  // Optional, like `BuildingFacts.constructionTicks` it feeds: the live
-  // callers (`SnapshotSystem`, `gatherEntityFacts` below) both pass one, but
-  // `buildInitialSnapshot`'s save projection (initial-snapshot.ts) cannot —
-  // `SavedBuilding` carries no field for it until Task 8 — and a required
-  // parameter here would force that unrelated file into this task's diff.
-  construction?: Construction,
+  input: InputBuffer, stored: Partial<Record<ResourceId, number>>, construction: Construction,
 ): BuildingFacts {
   return {
     id: building.id,
@@ -169,7 +162,7 @@ export function buildingFactsOf(
     inputBuffer: Object.fromEntries(input.amounts) as Partial<Record<ResourceId, number>>,
     stored,
     relocatingTicks: relocation.ticksLeft,
-    constructionTicks: construction?.ticksLeft,
+    constructionTicks: construction.ticksLeft,
   };
 }
 
@@ -185,5 +178,9 @@ export function savedBuildingOf(facts: BuildingFacts): SavedBuilding {
     inputBuffer: facts.inputBuffer,
     stored: facts.stored,
     relocatingTicks: facts.relocatingTicks,
+    // Save v7. Without it every site completed for free on reload: the record
+    // came back with no countdown, restore defaulted it to zero, and a
+    // building nobody paid for was standing there finished.
+    constructionTicks: facts.constructionTicks,
   };
 }

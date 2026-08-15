@@ -45,14 +45,14 @@ export const MAX_SAVED_COUNTER = Number.MAX_SAFE_INTEGER - 2 ** 32;
  *
  * Both producers (`buildSaveFromWorld`, `initialSave`) use this constant rather
  * than a literal, which makes the bump self-policing: because
- * `SaveGameV6.version` is the literal type `6`, raising this to 7 fails
- * typecheck AT those producers (`Type '7' is not assignable to type '6'`) until
+ * `SaveGameV7.version` is the literal type `7`, raising this to 8 fails
+ * typecheck AT those producers (`Type '8' is not assignable to type '7'`) until
  * the save type is updated too. That is deliberate — with hardcoded literals,
- * bumping the constant would have pointed the loader at v7 while autosaves and
- * fresh colonies kept claiming v6, and a v6-labelled save carrying v7 fields
+ * bumping the constant would have pointed the loader at v8 while autosaves and
+ * fresh colonies kept claiming v7, and a v7-labelled save carrying v8 fields
  * would then be migrated a second time on load.
  */
-export const LATEST_SAVE_VERSION = 6;
+export const LATEST_SAVE_VERSION = 7;
 
 /** The v1 building record — frozen legacy shape, pre-spatial. */
 export interface SavedBuildingV1 {
@@ -82,8 +82,9 @@ export interface SavedBuildingV4 extends SavedBuildingV3 {
 }
 
 /**
- * The current building record (save v6): goods are hauled BOTH ways now, so a
- * building holds two piles the colony would otherwise lose on every reload.
+ * The v6 building record — frozen legacy shape, pre-construction: goods are
+ * hauled BOTH ways now, so a building holds two piles the colony would
+ * otherwise lose on every reload.
  *
  * Frozen as `SavedBuildingV4` above rather than extended in place, for the
  * reason `SavedBuildingV1`-`V3` are frozen: `SaveGameV4.buildings` is typed by
@@ -92,7 +93,7 @@ export interface SavedBuildingV4 extends SavedBuildingV3 {
  * migration input would have to carry them or stop compiling, and v6 would
  * have no distinct shape left to migrate towards.
  */
-export interface SavedBuilding extends SavedBuildingV4 {
+export interface SavedBuildingV6 extends SavedBuildingV4 {
   /** Raw goods waiting in this building's own in-tray for its next batch;
    * `{}` when empty. Uniform shape, like `buffer` — a single unconditional
    * guard check rather than an optional one. */
@@ -101,6 +102,31 @@ export interface SavedBuilding extends SavedBuildingV4 {
    * for everything else. Serialized off the building record because a ledger
    * site may not outlive the building behind it (spec §2.4 invariant 2). */
   stored: Partial<Record<ResourceId, number>>;
+}
+
+/**
+ * The current building record (save v7): a building is no longer finished the
+ * tick it is ordered, so the countdown that says whether it is a CONSTRUCTION
+ * SITE has to survive a reload — for the reason `relocatingTicks` does (spec
+ * §2.5, and increment 5 §2.4 for the precedent). Dropping it completed every
+ * site for free on the next load: the building appeared finished, its cost was
+ * never delivered, and its demand vanished from the affordability check.
+ *
+ * The materials already delivered need NO new field: `inputBuffer` is the
+ * site's in-tray and already round-trips. What it needs instead is a different
+ * load-time BOUND, since a site's tray is its bill rather than a buffer — see
+ * `clampedToCost` (src/engine/spawn.ts).
+ *
+ * `SavedBuildingV6` is frozen above rather than extended in place, for exactly
+ * the reason V1-V4 are: `SaveGameV6.buildings` is typed by that record, so a
+ * REQUIRED field here would silently claim every v6 save already carries it,
+ * and `isSavedBuildingV6Shape` would reject every genuine v6 file before the
+ * v6 -> v7 migration could supply the zero.
+ */
+export interface SavedBuilding extends SavedBuildingV6 {
+  /** Ticks left before this building stops being a construction site; 0 for a
+   * finished one, which is what every pre-v7 building migrates to. */
+  constructionTicks: number;
 }
 
 /** The pre-v3 worker record — frozen legacy shape, before hauling existed. */
@@ -211,7 +237,7 @@ export interface SaveGameV5 extends Omit<SaveGameV4, 'version' | 'workers'> {
 }
 
 /**
- * The current save (v6): goods stop living in one flat ledger. A building now
+ * The v6 save — frozen legacy shape: goods stop living in one flat ledger. A building now
  * carries its own in-tray and its own share of the colony's stock, and
  * `stockpile` narrows to THE CAMP's contents — which for a v5 colony is
  * exactly what it already was, since a v5 colony had nowhere else to put
@@ -223,8 +249,21 @@ export interface SaveGameV5 extends Omit<SaveGameV4, 'version' | 'workers'> {
 export interface SaveGameV6 extends Omit<SaveGameV5, 'version' | 'buildings'> {
   version: 6;
   /** What the CAMP holds. Every other site's contents live on the building
-   * that is that site (`SavedBuilding.stored`). */
+   * that is that site (`SavedBuildingV6.stored`). */
   stockpile: Partial<Record<ResourceId, number>>;
+  buildings: SavedBuildingV6[];
+}
+
+/**
+ * The current save (v7): construction is work, so a building can be persisted
+ * as a SITE — ordered, standing on its tile, and providing nothing until the
+ * materials haulers carry to it count its countdown down.
+ *
+ * `buildings` is redeclared for the reason v6 redeclared it: it is the one
+ * field whose record type moves, and the version literal moves with it.
+ */
+export interface SaveGameV7 extends Omit<SaveGameV6, 'version' | 'buildings'> {
+  version: 7;
   buildings: SavedBuilding[];
 }
 
@@ -400,13 +439,31 @@ function isSavedBuildingV4Shape(b: unknown): boolean {
 
 /** The v6 building record: a v4 one plus the two maps v6 adds, each validated
  * by the same buffer-shape check `buffer` goes through — one rule for "a map
- * of non-negative safe-integer amounts", never a second copy per field. */
+ * of non-negative safe-integer amounts", never a second copy per field.
+ *
+ * FROZEN, and deliberately blind to `constructionTicks`: this is what a v6 file
+ * on disk is validated against before the v6 -> v7 migration runs, and a check
+ * for v7's field here would refuse every genuine v6 save. */
 function isSavedBuildingV6Shape(b: unknown): boolean {
   return (
     isSavedBuildingV4Shape(b) &&
-    isBufferShape((b as SavedBuilding).inputBuffer) &&
-    isBufferShape((b as SavedBuilding).stored)
+    isBufferShape((b as SavedBuildingV6).inputBuffer) &&
+    isBufferShape((b as SavedBuildingV6).stored)
   );
+}
+
+/**
+ * The v7 building record: a v6 one carrying the construction countdown.
+ *
+ * `isTickCounter` — the check `starvingTicks` and `ageTicks` go through — NOT
+ * the bare `Number.isFinite` guarding `relocatingTicks` two functions up, which
+ * accepts a negative and a fractional countdown (relocation compensates for
+ * that in `isLoadableSave`, which can see the whole save). Magnitude is NOT
+ * bounded: a save written under a longer `buildTicks` still loads and is
+ * clamped at spawn (`clampedConstruction`), like every other tick counter.
+ */
+function isSavedBuildingV7Shape(b: unknown): boolean {
+  return isSavedBuildingV6Shape(b) && isTickCounter((b as SavedBuilding).constructionTicks);
 }
 
 export function isSaveGameV3(data: unknown): data is SaveGameV3 {
@@ -465,9 +522,16 @@ export function isSaveGameV5(data: unknown): data is SaveGameV5 {
   return isColonistRosterSave(data as Record<string, unknown>, 5, isSavedBuildingV4Shape);
 }
 
-/** The current structural guard: v5's roster rules, with every building
- * carrying an input buffer and a stored map. */
+/** The v6 structural guard — frozen, and still live: it is what the v6->v7
+ * migration's input is validated against. */
 export function isSaveGameV6(data: unknown): data is SaveGameV6 {
   if (typeof data !== 'object' || data === null) return false;
   return isColonistRosterSave(data as Record<string, unknown>, 6, isSavedBuildingV6Shape);
+}
+
+/** The current structural guard: v6's rules, with every building carrying a
+ * construction countdown. */
+export function isSaveGameV7(data: unknown): data is SaveGameV7 {
+  if (typeof data !== 'object' || data === null) return false;
+  return isColonistRosterSave(data as Record<string, unknown>, 7, isSavedBuildingV7Shape);
 }

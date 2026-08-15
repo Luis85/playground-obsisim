@@ -28,7 +28,7 @@ function mountWith(component: typeof EconomyView | typeof DashboardView, snapsho
 const baseBuilding = {
   col: 0, row: 0, workers: 0, workerSlots: 2, progress: 0, batchActive: false,
   progressPct: 0, tooledWorkers: 0, workPower: 0, buffered: 0, inputBuffered: 0, stored: 0, storage: 0,
-  relocatingTicks: 0, beds: 0, occupants: 0,
+  relocatingTicks: 0, constructionTicks: 0, beds: 0, occupants: 0,
 };
 
 describe('EconomyView', () => {

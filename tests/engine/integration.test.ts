@@ -5,7 +5,7 @@ import { SnapshotStore } from '../../src/engine/resources';
 import { createColonyWorld, initialSave } from '../../src/engine/world';
 import { BALANCE } from '../../src/engine/content/balance';
 import { enqueue as dispatch, stepTick } from './fixtures';
-import type { SaveGameV6 } from '../../src/shared/save';
+import type { SaveGameV7 } from '../../src/shared/save';
 
 /**
  * `constructBuilding` now spawns a SITE (spec §2.5), and this end-to-end
@@ -63,7 +63,7 @@ async function run(world: Awaited<ReturnType<typeof createColonyWorld>>, ticks: 
  */
 const HOUSE_TILES = [{ col: 5, row: 1 }, { col: 7, row: 1 }, { col: 9, row: 1 }, { col: 11, row: 1 }, { col: 5, row: 3 }];
 
-function richSave(): SaveGameV6 {
+function richSave(): SaveGameV7 {
   const save = initialSave();
   save.stockpile = { wood: 500, planks: 200, berries: 200 };
   // 5 houses x BALANCE.houseBeds is 20 beds for 18 colonists, so nobody is
@@ -74,6 +74,7 @@ function richSave(): SaveGameV6 {
   save.buildings = HOUSE_TILES.map((tile, i) => ({ inputBuffer: {}, stored: {},
     id: 19 + i, defId: 'house' as const, col: tile.col, row: tile.row,
     progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0,
+  constructionTicks: 0,
   }));
   save.colonists = Array.from({ length: 18 }, (_, i) => ({
     id: i + 1, hunger: 0, buildingId: null, toolTicks: 0, hauling: false,

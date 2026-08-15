@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript, sim-ecs 0.6.4, Vue 3 + Pinia, Vitest, Excalibur (canvas only), fallow (quality gates).
 
-**Spec:** `docs/superpowers/specs/2026-08-11-increment-9-construction-as-work.md`. Section references below (§2.4, §2.7, …) are to that document.
+**Spec:** `docs/superpowers/specs/2026-08-11-increment-9-construction-as-work.md`. Section references below (§2.5, §2.7, …) are to that document.
 
 ## The branch is playable throughout, with one visible oddity
 
@@ -30,28 +30,29 @@ The exclusions depend only on Task 1's component and Task 2's sites, never on de
   | `src/engine/world.ts` | 489 | **Task 1 — mandatory extraction, see above** |
   | `src/engine/systems/haul-transfer.ts` | 436 | untouched, keep it that way |
   | `src/shared/save.ts` | 434 | Task 8 (contingency: the v7 record beside the v6 one is small; if it trips, split the guards) |
-  | `src/shared/haul.ts` | 420 | Task 4 |
+  | `src/shared/haul.ts` | 420 | untouched — dispatch ordering is increment 10 |
   | `src/shared/save-migration.ts` | 415 | Task 8 |
-  | `src/engine/systems/haul-dispatch.ts` | 395 | Task 3, Task 4 |
+  | `src/engine/systems/haul-dispatch.ts` | 395 | Task 3 |
   | `src/engine/components.ts` | 350 | Task 1 |
   | `src/engine/systems/placement-handlers.ts` | 327 | Task 2, Task 7 |
   | `src/engine/snapshot-builder.ts` | 379 | Task 2b |
 
   Check with `grep -cve '^\s*$' <file>` after every task that touches one.
-- **Every task's tests must be greenable by that task's own changes.** `check:all` is required green at the end of every task, so a test asserting behaviour a *later* task enables cannot be committed — the implementer must then skip it, weaken it, or pull the later task forward, and all three are worse than writing the right assertion now. **This plan broke that rule three times in review** (Task 1's save round-trip needs Task 8's schema; Tasks 3 and 4 asserted completion, which needs Task 5's system), so before starting any task, check its tests against its own file list. Where the strong assertion belongs to a later task, the earlier one asserts the strongest thing it *can* reach and names the task that finishes the job.
-- **Grep for the four "a building is a producer" proxies and justify every hit.** Every shipped predicate and constant in this engine was written when a building was one of exactly three things: a producer, a shelter, or a store. A site is none of them. Two rounds of review on this plan found **six** places that assumed a fourth kind could not exist, across four proxies — and enumerating them one review round at a time is not a method. §2.7 has the table; the search is:
+- **Every task's tests must be greenable by that task's own changes.** `check:all` is required green at the end of every task, so a test asserting behaviour a *later* task enables cannot be committed — the implementer must then skip it, weaken it, or pull the later task forward, and all three are worse than writing the right assertion now. **This plan broke that rule three times in review** (Task 1's save round-trip needs Task 8's schema; Task 3 asserted completion, which needs Task 5's system; and a stalled-queue recovery test sat in a dispatch task that had neither completion nor cancellation), so before starting any task, check its tests against its own file list. Where the strong assertion belongs to a later task, the earlier one asserts the strongest thing it *can* reach and names the task that finishes the job.
+- **Grep for the three "a building is a producer" proxies and justify every hit.** Every shipped predicate and constant in this engine was written when a building was one of exactly three things: a producer, a shelter, or a store. A site is none of them. Two rounds of review on this plan found **six** places that assumed a fourth kind could not exist, across these proxies — and enumerating them one review round at a time is not a method. §2.7 has the table; the search is:
 
   ```bash
   grep -rn "inputBufferCap" src/          # "an in-tray belongs to a recipe, so 12 is enough"
   grep -rn "staffed\|StaffedSet" src/     # "a building worth feeding has workers"
   grep -rn "relocatingTicks\|isRelocating" src/   # "the only non-working building is a moving one"
-  grep -rn "affordableDefs\|canAfford" src/       # "you cannot order what you cannot pay for"
   ```
+
+  **Three proxies, not four.** An earlier draft listed `affordableDefs`/`canAfford` as a fourth, because §2.3 removed the affordability check. It does not any more — that assumption stays TRUE in this increment (Task 2 keeps the refusal), so there is nothing to audit. It becomes increment 10's first task.
 
   Each hit is either a site exemption, a site exclusion, or deliberately neither — and the third case needs a sentence saying why. The tasks below name the hits two reviews found; they are not a complete list, and a task that finds a new one should fix it and say so rather than deferring it.
 - **Mutation-test every test.** Back up by copy, `sed`, `diff -q` against **the backup** to confirm it applied, restore **by copy** — never `git checkout <file>`, which restores from HEAD and destroys uncommitted work.
-- **Every clause of a compound boolean needs its own fixture.** §2.7 is six separate exclusions and §2.4 is an ordering with a new term ahead of the existing chain. Both are the shape where a whole-condition mutation reddens a gated path and looks like coverage.
-- **Any quantity a dispatch spends must be tested with more than one hauler, and §2.4 needs more than one SITE.** Increment 8's over-claim family all passed single-hauler fixtures. The convergence rule is a *many* problem by construction and cannot be observed with one of either.
+- **Every clause of a compound boolean needs its own fixture.** §2.7 is six separate exclusions, and that is the shape where a whole-condition mutation reddens a gated path and looks like coverage.
+- **Any quantity a dispatch spends must be tested with more than one hauler.** Increment 8's over-claim family all passed single-hauler fixtures, and Task 3 makes a site's per-resource room claimable by several haulers at once — one hauler cannot over-claim, so a one-hauler fixture cannot show the bug.
 - **A mutation that makes a system THROW does not fail a test by default.** sim-ecs catches it and publishes a `SystemError`; subscribe and assert `errors` is empty.
 - **Goods are carried, never teleported.** This increment exists to make that sentence true in the last place it is false. No path may complete a site by moving goods without a hauler.
 - **Conservation is exact, and the sentinel is not sufficient.** A refund that teleports preserves the colony total. Assert what a total cannot see.
@@ -116,7 +117,8 @@ it('COMPONENT_TYPES includes Construction', () => {
 
 **Interfaces:**
 - `handleConstructBuilding` **stops calling `ctx.stockpile.pay(def.cost)`**, spawns with `Construction(BALANCE.buildTicks)`, and its notice says *started* rather than *built*.
-- The id-exhaustion and tile checks stay, and stay **before** the spawn — neither is recoverable later. The `pay` rejection disappears with `pay` itself.
+- **The affordability REFUSAL stays; only the PAYMENT goes.** `pay` today does both — it tests and it debits — so removing the call removes both unless the test is put back explicitly as a `canAfford` check ahead of the spawn. Dropping the refusal is increment 10's opening move and must not happen here by accident: it is a product change, and arriving at it through a refactor is how it would ship unnoticed and unmeasured.
+- The id-exhaustion and tile checks stay, and stay **before** the spawn — neither is recoverable later, and the affordability check joins them there.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -127,10 +129,11 @@ it('ordering a building does not move the ledger', async () => {
   // implementation that pays a different resource.
 });
 
-it('a colony that cannot afford a building can still order it', async () => {
-  // §2.3, and the decision it embodies. Empty ledger, order a mill, get a site.
-  // This is the test that fails against any reservation design, so it is also
-  // the one that pins the decision.
+it('a colony that cannot afford a building is still refused', async () => {
+  // ACCEPTANCE CRITERION 5, and the guard on the split. Empty ledger, order a
+  // mill, get a REFUSAL and no site. Removing `pay` deletes the debit and the
+  // test together unless `canAfford` is put back deliberately, so without this
+  // test increment 10's product change ships silently inside a refactor.
 });
 
 it('a site occupies its tile', async () => {
@@ -139,14 +142,14 @@ it('a site occupies its tile', async () => {
 });
 
 it('id exhaustion and an unbuildable tile are still refused', async () => {
-  // Both rejections survive the removal of the third. Separate fixtures — a
-  // single test covering both passes with one of them deleted.
+  // All three rejections survive. Separate fixtures — one test covering several
+  // passes with any one of them deleted.
 });
 ```
 
 - [ ] **Step 2: Implement, mutation-test, commit**
 
-Mutations: restore the `pay` call; spawn with `ticksLeft = 0`; move the tile check after the spawn.
+Mutations: restore the `pay` call; **delete the `canAfford` check**; spawn with `ticksLeft = 0`; move the tile check after the spawn.
 
 ---
 
@@ -304,120 +307,15 @@ Mutations, one per change: point a site's want at `recipe`; cap a site's room at
 
 ---
 
-### Task 4: Age first — the ordering that makes a queue converge
+### Task 4 was age-first dispatch, and it is now increment 10
 
-**The sharpest rule in the increment**, and the one an implementation gets wrong by leaving the ranking alone. Read §2.4 in full before starting.
+**Nothing replaces it here.** `compareSupplyCandidates` and `nextSupplyTarget` are untouched by this increment, and a site competes for haulers on exactly the terms every other supply target already uses.
 
-**Files:**
-- Modify: `src/shared/haul.ts` (`SupplyCandidate`, `compareSupplyCandidates`), `src/engine/systems/haul-dispatch.ts`
-- Test: `tests/shared/haul.test.ts`, `tests/engine/systems/haul-dispatch.test.ts`
+That has a visible consequence the implementer should expect rather than debug: **several sites ordered at once fill round-robin.** `movable` is bounded by remaining room, so a nearly-complete site has small `movable` and loses to a newer empty one. Three sites ordered together finish late and together instead of one at a time. §2.4 prices this and accepts it — with the affordability check still in place (Task 2), a queue is bounded by what the colony could pay for, so round-robin is slow rather than broken. Every site still completes.
 
-**Interfaces:**
-- `SupplyCandidate` gains `siteAge: number | null` — the building id for a site, `null` for a finished building. **No new state**: `IdCounter.take()` is monotone, so a lower id *is* an earlier order, and the tie-break chain already ends at this field.
-- `compareSupplyCandidates` gains **exactly one** thing: **a site is never in the starvation band.** No age term is added to it. **Do not add a "sites first" clause** either — see below.
-- `nextSupplyTarget` becomes **two-phase**, and this is where age lives:
-  1. lowest `siteAge` among site candidates;
-  2. best non-site by the existing comparator;
-  3. one ordinary comparison between those two winners.
+**If a fixture here appears to want an ordering rule, it is the wrong fixture.** No acceptance criterion in this increment mentions service order or completion order; criterion 4 says only that several sites all complete. A test asserting anything sharper is asserting a requirement this increment does not have, and it belongs to the successor.
 
-**Age must NOT be a comparator term, and this is the subtle half.** Applying age "when both candidates are sites" makes `compareSupplyCandidates` **non-transitive**, and `nextSupplyTarget` is a reduction — so the winner depends on candidate iteration order, the one property every selection in this codebase commits to not having. With nothing starving: an old site (movable 1) beats a newer site (movable 6) on age; the newer site beats a finished building (movable 4) on `movable`; the building beats the old site on `movable`. Feed them in the order building, old, new and the *newest* site wins.
-
-Two phases are transitive by construction — each is a total order over a disjoint set, and step 3 is a single comparison rather than a reduction over a mixed set.
-
-**Why, restated because the code will not show it:** `movable` is bounded by remaining room, so a nearly-complete site has small `movable` and **loses** to a newer empty one. Twenty sites round-robin and none finishes.
-
-**And why the rule stops there.** An earlier draft put sites ahead of finished buildings unconditionally, which is a priority inversion: a site's cost is planks, planks come from a sawmill, the sawmill needs wood — sites outranking the sawmill send every log to the sites, the sawmill never produces, and the oldest site waits on planks that can never arrive. A continuously extended queue starves the producer indefinitely.
-
-The two-part rule fixes that **with no dependency machinery**, and part 2 is what does it: a sawmill with an empty in-tray *is* starving, a site never is, so a blocked producer outranks a queue of sites automatically — through the band increment 8 already shipped for exactly this purpose.
-
-- [ ] **Step 1: Write the failing tests**
-
-```ts
-it('nextSupplyTarget picks an older site over a newer one that is emptier and nearer', () => {
-  // Through THE SELECTOR, not the comparator — age no longer lives in
-  // `compareSupplyCandidates` and a comparator-level test of it cannot pass,
-  // and would push an implementer straight back to the non-transitive version
-  // this design exists to avoid.
-  //
-  // DISCRIMINATING: the older site must lose on EVERY comparator term — less
-  // movable, farther, not starving — so a fixture where it also wins on one of
-  // them proves nothing.
-});
-
-it('compareSupplyCandidates is unchanged for two finished buildings', () => {
-  // The comparator's own test is now purely a regression guard. Age must NOT
-  // appear in it.
-});
-
-it('a STARVING producer outranks a site', () => {
-  // The priority inversion, guarded from the direction that matters. A sawmill
-  // with an empty in-tray beats a queue of sites that need its planks — which
-  // is what stops the queue starving the chain that supplies it. Reverse this
-  // and the fixture below deadlocks.
-});
-
-it('a queue of sites does not starve the producer that makes what they need', async () => {
-  // The integration form. Sites must cost BOTH wood and planks — a plank-only
-  // fixture cannot catch the stall below, because those sites never compete
-  // with the sawmill for wood at all.
-  //
-  // Three wood-and-plank sites, a staffed sawmill with an empty in-tray, wood
-  // in the camp. Against a "sites first" ordering the sawmill never runs.
-  //
-  // KNOWN LIMITATION, and this test pins its BOUNDARY rather than its absence
-  // (spec §2.4): the starvation band clears on the sawmill's FIRST claim
-  // (`claimedIn === 0`), so protection is one load deep and a long enough queue
-  // still stalls. Assert what the shipped rule guarantees — the sawmill is
-  // served before any site — and leave the stall to the §4.1 measurement.
-});
-
-// The recovery half of §2.4's known limitation — 'cancelling a younger site
-// recovers a stalled queue' — is NOT here. It needs completion (Task 5) and the
-// refund branch (Task 7) before it can be green, and neither exists yet. Task 7
-// owns it. This task's assertions stop at dispatch ordering, which is all it
-// builds.
-
-it('a site is never in the starvation band', () => {
-  // A site holding zero must NOT be promoted the way a producer holding zero is.
-});
-
-it('the winner does not depend on candidate order — mixed three-candidate permutations', () => {
-  // THE TRANSITIVITY TEST, and it must use a MIXED set: one old site with small
-  // movable, one newer site with large movable, one finished building in
-  // between. Feed all SIX permutations and require the same winner every time.
-  //
-  // A same-kind shuffle test cannot catch this: the cycle only exists across the
-  // site/non-site boundary. An earlier draft made the comparator non-transitive
-  // and every existing order-independence test stayed green.
-});
-
-it('among finished buildings nothing has changed', () => {
-  // The regression guard for increments 7 and 8's ranking work.
-});
-
-it('with five sites, no younger site is served while an older one has unclaimed room', async () => {
-  // ACCEPTANCE CRITERION 4, in the exact form §2.4 guarantees. Runs against an
-  // UNMODIFIED ranking and fails — confirm that before implementing, because it
-  // is the whole justification for this task.
-  //
-  // NOT "every dispatch serves the oldest site": `needOf` correctly drops a
-  // site once its remaining room is fully claimed, so the next-oldest is served
-  // while the first one's materials are still walking. An "always the oldest"
-  // assertion is false against a correct implementation at more than one
-  // hauler, which is precisely the fixture that matters.
-  //
-  // DISPATCH, not COMPLETION: ConstructionSystem does not exist until Task 5.
-  // The round-robin is fully visible without it — assert site 1's in-tray
-  // fills (or is fully claimed) before site 2 receives anything.
-  //
-  // At one hauler and at four: the round-robin is worse with more haulers, so a
-  // single-hauler fixture understates it.
-});
-```
-
-- [ ] **Step 2: Implement, mutation-test, commit**
-
-Mutations: drop the site-before-building term; reverse age; move age after `movable`; apply the starvation band to sites. **The third is the one that matters** — it leaves a plausible-looking ordering that still round-robins, and only the five-site integration test catches it.
+The ordering work — age-first as a separate selection phase, the non-transitivity trap, the starvation band, the producer-starvation stall and its recovery — moved intact to `docs/superpowers/plans/2026-08-15-increment-10-a-build-queue-that-converges.md`. It is not being rediscovered there; it is the same text, and it is the reason increment 10 exists.
 
 ---
 
@@ -458,18 +356,18 @@ it('a house completes and is then homed by the ordinary pass', async () => {
   // No special case in completion. rehome seats a colonist the next tick.
 });
 
-it('five sites at EQUAL distance complete in the order they were ordered', async () => {
-  // Task 4 proved the DISPATCH order; this proves the countdown does not reorder
-  // what dispatch ordered, which is the failure mode this task introduces.
+it('three affordable sites ordered at once ALL complete', async () => {
+  // ACCEPTANCE CRITERION 4, and note what it does NOT say. No assertion about
+  // which finishes first or how long they take: dispatch ordering is untouched
+  // in this increment, so round-robin filling is the EXPECTED behaviour and any
+  // sharper assertion would pin a requirement §2.4 explicitly declines to make.
   //
-  // EQUAL LEGS ARE LOAD-BEARING, and this is not a convenience. Strict
-  // completion order is NOT what §2.4 guarantees — criterion 4 is deliberately
-  // stated as a serving rule, because once the oldest site's remaining room is
-  // fully claimed it leaves the candidate set, and a younger site with a shorter
-  // walk can then fill and finish first with nothing wrong. Place all five
-  // equidistant from the camp so arrival order follows service order, and read
-  // this as a narrow regression test on the countdown rather than as criterion 4
-  // itself. Criterion 4 is proved by Task 4's serving assertion.
+  // What this must prove is that round-robin is slow rather than broken —
+  // every site reaches completion, nothing stalls, and the conservation
+  // sentinel stays at zero throughout. Give the fixture enough ticks that a
+  // round-robin fill still finishes; a tick budget tuned to sequential
+  // delivery would fail here for the wrong reason and invite someone to
+  // "fix" it with the ordering rule increment 10 owns.
 });
 ```
 
@@ -518,15 +416,16 @@ it('cancelling a site refunds what was delivered to it', async () => {
   // refundAt not addAt. The total alone passes against addAt.
 });
 
-it('cancelling a younger site recovers a stalled queue', async () => {
-  // §2.4's known limitation is a STALL rather than a deadlock only because this
-  // works. Drive the wood-and-plank fixture from Task 4 into the stall, cancel
-  // the newest site, and require the oldest to complete.
+it('cancelling a site returns its materials to the ledger for another site to use', async () => {
+  // The RECOVERY property, and the general form of it. Two sites, the wood
+  // split between them so neither can finish; cancel one, and require the other
+  // to complete on the returned materials.
   //
-  // It lands HERE, not with the dispatch tests that motivate it: completion is
-  // Task 5 and the refund branch is this task, so Task 4 could not have made it
-  // green. If it does not hold, the limitation is a deadlock and the increment
-  // does not ship as specified — so it is a gate on this task, not a nice-to-have.
+  // It is here rather than folded into the refund tests above because it proves
+  // something they do not: that refunded goods re-enter the ordinary supply
+  // path rather than landing somewhere a hauler will not look. Increment 10
+  // leans on exactly this to argue its starvation stall is recoverable, so it
+  // wants to be true and tested BEFORE that argument is made.
 });
 
 it('demolishing a FINISHED building still refunds its cost', async () => {
@@ -585,6 +484,10 @@ If nothing breaks, the deliverable is the suite and a commit message saying so. 
 **Two restore-path defects that the "no new field needed" framing hides.** `SavedBuilding.inputBuffer` does round-trip, and that is not sufficient:
 
 - `buildingComponents` restores through `clampedInputBuffer` (`spawn.ts:113`), which is `clampedBuffer(saved, BALANCE.inputBufferCap)`. **A 30-unit mill site saved mid-countdown reloads holding 12**, destroying 18 units the ledger already recorded as consumed. The clamp must take the site's cost as its bound, as `needOf` and `unload` do — **per resource, not as one total.** `clampedBuffer` takes a single aggregate cap and spends it in catalog order, so the cheapest implementation of "bound by the cost" is to pass `sum(cost)`, and that is wrong in a way no equal-to-cost fixture can see. After a rebalance from 20 wood/10 planks to 10 wood/20 planks, a site saved under the old cost restores holding 20 wood — inside the aggregate 30, over `cost.wood` — accepts 10 more planks, and clears 40 units against a 30-unit cost on completion. A new `clampedToCost` keyed per resource is the fix; reusing `clampedBuffer` with a summed cap is the defect.
+
+  **And the trimmed excess must be RETURNED, not dropped.** This is the half that makes the clamp itself a conservation bug rather than a display one. A site's in-tray lives outside `Stockpile`, so units the clamp declines to keep do not fall back anywhere — they cease to exist at load, which is precisely the failure this task exists to prevent, arriving through its own fix. Every existing `clampedBuffer` caller can drop silently because it trims a save the engine itself wrote and the cap has not moved; `clampedToCost` is the first one whose bound can legitimately *shrink* between save and load, because `cost` is content and content gets rebalanced.
+
+  So the restore must bank the per-resource excess to the camp through the restore-only path that records no delivery — the same one seeded stock uses — and a fixture must assert the **colony total is unchanged across the round trip**, not merely that the tray was trimmed. A test that checks only the kept amount passes against an implementation that deletes the rest.
 - `usableBeds` (`restore.ts:118`) gates on `count > 0 && b.relocatingTicks === 0` — relocation being the only way a house could exist unusable. An unfinished house otherwise seats colonists at load, and the **paused initial snapshot reports them housed** until the first tick evicts them.
 
 - [ ] **Step 1: Write the failing tests, then implement, then mutation-test, commit**
@@ -601,6 +504,15 @@ it('a site restored over its cost in ONE material is trimmed in that material', 
   // tray of 20 wood against a cost of 10 wood / 20 planks. Total 20 <= total
   // cost 30, so a summed-cap clamp keeps all 20 wood and this is the only
   // shape that reddens it. Assert the kept WOOD is 10.
+});
+it('the 10 wood that clamp declined is in the camp, not gone', async () => {
+  // THE CONSERVATION HALF, and the one the test above passes without. Assert
+  // the COLONY TOTAL is identical across save -> load. A site's in-tray is
+  // outside Stockpile, so trimmed units have nowhere to fall back to and simply
+  // vanish unless the restore banks them deliberately.
+  //
+  // Assert too that deliveredRate did NOT move: this is a restore, not a
+  // delivery, so it goes through the restore-only path seeded stock uses.
 });
 it('an unfinished house houses nobody at load, in the paused snapshot', async () => {
   // Before any tick runs. Asserting after a step passes against the runtime
@@ -644,24 +556,15 @@ it('a countdown saved under a larger buildTicks is clamped to the current one', 
   it needs — which is why Task 2b defers the state assertion here rather than
   reaching across into these files. The §2.5 row *'a site reports
   underConstruction, not relocating or waitingForInput'* is a test of this task.
-- **A site publishes what it still needs, per material.** This is what replaces the affordability refusal Task 2 removed: the player sees "needs 14 wood" instead of being told they cannot order it.
+- **A site publishes what it still needs, per material** — "needs 14 wood". Not a replacement for the affordability refusal (Task 2 keeps that): it is the only way to tell a site that is waiting from a site that is stuck, several minutes after the order, once meals and other builds have spent the ledger.
 - The Economy view names a **build backlog** beside the input and output backlogs.
-- **The affordability gates come out of all three build surfaces.** Task 2 removes the refusal in the command handler, and without this the queue-without-materials behaviour is **unreachable through the UI** — acceptance criterion 5 passes in the engine and the player still cannot order the site:
+- **The affordability gates STAY, all four of them.** `BuildPalette.vue:28`, `WorldView.vue:66`, `BuildingsView.vue:70` and the `affordableDefs` getter at `game-store.ts:172` keep gating exactly as they do today, because Task 2 keeps the engine check they mirror. Removing them is increment 10's first task. Doing it here would leave the UI permitting an order the engine then refuses, which is worse than either end alone.
 
-  | surface | today |
-  | --- | --- |
-  | `src/app/components/BuildPalette.vue:28` | `:disabled` unless `affordableDefs[id]` — cannot arm placement |
-  | `src/app/views/WorldView.vue:66` | placement predicate returns `affordableDefs[m.defId]` — rejects the tile |
-  | `src/app/views/BuildingsView.vue:70` | `:disabled` on the table button, tooltip "Not enough resources" |
-  | `src/app/stores/game-store.ts:172` | `affordableDefs` — the getter all three read |
+- [ ] **Step 1: Find the state surfaces before writing anything**
 
-  `affordableDefs` is **not deleted**: it stops gating and starts informing. What it tells the player remains true and worth showing, so the tooltip becomes advisory rather than a refusal.
+`grep -rn "relocating" src/app` — every place that special-cases the relocating state is a place that probably needs the construction one. Pre-flight the brief against the real files.
 
-- [ ] **Step 1: Find the surfaces before writing anything**
-
-`grep -rn "relocating" src/app` for the state, and `grep -rn "affordableDefs" src/app` for the gates — the four rows above are what review found, and the grep is what confirms there is no fifth. Pre-flight the brief against the real files.
-
-The test that matters here is a **UI-level** one: with an empty ledger, the palette arms, the tile is accepted, and the order goes through. An engine-level test of criterion 5 already exists in Task 2 and passes regardless of these gates, which is exactly how this was missed.
+**Do not grep for `affordableDefs` looking for work here.** It is untouched this increment; the four surfaces are enumerated above only so that increment 10 inherits a list that has already been checked against the code.
 
 - [ ] **Step 2: Tests, implement, mutation-test the smoke checks, commit**
 
@@ -724,23 +627,25 @@ it('a scenario that COMPLETES a supplied site reports conservationError === 0', 
 
 - [ ] **Step 1: The build time sweep** — at least three values of `buildTicks`, on a fixture where delivery is fast and one where it is slow. The question is whether the countdown does anything the delivery leg does not already do. If it is invisible next to the walk, say so.
 - [ ] **Step 2: Does build time want to scale with cost?** A house and a workshop take the same time at a flat constant. Build several of each and report whether flat reads as wrong.
-- [ ] **Step 3: Convergence.** N sites at one hauler and at four; report the completion *curve*, not just the order. A flat curve is the failure §2.4 predicts.
+- [ ] **Step 3: How bad is the round-robin?** N sites ordered at once, at one hauler and at four, reporting the completion *curve*. **This measurement sizes increment 10; it is not a pass/fail.** §2.4 predicts a flat curve — everything finishing at once, late — and the question is how flat, and at what N it starts to hurt. A reading of "three is fine, six is miserable" is the most valuable thing this task can produce.
+
+  **Do not fix what this finds.** The ordering rule is specified, reviewed and waiting in increment 10's plan; reaching for it here would ship the change this split exists to separate, and unmeasured.
 - [ ] **Step 4: What a colony pays to grow.** Ticks from order to first output, near the camp and at the far corner. Increment 5 priced delivery; this prices building.
-- [ ] **Step 5a: Connect the instrument BEFORE taking the OBS-8-06 reading.** `demandSourcesOf` (`haul-transfer.ts:54`) skips unstaffed buildings and derives demand from `recipe.inputs` alone, so as the engine stands **a remote site creates no depot demand and staging cannot fire for it at any distance.** Teach it about sites — unstaffed, demand from `cost` — and prove it with a fixture that shows a depot acquiring demand from a nearby site. This is a code change inside a measurement task, deliberately: taking the reading first would produce a confident zero from an instrument that was never connected, which is the increment-7 harness failure repeating.
-- [ ] **Step 5b: OBS-8-06.** A site ordered far from the camp with a depot between. Report whether staging fires, how often, and whether the site completes sooner with the depot. §4.2 names the three outcomes and all three are worth having — **do not tune to reach one of them.** If Step 5a was skipped, the reading is invalid and reports the third outcome by construction.
-- [ ] **Step 6: Write §4.1 and §4.2 from what was measured**, in §4.3-of-increment-7's manner. If a decision this spec took measures badly, record the disagreement rather than retuning toward the claim.
-- [ ] **Step 7: Verify and commit**
+- [ ] **Step 5: Write §4.1 from what was measured**, in §4.3-of-increment-7's manner. If a decision this spec took measures badly, record the disagreement rather than retuning toward the claim.
+
+**OBS-8-06 is NOT measured here.** It moved to increment 10 whole, with its "connect the instrument first" warning intact — the reading needs `demandSourcesOf` taught about sites, and that is a dispatch change this increment deliberately does not make. §4.2 says so.
+- [ ] **Step 6: Verify and commit**
 
 ---
 
 ### Task 12: Document and close out
 
 **Files:**
-- Modify: `docs/issues/2026-08-09-demolish-and-rebuild-bypasses-the-priced-relocation.md` (OBS-5-03 → Done, closed by construction rather than by bookkeeping — the outcome its own note predicted), `docs/issues/2026-08-11-the-staging-half-of-transfer-is-correct-and-almost-never-worth-a-trip.md` (OBS-8-06, updated with §4.2's reading whichever way it went), `docs/requirements/Construction as Work.md` (status), `docs/README_PRODUCT_BACKLOG.md` if statuses roll up
+- Modify: `docs/issues/2026-08-09-demolish-and-rebuild-bypasses-the-priced-relocation.md` (OBS-5-03 → Done, closed by construction rather than by bookkeeping — the outcome its own note predicted), `docs/issues/2026-08-11-the-staging-half-of-transfer-is-correct-and-almost-never-worth-a-trip.md` (OBS-8-06 — **not** resolved and not measured; note that increment 10 now owns the reading and why), `docs/requirements/Construction as Work.md` (status), `docs/README_PRODUCT_BACKLOG.md` if statuses roll up
 - Create: a Feature note for the builder role if §4 argues for one; any issue Task 11 found
 
 - [ ] **Step 1: Close what closed, carry what did not.** An issue that is not fixed gets its note updated with what this increment learned, not left untouched.
-- [ ] **Step 2: Whole-branch review.** Read the diff for the compound-boolean shape specifically, and for the multi-hauler/multi-site over-claim shape. Confirm no skip survives, no baseline moved, no suppression added, every `src/` file at or under 500 nonblank lines.
+- [ ] **Step 2: Whole-branch review.** Read the diff for the compound-boolean shape specifically, and for the multi-hauler/multi-site over-claim shape. Confirm no skip survives, no baseline moved, no suppression added, every `src/` file at or under 500 nonblank lines. **Confirm `src/shared/haul.ts` and `nextSupplyTarget` are untouched** — if the diff reaches dispatch ordering, the split has leaked.
 - [ ] **Step 3: `npm run check:all`, commit, open the PR**
 
 ---
@@ -748,5 +653,6 @@ it('a scenario that COMPLETES a supplied site reports conservationError === 0', 
 ## Notes for the implementer
 
 - **Push back on this plan.** Roughly half of increment 4's briefs contained an error, and increments 8's plan contained two that pre-flight caught. Check each brief against the real files before starting.
-- **The one thing not to compromise on** is Task 4's five-site integration test. Everything else here is machinery; that test is the only thing standing between this feature and a build queue that crawls. Confirm it fails against the unmodified ranking *before* implementing — a test that was never seen to fail is a claim, not evidence.
+- **The one thing not to compromise on** is Task 3's delivery path — a site that is offered materials and can never receive them is this increment's total failure, and three of the four changes in that task are outside `haul-dispatch.ts`. Confirm each gate lets a site through against the real files before implementing.
+- **Do not fix the round-robin.** Task 11 Step 3 measures it and increment 10 fixes it, with a plan that eleven review rounds have already been spent on. A dispatch change smuggled in here would be unmeasured, would land outside the file list of every task in this plan, and would make the successor's measurement meaningless.
 - **If a task finds itself inventing a second delivery mechanism for materials, stop.** The whole architecture of this increment is that a site is a building that needs things, and increment 7's machinery already knows how to feed one. A parallel path is the design this sequencing exists to avoid.

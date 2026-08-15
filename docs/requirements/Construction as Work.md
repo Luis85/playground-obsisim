@@ -37,7 +37,42 @@ Doing it before two-way haul would have meant inventing a second, parallel deliv
 
 `[[Demolish-and-rebuild bypasses the priced relocation]]` (OBS-5-03), accepted-not-fixed in Increment 7. Pricing that bypass on its own needs persisted demolition history to detect "this construct is really a relocation". If a construct costs delivered materials and a builder's time regardless, rebuilding elsewhere stops being free and the exploit closes without any bookkeeping at all — which is the strongest argument for doing this increment before revisiting that issue.
 
+## It is being built as two increments, not one
+
+This note was written as one feature and specced as one increment. **It ships as
+two**, and the seam is worth recording because it was not obvious in advance.
+
+- **Increment 9 — Construction as Work.** Materials are carried to a site and
+  building takes time. A site occupies its tile, provides nothing, is delivered
+  to by the existing haul machinery, completes on a countdown, cancels with a
+  full refund, and round-trips through a save. **The affordability rule does not
+  change**: you still cannot order what you cannot pay for.
+- **Increment 10 — A Build Queue That Converges.** A build order becomes a
+  *request*: the affordability check comes out of the engine and all four UI
+  surfaces, and dispatch is reordered oldest-site-first so the resulting queue
+  converges instead of crawling.
+
+**Why there.** The two halves of increment 10 are one change — removing the check
+is what makes long queues possible, and age-first dispatch is what stops those
+queues crawling — and neither is needed to make building *work*. Eleven rounds of
+review on the combined spec landed six of their findings inside those two
+sections and nowhere near the rest, which is what the seam was drawn from.
+
+**What the split costs, stated because it is real.** Increment 9 ships with
+several sites filling round-robin, so a player who orders three buildings at once
+sees them finish late and together. That is bounded by the affordability check —
+a queue is limited to what the colony could pay for, so every site still
+completes — and increment 9 §4.1 measures how bad it is, which is the sizing
+input for increment 10.
+
+The **builder role** listed under "What it would take" above is in neither
+increment. Both complete a site on materials plus a fixed time; labour as a
+constraint on building is deferred, and increment 9 §2.12 records what that
+defers.
+
 ## Documentation
 
 - `docs/superpowers/specs/2026-08-09-increment-7-two-way-haul-and-storage.md` §1.1, §2.13 — the descoping and its reasoning
+- `docs/superpowers/specs/2026-08-11-increment-9-construction-as-work.md` — sites, delivery, the countdown, cancellation, save v7
+- `docs/superpowers/specs/2026-08-15-increment-10-a-build-queue-that-converges.md` — the request model and the queue ordering
 - `docs/issues/2026-08-09-demolish-and-rebuild-bypasses-the-priced-relocation.md` — the issue this would close as a side effect

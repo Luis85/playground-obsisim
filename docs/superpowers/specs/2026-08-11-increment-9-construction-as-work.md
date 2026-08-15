@@ -2,8 +2,20 @@
 
 **Status:** Draft
 **Predecessor:** `docs/superpowers/specs/2026-08-10-increment-8-storehouse-transfer.md`
+**Successor:** `docs/superpowers/specs/2026-08-15-increment-10-a-build-queue-that-converges.md`
 **Backlog Feature:** `docs/requirements/Construction as Work.md`
-**Issues:** closes OBS-5-03 by construction. Measures OBS-8-06 without resolving it.
+**Issues:** closes OBS-5-03 by construction.
+
+> **This spec was split.** An earlier draft also made ordering a building a
+> *request* — no affordability check, queue as much as you like — and then needed
+> a new dispatch ordering to stop that queue crawling. Eleven rounds of review
+> landed six of their findings inside those two sections and nowhere near the
+> rest, which is the clearest signal available that they are a second increment
+> rather than two more requirements of this one. They now are: increment 10.
+>
+> What is left here is the part that stands on its own — **materials are carried
+> to a site and building takes time** — with the affordability rule the game
+> already has left exactly as it is. §2.4 records what that costs.
 
 ---
 
@@ -54,26 +66,26 @@ building works".
 
 ### 1.2 Product decisions taken for this increment
 
-- **A build order is a request, not a claim.** Ordering does not reserve
-  materials and does not check affordability. Sites compete for goods through
-  the supply ranking that already exists. §2.3.
-- **The oldest site is served first**, and that ordering is what makes a queue of
-  sites converge instead of crawling. §2.4 — it is the sharpest rule in the
-  increment and the least obvious.
+- **The affordability rule does not change.** You still cannot order what you
+  cannot pay for — but the payment stops happening at order time and becomes a
+  delivery. §2.3. Making an order a *request* instead is increment 10's whole
+  subject, and it is deferred as a unit with the queue ordering it requires.
 - **No builder role.** A site completes on materials plus a fixed build time. A
   fourth call on the same colonists would make this increment about labour
   allocation, and the thing that is actually missing is that materials are
   carried. §2.5, and §2.12 records what that defers.
-- **OBS-8-06 is measured here, not resolved here.** A construction site is a
-  consumer at an arbitrary player-chosen tile, which is precisely the remote
-  fixture that issue says the repository lacks. §4.2.
+- **Dispatch ordering is left alone**, and §2.4 records what that costs: several
+  sites at once are filled round-robin and finish together rather than one at a
+  time. That is a real cost, it is bounded here in a way it would not be under a
+  request model, and buying it back is increment 10.
 
 ### 1.3 What this makes harder, deliberately
 
-- **A player can order more than the colony can afford.** That is the direct
-  consequence of the request model and it is intended: a build queue that fills
-  as goods arrive is the point. §2.3 says what the palette should show instead of
-  refusing.
+- **The affordability check stops meaning what it says.** It tests the ledger at
+  order time and then nothing is taken, so two orders a tick apart can both pass
+  against the same wood. §2.3 is explicit that this is a weakened guarantee
+  rather than an intact one — it bounds over-ordering by making it take
+  deliberate effort, and it does not prevent it.
 - **"A building was constructed" stops meaning "a building works."** Six places
   in the engine currently treat those as the same statement, and one of them
   (`pending.constructed`, which homing folds in so a colonist can be sheltered on
@@ -157,151 +169,89 @@ only this paragraph would leave exactly the defects the sections below identify:
 What *is* unchanged is the shape: fetch, walk, unload, bank; the reservation
 model; and the flow-accounting rules. No second delivery mechanism appears.
 
-### 2.3 Ordering a building is a request
+### 2.3 Ordering a building charges on delivery, not at the order
 
-`handleConstructBuilding` **stops calling `stockpile.pay`**. It resolves the
-tile, takes an id, spawns the building with `Construction(BALANCE.buildTicks)`,
+`handleConstructBuilding` **stops calling `stockpile.pay`** and instead resolves
+the tile, takes an id, spawns the building with `Construction(BALANCE.buildTicks)`,
 and records the notice as *started* rather than *built*.
 
-- **No affordability check and no reservation.** The player may queue more than
-  the colony holds. The build palette stops refusing and starts *informing*:
-  what a site still needs is a fact the Buildings table can show, and §2.10 puts
-  it there.
-- **The cost leaves the ledger when materials enter the site's in-tray**, through
-  the `recordConsumed` call `unload` already makes. This is not a new rule; it is
-  §2.4 of increment 7's flow table applying unchanged to a new consumer.
+- **The affordability check stays exactly where it is.** `canAfford` still
+  refuses an order the colony cannot pay for, and the three UI surfaces that grey
+  out unaffordable defs keep doing so. Nothing about what the player may order
+  changes in this increment; what changes is *when the goods move*.
+- **The cost leaves the ledger as materials are hauled**, at pickup, with
+  consumption recorded at unload — the two moments criterion 1 keeps apart. This
+  is not a new rule; it is §2.4 of increment 7's flow table applying unchanged to
+  a new consumer.
 - **The id-exhaustion and tile checks stay, and stay before the spawn.** They are
   the two rejections that must still happen at order time, because neither is
   recoverable later.
 
-**Why not a reservation.** It is the legible alternative — you cannot order what
-you cannot afford — and it was declined for a specific reason: it would be the
-fifth claim in a system where four claims took four rounds of review to get
-right in increment 8, and it buys a rule the player can already understand from
-watching a site sit unfed. The cost is the failure mode §2.4 exists to prevent,
-and that failure mode is real rather than theoretical.
+**The check is weaker than it looks, and this is stated rather than papered
+over.** It reads the ledger at order time and takes nothing, so two orders placed
+a tick apart both pass against the same wood, and a determined player can queue
+well past what the colony holds. Increment 9 does not fix that and does not
+pretend to: it keeps the check because removing it is a product change with a
+dispatch problem attached, and both belong to increment 10 together.
 
-### 2.4 Which site gets served: age first
+What the check still buys is that **over-ordering takes deliberate effort instead
+of being the default path.** The palette greys out what you cannot afford, so the
+ordinary way to play does not produce a queue longer than the colony can feed —
+which is what makes §2.4's round-robin an acceptable cost here and an
+unacceptable one under a request model.
 
-This is the increment's sharpest rule and the one an implementation will get
-wrong by leaving the ranking alone.
+**Why not a reservation.** It is the third option — check *and* hold the
+materials — and it is declined for both increments: it would be the fifth claim
+in a system where four claims took four rounds of review to get right in
+increment 8. Increment 10 revisits the question from the other side by removing
+the check entirely.
 
-**The problem.** `compareSupplyCandidates` ranks `movable` descending before
-route. `movable` is bounded by the room left in the target's in-tray. So a site
-that is nearly complete has *little* room, therefore *small* `movable`, therefore
-**loses** to a site that was ordered later and is still empty. Twenty ordered
-sites round-robin, each one's last material delivered last, and none of them
-finishes until nearly all of them do.
+### 2.4 Dispatch ordering is unchanged, and several sites at once will crawl
 
-**The rule, in two parts:**
+**Nothing in `compareSupplyCandidates` or `nextSupplyTarget` changes in this
+increment.** A site is an ordinary supply target and competes for haulers on the
+terms every other target already uses. This section exists to say what that
+costs, because the cost is real and a reader who does not find it stated will
+assume it was not noticed.
 
-1. **A site is never in the starvation band.**
-2. **Site selection is a separate phase, not a comparator term.**
-   `nextSupplyTarget` picks the lowest-age site among sites, picks the best
-   candidate among non-sites by the existing comparator, and then chooses between
-   those two winners with one ordinary comparison.
+**What goes wrong.** `compareSupplyCandidates` ranks `movable` descending before
+route, and `movable` is bounded by the room left in the target's in-tray. So a
+site that is nearly complete has *little* room, therefore *small* `movable`,
+therefore **loses** to a site ordered later that is still empty. Order three
+houses at once and they fill round-robin: each one's last material arrives last,
+and none of them finishes appreciably before the others.
 
-**What this guarantees, stated exactly, because a looser phrasing is an
-overclaim.** The rule is *the oldest site **with unclaimed room** is served
-first* — not *the oldest site is always the one served*. `needOf` returns null
-once a site's remaining room is fully spoken for by in-flight deliveries
-(`room − claimedIn <= 0`), so the oldest site legitimately leaves the candidate
-set while its materials are still walking, and the next-oldest is served. That is
-correct rather than a leak: there is nothing useful left to send the oldest site,
-and sending more would overfill it.
+**Why that is acceptable here and would not be under a request model.** The
+affordability check §2.3 keeps means the ordinary way to play does not produce a
+queue longer than the colony can feed. Three sites ordered together are three
+sites the player could pay for, so every one of them completes — round-robin
+makes them finish *late and together* rather than *early and in order*. Slow is
+a fair cost for an increment whose subject is that materials are carried at all.
 
-**It follows that completion order is the common case and not a hard guarantee.**
-If the oldest site's claimed loads are walking long legs and a younger site's are
-walking short ones, the younger can finish first. Forcing strict completion order
-would mean holding haulers idle rather than serving a servable site, which costs
-throughput to buy an ordering the player did not ask for. §3's criterion is
-written against the guarantee this rule actually makes.
+Remove the check — increment 10 — and the same ordering stops being slow and
+starts being broken: a queue of twenty sites the colony cannot afford round-robins
+forever, and none of them ever completes. **The ordering fix and the removal of
+the check are one change, and that is why they are one increment.**
 
-`compareSupplyCandidates` itself gains **only** part 1. It stays a single total
-order and no age term is added to it.
+**Two consequences to be honest about within this increment:**
 
-**Why age cannot be a comparator term, which an earlier draft got wrong.** That
-draft applied age "when both candidates are sites". That makes the comparator
-**non-transitive**, and `nextSupplyTarget` is a reduction (`compare(candidate, best) < 0`),
-so a cycle makes its winner depend on candidate iteration order — the one
-property every selection in this codebase commits to *not* having. The cycle,
-with nothing starving:
+- **A site competes with producers for the same goods.** A sawmill's wood and a
+  site's wood come from the same ledger, and a site with a large empty in-tray
+  can outrank a sawmill that needs one more log. The affordability check bounds
+  how much can be sitting in sites at once, so this degrades throughput rather
+  than deadlocking, and cancelling a site (§2.6) returns its materials in full if
+  a player does manage to tie the colony up.
+- **Nothing here promises completion order.** Sites complete roughly when their
+  materials arrive, and §3 states no criterion about which finishes first. An
+  implementation that happens to produce ordered completions has not satisfied a
+  requirement, because there is not one.
 
-| pair | decided by | winner |
-| --- | --- | --- |
-| old site (movable 1) vs new site (movable 6) | age | **old site** |
-| new site (movable 6) vs a finished building (movable 4) | `movable` | **new site** |
-| finished building (movable 4) vs old site (movable 1) | `movable` | **finished building** |
-
-Old beats new, new beats the building, the building beats old. Feed those three
-in the order building, old, new and the *newest* site wins.
-
-The two-phase form is transitive by construction: each phase is a total order
-over a disjoint set, and the final step is a single pairwise comparison rather
-than a reduction over a mixed set. It also mirrors what this section already says
-conceptually — "which site did the player order first?" and "which producer is
-blocked?" are two questions, so they are answered by two selections rather than
-by one comparator asked to hold both.
-
-Everything else is untouched: the cross-comparison between the two winners uses
-the existing terms — starvation, `movable`, route, ids — exactly as two finished
-buildings are compared.
-
-**Age needs no new state.** `IdCounter.take()` is monotone, so a lower building
-id *is* an earlier order. The tie-break chain already ends at building id; this
-promotes that same field to the front when both sides are sites, and the "no
-memory between ticks" property of §2.6 survives untouched.
-
-**Why a site is never starving.** The band promotes a building holding zero of
-what it needs, because a producer at zero produces nothing while one holding some
-is working — it means *blocked*. A site produces nothing by definition. It is not
-blocked, it is unbuilt, and there is no output being lost while it waits. Reading
-"holds zero" as starvation for a site would also promote the newest site over the
-one closest to completion, which is the round-robin failure arriving through the
-fairness fix rather than through `movable`.
-
-**What an earlier draft got wrong, because the failure it causes is worse than
-the one it fixes.** That draft put *sites ahead of finished buildings*
-unconditionally. That is a priority inversion: a site's cost is planks, planks
-come from a sawmill, the sawmill needs wood — and sites outranking the sawmill
-send every log to the sites, so the sawmill never produces, so the oldest site
-waits on planks that can never arrive. A continuously extended queue starves the
-producer indefinitely.
-
-Removing that clause fixes the *immediate* inversion without any dependency
-machinery, and part 1 of the rule is what makes it work: a sawmill with an empty
-in-tray *is* starving, sites are *never* starving, so a blocked producer outranks
-a queue of sites. Two questions — "which producer is blocked?" and "which site
-did the player order first?" — asked in two disjoint comparisons, neither needing
-to know about the other.
-
-**That protection is one load deep, and the residual hazard is recorded rather
-than solved.** The predicate is
-`!batchActive && couldStartBatch && holdsNoneOf(input, resource) && claimedIn === 0`
-(`haul-dispatch.ts:236`), so the *first* claim toward a producer clears it. With
-several sites whose cost includes both wood and planks:
-
-1. the sawmill is empty, so it is starving and wins one 6-unit wood claim;
-2. `claimedIn` is now non-zero, so it stops being starving;
-3. the sites, with large `movable`, take every remaining log;
-4. the sawmill turns its 6 wood into 6 planks, and the oldest site needs 10;
-5. the rest of the wood is consumed inside younger sites' in-trays.
-
-**It is a stall, not an unrecoverable deadlock**, and the recovery is §2.6:
-cancelling a younger site refunds its materials in full, returning that wood to
-the ledger. That is a real and discoverable player action, and it is why this
-ships as a limitation rather than a blocker. But it is reachable by doing exactly
-what §2.3 invites — queueing more than the colony can currently afford — so a
-player must not be the first to find it.
-
-**Fixing it properly is a decision rather than a patch**, and the options are
-recorded because a successor will want them: reserve a producer's inputs against
-the demand of sites needing its output (a dependency graph); cap the share of a
-resource all sites may hold at once (a global throttle — one constant, no graph);
-or make the starvation band survive until a producer can actually run a batch
-rather than until its first claim (deeper, and it changes dispatch for producers
-generally). §4.1 measures how reachable the stall is at realistic queue lengths,
-so the choice is made against a number rather than an intuition.
+**What increment 10 does about it** is recorded in its own spec rather than
+sketched here: age-first selection as a separate phase rather than a comparator
+term, a site never entering the starvation band, and a measured answer to how
+badly a producer can be starved by sites that need what it makes. Every one of
+those was worked out during this spec's review and moved across intact — none of
+it is being rediscovered.
 
 ### 2.5 Completion
 
@@ -386,9 +336,14 @@ Four proxies carry that assumption, and each is grep-able:
 | `BALANCE.inputBufferCap` | "an in-tray belongs to a recipe, so 12 is enough" | `needOf`, `unload`, **and `clampedInputBuffer` on restore** (§2.9) |
 | `StaffedSet` / `staffed.has(id)` | "a building worth feeding has workers" | `supplyCandidates`, `unload`, `demandSourcesOf` (§4.2) |
 | `relocatingTicks === 0` | "the only way a building exists without working is that it is moving" | `usableBeds` at restore (§2.9), and the §2.7.2 list |
-| `canAfford` / `affordableDefs` | "you cannot order what you cannot pay for" | three UI surfaces (§2.10) |
 
-**The implementer's task is to grep for all four and justify every hit**, not to
+`canAfford` / `affordableDefs` was a fourth row here while §2.3 removed the
+check. It is not one now: the assumption "you cannot order what you cannot pay
+for" **stays true** in this increment, so nothing needs auditing for it. It
+returns as increment 10's opening move, and the four surfaces are enumerated
+there rather than left half-listed here.
+
+**The implementer's task is to grep for all three and justify every hit**, not to
 work the two lists below and stop. The lists are what two reviews found; the
 table is how to find the rest.
 
@@ -497,9 +452,23 @@ constructionTicks: number;
   by a save/load round trip.
 
   The clamp must take the site's cost as its bound, exactly as `needOf` and
-  `unload` do (§2.2). The round-trip fixture must hold **more than
-  `inputBufferCap`**, or it passes against the unfixed clamp and proves nothing —
-  which is why the field is not the problem and the fixture value is.
+  `unload` do (§2.2), and **per resource rather than as one total** — the
+  existing `clampedBuffer` spends a single aggregate cap in catalog order, which
+  would let a site over-cost in one material sit inside an under-cost total. The
+  round-trip fixture must hold **more than `inputBufferCap`**, or it passes
+  against the unfixed clamp and proves nothing — which is why the field is not
+  the problem and the fixture value is.
+
+  **Whatever the clamp declines must go back to the ledger.** This is what makes
+  the clamp a conservation rule rather than a display one, and it is the one
+  place in this increment where the fix can itself destroy goods. A site's
+  in-tray sits outside `Stockpile`, so trimmed units have nowhere to fall back
+  to; every other `clampedBuffer` caller can drop silently because it trims
+  against a cap that has not moved since the engine wrote the save, and this is
+  the first bound that can legitimately *shrink* between save and load, because
+  `cost` is content and content gets rebalanced. The excess is banked to the camp
+  through the restore-only path that records no delivery, and the fixture asserts
+  the **colony total across the round trip**, not the kept amount.
 - **`clampedInputBuffer` is called from TWO restore projections**, and fixing one
   leaves them disagreeing. `buildingComponents` (`spawn.ts:140`) builds the live
   entity; `buildInitialSnapshot` (`initial-snapshot.ts:118`) builds the **paused
@@ -544,26 +513,21 @@ constructionTicks: number;
   as the guard's existing colonist-reference rules: a per-record check that no
   single field can express.
 - **A site publishes what it still needs.** The Buildings table shows the
-  shortfall per material, which is what replaces the affordability refusal §2.3
-  removes: the player sees "needs 14 wood" rather than being told they cannot
-  order it.
-- **The affordability gates come out of every build surface**, and there are
-  three of them plus the store getter behind them. §2.3 removes the refusal in
-  the command handler; leaving these makes acceptance criterion 5 pass in the
-  engine and be **unreachable through the UI** — the worst of both, since the
-  model allows a queue and the player cannot express one.
+  shortfall per material — "needs 14 wood" — because a site that is waiting is
+  otherwise indistinguishable from a site that is stuck, and the player has no
+  other way to tell which.
 
-  | surface | today |
-  | --- | --- |
-  | `src/app/components/BuildPalette.vue:28` | `:disabled` unless `affordableDefs[id]` — cannot arm placement |
-  | `src/app/views/WorldView.vue:66` | the placement predicate returns `affordableDefs[m.defId]` — rejects the tile |
-  | `src/app/views/BuildingsView.vue:70` | `:disabled` on the table button, tooltip "Not enough resources" |
-  | `src/app/stores/game-store.ts:172` | `affordableDefs` itself — the getter all three read |
-
-  `affordableDefs` is not deleted: it stops *gating* and starts *informing*. What
-  it tells the player is still true and still worth showing — this order will not
-  start moving until the goods exist — so the tooltip becomes advisory rather
-  than a refusal.
+  This is worth doing here even though §2.3 keeps the affordability check. The
+  check tells the player they *could* pay at the moment they ordered; the
+  shortfall tells them what is missing *now*, several minutes later, after meals
+  and other builds have spent the ledger. They are different facts and only the
+  second one explains a site that is not moving.
+- **The affordability gates stay.** All four surfaces —
+  `BuildPalette.vue:28`, `WorldView.vue:66`, `BuildingsView.vue:70` and the
+  `affordableDefs` getter at `game-store.ts:172` — keep gating exactly as they do
+  today, because §2.3 keeps the engine-side check they mirror. Removing them is
+  increment 10's first task, and doing it here would leave the engine refusing
+  what the UI now permits.
 - The Economy view names a **build backlog** beside the input and output backlogs
   it already names — the same shape, a different consumer.
 - The canvas draws a site distinctly from a finished building. No new glyph is
@@ -576,12 +540,13 @@ Everything in `docs/process/agent-workflow.md` applies, including the two failur
 modes increment 8 added. Three bind unusually hard:
 
 - **Every clause of a compound boolean needs its own fixture.** §2.7 is six
-  conditions and §2.4 is an ordering with three terms ahead of the existing
-  chain; both are exactly the shape where a whole-condition mutation looks like
-  coverage.
+  conditions, and it is exactly the shape where a whole-condition mutation looks
+  like coverage.
 - **Multi-hauler fixtures.** Increment 8's over-claim family all passed
-  single-hauler tests. §2.4's convergence rule is a *many* problem by
-  construction — it cannot be observed with one site or one hauler.
+  single-hauler tests, and §2.2's per-resource room is claimed against by several
+  haulers at once — a one-hauler fixture cannot over-claim and so cannot show the
+  bug. This binds less hard than it did while §2.4 carried an ordering rule, but
+  the claim arithmetic is still a *many* problem.
 - **The multi-input path is real content now** (§2.2). Every existing recipe has
   zero or one input; construction costs have two. The proportional-shortfall
   branch of `shortestOf` has never been exercised by shipped content and must be.
@@ -596,12 +561,24 @@ modes increment 8 added. Three bind unusually hard:
 - **Build time scaling with cost.** One constant for every def; §4 asks whether
   that is wrong and answers with a sweep.
 - **Relocating a site** (§2.6).
-- **A player-ordered build priority or queue reordering.** Age is the order.
-  Letting the player reorder is a UI and a persistence problem that only becomes
-  interesting once a queue is long enough to want it.
+- **Ordering a building without the materials, and the queue ordering it
+  requires.** The whole of increment 10, deferred as one unit because they are one
+  change: removing the affordability check is what makes a long queue possible,
+  and age-first dispatch is what stops that queue crawling. Shipping either alone
+  is worse than shipping neither — the check without the ordering is what this
+  increment does deliberately and §2.4 prices; the ordering without the check
+  would be machinery with nothing to do.
+- **A player-ordered build priority or queue reordering.** Not increment 10
+  either. Age is the order there; letting the player reorder is a UI and a
+  persistence problem that only becomes interesting once a queue is long enough
+  to want it.
 - **Cancelling a site partway with a partial refund of build progress.** Progress
   is not a good; materials are refunded in full and time is lost.
-- **Resolving OBS-8-06.** Measured, not acted on. §4.2.
+- **OBS-8-06, in either direction.** Not measured here and not resolved here.
+  The reading it wants is a consumer far from the camp with a depot between, and
+  a site is exactly that — but taking it needs `demandSourcesOf` taught about
+  sites first, and it reads most usefully against the queue behaviour increment
+  10 introduces. It moves there whole.
 - **Roads, seasons, carts, storehouse tiers, a bounded camp.** Deferred again,
   and `docs/requirements/Seasons, Weather and Firewood.md` now exists so the
   strongest of them stops living only in a spec's out-of-scope list.
@@ -633,18 +610,18 @@ modes increment 8 added. Three bind unusually hard:
    store destination, and a producer under construction makes nothing.
 3. **Materials are carried.** A site at a distant tile receives its cost by
    hauler, leg by leg, with the conservation sentinel at zero throughout.
-4. **The oldest site with unclaimed room is always the site served.** Five sites
-   ordered at once are filled one at a time rather than round-robin: no younger
-   site receives a load while an older one still has unclaimed room. This is the
-   discriminating test for §2.4 and it fails against an unmodified ranking.
-
-   Stated as a serving rule rather than as "they complete in order of ordering",
-   which §2.4 explains is not guaranteed: a site drops out of the candidate set
-   once its remaining room is claimed, and unequal leg lengths can then let a
-   younger site finish first. The serving rule is what the design actually
-   promises, and it is the one that rules out the round-robin.
-5. **A site can be ordered without the materials existing**, and completes later
-   when they do.
+4. **Several sites ordered at once all complete.** Three affordable sites ordered
+   together each reach completion, with the conservation sentinel at zero
+   throughout. **No criterion about the order or the timing**, deliberately:
+   §2.4 leaves dispatch ordering alone, so round-robin filling is the expected
+   behaviour and a test asserting anything sharper would be asserting a
+   requirement this increment does not have. What must hold is that round-robin
+   is *slow* and not *broken* — nothing stalls, nothing is lost, every site
+   finishes.
+5. **Ordering still refuses what the colony cannot pay for**, unchanged from
+   today, at the command handler and at all four UI surfaces. This is a
+   regression criterion rather than a feature one: §2.3 moves the *payment* and
+   must not disturb the *check*.
 6. **Cancelling a site refunds every material delivered to it**, and does not
    move `Delivered/t`.
 7. **OBS-5-03 closes.** Demolish-and-rebuild elsewhere now costs the full
@@ -675,64 +652,34 @@ Unmeasured, and §4.1 says so.
 - **Whether build time should scale with cost.** A house (15 wood, 5 planks) and
   a workshop (20 planks) take the same time at a flat constant. Measure a chain
   that builds several of each and report whether the flat rate reads as wrong.
-- **Convergence.** N sites ordered simultaneously, completion order recorded, at
-  one hauler and at four. Acceptance criterion 4 is the bound; the *shape* of the
-  completion curve is the reading, and a flat one is the failure §2.4 predicts.
-- **How reachable the §2.4 stall is.** Sites costing both wood and planks, queued
-  against a chain that makes the planks, at queue lengths of 1 / 3 / 5 / 10. The
-  reading is the queue length at which the first completion stops happening —
-  which is the number that decides whether the residual hazard needs the
-  dependency graph, the global throttle, or nothing at all. Report it even if it
-  is "never at any length this fixture can express", because that is the result
-  that would close the question.
+- **How bad the round-robin actually is.** N sites ordered simultaneously, at one
+  hauler and at four, reporting the completion *curve*. This is the measurement
+  that sizes increment 10 rather than a pass/fail: §2.4 predicts a flat curve —
+  everything finishing at once, late — and the question is how flat, and at what
+  N it starts to hurt. **Do not fix it here.** A number that says "three sites are
+  fine and six are miserable" is exactly what the successor needs and is worth
+  more than a rushed ordering rule.
 - **What a colony pays to grow.** The first real measurement of expansion cost:
   ticks from order to first output, for a producer built near the camp and one
   built at the far corner. Increment 5's distance gradient priced *delivery*;
   this prices *building*, and the two together are what a player weighs.
 
-### 4.2 OBS-8-06, measured and not resolved
+### 4.2 OBS-8-06 moves to increment 10, unmeasured
 
-`OBS-8-06` records that the staging half of the transfer mechanic is reachable,
-correct and almost never worth a trip — 0 dispatches on the headline fixture
-against 145 drains — and argues the case for deleting it is **not yet made**,
-because every fixture in the repository puts the camp within a few tiles of
-everything that consumes.
+An earlier draft took the staging reading here, on the grounds that a
+construction site is a consumer at an arbitrary player-chosen tile — precisely
+the remote fixture `OBS-8-06` says the repository lacks. That reasoning still
+holds and the reading is still worth taking; it is the *timing* that was wrong.
 
-**A construction site is the missing fixture.** It is a consumer at an arbitrary
-player-chosen tile, it appears as a natural consequence of this increment rather
-than as a test built to prove a point, and its demand is large and bursty in a
-way no recipe's in-tray is.
+Taking it needs `demandSourcesOf` (`haul-transfer.ts:54`) taught about sites
+first — it skips unstaffed buildings and derives demand from `recipe.inputs`
+alone, so as the engine stands a remote site creates no depot demand and staging
+cannot fire for it at any distance. That is a dispatch change, and dispatch is
+what this increment deliberately does not touch (§2.4). Making one exception for
+an instrument would put a hand into the exact machinery the split was drawn to
+leave alone.
 
-**A precondition, and without it this measurement is worthless.** `demandSourcesOf`
-(`haul-transfer.ts:54`) builds the demand a depot stages toward, and it does two
-things that make a construction site invisible to it: it skips any building not
-in `StaffedSet`, and it derives demand from `recipe.inputs` alone. A site is
-never staffed (§2.7.1) and needs its `cost`, so **as the engine stands today a
-remote site creates no depot demand and staging cannot fire for it at any
-distance.**
-
-Run the experiment against that and it reports zero staging — which is the
-outcome §4.2 would read as *"staging is structurally dominated, and OBS-8-06's
-second hypothesis is the live one."* That conclusion would be drawn from an
-instrument that was never connected. It is the same failure increment 7 found in
-its own harness, where a `made` figure counted other buildings' inputs and every
-number derived from it was wrong.
-
-So `demandSourcesOf` must be taught about sites — unstaffed, demand from `cost` —
-**before** the reading is taken, and the reading is invalid without it. The plan
-carries this as a step of the measurement task rather than as an afterthought.
-
-With that in place, §4 must report, for a site ordered far from the camp with a
-depot between: whether staging fires, how many dispatches, and whether the site
-completes sooner with the depot than without. Three outcomes, all worth having:
-
-- **Staging fires and pays** — OBS-8-06 closes, the deletion case is dead, and
-  §1.1 of increment 8 is vindicated on ground it never got to stand on.
-- **Staging fires and does not pay** — the deletion case is made on the
-  mechanic's own best fixture, which is what OBS-8-06 asks for.
-- **Staging still does not fire** — then the reason is structural rather than
-  situational, and OBS-8-06's second hypothesis is the live one: staging is
-  *dominated by construction*, because a supply trip already fetches from any
-  site and delivers to the building, and no constant fixes that.
-
-This increment reports which. Acting on it belongs to OBS-8-06.
+So it moves whole, with its own warning intact: **connect the instrument before
+taking the reading.** Measuring first would produce a confident zero from an
+instrument that was never wired up, which is the increment-7 harness failure
+repeating.

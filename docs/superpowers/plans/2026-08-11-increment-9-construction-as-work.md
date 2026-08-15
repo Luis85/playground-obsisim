@@ -320,7 +320,8 @@ Five mutations, one per exclusion, each reddening exactly one test.
 
 **Files:**
 - Modify: `src/engine/systems/haul-dispatch.ts` (`needOf`, `supplyCandidates`), `src/engine/systems/haul-system.ts` (`unload`), **`src/engine/systems/haul-claims.ts`** (`Claims.input`, resource-aware — see below), **`src/engine/systems/placement-handlers.ts`** (the in-tray refund — see below)
-- Test: `tests/engine/systems/haul-dispatch.test.ts`, `tests/engine/systems/haul-system.test.ts`, `tests/engine/systems/haul-claims.test.ts`, `tests/engine/systems/command-system.test.ts`
+- Test: `tests/engine/systems/haul-dispatch.test.ts`, `tests/engine/systems/haul-system.test.ts`, `tests/engine/systems/command-system.test.ts` (**there is no `haul-claims.test.ts`** — the plan named one for fifteen rounds and it has never existed; `Claims` is tested from `haul-dispatch.test.ts`)
+- Created by this task, unplanned: `src/engine/systems/haul-construction.ts` (the site rules, split out when `haul-dispatch.ts` hit 503 of 500) and `src/engine/systems/demolition.ts` (the seam the plan named in advance).
 
 **This task owns the in-tray refund, because this task is what makes a partly supplied site possible.** Task 2 already branched the *cost* refund (a site refunds none). The in-tray half could not be written there — nothing could reach a tray. It cannot wait for Task 7 either: the moment materials land in a site's `InputBuffer`, the existing rule destroys them on demolition ("whatever was waiting in either tray dies with the building", `placement-handlers.ts`), so Tasks 3 and 5 would ship a cancellation path that permanently loses everything delivered. Refund the delivered materials through `destinationFor` with the reservation-aware `heldAt`, and assert conservation here.
 
@@ -617,7 +618,7 @@ If nothing breaks, the deliverable is the suite and a commit message saying so. 
 **The last three are not optional and not Task 9's.** This task's clamp test needs the NUMERIC `BuildingSnapshot.constructionTicks` (see the prerequisite note below), and publishing it takes all three: `shared/snapshot.ts` declares the field, `snapshot-buildings.ts` projects it, `snapshot-system.ts` reads the live `Construction` component. Task 9 adds the `underConstruction` STATE, which is a different thing and cannot substitute — a state cannot distinguish a clamped countdown from an unclamped one.
 
 **Four files beyond the obvious two**, because "the save carries a new number" understates what restore touches:
-- `spawn.ts` — `clampedInputBuffer` clamps the live entity to `inputBufferCap`
+- `spawn.ts` — `clampedInputBuffer` clamps the live entity to `inputBufferCap`. **This is now a LIVE defect, not a hypothetical one:** Task 3 made a site's tray exceed the cap in ordinary play, so a mill site holding 25 delivered units silently loses 13 on any reload, today, on this branch. Task 3 could not fix it — the clamp cannot know a building is a site until the save carries the countdown, which is this task.
 - `initial-snapshot.ts:118` — the **same clamp** on the paused snapshot, a *second* projection; fix one and a restored 30-unit site holds 30 while the screen says 12
 - `restore.ts:123` — `usableBeds`
 - `save-guard.ts:95` — `colonistTargets`, both halves: `shelters` gates on `relocatingTicks === 0`, and `workplaces` adds every recipe building regardless of construction, so a hand-edited v7 save can assign a worker to a site and pass the guard
@@ -837,6 +838,7 @@ it('a scenario that COMPLETES a supplied site reports conservationError === 0', 
 
   **Do not fix what this finds.** The ordering rule is specified, reviewed and waiting in increment 10's plan; reaching for it here would ship the change this split exists to separate, and unmeasured.
 - [ ] **Step 4: What a colony pays to grow.** Ticks from order to first output, near the camp and at the far corner. Increment 5 priced delivery; this prices building.
+- [ ] **Step 4b: A site is `starving`, and nobody decided that.** Task 3 found it rather than chose it: a site holds none of what it is offered, so it satisfies `SupplyCandidate.starving` and enters `compareSupplyCandidates` in the starving band — ahead of ordinary restocking. `src/shared/haul.ts` is untouched and must stay so; this is a **reading**, not a change. Report how often a site outranks a producer that is genuinely out of input, because increment 10 inherits the ordering rule and needs to know whether construction is quietly jumping the queue before it designs one. If it is, that belongs in increment 10's spec as a decision rather than an accident.
 - [ ] **Step 5: Write §4.1 from what was measured**, in §4.3-of-increment-7's manner. If a decision this spec took measures badly, record the disagreement rather than retuning toward the claim.
 
 **OBS-8-06 is NOT measured here.** It moved to increment 10 whole, with its "connect the instrument first" warning intact — the reading needs `demandSourcesOf` taught about sites, and that is a dispatch change this increment deliberately does not make. §4.2 says so.

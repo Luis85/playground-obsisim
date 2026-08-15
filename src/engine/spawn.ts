@@ -127,6 +127,14 @@ export interface BuildingSpec {
   // construct path has nothing to put in one yet, and a fixture may not care.
   inputBuffer?: Partial<Record<ResourceId, number>>;
   relocatingTicks?: number;
+  // The construction countdown, threaded exactly like `relocatingTicks` above
+  // and for the same reason: `handleConstructBuilding` now spawns a SITE
+  // (spec §2.5), and the shared component list is the only place a building's
+  // components may be written down — appending a second `Construction`
+  // alongside the one below would attach the component twice. Optional
+  // because every other caller (the restore path, fixtures) still spawns a
+  // finished building, which is a countdown of 0.
+  constructionTicks?: number;
 }
 
 /** Every component a building needs, in one list. Order is not significant. */
@@ -139,10 +147,13 @@ export function buildingComponents(spec: BuildingSpec): object[] {
     new OutputBuffer(clampedBuffer(spec.buffer ?? {}, BALANCE.outputBufferCap)),
     new InputBuffer(clampedInputBuffer(spec.inputBuffer ?? {})),
     new Relocation(clampedRelocation(spec.relocatingTicks ?? 0)),
-    // Unconditional, like Relocation above: nothing yet sets this above 0 (no
-    // save field until Task 8, no construct-command wiring until later), so
-    // every building — restored or freshly built — spawns settled/finished.
-    new Construction(),
+    // Unconditional, like Relocation above. The live construct path now hands
+    // in `BALANCE.buildTicks`; the restore path has no save field for it until
+    // Task 8, so a restored building still spawns finished. Deliberately NOT
+    // clamped the way `relocatingTicks` is: nothing but the engine's own
+    // constant can reach it yet, and the clamp belongs with the save field
+    // that first makes an out-of-range value expressible.
+    new Construction(spec.constructionTicks ?? 0),
   ];
 }
 

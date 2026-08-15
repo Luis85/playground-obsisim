@@ -6,7 +6,9 @@ import { BUILDINGS } from '../content/buildings';
 import { MEAL_WEIGHTS } from '../content/resources';
 import { spareBeds } from './population-handlers';
 import { isRelocating } from '../../shared/placement';
-import { Age, Building, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Relocation, WorkerSlots } from '../components';
+import {
+  Age, Building, Construction, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Relocation, WorkerSlots,
+} from '../components';
 import { storeSitesFrom } from './haul-dispatch';
 import { CommandQueue, IdCounter, NoticeBoard, PendingChanges, RemovalLedger, SimClock, Stockpile, WorldMap } from '../resources';
 import {
@@ -42,7 +44,7 @@ export const CommandSystem = () => createSystem({
   map: ReadResource(WorldMap),
   buildings: queryComponents({
     entity: ReadEntity(), building: Read(Building), slots: Read(WorkerSlots), position: Write(Position), buffer: Write(OutputBuffer),
-    input: Write(InputBuffer), relocation: Write(Relocation),
+    input: Write(InputBuffer), relocation: Write(Relocation), construction: Read(Construction),
   }),
   // JobAssignment alone identifies a worker entity — the Colonist component
   // added nothing the handlers read.
@@ -69,8 +71,8 @@ export const CommandSystem = () => createSystem({
     pending.clear();
     const ctx: CommandContext = {
       clock, stockpile, ids, notices, map,
-      buildings: [...buildings.iter()].map(({ entity, building, slots, position, buffer, input, relocation }) =>
-        ({ entity, building, slots, position, buffer, input, relocation })),
+      buildings: [...buildings.iter()].map(({ entity, building, slots, position, buffer, input, relocation, construction }) =>
+        ({ entity, building, slots, position, buffer, input, relocation, construction })),
       workers: [...workers.iter()].map(({ job, trip, age, home }) => ({ job, trip, home, stage: stageOf(age.ticks, BALANCE.lifeBands) })),
       spawn: (...components) => {
         let entity = actions.commands.buildEntity();

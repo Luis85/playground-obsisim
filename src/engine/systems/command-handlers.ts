@@ -8,7 +8,7 @@ import { nomadBlocker, NOMAD_REJECTIONS, SALT, spreadFor, type LifeStage, type N
 import type { TileRef } from '../../shared/placement';
 import { BALANCE } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
-import { Building, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Relocation, WorkerSlots } from '../components';
+import { Building, Construction, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Relocation, WorkerSlots } from '../components';
 import { heldAtOf } from './haul-claims';
 import { bankCarriedLoad } from './haul-sites';
 import { shelterWithRoom, spawnArrival, type ShelterRow } from './population-handlers';
@@ -31,6 +31,12 @@ export interface BuildingRow {
    * building (§2.7) and has to name what it destroyed. */
   input: InputBuffer;
   relocation: Relocation;
+  /** Whether this row is a construction site rather than a finished building
+   * (`isUnderConstruction`). Carried on the row because the cumulative
+   * affordability check (§2.3) sums what every EXISTING site still needs, and
+   * neither `Building` nor a full in-tray can tell a site apart from a
+   * producer that happens to be holding inputs. */
+  construction: Construction;
 }
 
 export interface WorkerRow {

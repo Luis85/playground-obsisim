@@ -535,12 +535,16 @@ describe('what a leg cannot assume', () => {
     // be satisfied by.
     expect(tripOf(haulers[0])).toMatchObject({ phase: 'fetching', plannedAmount: 6, amount: 0 });
 
-    // A gatherer's hut costs 10 wood and the camp holds none, so `pay` draws it
-    // straight out of the depot this hauler is walking toward — a legitimate
-    // spend the source claim does not bind.
+    // A ledger spend of 10 wood draws straight out of the depot this hauler is
+    // walking toward — `pay` reaches across every site, and a source claim does
+    // not bind it. Spent directly rather than through a build order, which is
+    // what this fixture used until §2.3 moved a building's cost from the order
+    // to the delivery: an order now takes nothing, so it can no longer drain
+    // anything. Meals are the shipped spender that still can, and no meal is
+    // made of wood — hence the bare `pay`, which is the same call a meal makes.
     await step(out - 1);
-    enqueue(world, { type: 'constructBuilding', buildingDefId: 'gatherersHut' });
-    await step(1); // the build lands, then this same tick brings the hauler in
+    expect(stockpile.pay({ wood: 10 })).toBe(true);
+    await step(1); // the spend lands, then this same tick brings the hauler in
     expect(stockpile.get('wood')).toBe(0);
     expect(colonyTotal(world, 'wood')).toBe(2); // NOT 6: what was there, not what was claimed
   });

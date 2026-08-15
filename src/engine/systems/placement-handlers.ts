@@ -1,7 +1,7 @@
-import type { ResourceId } from '../../shared/content-types';
+import type { BuildingDefId, CostMap, ResourceId } from '../../shared/content-types';
 import type { Command } from '../../shared/commands';
 import { CAMP_SITE_ID, legPositionOf } from '../../shared/haul';
-import { autoPlacePosition, isTileBuildable, relocationTicks, type TileRef } from '../../shared/placement';
+import { autoPlacePosition, isTileBuildable, isUnderConstruction, relocationTicks, type TileRef } from '../../shared/placement';
 import { BALANCE } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
 import { RESOURCES, RESOURCE_IDS } from '../content/resources';
@@ -10,7 +10,7 @@ import { buildingComponents } from '../spawn';
 import { heldAtOf } from './haul-claims';
 import { destinationFor } from './haul-sites';
 import { shelterWithRoom } from './population-handlers';
-import { findBuilding, type CommandContext } from './command-handlers';
+import { findBuilding, type BuildingRow, type CommandContext } from './command-handlers';
 
 // The three commands that put a building somewhere, take it away again, or move
 // it — split out of command-handlers.ts because that file was approaching the
@@ -34,14 +34,88 @@ function occupiedTiles(ctx: CommandContext): TileRef[] {
   ];
 }
 
+/**
+ * What every construction site the colony already has going still needs, per
+ * resource — `Σ over sites of max(0, cost[r] − held[r])` (spec §2.3).
+ *
+ * Derived from live components at every call, stored nowhere, RESERVING
+ * nothing: no claim is written and two haulers racing for the same log are
+ * still resolved by the claim machinery that already does that. It is what
+ * `pay` used to do implicitly — a second order used to see the first one's
+ * cost gone from the ledger, and with the payment moved to delivery every
+ * order in a drain would otherwise read the same untouched stock.
+ *
+ * Both halves of "the sites the colony has going" are needed and neither is
+ * sufficient alone: `ctx.buildings` misses every site ordered earlier in THIS
+ * drain (invisible to queries until the post-step sync), and
+ * `pending.constructed` is only ever this drain's own. A pending site has
+ * nothing delivered yet, so its shortfall is its whole cost.
+ *
+ * Skips `ctx.demolishedIds` for the reason `occupiedTiles` above does:
+ * a site cancelled earlier in this drain is still in the query with its
+ * `Construction` and its in-tray intact, and charging its shortfall against
+ * the very order meant to replace it refuses a rebuild the colony can plainly
+ * afford.
+ *
+ * Deliberately conservative by the amount in transit: a load already picked up
+ * has left `Stockpile` and has not yet reached `held`, so it is counted
+ * against the player twice. That is the safe direction — it never permits a
+ * queue the colony cannot fund — and increment 10 deletes the check outright.
+ */
+function outstandingMaterials(ctx: CommandContext): CostMap {
+  const outstanding: CostMap = {};
+  const owe = (defId: BuildingDefId, held: (id: ResourceId) => number): void => {
+    for (const [resource, amount] of Object.entries(BUILDINGS[defId].cost)) {
+      const id = resource as ResourceId;
+      outstanding[id] = (outstanding[id] ?? 0) + Math.max(0, amount - held(id));
+    }
+  };
+  for (const row of ctx.buildings) {
+    if (ctx.demolishedIds.has(row.building.id)) continue;
+    if (!isUnderConstruction(row.construction.ticksLeft)) continue;
+    owe(row.building.defId, (id) => row.input.amounts.get(id) ?? 0);
+  }
+  for (const site of ctx.pending.constructed) owe(site.defId, () => 0);
+  return outstanding;
+}
+
+/**
+ * §2.3's rule: an order is refused unless the colony holds its cost ON TOP OF
+ * what every site already going still needs.
+ *
+ * `colonyStock`, not `toJSON`: materials are hauled from any site, so wood in
+ * a storehouse funds a build exactly as camp wood does — the same reason the
+ * nomad gate reads it.
+ *
+ * Quantified over the NEW cost's resources rather than over every resource in
+ * the catalog. The question being asked is whether this order can be added to
+ * the queue, and a colony that has drifted short on a material this order does
+ * not want cannot fix that by being refused an unrelated building.
+ *
+ * An ORDER-TIME check, and it guarantees nothing about completion: it writes
+ * nothing down, so goods it counted can leave for a meal or a sawmill before a
+ * hauler collects them. Reserving hard enough to close that would mean holding
+ * materials against food, which is a worse game than a queue that occasionally
+ * stalls — and cancellation recovers it.
+ */
+function affordableWithQueue(ctx: CommandContext, cost: CostMap): boolean {
+  const outstanding = outstandingMaterials(ctx);
+  const stock = ctx.stockpile.colonyStock();
+  return Object.entries(cost).every(([resource, amount]) => {
+    const id = resource as ResourceId;
+    return (stock[id] ?? 0) >= (outstanding[id] ?? 0) + amount;
+  });
+}
+
 export function handleConstructBuilding(ctx: CommandContext, command: Extract<Command, { type: 'constructBuilding' }>): void {
-  // Checked BEFORE pay(): refusing after payment would swallow the cost.
+  // Checked BEFORE the spawn, with the two below: neither an id nor a tile is
+  // recoverable once the entity exists.
   if (ctx.ids.exhausted()) {
     ctx.notices.reject('Cannot create more entities: id space exhausted.');
     return;
   }
   const def = BUILDINGS[command.buildingDefId];
-  // Position resolves (and can refuse) BEFORE pay(), same principle as ids.
+  // Position resolves (and can refuse) before the spawn, same principle as ids.
   const occupied = occupiedTiles(ctx);
   let at = command.at ?? null;
   if (at === null) {
@@ -54,7 +128,13 @@ export function handleConstructBuilding(ctx: CommandContext, command: Extract<Co
     ctx.notices.reject('Cannot build there.');
     return;
   }
-  if (!ctx.stockpile.pay(def.cost)) {
+  // The REFUSAL survives §2.3, only the PAYMENT goes: `pay` both tested and
+  // debited, so deleting the call would quietly repeal "you cannot order what
+  // you cannot pay for" — which is increment 10's product change, not a
+  // side effect of moving the charge to delivery. Cumulative rather than a
+  // plain `canAfford(def.cost)`, because the debit is what used to stop a
+  // second order spending the first one's wood a second time.
+  if (!affordableWithQueue(ctx, def.cost)) {
     ctx.notices.reject(`Cannot afford ${def.name}.`);
     return;
   }
@@ -63,12 +143,19 @@ export function handleConstructBuilding(ctx: CommandContext, command: Extract<Co
   // Component list shared with the save-restore path (src/engine/spawn.ts) so a
   // building constructed in play cannot end up missing one — it already did,
   // with OutputBuffer (OBS-4-02).
-  ctx.spawn(...buildingComponents({ id, defId: def.id, col: at.col, row: at.row }));
+  //
+  // A SITE, not a finished building (§2.5): it occupies its tile from this
+  // tick and is counted down by delivered materials, never by the order.
+  ctx.spawn(...buildingComponents({ id, defId: def.id, col: at.col, row: at.row, constructionTicks: BALANCE.buildTicks }));
   // Recorded AFTER every rejection path above: a construction refused for
   // cost, tiles, or id exhaustion must not appear in this list, or homing
   // would shelter someone in a house that was never actually built.
   ctx.pending.constructed.push({ id, defId: def.id, col: at.col, row: at.row });
-  ctx.notices.succeed(`Built a ${def.name}.`);
+  // STARTED, not built: nothing has been paid, nothing has been delivered and
+  // the thing on that tile is a hole in the ground. A success notice reading
+  // "Built a House." beside a building that provides nothing is the same
+  // false receipt OBS-4-07 was filed against.
+  ctx.notices.succeed(`Started building a ${def.name}.`);
 }
 
 /** What a demolished building was holding, worded for the success notice:
@@ -130,6 +217,30 @@ function turnBackOrCancel(ctx: CommandContext, trip: HaulTrip): void {
   trip.startLeg('returning', at, dest, BALANCE.haulTilesPerTick);
 }
 
+/**
+ * The construction cost handed back when a building is demolished.
+ *
+ * Full refund for a FINISHED building — a flagged balance knob (increment 5
+ * owns tuning), and a decision rather than an accident: cutting it was
+ * considered and rejected. `refund()`, not `add()`: the building was never
+ * hauled to, so this must not inflate the Economy view's Delivered/t
+ * (Stockpile.refund's doc comment says why). Active batch progress is simply
+ * lost with the entity.
+ *
+ * A SITE gets nothing back, and that branch arrives with §2.3 rather than with
+ * the rest of cancellation: the cost was never charged at the order, so paying
+ * it back would MINT it out of nothing every time a player cancelled a build.
+ * What a site does owe back is the materials actually DELIVERED to it, which
+ * is a later task's half — nothing can reach an in-tray until dispatch learns
+ * to supply a site.
+ */
+function refundCostOf(ctx: CommandContext, found: BuildingRow): void {
+  if (isUnderConstruction(found.construction.ticksLeft)) return;
+  for (const [resource, amount] of Object.entries(BUILDINGS[found.building.defId].cost)) {
+    ctx.stockpile.refund(resource as ResourceId, amount);
+  }
+}
+
 export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Command, { type: 'demolishBuilding' }>): void {
   const found = findBuilding(ctx, command.buildingId);
   if (found === null) {
@@ -137,13 +248,7 @@ export function handleDemolishBuilding(ctx: CommandContext, command: Extract<Com
     return;
   }
   const def = BUILDINGS[found.building.defId];
-  // Full refund — flagged balance knob (increment 5 owns tuning). refund(),
-  // not add(): the building was never hauled to, so this must not inflate
-  // the Economy view's Delivered/t (Stockpile.refund's doc comment says why).
-  // Active batch progress is simply lost with the entity.
-  for (const [resource, amount] of Object.entries(def.cost)) {
-    ctx.stockpile.refund(resource as ResourceId, amount);
-  }
+  refundCostOf(ctx, found);
   // Whatever was waiting in either tray dies with the building — decided in
   // OBS-4-07 for the out-tray, and extended to the IN-tray by §2.7 for the same
   // reason: neither is in the ledger, and a building left full of goods should

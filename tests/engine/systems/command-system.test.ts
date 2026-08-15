@@ -6,7 +6,7 @@ import {
 } from '../../../src/engine/resources';
 import { BALANCE } from '../../../src/engine/content/balance';
 import {
-  Building, Colonist, HaulTrip, Home, Hunger, InputBuffer, JobAssignment, OutputBuffer, Position, Relocation, WorkerSlots,
+  Building, Colonist, Construction, HaulTrip, Home, Hunger, InputBuffer, JobAssignment, OutputBuffer, Position, Relocation, WorkerSlots,
 } from '../../../src/engine/components';
 import { CommandSystem } from '../../../src/engine/systems/command-system';
 import type { BuildingRow, CommandContext, WorkerRow } from '../../../src/engine/systems/command-handlers';
@@ -27,7 +27,7 @@ import { RESOURCES } from '../../../src/engine/content/resources';
 import { CAMP_SITE_ID, type StoreSite } from '../../../src/shared/haul';
 import type { Command } from '../../../src/shared/commands';
 import type { SaveGameV6 } from '../../../src/shared/save';
-import { DEFAULT_MAP, type TileRef } from '../../../src/shared/placement';
+import { DEFAULT_MAP, isUnderConstruction, type TileRef } from '../../../src/shared/placement';
 
 /**
  * What a hauler in this file's fixtures carries per trip.
@@ -124,6 +124,32 @@ function saveThatCanHouseArrivals(): SaveGameV6 {
   };
 }
 
+/**
+ * The id of the FINISHED forester `saveWithFinishedForester` restores.
+ */
+const FINISHED_FORESTER_ID = 90;
+
+/**
+ * A colony whose forester was built in an earlier life, so it is a finished
+ * building rather than a construction site.
+ *
+ * Since §2.3 an ORDERED building is a site: its cost was never charged, and
+ * cancelling it therefore refunds nothing. Every case below that asserts the
+ * FULL REFUND — a deliberate balance decision, not an accident — needs a
+ * building somebody actually paid for, and until Task 8 gives sites a save
+ * field the restore path is the only way to get one.
+ */
+function saveWithFinishedForester(): SaveGameV6 {
+  const base = houselessSave();
+  return {
+    ...base,
+    buildings: [
+      { inputBuffer: {}, stored: {}, id: FINISHED_FORESTER_ID, defId: 'forester', col: 5, row: 5, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 },
+    ],
+    nextEntityId: 100,
+  };
+}
+
 // Relocation downtime is enforced by ProductionSystem, which the shared setup()
 // deliberately omits. Order matches ALL_SYSTEMS (buildColonyPrepWorld throws
 // otherwise).
@@ -140,15 +166,185 @@ async function setupWithProduction(save: SaveGameV6 = houselessSave()) {
 }
 
 describe('CommandSystem', () => {
-  it('constructs a building, paying its cost; entity appears next tick', async () => {
+  it('constructs a building without charging for it; entity appears next tick', async () => {
+    // The cost is charged as materials are HAULED (§2.3), so the ledger does
+    // not move here — see 'ordering a building does not move the ledger' below
+    // for the whole-ledger version of that claim.
     const { world, tick, dispatch, snapshot } = await setup();
     await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
-    expect(world.getResource(Stockpile).get('wood')).toBe(20); // 30 - 10
+    expect(world.getResource(Stockpile).get('wood')).toBe(30); // untouched
     expect(snapshot().buildings).toHaveLength(0); // command applied at end of step
-    expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Built a Forester.' }]);
+    expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Started building a Forester.' }]);
     await tick();
     expect(snapshot().buildings).toHaveLength(1);
     expect(snapshot().buildings[0].defId).toBe('forester');
+  });
+
+  it('ordering a building does not move the ledger', async () => {
+    // §2.3: the cost leaves the ledger as materials are HAULED, not at the
+    // order. The whole colonyStock is compared, not the two cost resources —
+    // a partial assertion passes an implementation that debits some third
+    // resource, and `pay` is a loop over a cost map that is easy to mis-key.
+    const { world, dispatch } = await setup();
+    const before = { ...world.getResource(Stockpile).colonyStock() };
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
+    expect(world.getResource(Stockpile).colonyStock()).toEqual(before);
+  });
+
+  it('an order spawns a construction site, not a finished building', async () => {
+    const { world, tick, dispatch, snapshot } = await setup();
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
+    expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Started building a Forester.' }]);
+    await tick();
+    const site = [...world.getEntities()].find((e) => e.getComponent(Building) !== undefined)!;
+    expect(site.getComponent(Construction)!.ticksLeft).toBe(BALANCE.buildTicks);
+    expect(isUnderConstruction(site.getComponent(Construction)!.ticksLeft)).toBe(true);
+  });
+
+  it('a colony that cannot afford a building is still refused', async () => {
+    // Removing `pay` deletes the DEBIT and the REFUSAL together — `pay` did
+    // both — so without this the check comes out inside a refactor and
+    // increment 10's product change ships unmeasured.
+    const save = houselessSave();
+    save.stockpile = {};
+    const { world, tick, dispatch, snapshot } = await setup(save);
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'mill' }); // 20 wood, 10 planks
+    expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'Cannot afford Mill.' }]);
+    expect(world.getResource(Stockpile).colonyStock()).toEqual({});
+    await tick();
+    expect(snapshot().buildings).toHaveLength(0);
+  });
+
+  it('cancelling a site with nothing delivered refunds nothing', async () => {
+    // The minting test. The refund loop paid back `def.cost` unconditionally,
+    // which was right only while the order charged it — with the payment gone
+    // it hands back goods that never left, and the colony total is where that
+    // shows up. Two resources, so a loop that refunds the first key alone is
+    // caught too. (Task 7 owns the in-tray half; nothing can reach a tray yet.)
+    const save = houselessSave();
+    save.stockpile = { ...save.stockpile, planks: 10 };
+    const { world, tick, dispatch, snapshot } = await setup(save);
+    const held = () => [colonyTotal(world, 'wood'), colonyTotal(world, 'planks')];
+    const before = held();
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'mill' }); // 20 wood, 10 planks
+    await tick();
+    expect(held()).toEqual(before); // nothing paid at the order either
+    await dispatch({ type: 'demolishBuilding', buildingId: snapshot().buildings[0].id });
+    expect(held()).toEqual(before);
+  });
+
+  it('demolishing a FINISHED building still refunds its cost', async () => {
+    // The other side of the branch: without this it can be written as "never
+    // refund", which silently repeals `Demolition Keeps Its Full Refund`.
+    const save = houselessSave();
+    save.buildings = [
+      { inputBuffer: {}, stored: {}, id: 90, defId: 'forester', col: 5, row: 3, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 },
+    ];
+    save.nextEntityId = 100;
+    const { world, dispatch, snapshot } = await setup(save);
+    await dispatch({ type: 'demolishBuilding', buildingId: 90 });
+    expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Demolished the Forester — cost refunded.' }]);
+    expect(world.getResource(Stockpile).get('wood')).toBe(40); // 30 + the forester's 10
+  });
+
+  describe('the affordability check counts the sites already queued', () => {
+    /**
+     * Exactly one house's worth of wood, and plenty of planks.
+     *
+     * A house costs 15 wood AND 5 planks, so a ledger holding one house's
+     * planks would refuse the second order for want of planks whichever way
+     * the check is written — passing the test for the wrong reason. 20 planks
+     * leaves wood as the only binding resource, which is the resource the
+     * cumulative rule is being tested on.
+     */
+    function oneHouseOfWood(): SaveGameV6 {
+      return { ...houselessSave(), stockpile: { wood: 15, planks: 20 } };
+    }
+
+    it('refuses the second of two orders sharing one house\'s materials, both in one drain', async () => {
+      const { tick, dispatch, snapshot } = await setup(oneHouseOfWood());
+      await dispatch(
+        { type: 'constructBuilding', buildingDefId: 'house' },
+        { type: 'constructBuilding', buildingDefId: 'house' },
+      );
+      expect(snapshot().notices).toEqual([
+        { kind: 'success', message: 'Started building a House.' },
+        { kind: 'rejection', message: 'Cannot afford House.' },
+      ]);
+      await tick();
+      expect(snapshot().buildings).toHaveLength(1);
+    });
+
+    it('refuses the second of two orders sharing one house\'s materials, one order per tick', async () => {
+      // No hauler is assigned and no site is a source, so nothing collects
+      // between the two ticks: the ledger the second order reads is the same
+      // one the first read. A plain `canAfford(def.cost)` therefore accepts
+      // both — which is exactly the queue §2.4 says increment 9 does not ship.
+      const { tick, dispatch, snapshot } = await setup(oneHouseOfWood());
+      await dispatch({ type: 'constructBuilding', buildingDefId: 'house' });
+      await tick();
+      await dispatch({ type: 'constructBuilding', buildingDefId: 'house' });
+      expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'Cannot afford House.' }]);
+      await tick();
+      expect(snapshot().buildings).toHaveLength(1);
+    });
+
+    it('counts sites only — a FINISHED building is not charged against a new order', async () => {
+      // The distinction the row's `Construction` exists for. A finished
+      // building's cost was paid off long ago; counting it as outstanding would
+      // reserve every building the colony has ever built against every future
+      // order, and a colony holding exactly one forester's wood could never
+      // build a second one.
+      const save = saveWithFinishedForester();
+      save.stockpile = { wood: 10 }; // exactly one forester, and no slack at all
+      const { tick, dispatch, snapshot } = await setup(save);
+      await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
+      expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Started building a Forester.' }]);
+      await tick();
+      expect(snapshot().buildings).toHaveLength(2);
+    });
+
+    it('does not charge a site demolished earlier in the same drain against its replacement', async () => {
+      // Removal is deferred to the post-step drain, so the cancelled site is
+      // still in the query with its Construction intact. Summed naively its
+      // shortfall is charged against the very order meant to replace it, and
+      // the pair is refused for materials the refund has already returned.
+      const save = houselessSave();
+      save.buildings = [
+        { inputBuffer: {}, stored: {}, id: 90, defId: 'house', col: 5, row: 3, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 },
+      ];
+      // Exactly one house, and no refund to help: cancelling a site returns
+      // nothing, so the replacement is funded by the ledger alone. Counted
+      // naively the ghost's own 15 wood is charged on top and the pair is
+      // refused for materials the colony plainly holds.
+      save.stockpile = { wood: 15, planks: 5 };
+      save.nextEntityId = 100;
+      const { world, tick, dispatch, snapshot } = await setup(save);
+      // Building 90 is a SITE, not a finished house: nothing delivered to it
+      // yet, so its shortfall is its whole cost. (Sites do not round-trip
+      // through a save until Task 8, hence the direct write.)
+      [...world.getEntities()].find((e) => e.getComponent(Building)?.id === 90)!
+        .getComponent(Construction)!.ticksLeft = BALANCE.buildTicks;
+      await dispatch(
+        { type: 'demolishBuilding', buildingId: 90 },
+        { type: 'constructBuilding', buildingDefId: 'house', at: { col: 5, row: 3 } },
+      );
+      expect(snapshot().notices.map((n) => n.kind)).toEqual(['success', 'success']);
+      await tick();
+      expect(snapshot().buildings).toHaveLength(1);
+    });
+  });
+
+  it('a site occupies its tile from the order tick', async () => {
+    // An obstruction, not a reservation: the tile is taken the moment the
+    // order lands, and stays taken on every later tick.
+    const { tick, dispatch, snapshot } = await setup();
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 5, row: 5 } });
+    await tick();
+    await dispatch({ type: 'constructBuilding', buildingDefId: 'gatherersHut', at: { col: 5, row: 5 } });
+    expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'Cannot build there.' }]);
+    await tick();
+    expect(snapshot().buildings).toHaveLength(1); // the refused hut never spawned
   });
 
   it('rejects unaffordable construction with a notice', async () => {
@@ -332,6 +528,7 @@ describe('CommandSystem', () => {
           buffer: entity.getComponent(OutputBuffer)!,
           input: entity.getComponent(InputBuffer)!,
           relocation: entity.getComponent(Relocation)!,
+          construction: entity.getComponent(Construction)!,
         };
       });
     }
@@ -499,7 +696,7 @@ describe('CommandSystem', () => {
   it('constructs at a chosen buildable tile', async () => {
     const { tick, dispatch, snapshot } = await setup();
     await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 7, row: 4 } });
-    expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Built a Forester.' }]);
+    expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Started building a Forester.' }]);
     await tick();
     expect(snapshot().buildings[0]).toMatchObject({ defId: 'forester', col: 7, row: 4 });
   });
@@ -512,17 +709,20 @@ describe('CommandSystem', () => {
     expect(snapshot().buildings.map((b) => [b.col, b.row])).toEqual([[4, 1], [6, 1]]);
   });
 
-  it('rejects out-of-bounds, camp-band, and occupied tiles without paying', async () => {
+  it('rejects out-of-bounds, camp-band, and occupied tiles', async () => {
     const { world, tick, dispatch, snapshot } = await setup();
     await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 0, row: 1 } });
     expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'Cannot build there.' }]);
     await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 24, row: 1 } });
     expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'Cannot build there.' }]);
-    expect(world.getResource(Stockpile).get('wood')).toBe(30); // nothing paid
+    expect(world.getResource(Stockpile).get('wood')).toBe(30);
     await dispatch({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 5, row: 5 } });
     await dispatch({ type: 'constructBuilding', buildingDefId: 'gatherersHut', at: { col: 5, row: 5 } });
     expect(snapshot().notices).toEqual([{ kind: 'rejection', message: 'Cannot build there.' }]);
-    expect(world.getResource(Stockpile).get('wood')).toBe(20); // only the forester paid
+    // Nothing is charged at the order any more (§2.3), so the ledger says
+    // nothing about which of these four orders was accepted — the building
+    // count below is what does.
+    expect(world.getResource(Stockpile).get('wood')).toBe(30);
     await tick();
     expect(snapshot().buildings).toHaveLength(1);
   });
@@ -568,14 +768,12 @@ describe('CommandSystem', () => {
   });
 
   it('demolishes: refunds the cost, idles the workers, removes the entity', async () => {
-    const { world, tick, dispatch, snapshot } = await setup();
-    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' }); // wood 30 -> 20
-    await tick();
-    const buildingId = snapshot().buildings[0].id;
+    const { world, tick, dispatch, snapshot } = await setup(saveWithFinishedForester());
+    const buildingId = FINISHED_FORESTER_ID;
     await dispatch({ type: 'assignWorker', buildingId });
     await dispatch({ type: 'demolishBuilding', buildingId });
     expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Demolished the Forester — cost refunded.' }]);
-    expect(world.getResource(Stockpile).get('wood')).toBe(30); // full refund
+    expect(world.getResource(Stockpile).get('wood')).toBe(40); // 30 + the forester's full 10
     await tick();
     expect(snapshot().buildings).toHaveLength(0);
     expect(snapshot().idleAdults).toBe(3);
@@ -585,12 +783,10 @@ describe('CommandSystem', () => {
     // OBS-4-07, resolved: the buffer is destroyed either way (unchanged from
     // the test above) — only the notice's wording is new. The stockpile
     // assertion is the guard that this stayed a messaging fix: it must land on
-    // the exact same 30 as the empty-building case above, proving the 9
+    // the exact same 40 as the empty-building case above, proving the 9
     // buffered wood never reached the stockpile despite being named in the notice.
-    const { world, tick, dispatch, snapshot } = await setup();
-    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' }); // wood 30 -> 20
-    await tick();
-    const buildingId = snapshot().buildings[0].id;
+    const { world, dispatch, snapshot } = await setup(saveWithFinishedForester());
+    const buildingId = FINISHED_FORESTER_ID;
     for (const entity of world.getEntities()) {
       const building = entity.getComponent(Building);
       if (building?.id === buildingId) entity.getComponent(OutputBuffer)!.add('wood', 9);
@@ -599,17 +795,16 @@ describe('CommandSystem', () => {
     expect(snapshot().notices).toEqual([
       { kind: 'success', message: 'Demolished the Forester — cost refunded, 9 Wood lost.' },
     ]);
-    expect(world.getResource(Stockpile).get('wood')).toBe(30); // construction refund only, same as the empty case
+    expect(world.getResource(Stockpile).get('wood')).toBe(40); // construction refund only, same as the empty case
   });
 
   it('demolishing an empty building leaves the notice byte-identical to today\'s wording', async () => {
     // OBS-4-07: a zero-units clause would be noise on the common case, so an
     // empty buffer must not grow a trailing ", lost." clause of any kind.
-    const { tick, dispatch, snapshot } = await setup();
-    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
-    await tick();
-    const buildingId = snapshot().buildings[0].id;
-    await dispatch({ type: 'demolishBuilding', buildingId });
+    // The same finished building the case above uses, so the two notices differ
+    // in exactly the one clause under test.
+    const { dispatch, snapshot } = await setup(saveWithFinishedForester());
+    await dispatch({ type: 'demolishBuilding', buildingId: FINISHED_FORESTER_ID });
     expect(snapshot().notices).toEqual([{ kind: 'success', message: 'Demolished the Forester — cost refunded.' }]);
   });
 
@@ -714,7 +909,7 @@ describe('CommandSystem', () => {
     // past an index-1-only assertion.
     expect(snapshot().notices).toEqual([
       { kind: 'success', message: 'Demolished the Forester — cost refunded.' },
-      { kind: 'success', message: "Built a Gatherer's Hut." },
+      { kind: 'success', message: "Started building a Gatherer's Hut." },
     ]);
     await tick();
     expect(snapshot().buildings).toHaveLength(1);
@@ -1565,13 +1760,14 @@ describe('CommandSystem', () => {
     // fail if the refund is halved. What this test adds is the REASON it is
     // 100%, recorded at an assertion rather than only in a spec, so a future
     // balance pass reaching for this knob finds the argument against it here.
-    const { world, tick, dispatch, snapshot } = await setup();
+    //
+    // A FINISHED forester, because since §2.3 an ordered one is a site whose
+    // cost was never charged — refunding that would mint wood from nothing,
+    // which is a different rule and has its own case above.
+    const { world, dispatch } = await setup(saveWithFinishedForester());
     const before = world.getResource(Stockpile).get('wood');
-    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
-    expect(world.getResource(Stockpile).get('wood')).toBe(before - 10); // forester costs 10 wood
-    await tick(); // the entity appears the tick after the command is handled
-    await dispatch({ type: 'demolishBuilding', buildingId: snapshot().buildings[0].id });
-    expect(world.getResource(Stockpile).get('wood')).toBe(before);
+    await dispatch({ type: 'demolishBuilding', buildingId: FINISHED_FORESTER_ID });
+    expect(world.getResource(Stockpile).get('wood')).toBe(before + 10); // forester costs 10 wood
   });
 
   it('demolition refund does not count as a hauler delivery', async () => {
@@ -1584,12 +1780,10 @@ describe('CommandSystem', () => {
     // producedThisTick. Both halves matter: the refund amount is existing
     // behaviour that must not regress, and the zeroed producedThisTick is
     // the fix.
-    const { world, tick, dispatch, snapshot } = await setup();
+    const { world, dispatch } = await setup(saveWithFinishedForester());
     const before = world.getResource(Stockpile).get('wood');
-    await dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
-    await tick();
-    await dispatch({ type: 'demolishBuilding', buildingId: snapshot().buildings[0].id });
-    expect(world.getResource(Stockpile).get('wood')).toBe(before); // full refund, unchanged
+    await dispatch({ type: 'demolishBuilding', buildingId: FINISHED_FORESTER_ID });
+    expect(world.getResource(Stockpile).get('wood')).toBe(before + 10); // full refund
     expect(world.getResource(Stockpile).producedThisTick.get('wood') ?? 0).toBe(0); // not a delivery
   });
 });

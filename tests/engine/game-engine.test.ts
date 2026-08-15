@@ -142,7 +142,7 @@ describe('GameEngine', () => {
         // field fail here as well as in the round-trip cases.
         buffer: {}, inputBuffer: {}, stored: {}, relocatingTicks: 0,
       });
-    expect(save.stockpile.wood).toBe(20); // cost paid AND building present
+    expect(save.stockpile.wood).toBe(30); // building present, and NOT charged for at the order (§2.3)
   });
 
   it('a save written on the tick after a die-off holds nobody the colony has already killed', async () => {
@@ -239,7 +239,7 @@ describe('GameEngine', () => {
         // Same reasoning as the autosave case above: both empty, both asserted.
         buffer: {}, inputBuffer: {}, stored: {}, relocatingTicks: 0,
       });
-    expect(save.stockpile.wood).toBe(20); // cost paid AND building present
+    expect(save.stockpile.wood).toBe(30); // building present, and NOT charged for at the order (§2.3)
     await engine.flush(); // empty queue: no extra tick
     expect(engine.serialize().tick).toBe(1);
   });
@@ -277,14 +277,19 @@ describe('GameEngine', () => {
     save.stockpile = { wood: 60 };
     const engine = await GameEngine.create(save);
 
-    // A is queued BEFORE the tick, so tick 1's CommandSystem pays for it.
+    // A is queued BEFORE the tick, so tick 1's CommandSystem handles it.
+    const idsBefore = engine.serialize().nextEntityId;
     engine.dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
     const inFlight = engine.stepOnce(); // deliberately not awaited
 
-    // Spin until A's cost is paid: that proves tick 1 has drained its queue,
-    // while the tick itself is still in flight (inFlight is not awaited yet).
+    // Spin until A has taken its entity id: that proves tick 1 has drained its
+    // queue, while the tick itself is still in flight (inFlight is not awaited
+    // yet). The id counter, not the stockpile — since §2.3 an order charges
+    // nothing, so the ledger no longer moves when a command is handled — and
+    // it is the same kind of witness: a resource the handler writes
+    // synchronously, before the step's own deferred entity sync.
     let spins = 0;
-    while (engine.serialize().stockpile.wood === 60) {
+    while (engine.serialize().nextEntityId === idsBefore) {
       await Promise.resolve();
       if (++spins > 1000) throw new Error('in-flight tick never drained its queue');
     }
@@ -306,7 +311,7 @@ describe('GameEngine', () => {
     await engine.stepOnce(); // paused manual step: no follow-up tick will come
     expect(engine.snapshot!.buildings).toHaveLength(2); // the starter house and the new forester
     expect(engine.snapshot!.buildings[1].defId).toBe('forester');
-    expect(engine.snapshot!.stockpile.wood.stock).toBe(20);
+    expect(engine.snapshot!.stockpile.wood.stock).toBe(30); // a site is charged on delivery, not at the order
   });
 
   it('save/restore preserves entity ids and the id counter keeps incrementing past them', async () => {

@@ -235,7 +235,7 @@ describe('isLoadableSave', () => {
         // never puts an arrival and a relocation in contention at all, which
         // is the whole interaction under test.
         expect({
-          built: said(/Built a House/), joined: said(/joined the colony/), moved: said(/Moved the/),
+          built: said(/Started building a House/), joined: said(/joined the colony/), moved: said(/Moved the/),
           assigned: said(/Assigned a worker/), demolished: said(/Demolished the/),
         }).toEqual({ built: true, joined: true, moved: true, assigned: true, demolished: true });
         // Past the recruit cooldown before the second drain, so its nomad is

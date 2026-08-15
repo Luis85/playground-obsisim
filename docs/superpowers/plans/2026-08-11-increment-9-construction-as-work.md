@@ -125,15 +125,23 @@ Mutations: restore the `pay` call; spawn with `ticksLeft = 0`; move the tile che
 
 ---
 
-### Task 3: A site's demand is its cost
+### Task 3: A site's demand is its cost, and three gates must let it through
+
+**Without all four changes in this task, no material can ever reach a site and the feature does not work at all.** Three of them are outside `haul-dispatch.ts`, and a brief scoped to `needOf` alone — as an earlier draft of this plan was — ships a site that is offered materials and can never receive them.
 
 **Files:**
-- Modify: `src/engine/systems/haul-dispatch.ts` (`needOf`)
-- Test: `tests/engine/systems/haul-dispatch.test.ts`
+- Modify: `src/engine/systems/haul-dispatch.ts` (`needOf`, `supplyCandidates`), `src/engine/systems/haul-system.ts` (`unload`)
+- Test: `tests/engine/systems/haul-dispatch.test.ts`, `tests/engine/systems/haul-system.test.ts`
 
 **Interfaces:**
-- `needOf` branches on `isUnderConstruction`: a site's wanted map is `BUILDINGS[defId].cost` and its per-resource room is `cost[r] − held[r]`, **not** `BALANCE.inputBufferCap`. A mill costs 20 wood and 10 planks; capping its site at 12 makes it undeliverable.
-- Everything downstream is unchanged. Do not add a parallel candidate builder — that is the second delivery mechanism the backlog note warns doing this before increment 7 would have required.
+- `needOf` branches on `isUnderConstruction`: a site's wanted map is `BUILDINGS[defId].cost` and its per-resource room is `cost[r] − held[r]`, **not** `BALANCE.inputBufferCap`.
+- `supplyCandidates` (line 172) checks `staffed.has(id)` **before** calling `needOf`, so the branch above is unreachable for a site until this gate exempts one. A site is never staffed: Task 6 forbids assigning workers, and a house or storehouse def has `workerSlots: 0` regardless.
+- `unload` (`haul-system.ts:221–222`) does **both** remaining halves — it rechecks staffing, and it caps placement at `row.input.room(BALANCE.inputBufferCap)`. Exempt the first and make the second cost-aware, or a mill site accepts 12 of its 30 units while dispatch offers the remaining 18 forever. That is a livelock, not a shortfall.
+- **Dispatch and arrival must be exempted together** — `staffed` is derived once per tick and handed to both readers precisely so they cannot drift (§2.5 of increment 7). Exempting only dispatch is worse than exempting neither: haulers walk to a site that refuses the load, the goods walk back, and the conservation sentinel stays at zero the whole time.
+
+**Why the exemption is principled, and this belongs in the code comment:** increment 7 §2.6 gates on staffing because goods in an `InputBuffer` are out of the spendable ledger and die with the building. Neither half holds for a site — §2.6 refunds its materials in full on cancellation, and it consumes them by completing rather than by working. If a later increment adds a builder role or removes that refund, this exemption must be revisited.
+
+Everything else downstream is unchanged. Do not add a parallel candidate builder — that is the second delivery mechanism the backlog note warns doing this before increment 7 would have required.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -154,11 +162,39 @@ it('a site with two materials outstanding asks for the proportionally shortest',
 it('a finished building still wants its recipe, not its cost', async () => {
   // The other side of the branch. Its own fixture, or the clause is untested.
 });
+
+// ── The three gates. Each one alone stops the feature dead, and each passes
+// ── every test above it, because those are all unit tests on needOf.
+
+it('an unstaffed site is a supply candidate', async () => {
+  // supplyCandidates' staffing gate, which sits BEFORE needOf. Assert a
+  // candidate EXISTS for a site with no workers — a fixture that happens to
+  // staff the site proves nothing and cannot be staffed anyway.
+});
+
+it('an unstaffed producer is still NOT a supply candidate', async () => {
+  // The other side of the same clause. Increment 7 §2.6's rule survives for
+  // everything that is not a site; without this fixture the exemption could be
+  // written as "always true" and pass.
+});
+
+it('a site accepts a delivery larger than inputBufferCap', async () => {
+  // The unload cap. 20 wood into a mill site: all of it lands, not 12.
+  // DISCRIMINATING: use a cost ABOVE the cap, or the assertion cannot tell the
+  // two limits apart.
+});
+
+it('a mill site reaches its full 30-unit cost and completes', async () => {
+  // The end-to-end proof that all four changes compose. This is the test that
+  // fails if any single one of them is missed, and the one to write FIRST.
+});
 ```
 
 - [ ] **Step 2: Implement, mutation-test, commit**
 
-Mutations: point a site's want at `recipe` instead of `cost`; cap a site's room at `inputBufferCap`; invert the `isUnderConstruction` branch.
+Mutations, one per change: point a site's want at `recipe`; cap a site's room at `inputBufferCap` in `needOf`; restore the staffing gate in `supplyCandidates`; restore the staffing recheck in `unload`; restore `inputBufferCap` in `unload`; invert the `isUnderConstruction` branch.
+
+**Four of those six leave a plausible, compiling implementation** that delivers nothing or delivers 12 units and stalls — and only the end-to-end test catches them. A suite of `needOf` unit tests passes against all four.
 
 ---
 
@@ -406,7 +442,8 @@ it('goods in a site in-tray are conserved', async () => {});
 - [ ] **Step 2: Does build time want to scale with cost?** A house and a workshop take the same time at a flat constant. Build several of each and report whether flat reads as wrong.
 - [ ] **Step 3: Convergence.** N sites at one hauler and at four; report the completion *curve*, not just the order. A flat curve is the failure §2.4 predicts.
 - [ ] **Step 4: What a colony pays to grow.** Ticks from order to first output, near the camp and at the far corner. Increment 5 priced delivery; this prices building.
-- [ ] **Step 5: OBS-8-06.** A site ordered far from the camp with a depot between. Report whether staging fires, how often, and whether the site completes sooner with the depot. §4.2 names the three outcomes and all three are worth having — **do not tune to reach one of them.**
+- [ ] **Step 5a: Connect the instrument BEFORE taking the OBS-8-06 reading.** `demandSourcesOf` (`haul-transfer.ts:54`) skips unstaffed buildings and derives demand from `recipe.inputs` alone, so as the engine stands **a remote site creates no depot demand and staging cannot fire for it at any distance.** Teach it about sites — unstaffed, demand from `cost` — and prove it with a fixture that shows a depot acquiring demand from a nearby site. This is a code change inside a measurement task, deliberately: taking the reading first would produce a confident zero from an instrument that was never connected, which is the increment-7 harness failure repeating.
+- [ ] **Step 5b: OBS-8-06.** A site ordered far from the camp with a depot between. Report whether staging fires, how often, and whether the site completes sooner with the depot. §4.2 names the three outcomes and all three are worth having — **do not tune to reach one of them.** If Step 5a was skipped, the reading is invalid and reports the third outcome by construction.
 - [ ] **Step 6: Write §4.1 and §4.2 from what was measured**, in §4.3-of-increment-7's manner. If a decision this spec took measures badly, record the disagreement rather than retuning toward the claim.
 - [ ] **Step 7: Verify and commit**
 

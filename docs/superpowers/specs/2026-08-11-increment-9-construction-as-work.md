@@ -126,6 +126,14 @@ Two differences that follow, and both matter:
 - **A site's in-tray cap is its cost, not `BALANCE.inputBufferCap`.** A mill
   costs 20 wood and 10 planks; capping its site at 12 would make it
   undeliverable. Room is `cost[resource] − held[resource]`, per resource.
+
+  **This cap lives in two places and both must change.** `needOf` sizes the
+  candidate at dispatch, and `unload` (`haul-system.ts:222`) sizes what is
+  actually placed on arrival — `Math.min(trip.amount, row.input.room(BALANCE.inputBufferCap))`.
+  Changing only the first leaves a mill site accepting 12 of its 30 units while
+  dispatch cheerfully offers the remaining 18 forever, which is a livelock rather
+  than a shortfall: the site never completes and the haulers never stop trying.
+  §2.7.1 carries this as one of the three conditions that must let a site in.
 - **A site wants every material, not one.** `shortestOf` already handles a
   multi-input recipe by proportional shortfall, and this is the first content in
   the game that exercises it — every shipped recipe has zero or one input, a gap
@@ -234,10 +242,51 @@ Moving a hole in the ground is meaningless, the relocation price is derived from
 a working building's downtime, and the interaction between a move countdown and a
 build countdown is two countdowns on one entity for no gameplay gain. §2.12.
 
-### 2.7 The six places where "exists" currently means "works"
+### 2.7 Where a site must be excluded, and where it must be let in
 
-Each is a condition that must now exclude a site, each is a separate fixture, and
-the list is exhaustive by intent rather than by search:
+Two halves, and the second is the one an implementation misses because §2.7's
+title only describes the first. **A site is not merely a building that provides
+nothing — it is also a building that must be fed**, and three conditions in the
+delivery path currently use "is this building staffed" as a proxy for "is this a
+legitimate delivery target". A site is never staffed and must be fed anyway.
+
+#### 2.7.1 Three conditions that must let a site in
+
+Without all three, **no material can ever reach a site and the feature cannot
+work at all**:
+
+| place | today | required |
+| --- | --- | --- |
+| `supplyCandidates` (`haul-dispatch.ts:172`) | `if (!staffed.has(id)) continue` — checked **before** `needOf`, so §2.2's branch is never reached for a site | a site is a candidate regardless of staffing |
+| `unload` staffing recheck (`haul-system.ts:221`) | the arrival half of the same rule; a load bounces home as an undelivered remainder | a site accepts its delivery regardless of staffing |
+| `unload` capacity (`haul-system.ts:222`) | `row.input.room(BALANCE.inputBufferCap)` — a mill site costing 30 units accepts **12** and can never complete, while dispatch keeps offering the rest | room is measured against the def's `cost`, per resource, exactly as §2.2 requires at dispatch |
+
+**The exemption is principled rather than a special case, and the reason is the
+thing to write into the code.** Increment 7 §2.6 gives the staffing rule's
+rationale: goods in an `InputBuffer` are out of the spendable ledger and die with
+the building, so without the gate a colony short of adults would watch its stock
+drain into a mill that cannot use it and cannot give it back. **Neither half of
+that holds for a site.** A site's materials *can* be given back — §2.6 refunds
+them in full on cancellation — and the site *will* use them, because it completes
+on delivery and time rather than on labour. The condition's reason is what
+decides the exemption, not the condition itself.
+
+That also makes the two rules verifiable against each other: if a later increment
+adds a builder role, or removes §2.6's refund, this exemption has to be revisited,
+and this paragraph is what tells that increment so.
+
+**Dispatch and arrival must be exempted together.** §2.5 of increment 7 requires
+every dispatch condition to be reserved or rechecked on arrival, and these two
+are the same rule seen from both ends — `staffed` is derived once per tick and
+handed to both readers precisely so they cannot drift. Exempting only the
+dispatch half sends haulers to a site that then refuses the load, which is worse
+than not dispatching: the goods walk both ways and the conservation sentinel
+stays at zero throughout.
+
+#### 2.7.2 Six conditions that must keep a site out
+
+Each is a separate fixture, and the list is exhaustive by intent rather than by
+search:
 
 | place | what must change |
 | --- | --- |
@@ -401,9 +450,28 @@ player-chosen tile, it appears as a natural consequence of this increment rather
 than as a test built to prove a point, and its demand is large and bursty in a
 way no recipe's in-tray is.
 
-So §4 must report, for a site ordered far from the camp with a depot between:
-whether staging fires, how many dispatches, and whether the site completes sooner
-with the depot than without. Three outcomes, all worth having:
+**A precondition, and without it this measurement is worthless.** `demandSourcesOf`
+(`haul-transfer.ts:54`) builds the demand a depot stages toward, and it does two
+things that make a construction site invisible to it: it skips any building not
+in `StaffedSet`, and it derives demand from `recipe.inputs` alone. A site is
+never staffed (§2.7.1) and needs its `cost`, so **as the engine stands today a
+remote site creates no depot demand and staging cannot fire for it at any
+distance.**
+
+Run the experiment against that and it reports zero staging — which is the
+outcome §4.2 would read as *"staging is structurally dominated, and OBS-8-06's
+second hypothesis is the live one."* That conclusion would be drawn from an
+instrument that was never connected. It is the same failure increment 7 found in
+its own harness, where a `made` figure counted other buildings' inputs and every
+number derived from it was wrong.
+
+So `demandSourcesOf` must be taught about sites — unstaffed, demand from `cost` —
+**before** the reading is taken, and the reading is invalid without it. The plan
+carries this as a step of the measurement task rather than as an afterthought.
+
+With that in place, §4 must report, for a site ordered far from the camp with a
+depot between: whether staging fires, how many dispatches, and whether the site
+completes sooner with the depot than without. Three outcomes, all worth having:
 
 - **Staging fires and pays** — OBS-8-06 closes, the deletion case is dead, and
   §1.1 of increment 8 is vindicated on ground it never got to stand on.

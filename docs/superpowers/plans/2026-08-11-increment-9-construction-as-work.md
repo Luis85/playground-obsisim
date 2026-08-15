@@ -371,12 +371,11 @@ it('a queue of sites does not starve the producer that makes what they need', as
   // served before any site — and leave the stall to the §4.1 measurement.
 });
 
-it('cancelling a younger site recovers a stalled queue', async () => {
-  // The recovery path §2.4 leans on, tested rather than asserted. Drive the
-  // fixture above into the stall, cancel the newest site, and require the
-  // oldest to complete. If this does not hold, the limitation is a deadlock
-  // rather than a stall and the increment does not ship as specified.
-});
+// The recovery half of §2.4's known limitation — 'cancelling a younger site
+// recovers a stalled queue' — is NOT here. It needs completion (Task 5) and the
+// refund branch (Task 7) before it can be green, and neither exists yet. Task 7
+// owns it. This task's assertions stop at dispatch ordering, which is all it
+// builds.
 
 it('a site is never in the starvation band', () => {
   // A site holding zero must NOT be promoted the way a producer holding zero is.
@@ -459,11 +458,18 @@ it('a house completes and is then homed by the ordinary pass', async () => {
   // No special case in completion. rehome seats a colonist the next tick.
 });
 
-it('five sites ordered at once complete in the order they were ordered', async () => {
-  // ACCEPTANCE CRITERION 4, finally statable: Task 4 proved the DISPATCH order
-  // and this proves it produces the completion order it was chosen for. Both
-  // are needed — dispatch order without completion order does not rule out a
-  // countdown that reorders them, which is precisely what this task adds.
+it('five sites at EQUAL distance complete in the order they were ordered', async () => {
+  // Task 4 proved the DISPATCH order; this proves the countdown does not reorder
+  // what dispatch ordered, which is the failure mode this task introduces.
+  //
+  // EQUAL LEGS ARE LOAD-BEARING, and this is not a convenience. Strict
+  // completion order is NOT what §2.4 guarantees — criterion 4 is deliberately
+  // stated as a serving rule, because once the oldest site's remaining room is
+  // fully claimed it leaves the candidate set, and a younger site with a shorter
+  // walk can then fill and finish first with nothing wrong. Place all five
+  // equidistant from the camp so arrival order follows service order, and read
+  // this as a narrow regression test on the countdown rather than as criterion 4
+  // itself. Criterion 4 is proved by Task 4's serving assertion.
 });
 ```
 
@@ -510,6 +516,17 @@ it('cancelling a partly supplied site refunds only what arrived', async () => {
 it('cancelling a site refunds what was delivered to it', async () => {
   // Assert the COLONY TOTAL, and separately that deliveredRate did NOT move —
   // refundAt not addAt. The total alone passes against addAt.
+});
+
+it('cancelling a younger site recovers a stalled queue', async () => {
+  // §2.4's known limitation is a STALL rather than a deadlock only because this
+  // works. Drive the wood-and-plank fixture from Task 4 into the stall, cancel
+  // the newest site, and require the oldest to complete.
+  //
+  // It lands HERE, not with the dispatch tests that motivate it: completion is
+  // Task 5 and the refund branch is this task, so Task 4 could not have made it
+  // green. If it does not hold, the limitation is a deadlock and the increment
+  // does not ship as specified — so it is a gate on this task, not a nice-to-have.
 });
 
 it('demolishing a FINISHED building still refunds its cost', async () => {
@@ -679,7 +696,21 @@ it('the completion log records order, not just totals', async () => {
 it('a scenario with no sites reports no completions', async () => {
   // The zero side, which is what catches an over-counting instrument.
 });
-it('goods in a site in-tray are conserved', async () => {});
+it('goods in a site in-tray are conserved', async () => {
+  // The IN-FLIGHT half only. It passes with the construction sink entirely
+  // absent, because buffered goods are still standing in goodsStanding — so on
+  // its own it is not evidence of anything and must never be the only fixture.
+});
+it('a scenario that COMPLETES a supplied site reports conservationError === 0', async () => {
+  // THE ONE THAT CATCHES THE MISSING SINK, and the reason the prose above
+  // insists on completion. ConstructionSystem empties the tray at completion,
+  // so those units leave `final` with nothing subtracting them: without the
+  // construction term this reports exactly the negative cost. Run the scenario
+  // past the countdown, not merely up to delivery.
+  //
+  // Without it the balance measurements in Task 11 ship with every completed
+  // cost reported as lost goods, and §4.1 gets written from that.
+});
 ```
 
 - [ ] **Step 2: Verify and commit**

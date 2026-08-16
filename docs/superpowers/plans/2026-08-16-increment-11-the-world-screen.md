@@ -2321,6 +2321,17 @@ Add to `tests/app/buildings-view.test.ts`:
     expect(engine.dispatch).toHaveBeenCalledWith({ type: 'moveBuilding', buildingId: 1, to: { col: 9, row: 4 } });
   });
 
+  it('refuses to staff a construction site, and says why', async () => {
+    const { wrapper, engine } = mountView(makeSnapshot({
+      idleAdults: 3,
+      buildings: [makeBuilding(1, { workers: 0, workerSlots: 3, state: 'underConstruction', constructionTicks: 20, constructionNeeds: { wood: 5 } })],
+    }));
+    expect(wrapper.get('[data-test="assign-1"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('[data-test="assign-reason-1"]').text()).toContain('cannot be staffed');
+    await wrapper.get('[data-test="assign-1"]').trigger('click');
+    expect(engine.dispatch).not.toHaveBeenCalled();
+  });
+
   it('refuses a move to an occupied tile, and says why', async () => {
     const { wrapper, engine } = mountView(makeSnapshot({
       buildings: [makeBuilding(1, { col: 4, row: 1 }), makeBuilding(2, { col: 6, row: 1 })],
@@ -2381,8 +2392,25 @@ export function createGameRouter(): Router {
 
 `LedgerView.vue` composes `DashboardView`, `BuildingsView`, `PopulationView` and `EconomyView` in sequence and owns no figures of its own.
 
-`BuildingsView.vue` gains **a construction countdown column** and two number
-inputs plus a Move button per row.
+`BuildingsView.vue` gains **a construction countdown column**, **a
+site-aware staffing gate**, and two number inputs plus a Move button per row.
+
+The staffing gate is Task 7's fix applied to the other surface. `BuildingsView`
+checks only slot capacity and `idleAdults`, so a site — which keeps its def's
+`workerSlots` and which `handleAssignWorker` refuses unconditionally — still
+shows an enabled `+`. Two surfaces per verb means two gates, or the fallback
+becomes the misleading path:
+
+```vue
+            <button
+              :data-test="`assign-${b.id}`"
+              :disabled="b.constructionTicks > 0 || b.workers >= b.workerSlots || store.snapshot.idleAdults === 0"
+              @click="engine.dispatch({ type: 'assignWorker', buildingId: b.id })"
+            >+</button>
+            <small v-if="b.constructionTicks > 0" class="obsisim-reason" :data-test="`assign-reason-${b.id}`">
+              A construction site cannot be staffed until it is finished.
+            </small>
+```
 
 The countdown is a fallback-contract obligation, not decoration: the Inspector
 shows `constructionTicks`, and §2.5 promises every number a panel shows is also

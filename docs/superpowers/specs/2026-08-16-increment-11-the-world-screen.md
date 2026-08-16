@@ -148,14 +148,24 @@ next canvas click relocating a building the player can no longer see is chosen.
 So the ordering above is the second line of defence, not the first. The
 invariant is:
 
-> **Clearing the selection cancels an armed move, by whatever route the
-> selection is cleared** — Escape, clicking empty ground, closing the
-> Inspector, switching to another panel that displaces it, or the building
-> being demolished under it.
+> **An armed move never outlives the Inspector that armed it, nor the selection
+> it came from.**
 
-That is today's behaviour, stated as a rule so the split cannot lose it: it
-lives in the UI store's selection setter (§2.6), where every one of those
-routes passes through, rather than in any one component's close handler.
+It has two mechanisms because those are two different events, and the dock rule
+above means they cannot be collapsed into one:
+
+- **Clearing the selection cancels the move** — Escape, clicking empty ground,
+  or the building being demolished under it. This lives in the UI store's
+  selection setter (§2.6), which every one of those routes passes through.
+- **Dismissing the Inspector cancels the move and leaves the selection alone** —
+  closing the dock, or switching to another panel. Selection deliberately
+  survives a panel switch, so this case cannot ride on the setter above; it
+  belongs to the dock's own panel-change path.
+
+The second bullet is the one that is easy to lose: select a building, arm Move
+from its Inspector, open Attention. The Inspector is gone, the selection is
+correctly still there, and without this rule the move stays armed behind a panel
+that no longer shows it. Criterion 6 tests that route by name.
 
 **No camera work.** The map is a fixed 24×16 and `fitCamera` already fits all of
 it on screen, so "focus this building" is a highlight pulse rather than a pan.
@@ -217,7 +227,7 @@ type Selection =
 | Attention row naming one building; Economy stage row | selects that building |
 | Population colonist row; Inspector occupant row | selects that colonist |
 | Attention row naming several colonists (*"3 colonists have no bed"*) | highlights that set; selects nothing |
-| Colony resource row | **nothing** — a resource has no subject on the map |
+| Attention runway row (*"Bread empties in ~30t"*); Colony resource row | **nothing** — a resource has no subject on the map |
 
 Two consequences for the renderer seam, both inside `src/app/world/` and so
 inside this increment's scope:
@@ -228,9 +238,12 @@ inside this increment's scope:
 - A new `setHighlight(ids)` carries the plural case — a transient pulse over a
   set, with no selection and no Inspector.
 
-The Colony panel's inertness is deliberate and worth stating rather than
-discovering: highlighting every building that holds or makes a resource is a
-reasonable feature and it is not this one.
+The inert row is inert in **both** panels, which is why the last line pairs
+them: a runway warning in Attention names bread exactly as a Colony row does,
+and one of them selecting nothing while the other highlighted every bakery
+would be a rule the player has to learn per panel. Highlighting every building
+that holds or makes a resource is a reasonable feature; it is not this one, and
+it is not half of this one.
 
 **Inspector** — what `SelectionPanel` becomes. Header (name, tile, state), then
 staffing as `− 2/3 +`, then the detail that building kind actually has:
@@ -426,16 +439,20 @@ assumption.
    asserted against the UI store rather than against pixels. The inert case
    (Colony's resource rows) is tested too, so "not selectable" stays a decision
    rather than becoming an omission nobody notices.
-5. **The canvas does not remount when the dock panel changes**, and **survives
-   a Ledger round trip**: the renderer factory is called exactly once across a
-   full tour of the panels *and* once more across `/` → `/ledger` → `/`. The
-   second half is the one that catches a deleted keep-alive, and a panel-only
-   tour passes without it.
+5. **The renderer factory is called exactly once, total**, across a tour that
+   visits every panel *and* makes the `/` → `/ledger` → `/` round trip. One
+   call for the whole tour, not one per leg: the Ledger trip deactivates and
+   reactivates the kept-alive renderer, so a second construction there is the
+   WebGL teardown regression rather than the expected behaviour. The round trip
+   has to be in the tour because a panel-only tour passes with the keep-alive
+   deleted.
 6. **The Escape ladder resolves most-transient-first** — armed mode, then
    selection, then dock — and stays inert while the view is not the active
-   leaf. Separately: **clearing the selection by any route cancels an armed
-   move**, tested through at least Escape, an empty-ground click, and the
-   selected building being demolished.
+   leaf. Separately, **an armed move outlives neither its selection nor its
+   Inspector**, tested through all four routes: Escape, an empty-ground click,
+   the selected building being demolished, and — the one that does not go
+   through the selection setter — switching the dock to another panel, which
+   must cancel the move while leaving the selection standing.
 7. **Below the width threshold the dock overlays and the rail collapses**,
    driven by the `ResizeObserver` flag so it is assertable in jsdom.
 8. **`npm run check:all` green**, no baseline loosened, no suppression added,

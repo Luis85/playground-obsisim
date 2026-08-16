@@ -1277,8 +1277,8 @@ function mountScreen() {
   // Seeded BEFORE mount, deliberately. In production `App.vue` gates the
   // router view on `store.snapshot`, so nothing downstream ever renders
   // against null — but mounting WorldScreen directly skips that gate, and
-  // ResourceStrip dereferences `store.snapshot!.idleAdults` on its first
-  // render. Without this the component throws before a single assertion runs.
+  // several assertions read live figures. ResourceStrip guards on
+  // store.snapshot in its own right, so this is convenience, not a crutch.
   useGameStore(pinia).ingest(
     makeSnapshot({ idleAdults: 1, buildings: [makeBuilding(1)] }),
     { paused: true, speed: 1, error: null },
@@ -1399,6 +1399,10 @@ describe('WorldScreen', () => {
     expect(ui.selection).toEqual({ kind: 'building', id: 1 }); // untouched
   });
 
+  // Deliberately NOT seeded, and safe because ResourceStrip guards on
+  // store.snapshot. A component that throws against a null snapshot will throw
+  // in some context nobody has thought of yet; seeding every mount hides that
+  // rather than fixing it.
   it('shows the fallback message when the stage reports a fatal', async () => {
     const wrapper = mount(WorldScreen, {
       global: {
@@ -1492,18 +1496,34 @@ explains a disabled `+` with a `title` alone, and §2.2 requires a refused
 control to state its reason where the player is looking — the same rule the
 Inspector's staffing and Move controls follow.
 
+**Guard the whole component on `store.snapshot`**, the way every other view in
+this codebase already does — `BuildingsView`, `DashboardView`, `EconomyView`,
+`PopulationView`, `PopulationSummary` and `TopBar` all open with
+`v-if="store.snapshot"`. `store.snapshot!` is a lie anywhere the router gate is
+absent, and mounting a component directly in a test is exactly that. Seeding
+each test that mounts it is a fix per call site, and there is always another
+call site; this is a fix per component, and it is the house style regardless.
+
 ```vue
+<template>
+  <div v-if="store.snapshot" class="obsisim-strip" data-test="resource-strip">
+    <!-- one chip per RESOURCE_IDS entry … -->
     <span class="obsisim-haulers">
       Haulers: <strong data-test="hauler-count">{{ store.haulerCount }}</strong>
       <button data-test="unassign-hauler" :disabled="store.haulerCount === 0"
         @click="engine.dispatch({ type: 'unassignHauler' })">−</button>
-      <button data-test="assign-hauler" :disabled="store.snapshot!.idleAdults === 0"
+      <button data-test="assign-hauler" :disabled="store.snapshot.idleAdults === 0"
         @click="engine.dispatch({ type: 'assignHauler' })">+</button>
-      <small v-if="store.snapshot!.idleAdults === 0" class="obsisim-reason" data-test="hauler-reason">
+      <small v-if="store.snapshot.idleAdults === 0" class="obsisim-reason" data-test="hauler-reason">
         No idle adults — unassign someone first.
       </small>
     </span>
+  </div>
+</template>
 ```
+
+The `!` is gone from both reads: inside the guard the narrowing is real rather
+than asserted, which is what made the original version wrong.
 
 Re-run: PASS, 4 tests.
 

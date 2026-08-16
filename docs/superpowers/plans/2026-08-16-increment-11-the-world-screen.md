@@ -641,6 +641,43 @@ new), and `none` clears it. `setHighlight` keeps one short-lived pulse actor per
 subject — building or colonist, branching the same way `setSelection` does —
 and replaces the whole set on each call, so an empty array clears it.
 
+- [ ] **Step 3b: Give the smoke harness a phase per new branch**
+
+This is not optional, and it is the only place these branches are ever drawn.
+`scripts/world-smoke-harness/main.ts` calls `setSelection(1)` **bundled with a
+ghost in one phase** and calls `setHighlight` nowhere at all — so simply
+retyping that one call to the discriminated argument would leave the colonist
+branch and the whole of `setHighlight` absent or no-op while `smoke:world` and
+every fake-renderer unit test stayed green. Unit tests cannot cover this:
+`renderer.ts` is never imported by them.
+
+Follow the harness's own convention, stated in its comments — **one change per
+phase, so each check is discriminating** — and append four phases before the
+`dispose()` phase (everything after it draws nothing):
+
+```ts
+  // A colonist ring, alone: the building-ring phase above bundles its
+  // selection with a ghost, so only an isolated frame can prove the colonist
+  // branch draws anything at all.
+  () => renderer.setSelection({ kind: 'colonist', id: 12 }),
+  // ONE change: the same ring moves from the colonist to a building.
+  () => renderer.setSelection({ kind: 'building', id: 1 }),
+  // ONE change: selection cleared, a building pulse appears in its place.
+  () => {
+    renderer.setSelection({ kind: 'none' });
+    renderer.setHighlight([{ kind: 'building', id: 1 }]);
+  },
+  // ONE change: the pulse moves from a building to a colonist — the second
+  // setHighlight branch, which the previous frame cannot reach.
+  () => renderer.setHighlight([{ kind: 'colonist', id: 12 }]),
+  // ONE change: the pulse clears.
+  () => renderer.setHighlight([]),
+```
+
+Each frame must differ from its predecessor, which is what the runner already
+asserts. Update the existing `setSelection(1)` / `setSelection(null)` calls to
+the discriminated form in the same pass.
+
 - [ ] **Step 4: Typecheck the renderer in isolation**
 
 Run: `npm run typecheck`
@@ -2029,7 +2066,11 @@ In `WorldScreen.vue`, render each panel behind its `ui.panel` value inside the
       <button v-for="p in DOCK_PANELS" :key="p" :data-test="`dock-tab-${p}`"
         :class="{ 'is-active': ui.panel === p }" @click="ui.openPanel(p)">{{ DOCK_LABELS[p] }}</button>
     </nav>
-    <aside v-if="ui.panel" class="obsisim-dock" data-test="dock">
+    <!-- `is-overlay` carried over from Step 4 deliberately: this snippet
+         REPLACES that element, and dropping the binding here would silently
+         undo criterion 7's overlay half — the dock would take its grid column
+         back and shrink the canvas in a sidebar-width pane. -->
+    <aside v-if="ui.panel" class="obsisim-dock" :class="{ 'is-overlay': ui.narrow }" data-test="dock">
       <InspectorPanel v-if="ui.panel === 'inspector'" />
       <ColonyPanel v-else-if="ui.panel === 'colony'" />
       <PopulationPanel v-else-if="ui.panel === 'population'" />

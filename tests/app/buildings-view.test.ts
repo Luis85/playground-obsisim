@@ -10,8 +10,9 @@ import { makeBuilding, makeSnapshot } from './fixtures';
 import type { BuildingState, BuildingSnapshot } from '../../src/shared/snapshot';
 
 // A single 1/2-staffed Forester, with the caller choosing the wood stock (to
-// drive the construct-button's affordable/disabled state) and the building's
-// reported state (to drive the humanized-label assertions below).
+// drive the construct-button's tooltip — the button itself is never
+// disabled) and the building's reported state (to drive the humanized-label
+// assertions below).
 function mountView(
   stock: { wood?: number; planks?: number } = {},
   state: BuildingState = 'producing',
@@ -106,7 +107,7 @@ describe('BuildingsView', () => {
     const poor = mountView({ wood: 0 });
     await poor.wrapper.vm.$nextTick();
     const button = poor.wrapper.find('[data-test="construct-forester"]').element as HTMLButtonElement;
-    expect(button.title).toBe('Not enough resources');
+    expect(button.title).toBe('Short on resources — placed now, fills in as goods arrive; pick the tile yourself in the World tab');
 
     const rich = mountView({ wood: 100 });
     await rich.wrapper.vm.$nextTick();

@@ -618,11 +618,11 @@ describe('PopulationSystem — homing', () => {
   // What that test does NOT carry over is this one's incidental second job:
   // it was the only thing that reddened when `PendingChanges.clear()` stopped
   // emptying `constructed`, because a stale copy is exactly what it staged.
-  // `clear()` is still load-bearing — `outstandingMaterials`
-  // (placement-handlers.ts) charges every entry's whole cost against the next
-  // order — so that invariant was re-pinned, on the consequence rather than
-  // the mechanism, by command-system.test.ts's 'charges a standing site once,
-  // not once more for every tick since it was ordered'.
+  // That reader is gone now: `outstandingMaterials` (placement-handlers.ts)
+  // was deleted along with the order-time affordability check it served, so
+  // `PendingChanges.constructed` is write-only — pushed by
+  // `handleConstructBuilding`, read by nothing. See its own doc in
+  // src/engine/resources.ts for why the field stays anyway.
   //
   // RETIRED alongside it: 'charges a colonist housed by a same-tick
   // construction as housed, not homeless' pinned ProductionSystem's pre-sync

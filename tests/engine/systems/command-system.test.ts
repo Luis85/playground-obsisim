@@ -479,7 +479,6 @@ describe('CommandSystem', () => {
     expect(snapshot().buildings).toHaveLength(1); // the refused hut never spawned
   });
 
-
   it('welcomes a nomad and enforces the 30-tick cooldown', async () => {
     // Beds and food are both held far from their thresholds by the fixture, so
     // the cooldown is the only gate in play — the same reason the balance

@@ -49,8 +49,11 @@ describe('BuildPalette', () => {
   // that test passes regardless of whether any of the three view gates were
   // ever removed, and on its own would let a version ship where the model
   // allows a queue the player has no way to express through this surface.
-  // `mountPalette`'s own stock default is `{ wood: 100 }`, so `{}` here is
-  // deliberately a genuinely EMPTY ledger, not merely a wood shortfall.
+  // `mountPalette`'s `stocks` argument is inert for BuildPalette itself now —
+  // the component no longer reads the store at all — but the fixture stays a
+  // genuinely EMPTY ledger (not merely a wood shortfall) so that a gate
+  // restored here would have something (or, being empty, nothing) to read
+  // and redden this test rather than passing regardless.
   it('the palette arms on an empty ledger', async () => {
     const wrapper = mountPalette(null, {});
     await wrapper.vm.$nextTick();

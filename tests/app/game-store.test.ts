@@ -176,8 +176,10 @@ describe('useGameStore', () => {
   // (Task 2 deliberately leaves it alone), so a getter comparing a fresh
   // def's cost against `snapshot.stockpile` alone would still call a second
   // house affordable — this is what proves the getter subtracts the queued
-  // site's own `constructionNeeds` instead, matching the engine's
-  // `affordableWithQueue`.
+  // site's own `constructionNeeds` instead, matching the arithmetic the
+  // engine's order-time check (`affordableWithQueue`) used to compute. That
+  // check is gone (spec §2.1) — nothing refuses at order time any more — but
+  // the getter keeps its arithmetic for this advisory display.
   it('affordableDefs subtracts a queued site\'s own shortfall from a fresh order of the same def', () => {
     const store = useGameStore();
     store.ingest(makeSnapshot({

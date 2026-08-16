@@ -74,10 +74,14 @@ const store = useGameStore();
             <!-- NOT disabled on affordability (spec §2.1, increment 10): an
                  order is a request the queue fills over time, so this button
                  always dispatches. `affordableDefs` only informs the tooltip
-                 now — the one place left that still says what is short. -->
+                 now — the one place left that still says what is short, so
+                 the unaffordable branch reads as advice about what happens
+                 next rather than a reason the click was refused. The "picked
+                 automatically" hint is true regardless of affordability, so
+                 both branches carry it. -->
             <button
               :data-test="`construct-${id}`"
-              :title="store.affordableDefs[id] ? 'Placed automatically — pick the tile yourself in the World tab' : 'Not enough resources'"
+              :title="store.affordableDefs[id] ? 'Placed automatically — pick the tile yourself in the World tab' : 'Short on resources — placed now, fills in as goods arrive; pick the tile yourself in the World tab'"
               @click="engine.dispatch({ type: 'constructBuilding', buildingDefId: id })"
             >
               Build

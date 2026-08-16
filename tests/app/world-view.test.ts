@@ -332,7 +332,7 @@ describe('WorldView interaction', () => {
   // assertion whether or not the gate still existed, which is exactly the
   // false-positive the brief calls out.
   it('WorldView accepts the tile for an unaffordable def', async () => {
-    const { renderer, wrapper } = armedHarness();
+    const { renderer, wrapper, engine } = armedHarness();
     await nextTick();
     useGameStore().ingest(makeSnapshot({
       tick: 1,
@@ -343,6 +343,14 @@ describe('WorldView interaction', () => {
     await wrapper.find('[data-test="palette-forester"]').trigger('click');
     await wrapper.find('[data-test="world-host"]').trigger('pointermove', { pageX: 40, pageY: 40 });
     expect(renderer.setGhost).toHaveBeenLastCalledWith({ defId: 'forester', col: 8, row: 4, valid: true });
+    // The predicate alone proves nothing if the click handler still refused
+    // separately — pin the player-visible outcome too: an unaffordable order
+    // actually dispatches, the same as the primary click-dispatch assertions
+    // above.
+    await wrapper.find('[data-test="world-host"]').trigger('click', { pageX: 40, pageY: 40 });
+    expect(engine.dispatch).toHaveBeenCalledWith({
+      type: 'constructBuilding', buildingDefId: 'forester', at: { col: 8, row: 4 },
+    });
   });
 
   it('switching armed definitions over a parked pointer swaps the ghost in place', async () => {

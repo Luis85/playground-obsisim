@@ -514,13 +514,19 @@ assumption.
 6. **The Escape ladder resolves most-transient-first** — armed mode, then
    selection, then dock — and stays inert while the view is not the active
    leaf. Separately, **an armed move outlives neither its selection nor its
-   Inspector**, tested through all five routes: Escape, an empty-ground click,
-   the selected building being demolished, **selecting a different subject** —
-   an Inspector occupant row, which replaces a building selection with a
-   colonist one and never touches the dock — and switching the dock to another
-   panel, which must cancel the move while leaving the selection standing. The
-   last two are the ones that fail against a rule written as "cleared to
-   `none`" or as "the dock changed".
+   Inspector**, tested through all four routes that can reach it: Escape, the
+   selected building being demolished, **selecting a different subject** — an
+   Inspector occupant row, which replaces a building selection with a colonist
+   one and never touches the dock — and switching the dock to another panel,
+   which must cancel the move while leaving the selection standing. The last
+   two are the ones that fail against a rule written as "cleared to `none`" or
+   as "the dock changed".
+
+   **Not** an empty-ground canvas click. While a move is armed every canvas
+   click goes to the tile handler, which either dispatches the move or does
+   nothing, so the deselect path is unreachable in that state. Clearing the
+   selection by clicking empty ground is real behaviour — it belongs to idle
+   mode, and it is tested there rather than counted here.
 7. **Below the width threshold the dock overlays and the rail collapses**,
    driven by the `ResizeObserver` flag so it is assertable in jsdom.
 8. **`npm run check:all` green**, no baseline loosened, no suppression added,

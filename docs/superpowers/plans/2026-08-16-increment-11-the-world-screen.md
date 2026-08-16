@@ -1126,12 +1126,13 @@ git commit -m "The canvas host, without the selection state it used to own"
 ## Task 6: `WorldScreen.vue` — the shell, and deleting `WorldView`
 
 **Files:**
-- Create: `src/app/views/WorldScreen.vue`
+- Create: `src/app/views/WorldScreen.vue`, `src/app/components/ResourceStrip.vue`
 - Delete: `src/app/views/WorldView.vue`, `tests/app/world-view.test.ts`
-- Test: `tests/app/world-screen.test.ts`
+- Test: `tests/app/world-screen.test.ts`, `tests/app/resource-strip.test.ts`
 
 **Interfaces:**
-- Consumes: `WorldStage` (Task 5), `useUiStore` (Task 1), `BuildPalette`, `WorldLegend`.
+- Consumes: `WorldStage` (Task 5), `useUiStore` (Task 1), `BuildPalette`, `WorldLegend`, `ENGINE_KEY` (the strip's hauler verbs).
+- Produces: `ResourceStrip`, which this shell imports — hence built here rather than in Task 8.
 - Produces: the component the `/` route renders. Dock slots are filled in Tasks 7–11; until then the dock renders a placeholder per panel.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1293,7 +1294,94 @@ describe('WorldScreen', () => {
 Run: `npx vitest run --project unit tests/app/world-screen.test.ts`
 Expected: FAIL — cannot resolve `WorldScreen.vue`.
 
-- [ ] **Step 3: Write the shell**
+- [ ] **Step 3: Write `ResourceStrip` first — the shell imports it**
+
+`WorldScreen` renders `ResourceStrip`, and Step 1's test asserts
+`data-test="resource-strip"` exists. So this component cannot wait for Task 8:
+the module would not resolve, and this task could not reach a passing test at
+all. It is small, and it carries the two hauler verbs, so it belongs with the
+shell that shows them.
+
+Create `tests/app/resource-strip.test.ts`:
+
+```ts
+// @vitest-environment happy-dom
+import { describe, expect, it, vi } from 'vitest';
+import { mount } from '@vue/test-utils';
+import { createTestingPinia } from '@pinia/testing';
+import ResourceStrip from '../../src/app/components/ResourceStrip.vue';
+import { ENGINE_KEY } from '../../src/app/engine-key';
+import { useGameStore } from '../../src/app/stores/game-store';
+import { makeSnapshot, makeWorker, stockedWith } from './fixtures';
+
+function mountStrip(snapshot = makeSnapshot()) {
+  const engine = { dispatch: vi.fn() };
+  const pinia = createTestingPinia({ createSpy: vi.fn, stubActions: false });
+  useGameStore(pinia).ingest(snapshot, { paused: true, speed: 1, error: null });
+  return {
+    wrapper: mount(ResourceStrip, { global: { plugins: [pinia], provide: { [ENGINE_KEY as symbol]: engine } } }),
+    engine,
+  };
+}
+
+describe('ResourceStrip', () => {
+  it('assigns a hauler', async () => {
+    const { wrapper, engine } = mountStrip(makeSnapshot({ idleAdults: 1 }));
+    await wrapper.get('[data-test="assign-hauler"]').trigger('click');
+    expect(engine.dispatch).toHaveBeenCalledWith({ type: 'assignHauler' });
+  });
+
+  it('unassigns a hauler', async () => {
+    const { wrapper, engine } = mountStrip(makeSnapshot({ colonists: [makeWorker(1, { hauling: true })] }));
+    await wrapper.get('[data-test="unassign-hauler"]').trigger('click');
+    expect(engine.dispatch).toHaveBeenCalledWith({ type: 'unassignHauler' });
+  });
+
+  it('disables assign with no idle adults AND says why', () => {
+    const { wrapper } = mountStrip(makeSnapshot({ idleAdults: 0 }));
+    expect(wrapper.get('[data-test="assign-hauler"]').attributes('disabled')).toBeDefined();
+    // §2.2: visible, not hidden in a title. A disabled control with no stated
+    // reason is the exact thing that rule exists to stop.
+    expect(wrapper.get('[data-test="hauler-reason"]').text()).toContain('No idle adults');
+  });
+
+  it('marks a short runway', () => {
+    const { wrapper } = mountStrip(makeSnapshot({
+      stockpile: { ...stockedWith({ bread: 20 }), bread: { stock: 20, deliveredRate: 0, madeRate: 0, consumptionRate: 2, netFlow: -2, stockValue: 0 } },
+    }));
+    expect(wrapper.get('[data-test="strip-bread"]').classes()).toContain('obsisim-negative');
+  });
+});
+```
+
+Run it to watch it fail (`npx vitest run --project unit tests/app/resource-strip.test.ts` — cannot resolve `ResourceStrip.vue`), then write the component.
+
+`ResourceStrip.vue` renders one chip per `RESOURCE_IDS` entry — glyph, stock,
+and `~Nt` when `store.runways[id]` is defined — with class `obsisim-negative` at
+or under 30 ticks, plus the hauler pair. Root element carries
+`data-test="resource-strip"`.
+
+The hauler pair is **not** lifted verbatim from `DashboardView`: that version
+explains a disabled `+` with a `title` alone, and §2.2 requires a refused
+control to state its reason where the player is looking — the same rule the
+Inspector's staffing and Move controls follow.
+
+```vue
+    <span class="obsisim-haulers">
+      Haulers: <strong data-test="hauler-count">{{ store.haulerCount }}</strong>
+      <button data-test="unassign-hauler" :disabled="store.haulerCount === 0"
+        @click="engine.dispatch({ type: 'unassignHauler' })">−</button>
+      <button data-test="assign-hauler" :disabled="store.snapshot!.idleAdults === 0"
+        @click="engine.dispatch({ type: 'assignHauler' })">+</button>
+      <small v-if="store.snapshot!.idleAdults === 0" class="obsisim-reason" data-test="hauler-reason">
+        No idle adults — unassign someone first.
+      </small>
+    </span>
+```
+
+Re-run: PASS, 4 tests.
+
+- [ ] **Step 4: Write the shell**
 
 Create `src/app/views/WorldScreen.vue`:
 
@@ -1403,7 +1491,7 @@ onBeforeUnmount(() => {
 </template>
 ```
 
-- [ ] **Step 4: Delete `WorldView` and its test**
+- [ ] **Step 5: Delete `WorldView` and its test**
 
 ```bash
 git rm src/app/views/WorldView.vue tests/app/world-view.test.ts
@@ -1411,15 +1499,15 @@ git rm src/app/views/WorldView.vue tests/app/world-view.test.ts
 
 Its behaviour is now split across `ui-store` (Task 1), `interaction.ts` (Task 4), `WorldStage` (Task 5) and this shell, and every case it asserted has an equivalent in one of those four test files.
 
-- [ ] **Step 5: Run the whole suite**
+- [ ] **Step 6: Run the whole suite**
 
 Run: `npm test`
 Expected: PASS. Failures will be in `src/app/router.ts` and `App.vue`, which still import `WorldView` — Task 12 rewires them, so if the suite cannot even load, do the router edit now and leave the Ledger for Task 12.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add -A src/app/views tests/app
+git add -A src/app tests/app
 git commit -m "The world screen replaces the world tab"
 ```
 
@@ -1621,66 +1709,19 @@ git commit -m "Staffing moves onto the canvas, and a refusal says so in the pane
 
 ---
 
-## Task 8: The resource strip and the Colony panel — haulers on the canvas
+## Task 8: The Colony panel
 
 **Files:**
-- Create: `src/app/components/ResourceStrip.vue`, `src/app/components/dock/ColonyPanel.vue`
-- Test: `tests/app/resource-strip.test.ts`, extend `tests/app/dock-panels.test.ts`
+- Create: `src/app/components/dock/ColonyPanel.vue`
+- Test: extend `tests/app/dock-panels.test.ts`
 
 **Interfaces:**
-- Consumes: `useGameStore().runways`, `.haulerCount`; `ENGINE_KEY`.
-- Produces: `data-test="resource-strip"`, which `WorldScreen`'s test (Task 6) already asserts.
+- Consumes: `useGameStore()`.
+- Produces: nothing later tasks depend on.
 
-- [ ] **Step 1: Write the failing tests**
+`ResourceStrip` was built in Task 6, because the shell imports it — see the note there.
 
-Create `tests/app/resource-strip.test.ts`:
-
-```ts
-// @vitest-environment happy-dom
-import { describe, expect, it, vi } from 'vitest';
-import { mount } from '@vue/test-utils';
-import { createTestingPinia } from '@pinia/testing';
-import ResourceStrip from '../../src/app/components/ResourceStrip.vue';
-import { ENGINE_KEY } from '../../src/app/engine-key';
-import { useGameStore } from '../../src/app/stores/game-store';
-import { makeSnapshot, makeWorker, stockedWith } from './fixtures';
-
-function mountStrip(snapshot = makeSnapshot()) {
-  const engine = { dispatch: vi.fn() };
-  const pinia = createTestingPinia({ createSpy: vi.fn, stubActions: false });
-  useGameStore(pinia).ingest(snapshot, { paused: true, speed: 1, error: null });
-  return { wrapper: mount(ResourceStrip, { global: { plugins: [pinia], provide: { [ENGINE_KEY as symbol]: engine } } }), engine };
-}
-
-describe('ResourceStrip', () => {
-  it('assigns a hauler', async () => {
-    const { wrapper, engine } = mountStrip(makeSnapshot({ idleAdults: 1 }));
-    await wrapper.get('[data-test="assign-hauler"]').trigger('click');
-    expect(engine.dispatch).toHaveBeenCalledWith({ type: 'assignHauler' });
-  });
-
-  it('unassigns a hauler', async () => {
-    const { wrapper, engine } = mountStrip(makeSnapshot({ colonists: [makeWorker(1, { hauling: true })] }));
-    await wrapper.get('[data-test="unassign-hauler"]').trigger('click');
-    expect(engine.dispatch).toHaveBeenCalledWith({ type: 'unassignHauler' });
-  });
-
-  it('disables assign with no idle adults AND says why', () => {
-    const { wrapper } = mountStrip(makeSnapshot({ idleAdults: 0 }));
-    expect(wrapper.get('[data-test="assign-hauler"]').attributes('disabled')).toBeDefined();
-    // §2.2: visible, not hidden in a title. A disabled control with no stated
-    // reason is the exact thing that rule exists to stop.
-    expect(wrapper.get('[data-test="hauler-reason"]').text()).toContain('No idle adults');
-  });
-
-  it('marks a short runway', () => {
-    const { wrapper } = mountStrip(makeSnapshot({
-      stockpile: { ...stockedWith({ bread: 20 }), bread: { stock: 20, deliveredRate: 0, madeRate: 0, consumptionRate: 2, netFlow: -2, stockValue: 0 } },
-    }));
-    expect(wrapper.get('[data-test="strip-bread"]').classes()).toContain('obsisim-negative');
-  });
-});
-```
+- [ ] **Step 1: Write the failing test**
 
 Add to `tests/app/dock-panels.test.ts`:
 
@@ -1695,53 +1736,33 @@ describe('ColonyPanel', () => {
 
   it('does not select anything when a resource row is clicked', async () => {
     const { wrapper, ui } = mountPanel(ColonyPanel, makeSnapshot({ stockpile: stockedWith({ wood: 42 }) }));
+    ui.selectBuilding(4);
     await wrapper.get('[data-test="colony-row-wood"]').trigger('click');
-    expect(ui.selection).toEqual({ kind: 'none' });
+    expect(ui.selection).toEqual({ kind: 'building', id: 4 }); // inert: not even a deselect
     expect(ui.highlight).toEqual([]);
   });
 });
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [ ] **Step 2: Run the test to verify it fails**
 
-Run: `npx vitest run --project unit tests/app/resource-strip.test.ts tests/app/dock-panels.test.ts`
-Expected: FAIL on the two new files.
+Run: `npx vitest run --project unit tests/app/dock-panels.test.ts`
+Expected: FAIL — cannot resolve `ColonyPanel.vue`.
 
-- [ ] **Step 3: Write both components**
-
-`ResourceStrip.vue` renders one chip per `RESOURCE_IDS` entry — glyph, stock, and `~Nt` when `store.runways[id]` is defined — with class `obsisim-negative` at or under 30 ticks, plus the hauler `−`/`+` pair.
-
-The hauler pair is **not** lifted verbatim: the Dashboard's version explains a
-disabled `+` with a `title` alone, and §2.2 requires a refused control to state
-its reason where the player is looking. Same rule the Inspector's staffing and
-Move controls follow, and the engine's own refusal is *"No idle workers
-available"*:
-
-```vue
-    <span class="obsisim-haulers">
-      Haulers: <strong data-test="hauler-count">{{ store.haulerCount }}</strong>
-      <button data-test="unassign-hauler" :disabled="store.haulerCount === 0"
-        @click="engine.dispatch({ type: 'unassignHauler' })">−</button>
-      <button data-test="assign-hauler" :disabled="store.snapshot!.idleAdults === 0"
-        @click="engine.dispatch({ type: 'assignHauler' })">+</button>
-      <small v-if="store.snapshot!.idleAdults === 0" class="obsisim-reason" data-test="hauler-reason">
-        No idle adults — unassign someone first.
-      </small>
-    </span>
-```
+- [ ] **Step 3: Write the panel**
 
 `ColonyPanel.vue` is `DashboardView.vue`'s existing `<table>` moved into a panel. Its rows carry `data-test="colony-row-<id>"` and **no click handler at all** — inertness is the absence of a handler, and the test above is what stops a later change adding one silently.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [ ] **Step 4: Run the test to verify it passes**
 
-Run: `npx vitest run --project unit tests/app/resource-strip.test.ts tests/app/dock-panels.test.ts`
+Run: `npx vitest run --project unit tests/app/dock-panels.test.ts`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/app/components tests/app
-git commit -m "Haulers move onto the world screen, and a resource row stays inert"
+git add src/app/components/dock/ColonyPanel.vue tests/app/dock-panels.test.ts
+git commit -m "The resource table becomes a panel, and its rows stay inert"
 ```
 
 ---
@@ -2219,7 +2240,37 @@ and both must land on the Ledger. Criterion 3 requires both, and the
 throwing-factory case cannot reach `onFatal` at all, because that callback is
 registered only after the factory succeeds.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Prove criterion 5 against the real router**
+
+Neither existing lifecycle test reaches this. Task 5's toggles `WorldStage` in a
+hand-built `KeepAlive`, and Task 6's panel tour never navigates — so a wrong
+`include` name in `App.vue` (it must now match `defineOptions({ name:
+'WorldScreen' })`, not the deleted `WorldView`) or a misplaced `<keep-alive>`
+would rebuild the WebGL context on every real Ledger visit while every other
+test passes. That rename is exactly the mistake this catches.
+
+Add to `tests/app/ledger-view.test.ts`:
+
+```ts
+  it('builds the renderer exactly once across the panels AND the ledger round trip', async () => {
+    const { renderer, factory } = makeFake();
+    const { router } = await mountApp(factory);
+    const ui = useUiStore();
+    for (const panel of ['colony', 'population', 'economy', 'attention', 'inspector'] as const) {
+      ui.openPanel(panel);
+      await nextTick();
+    }
+    await router.push('/ledger');
+    await router.push('/');
+    await flushPromises();
+    expect(factory).toHaveBeenCalledOnce();
+    expect(renderer.dispose).not.toHaveBeenCalled();
+    expect(renderer.stop).toHaveBeenCalled();   // deactivated on the way out
+    expect(renderer.start).toHaveBeenCalled();  // reactivated on the way back
+  });
+```
+
+- [ ] **Step 7: Commit**
 
 ```bash
 git add -A src/app tests/app

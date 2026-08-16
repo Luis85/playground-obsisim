@@ -1756,6 +1756,181 @@ const queueScenario = (n: number, haulers: number, ticks: number) => runScenario
   sites: SITE_TILES.slice(0, n).map((t) => ({ defId: 'house' as const, col: t.col, row: t.row, atTick: 0 })),
 });
 
+/** SITE_TILES plus two more at the same ~leg 4, because increment 9's curve
+ * stopped at eight sites and increment 10 §4.1's stall sweep runs to ten. */
+const QUEUE_TILES: readonly TileRef[] = [...SITE_TILES, { col: 6, row: 6 }, { col: 5, row: 6 }];
+
+/**
+ * §4.1's SECOND question: N sites costing BOTH wood and planks, queued against
+ * the chain that makes the planks — a forester feeding a staffed sawmill that
+ * eats the same wood the sites are built of.
+ *
+ * A SEPARATE SWEEP FROM `queueScenario`, AND THE SEPARATION IS LOAD-BEARING.
+ * That fixture has no dependency chain in it: its wood and planks both come
+ * from an inexhaustible camp pile, so it cannot produce §2.3's stall at any N,
+ * and folding the two together would report "no stall observed" from a run
+ * that could not have observed one.
+ *
+ * The chain feeds itself because it is a TWO-STAGE scenario:
+ * `seededResourcesFor` withholds every resource a stage produces, so the only
+ * wood in this colony is the wood the forester makes and the only planks are
+ * the sawmill's.
+ *
+ * `sawyers` IS INCREMENT 9's THIRD READING'S DIAL, and both settings are
+ * needed. At PARITY (2) the sawmill eats ~0.67 wood/tick against the
+ * forester's ~0.67, so there is no spare wood for a site at ANY queue length —
+ * measured, and it is producer contention rather than anything about the
+ * queue. At HALF (1) it eats ~0.33 and the rest is wood a longer queue can
+ * compete for, which is the only arrangement in which "the queue length at
+ * which the first completion stops happening" is a question about the QUEUE.
+ */
+const NEAR_SAWMILL: TileRef = { col: 2, row: 4 };
+/** The same sawmill, twenty tiles out instead of four — so a reading that
+ * shows the producer taking every log cannot be a fact about it standing
+ * nearer the camp than the sites do. */
+const FAR_SAWMILL: TileRef = { col: 18, row: 12 };
+const stallScenario = (n: number, haulers: number, ticks: number, sawyers: number, at: TileRef = NEAR_SAWMILL) => runScenario({
+  defId: 'forester', col: 6, row: 0, crew: 2, haulers, ticks, resource: 'wood',
+  second: { defId: 'sawmill', col: at.col, row: at.row, crew: sawyers, resource: 'planks' },
+  sites: QUEUE_TILES.slice(0, n).map((t) => ({ defId: 'house' as const, col: t.col, row: t.row, atTick: 0 })),
+});
+
+/**
+ * §4.1's THIRD question, and the def is the reading: a `gatherersHut` (10 wood)
+ * is what a colony queues when it wants to GROW, and unlike a `house` it has a
+ * recipe, so "ticks to first output" is a question that can be asked of it at
+ * all. Same tiles and same shape as `queueScenario`, so the two curves differ
+ * only in what is being built.
+ */
+const growthQueueScenario = (n: number, haulers: number, ticks: number) => runScenario({
+  defId: 'forester', col: 6, row: 0, crew: 0, haulers, ticks, resource: 'wood',
+  sites: SITE_TILES.slice(0, n).map((t) => ({ defId: 'gatherersHut' as const, col: t.col, row: t.row, atTick: 0 })),
+});
+
+/**
+ * OBS-8-06's missing fixture (§4.2): one site at the FAR CORNER, 26 tiles of
+ * walking from the only pile of goods in the colony, with a depot optionally
+ * standing halfway along that line.
+ *
+ * A site is the one consumer a player can put at an arbitrary tile, which is
+ * exactly what every other fixture in the repository lacks — and the reading
+ * is invalid unless `demandSourcesOf` has been taught about sites first, since
+ * a site that contributes no demand gives the depot no deficit to be staged
+ * into and reports 0 dispatches from an instrument that was never connected.
+ */
+const HALFWAY_DEPOT: TileRef = { col: 12, row: 8 };
+/** Three tiles in the far corner, so the remote reading can be taken with a
+ * demand that OUTLIVES one wave of haulers as well as with a single site's. */
+const CORNER_TILES: readonly TileRef[] = [{ col: 23, row: 15 }, { col: 22, row: 15 }, { col: 23, row: 14 }];
+/** Every (sites, haulers, depot) the §4.2 reading is taken at, written out as
+ * one list so the report body stays a single loop rather than three nested
+ * ones — the same reason `stallSweepLines` builds its sweep up front. */
+const REMOTE_ARRANGEMENTS: readonly [number, number, TileRef[] | undefined][] = [1, 3].flatMap(
+  (n) => [1, 2, 4].flatMap(
+    (haulers): [number, number, TileRef[] | undefined][] => [[n, haulers, undefined], [n, haulers, [HALFWAY_DEPOT]]],
+  ),
+);
+const remoteSiteScenario = (haulers: number, storehouses?: TileRef[], n = 1) => runScenario({
+  defId: 'forester', col: 6, row: 0, crew: 0, haulers, ticks: 400, resource: 'wood',
+  sites: CORNER_TILES.slice(0, n).map((t) => ({ defId: 'house' as const, col: t.col, row: t.row, atTick: 0 })),
+  storehouses,
+});
+
+/**
+ * §4.1's stall sweep, printed: both crew arrangements at the near sawmill, and
+ * the far sawmill as the control that says whether a producer taking every log
+ * is a fact about the starvation band or about its claim cycle being short.
+ *
+ * One function per sweep, and the split is the quality gate's doing rather than
+ * taste: the three blocks written as one report body scored 25 cognitive
+ * against a threshold of 15, and a suppression is not available here.
+ */
+async function stallSweepLines(): Promise<string[]> {
+  const lines = ['', '  how reachable is the §2.3 stall? house sites (15 wood + 5 planks) against a forester -> sawmill chain,',
+    '  3 haulers, 900 ticks, NOTHING seeded: every log is the forester\'s and every plank is the sawmill\'s',
+    '  sawyers  queue  first completion  last  completed  wood made  planks made  in site trays  cons.err'];
+  const sweep: [number, TileRef][] = [
+    ...[1, 3, 5, 10].map((n): [number, TileRef] => [n, NEAR_SAWMILL]),
+    ...[1, 3, 5, 10].map((n): [number, TileRef] => [n, FAR_SAWMILL]),
+  ];
+  for (const sawyers of [2, 1]) {
+    for (const [n, at] of sweep) {
+      // The half-crew arrangement is measured at the near sawmill only: it is
+      // the control for the parity rows, and the far/half combination adds a
+      // fourth arrangement to a sweep whose reading is already answered.
+      if (sawyers === 1 && at === FAR_SAWMILL) continue;
+      const r = await stallScenario(n, 3, 900, sawyers, at);
+      const done = r.completions.map((c) => c.tick).sort((a, b) => a - b);
+      lines.push(
+        `  ${String(sawyers).padStart(7)}${at === FAR_SAWMILL ? '*' : ' '} ${String(n).padStart(5)}  ` +
+        `${(done.length === 0 ? 'never' : String(done[0])).padStart(16)}  ` +
+        `${String(done.at(-1) ?? '—').padStart(4)}  ${String(r.completions.length).padStart(9)}  ` +
+        `${String(r.stages[0].made).padStart(9)}  ` +
+        `${String(r.stages[1].made).padStart(11)}  ${String(r.siteInputUnits).padStart(13)}  ` +
+        `${String(r.goods.conservationError).padStart(8)}`,
+      );
+    }
+  }
+  lines.push('  (* = the far-sawmill control, at leg 10 instead of leg 2)');
+  return lines;
+}
+
+/**
+ * §4.1's third question, printed: what a queue costs the LAST building, plus
+ * the constant that turns a completion tick into the "first output" increment 9
+ * §4.1's fifth reading published.
+ *
+ * That rig assigned a worker on the completion tick and waited one batch, and
+ * this harness cannot issue an assignment — so if `completion + ticksPerBatch`
+ * lands on increment 9's figures the derived column is as good as measured, and
+ * if it does not, the two instruments disagree and the difference is the finding.
+ */
+async function queueCostLines(): Promise<string[]> {
+  const lines = ['', '  what a queue costs the LAST building: N gatherer\'s hut sites (10 wood) ordered together, all at leg 4',
+    '  haulers  N  first  last  last vs alone'];
+  for (const haulers of [1, 4]) {
+    const alone = (await growthQueueScenario(1, haulers, 400)).completions[0].tick;
+    for (const n of [1, 3, 5, 8]) {
+      const ticksOf = (await growthQueueScenario(n, haulers, 1200)).completions.map((c) => c.tick).sort((a, b) => a - b);
+      lines.push(
+        `  ${String(haulers).padStart(7)}  ${n}  ${String(ticksOf[0]).padStart(5)}  ${String(ticksOf.at(-1)).padStart(4)}  ` +
+        `${(ticksOf.at(-1)! / alone).toFixed(2).padStart(13)}`,
+      );
+    }
+  }
+  lines.push('', '  the first-output constant, against increment 9 §4.1 reading 5 (hut alone: 41 near, 74 far)',
+    '  tile        haulers  completion  + one batch');
+  for (const [at, haulers] of [[{ col: 3, row: 0 }, 1], [{ col: 23, row: 15 }, 1], [{ col: 3, row: 0 }, 2]] as const) {
+    const done = (await siteScenario('gatherersHut', at, haulers, 400)).completions[0].tick;
+    lines.push(
+      `  (${String(at.col).padStart(2)},${String(at.row).padStart(2)})   ${String(haulers).padStart(12)}  ` +
+      `${String(done).padStart(10)}  ${String(done + BUILDINGS.gatherersHut.recipe!.ticksPerBatch).padStart(11)}`,
+    );
+  }
+  return lines;
+}
+
+/** §4.2's reading, printed: the remote site with and without the depot between
+ * it and the camp, at one and at three sites so the answer cannot be an
+ * artefact of a demand that ends after one hauler wave. */
+async function remoteDepotLines(): Promise<string[]> {
+  const lines = ['', '  OBS-8-06: house site(s) at the far corner, a depot at (12,8) between them and the camp',
+    '  sites  haulers  depot  completions  staging  drain  depot peak  depot end  supply  fetching  outbound  returning'];
+  for (const [n, haulers, depot] of REMOTE_ARRANGEMENTS) {
+    const r = await remoteSiteScenario(haulers, depot, n);
+    const done = r.completions.length === 0 ? 'never' : r.completions.map((c) => c.tick).join(' ');
+    lines.push(
+      `  ${String(n).padStart(5)}  ${String(haulers).padStart(7)}  ${(depot === undefined ? 'no' : 'yes').padStart(5)}  ` +
+      `${done.padStart(11)}  ${String(r.transfersStaging).padStart(7)}  ` +
+      `${String(r.transfersDrain).padStart(5)}  ${String(Math.max(...r.storedSeries)).padStart(10)}  ` +
+      `${String(r.storedAtEnd).padStart(9)}  ${String(r.haulerTicks.supply).padStart(6)}  ` +
+      `${String(r.haulerTicks.fetching).padStart(8)}  ${String(r.haulerTicks.outbound).padStart(8)}  ` +
+      `${String(r.haulerTicks.returning).padStart(9)}`,
+    );
+  }
+  return lines;
+}
+
 describe('construction, measured — §4.1', () => {
   it('the countdown is not invisible beside the walk — beside the camp it IS the wait', async () => {
     // §4.1's first question, asked the way the spec asks it: is `buildTicks`
@@ -1837,6 +2012,87 @@ describe('construction, measured — §4.1', () => {
     expect(ticksOf.at(-1)! - ticksOf[0]).toBeGreaterThan(ticksOf.at(-1)! * 0.5);
   }, 180000);
 
+  it('a queue of ten against the chain that feeds it does not stall — the PRODUCER does', async () => {
+    // §4.1's second question (increment 10), and the answer to "at what queue
+    // length does the first completion stop happening?" is NEVER at any length
+    // this fixture can express. The full sweep is in the report block below;
+    // these are its two ends, plus the control that says what the failure it
+    // DOES find is really made of.
+    //
+    // Ten house sites (15 wood + 5 planks each) against a forester feeding a
+    // staffed sawmill, nothing seeded, 900 ticks, 3 haulers.
+    const one = await stallScenario(1, 3, 900, 1);
+    const ten = await stallScenario(10, 3, 900, 1);
+    // Every site in the queue of ten finished, and — the convergence property
+    // again, now under production contention rather than pure haulage — the
+    // FIRST one finished on exactly the tick it finished on when it was the
+    // only site ordered. A queue of ten costs the first building nothing.
+    expect(one.completions).toHaveLength(1);
+    expect(ten.completions).toHaveLength(10);
+    expect(ten.completions[0].tick).toBe(one.completions[0].tick);
+    // Acceptance criterion 6: conservation is exact with a long queue running.
+    expect(ten.goods.conservationError).toBe(0);
+
+    // THE CONTROL, AND IT IS NOT THE FAILURE §2.3 DESCRIBES. At crew parity a
+    // CAMP-ADJACENT sawmill eats wood as fast as the forester makes it and
+    // NOTHING completes — at a queue of ONE as surely as at ten, with the
+    // sites' in-trays empty at the end and 592 of 600 logs turned into planks.
+    // That failure is producer contention, which a queue of one already suffers
+    // in full, and no queue length reaches or worsens it.
+    //
+    // Move the same parity sawmill to leg 10 and the queue IS served (10 of 10)
+    // while its first completion slips 113 -> 186 as N goes 1 -> 10: §2.3's
+    // mechanism, arriving as a 1.65x delay rather than as a stall. Both
+    // arrangements are in the report block and in §4.1.
+    const parity = await stallScenario(1, 3, 900, 2);
+    expect(parity.completions).toEqual([]);
+    expect(parity.siteInputUnits).toBe(0);
+    expect(parity.stages[1].made).toBeGreaterThan(0);
+  }, 300000);
+
+  it('what a queue costs the LAST building is the whole queue, and the first one pays nothing', async () => {
+    // §4.1's third question: ticks from the order to a finished building for
+    // the LAST site of a queue of N, against the same site built alone. A
+    // `gatherersHut` (10 wood) rather than a `house`, because a hut has a
+    // recipe and "first output" is a question that can be asked of it — that
+    // last step is `ticksPerBatch` on top of what is measured here, and the
+    // report block below pins the constant against increment 9's reading 5.
+    const alone = await growthQueueScenario(1, 4, 400);
+    const eight = await growthQueueScenario(8, 4, 1200);
+    expect(eight.completions).toHaveLength(8);
+    const ticksOf = eight.completions.map((c) => c.tick).sort((a, b) => a - b);
+    // The front of the queue is free and the back of it is not: measured 35 for
+    // the first at every N, and 65 for the eighth against 35 alone (1.86x).
+    expect(ticksOf[0]).toBe(alone.completions[0].tick);
+    expect(ticksOf.at(-1)!).toBeGreaterThan(alone.completions[0].tick);
+    expect(eight.goods.conservationError).toBe(0);
+  }, 300000);
+
+  it('OBS-8-06: staging fires for a remote site, and does not pay', async () => {
+    // §4.2, and the reading is only valid because `demandSourcesOf` was taught
+    // about sites first (see haul-transfer.test.ts): a site contributing no
+    // demand gives the depot no deficit, and the reading would be a confident
+    // zero from an instrument that was never connected.
+    //
+    // One house site at the far corner, a depot halfway. The SECOND of §4.2's
+    // three outcomes, and nothing here is tuned toward it: staging fires — so
+    // the mechanic is reachable at the remote fixture OBS-8-06 says the
+    // repository lacks — and the site completes on exactly the same tick with
+    // the depot as without it.
+    const without = await remoteSiteScenario(4);
+    const withDepot = await remoteSiteScenario(4, [HALFWAY_DEPOT]);
+    expect(without.transfers).toBe(0);
+    expect(withDepot.transfersStaging).toBeGreaterThan(0);
+    expect(withDepot.completions[0].tick).toBe(without.completions[0].tick);
+    // And what the trips bought: 24 units parked at a depot that still holds
+    // every one of them at the end, while the loaded leg into the site is the
+    // same length it was without the depot — every load still walked from the
+    // camp.
+    expect(withDepot.storedAtEnd).toBe(Math.max(...withDepot.storedSeries));
+    expect(withDepot.haulerTicks.outbound).toBe(without.haulerTicks.outbound);
+    expect(withDepot.goods.conservationError).toBe(0);
+  }, 300000);
+
   it('prints the construction readings when BALANCE_REPORT is set', async () => {
     if (!process.env.BALANCE_REPORT) return;
     // §4.1's first, second and fourth questions in three blocks, all read off
@@ -1885,5 +2141,16 @@ describe('construction, measured — §4.1', () => {
       }
     }
     console.log(lines.join('\n'));
+  }, 1800000);
+
+  it('prints the queue readings when BALANCE_REPORT is set', async () => {
+    if (!process.env.BALANCE_REPORT) return;
+    // §4.1's second and third questions and §4.2's. Three sweeps, three
+    // functions — the convergence curve is printed by the block above, and
+    // these are the readings that could not be folded into it.
+    console.log([
+      '', 'the build queue — §4.1 and §4.2',
+      ...await stallSweepLines(), ...await queueCostLines(), ...await remoteDepotLines(),
+    ].join('\n'));
   }, 1800000);
 });

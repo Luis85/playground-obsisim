@@ -389,6 +389,21 @@ export interface BalanceResult extends StageResult {
    * with nothing in `sites` to have produced it.
    */
   completions: { buildingId: number; defId: BuildingDefId; tick: number }[];
+  /**
+   * Units standing in the IN-TRAYS of the sites `Scenario.sites` ordered, at
+   * the last tick of the run — the part of the bill that was delivered and has
+   * not been spent, because spending it is completion.
+   *
+   * The closing half of the per-site view increment 9 §4.3 records this harness
+   * as lacking (which is why its stall reading needed a scratch rig), added for
+   * increment 10 §4.1's stall sweep and no wider: `completions` says whether a
+   * site finished, and this says whether an unfinished one was starved outright
+   * or stopped one load short. A run whose sites all completed reads 0, because
+   * `ConstructionSystem` clears the tray it consumes — the same 0 a run whose
+   * sites were never fed reads, so this figure is read BESIDE `completions`
+   * rather than on its own.
+   */
+  siteInputUnits: number;
 }
 
 /**
@@ -1083,5 +1098,8 @@ export async function runScenario(scenario: Scenario): Promise<BalanceResult> {
     retirements: turnover.retirements,
     goods: audit.close(snapshot, stockpile),
     completions,
+    siteInputUnits: siteStates.reduce(
+      (sum, site) => sum + (snapshot.buildings.find((b) => b.id === site.buildingId)?.inputBuffered ?? 0), 0,
+    ),
   };
 }

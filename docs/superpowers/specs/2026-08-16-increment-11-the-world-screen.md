@@ -203,6 +203,23 @@ subject (bounded so the camera cannot leave the map), and drag-to-pan on the
 canvas — with a movement threshold between pointerdown and pointerup, so a drag
 pans and a click still selects or places.
 
+**And `fitCamera` has to stop running on every snapshot**, or none of the above
+survives contact with a running colony. `WorldScene.sync()` calls it
+unconditionally, and it rewrites `camera.pos` as well as `camera.zoom` — so at
+two ticks a second a panned or focused camera would snap back to centre within
+half a second, and both drag-to-pan and panel navigation would be unusable in
+exactly the case they exist for.
+
+The framing inputs are the map size and the viewport size, and neither changes
+per tick. So `sync()` refits only when one of them has changed since the last
+fit, `refit()` (the pane-resize path) always refits, and the camera is otherwise
+left where the player or `focusOn` put it. A map or viewport change does discard
+a pan, which is correct: the frame it was panned within no longer exists.
+
+This is invisible on a map that fits — the camera is centred and refitting
+recomputes the same value — which is precisely why it can be missed until a
+grown map makes it fatal.
+
 On a default-map colony in a normal pane none of this engages: the floor is
 never reached, the camera is fitted exactly as today, and a drag does nothing.
 
@@ -505,9 +522,13 @@ assumption.
    in either.
 4. **Every row click resolves to what §2.3's table says it resolves to** — a
    building selection, a colonist selection, a highlight set, or nothing —
-   asserted against the UI store rather than against pixels. The inert case
-   (Colony's resource rows) is tested too, so "not selectable" stays a decision
-   rather than becoming an omission nobody notices.
+   asserted **both** on the UI store *and* on the injected fake renderer's
+   `setSelection` / `setHighlight` / `focusOn` calls. The store half alone
+   passes for an implementation that records the selection and never forwards it
+   through `WorldStage`, which is a colony where clicking a Population row lights
+   up nothing at all. Neither half needs pixels. The inert case (Colony's
+   resource rows, Attention's runway rows) is tested too, so "not selectable"
+   stays a decision rather than becoming an omission nobody notices.
 5. **The renderer factory is called exactly once, total**, across a tour that
    visits every panel *and* makes the `/` → `/ledger` → `/` round trip. One
    call for the whole tour, not one per leg: the Ledger trip deactivates and
@@ -536,6 +557,12 @@ assumption.
    halves are required — the second is what stops this becoming a regression for
    every colony that will never have a grown map. The fixture is a save carrying
    its own `map`, which `save.ts` already validates from `MIN_MAP` to `MAX_MAP`.
+
+   **And the camera survives snapshots**: pan or focus, then deliver several
+   more snapshots, and the camera is still where it was put. This is the
+   discriminating half — it fails against today's `sync()`, which refits
+   unconditionally, and a grown-map test that never ticks would pass with that
+   bug fully intact.
 9. **`npm run check:all` green**, no baseline loosened, no suppression added,
    every `src/` file at or under 500 nonblank lines.
 10. **Coverage floors for `src/app/components/**` and `src/app/views/**` are in

@@ -753,7 +753,7 @@ the constant to rescue it.
 | --- | ---: | --- | --- |
 | `buildTicks` | 30 | **Kept, with its stated rationale contradicted.** The number is defensible; the sentence justifying it is not. | Beside the camp a house is delivered in **7** ticks and then stands still for **30**: the countdown is **81%** of the wait. At leg 8 it is 52%, and only at leg 13 does the walk overtake it (43 against 30, 41%). The delivery half does not move when the constant moves and the countdown half does not move when haulers are hired, so the two are separable and both were measured. §4.1's first reading. |
 | `buildTicks`, as a FLAT rate | 30 for every def | **Reads wrong near the camp and right far from it.** Not retuned here; scaling with cost is §2.12's deferral and §4.1 says what a successor would be buying. | At leg 1 and two haulers a gatherer's hut (10 units) is finished at 32 ticks and a mill (30 units) at 40 — **three times the cost for 25% more wait**. At leg 13 the same pair reads 44 and 100, a factor of 2.3. Delivery already prices cost; the flat constant is what dilutes it, and it dilutes it most exactly where most building happens. |
-| `minSupplyUnits` | 2 | **Measured to make one shipped def unbuildable.** Not touched — this increment does not change dispatch (§2.4) — and filed as **OBS-9-01**. | A `sawmill` site (25 wood) fills to **24/25** and stops forever, at every distance and hauler count measured, with the missing unit standing at the camp. `cost mod haulerCapacity` is 1, `worthMoving`'s exemption is keyed on the SOURCE's holding rather than the target's remaining need, and a site's room only ever shrinks. With homeless haulers (capacity 3) a **gatherer's hut** (10 wood) strands the same way at 9/10. |
+| `minSupplyUnits` | 2 | **Value unchanged; its RULE was corrected.** Measured to make one shipped def unbuildable (**OBS-9-01**), which was filed rather than fixed here and then fixed anyway — a def nobody can build is not a dispatch-ordering question. The floor still stands for every recipe consumer. | A `sawmill` site (25 wood) filled to **24/25** and stopped forever, at every distance and hauler count measured, with the missing unit standing at the camp. `cost mod haulerCapacity` is 1, `worthMoving`'s exemption was keyed on the SOURCE's holding rather than the target's remaining need, and a site's room only ever shrinks. With homeless haulers (capacity 3) a **gatherer's hut** (10 wood) stranded the same way at 9/10. `finishesSiteMaterial` now exempts the load that settles a SITE's bill; the sawmill delivers in 11 / 71 ticks (§4.1's second reading) and nothing else in §4.1 moved. |
 | `inputBufferCap` / `haulCarryCapacity` / `haulTilesPerTick` | 12 / 6 / 2 | **Untouched, and untouched by construction.** | Every reading below is taken on a fixture whose stage is inert (`crew: 0`), so increment 5's gradient and increment 8's transfer readings are not re-derived here and are unchanged at HEAD. |
 
 ### 4.1 What the harness measured
@@ -800,7 +800,19 @@ it matters most.** One site, two haulers, delivery ticks:
 | house | 20 | 2 | 7 | 43 | 36 | 72 |
 | workshop | 20 | 1 | 7 | 43 | 36 | 72 |
 | mill | 30 | 2 | 11 | 71 | 40 | 100 |
-| sawmill | 25 | 1 | **never** | **never** | — | — |
+| sawmill | 25 | 1 | 11 | 71 | 40 | 100 |
+
+**The sawmill row MOVED, and it is the only published figure in §4.1 that
+did.** It read `never / never` when this section was first written: the sweep
+found the sawmill site stalling at 24 of its 25 wood at every distance and
+hauler count, which was filed as **OBS-9-01** and left unfixed here for the
+reason §2.4 gives about dispatch. That reasoning did not survive review — the
+defect makes a shipped, player-selectable building impossible to build, which
+is not a dispatch *ordering* question — so `worthMoving` now exempts the load
+that settles a site's outstanding bill for one material (`finishesSiteMaterial`,
+haul-construction.ts). The row above is the post-fix reading, re-taken on the
+same committed report block; **every other figure in §4.1 was re-taken too and
+none of them moved** — see §4.4.
 
 Delivery already scales with cost, almost exactly linearly in loads, and the
 number of distinct materials does not enter it — a workshop (20 planks) and a
@@ -812,10 +824,18 @@ to appear. Scaling `buildTicks` with `unitsOf(cost)` would make a mill feel like
 a mill at every distance rather than only at leg 13. It is **not done here**
 (§2.12 defers it), and this is the number a successor should size it against.
 
-**The sweep also found that a sawmill cannot be built at all** — 24 of its 25
-wood, forever, at every distance and hauler count. That is **OBS-9-01**, it is a
-`minSupplyUnits` threshold rather than anything construction introduced, and it
-is recorded rather than fixed for the reason §2.4 gives about dispatch.
+**The sawmill's new row sharpens that finding rather than softening it, and
+this is what "linear in LOADS" costs.** A sawmill is 25 units against a mill's
+30, one material against two — and it is delivered in exactly the same 11 and
+71 ticks, because with two haulers both are three waves of round trips. The
+sawmill's third wave carries **one unit** — a whole round trip, the same one
+that carries six at every other wave, for what `cost mod capacity` leaves. So a
+remainder that used to strand the build now merely costs a whole trip, and a
+def whose cost is one under a multiple of the carry is quietly the most
+expensive shape in the catalog to deliver. Nothing here is tuned for it —
+`haulCarryCapacity` and every cost stay where they were — but a successor
+scaling `buildTicks` with `unitsOf(cost)` should know that the delivery term it
+is adding to counts *loads*, not units.
 
 **3. A bounded queue stalls, routinely, and for as long as the contention
 lasts.** §2.3 accepts that goods counted at order time can leave for another
@@ -1003,8 +1023,12 @@ repeating.
   hut, and hunger never became the binding term; the producer did. Anyone
   reading the stall numbers should read them as producer contention, which is
   what they measure.
-- **OBS-9-01 was found and not fixed** — it is a dispatch threshold, and §2.4 is
-  explicit that dispatch is what this increment does not touch.
+- **OBS-9-01 was found and not fixed here, and was fixed immediately after.**
+  The reasoning at the time was that it is a dispatch threshold and §2.4 is
+  explicit that dispatch is what this increment does not touch. It does not
+  hold: §2.4 is about dispatch *ordering* — which candidate wins — and a floor
+  that makes a shipped def unbuildable is neither an ordering rule nor a thing
+  worth shipping. §4.4 records the fix and the re-measurement.
 - **No mid-run drain of a running colony was staged**, for the reason increment
   7 §4.4 gives: no instrument in this repository can stage one. §4.1's third
   reading drains the ledger through a *consumer*, which is the nearest thing
@@ -1023,3 +1047,30 @@ repeating.
   from this section's fixture descriptions. What IS committed is the first,
   second and fourth readings, as two assertions and a report block in
   `tests/engine/balance.test.ts`.
+
+### 4.4 Re-measured after OBS-9-01 was fixed
+
+Every figure in §4.1 above was taken on balance runs made BEFORE `worthMoving`
+gained its target-side exemption, so every one of them was suspect until it was
+re-taken: the threshold sits in the supply path each of these readings runs
+through. They were re-taken rather than argued about. **One number moved.**
+
+| reading | instrument | what could have moved it | result |
+| --- | --- | --- | --- |
+| 1, the build-time sweep | committed report block | the house's own delivery ticks, if a load of its 15 wood or 5 planks ever fell under the floor | **unchanged** — 7 / 28 / 43 at legs 1 / 8 / 13, and 128 / 72 / 72 / 44 at the far corner by hauler count |
+| 2, the per-def table | committed report block | any def whose `cost mod capacity` is 1 | **the sawmill moved**, `never` → 11 / 71. Hut, house, workshop and mill are digit-for-digit what they were |
+| 3, the bounded-queue stall | scratch rig (gone) | its three `farm` sites, at 20 wood | **unchanged.** 20 wood leaves a remainder of 2 against the carry of 6 a housed hauler has and against the 3 an unhoused one has — at or above the floor either way — so no load in that fixture was ever the one `worthMoving` refused, and its stall is producer contention exactly as reported. Stated as arithmetic rather than as a re-run: the rig is gone (see the last bullet of §4.3) |
+| 4, the round-robin curve | committed report block | its `house` sites | **unchanged** — every cell of both hauler columns, N = 1 … 8 |
+| 5, what a colony pays to grow | scratch rig (gone) | its `gatherersHut` (10 wood) and `farm` (20 wood) sites | **unchanged.** Both remainders clear the floor at a carry of 6 (4 and 2), which is what the housed haulers behind that table carried. Corroborated on the committed harness: the same two defs, at one, two and four haulers, near and far, deliver in the same ladder of 3 / 7 / 15 / 43 / 99 ticks the table is built on |
+| 6, sites in the starving band | scratch rig (gone) | its four `farm` sites | **unchanged**, on reading 3's arithmetic. `starving` is derived before `worthMoving` is consulted and from different quantities, so the exemption cannot move which candidates tie in the band |
+
+**The homeless-hauler case named in OBS-9-01 was never a published reading.** A
+carry of 3 makes a gatherer's hut the stranded def instead of the sawmill, and
+no §4.1 fixture hauls unhoused — the harness houses its crews. It is pinned by
+a test rather than by a number here (`construction-system.test.ts`, 'a
+gatherer's hut completes for homeless haulers').
+
+The re-measurement was taken with the shipped report block
+(`BALANCE_REPORT=1 npm run test:balance`) plus a scratch file deleted with this
+commit, which reused `runScenario` for the hauler-count columns the report
+block does not print.

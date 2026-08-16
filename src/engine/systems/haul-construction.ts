@@ -87,6 +87,43 @@ export function inputRoomOf(row: HaulBuildingRow, resource: ResourceId): number 
 }
 
 /**
+ * WOULD THIS LOAD SETTLE THE SITE'S OUTSTANDING BILL FOR ONE MATERIAL? — the
+ * target's half of `worthMoving`'s exemption (haul-dispatch.ts), and the reason
+ * a sawmill can be built at all (OBS-9-01).
+ *
+ * `minSupplyUnits` says "don't walk thirteen tiles to deliver one unit", and
+ * for a recipe consumer that is simply true: its in-tray is a buffer, a batch
+ * empties it, and the room that was one unit is twelve again a few ticks later,
+ * so a refused tail costs latency and nothing else. `worthMoving` already
+ * carries ONE escape from it, keyed on the SOURCE — a depot holding a single
+ * unit is doing everything it can, and refusing that unit strands it forever.
+ *
+ * A SITE NEEDS THE SAME ESCAPE FROM THE OTHER END, and for the same reason
+ * rather than an analogous one. A site's demand is a BILL: finite, known, and
+ * it only ever shrinks, because nothing at a site consumes anything. So its
+ * room descends in whole hauler-loads to `cost[r] mod capacity`, and where that
+ * remainder falls under the floor no trip is ever worth making, on any tick,
+ * for the rest of the game — a sawmill (25 wood, capacity 6) stands at 24/25
+ * forever. The refused load is not late; it is the last one, and nothing else
+ * will ever move it.
+ *
+ * SITES ONLY, deliberately. The floor is what every recipe consumer's supply
+ * numbers are measured against, and a general exemption would move them
+ * silently — which is why this asks `isUnderConstruction` first and answers
+ * `false` for a finished building however small its room.
+ *
+ * Reads `inputRoomOf` and `claims.input` rather than a fresh derivation of a
+ * site's remaining need: this is the same quantity `siteNeedOf` ranks on, and
+ * two spellings of it would eventually disagree about which unit is the last.
+ */
+export function finishesSiteMaterial(
+  row: HaulBuildingRow, resource: ResourceId, claims: Claims, movable: number,
+): boolean {
+  if (!isUnderConstruction(row.construction.ticksLeft)) return false;
+  return movable >= inputRoomOf(row, resource) - claims.input(row.building.id, resource);
+}
+
+/**
  * May a supply load be aimed at this building, and put into it on arrival?
  *
  * ONE DERIVATION, TWO READERS, the same shape `StaffedSet` itself is: dispatch

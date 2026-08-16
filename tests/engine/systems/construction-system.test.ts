@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { SystemError } from 'sim-ecs';
 import type { BuildingDefId, ResourceId } from '../../../src/shared/content-types';
 import { BALANCE } from '../../../src/engine/content/balance';
+import { BUILDINGS } from '../../../src/engine/content/buildings';
 import { Building, Construction, Home, InputBuffer, Production } from '../../../src/engine/components';
 import { IdCounter, Stockpile } from '../../../src/engine/resources';
 import { ConstructionSystem } from '../../../src/engine/systems/construction-system';
-import { HaulSystem } from '../../../src/engine/systems/haul-system';
+import { HaulSystem, haulerCapacity } from '../../../src/engine/systems/haul-system';
 import { PopulationSystem } from '../../../src/engine/systems/population-system';
 import { ProductionSystem } from '../../../src/engine/systems/production-system';
 import {
@@ -38,7 +39,14 @@ interface BuildSpec {
 async function setup(
   specs: readonly BuildSpec[],
   systems: readonly TColonySystemFactory[],
-  opts: { camp?: Partial<Record<ResourceId, number>>; haulers?: number; homeless?: number } = {},
+  opts: {
+    camp?: Partial<Record<ResourceId, number>>; haulers?: number; homeless?: number;
+    /** Haulers with NO home, so `haulerCapacity` charges `homelessFactor` and
+     * they carry 3 rather than 6. A hauler's carry is what decides which unit
+     * of a site's bill is the last one, so it is a subject here rather than a
+     * detail — see the gatherer's hut case below. */
+    homelessHaulers?: number;
+  } = {},
 ) {
   const save = initialSave();
   save.colonists = [];
@@ -59,6 +67,10 @@ async function setup(
   }).getComponent(Building)!.id : null;
   const haulers = Array.from({ length: haulerCount }, () => spawnColonist(prep, ids, { hauling: true, homeId: haulerHomeId, ageTicks: ADULT }));
   const homeless = Array.from({ length: opts.homeless ?? 0 }, () => spawnColonist(prep, ids, { homeId: null, ageTicks: ADULT }));
+  const nomadHaulers = Array.from(
+    { length: opts.homelessHaulers ?? 0 },
+    () => spawnColonist(prep, ids, { hauling: true, homeId: null, ageTicks: ADULT }),
+  );
 
   const world = await prep.prepareRun();
   specs.forEach((spec, i) => {
@@ -72,7 +84,7 @@ async function setup(
   world.eventBus.subscribe(SystemError, () => { systemErrors++; });
   const step = async (times: number) => { for (let i = 0; i < times; i++) await world.step(); };
   return {
-    world, buildings, haulers, homeless, step, stockpile: world.getResource(Stockpile),
+    world, buildings, haulers, homeless, nomadHaulers, step, stockpile: world.getResource(Stockpile),
     errors: () => systemErrors,
   };
 }
@@ -189,6 +201,114 @@ describe('ConstructionSystem', () => {
       expect(site.getComponent(InputBuffer)!.total()).toBe(0);
     }
     expect(stockpile.get('wood')).toBe(1000 - 3 * 10); // conserved: 30 units left the camp, none minted
+    expect(errors()).toBe(0);
+  });
+});
+
+/**
+ * OBS-9-01 — A SITE'S LAST LOAD MAY FALL BELOW `minSupplyUnits`, AND THE SITE
+ * MUST STILL BE FINISHED.
+ *
+ * A site's room shrinks by whole hauler-loads and nothing at a site ever
+ * consumes anything, so the room left after the last full load is
+ * `cost[r] mod capacity` and it never grows back. Where that remainder is
+ * below `BALANCE.minSupplyUnits`, `worthMoving`'s floor refused the trip on
+ * every tick forever and the building could not be built AT ALL — measured at
+ * every distance and hauler count, with the missing unit standing at the camp.
+ *
+ * These cases assert COMPLETION rather than a dispatch decision, because that
+ * is the promise that was broken: the increment's whole claim is that a site
+ * finishes once its materials arrive. Each names the arithmetic that puts its
+ * remainder under the floor, so a fixture that stops being the case it was
+ * written for says so instead of passing quietly.
+ */
+describe('a site whose last load is below the supply floor', () => {
+  /** The remainder a def's bill for one material leaves after the last full
+   * load — the quantity `worthMoving` used to refuse. Derived rather than
+   * written out, since it is a relationship between three shipped numbers and
+   * any of them may be retuned. */
+  const lastLoad = (defId: BuildingDefId, resource: ResourceId, capacity: number) =>
+    (BUILDINGS[defId].cost[resource] ?? 0) % capacity;
+
+  it('a sawmill site completes, though its last unit is below minSupplyUnits', async () => {
+    // THE HEADLINE CASE, and the one the defect was found on: a sawmill costs
+    // 25 wood, a housed hauler carries 6, and 25 = 4x6 + 1. The site filled to
+    // 24/25 and stopped there for the rest of the game.
+    const capacity = BALANCE.haulCarryCapacity; // the haulers below are housed beside the camp
+    expect(lastLoad('sawmill', 'wood', capacity)).toBe(1);
+    expect(lastLoad('sawmill', 'wood', capacity)).toBeLessThan(BALANCE.minSupplyUnits); // the floor refused it
+    expect(lastLoad('sawmill', 'wood', capacity)).toBeGreaterThan(0); // and there really is a tail to strand
+
+    const { buildings, step, stockpile, errors } = await setup(
+      [{ defId: 'sawmill', col: 4, row: 1, site: { ticksLeft: BALANCE.buildTicks } }],
+      [HaulSystem, ConstructionSystem],
+      { camp: { wood: 1000 }, haulers: 2 },
+    );
+
+    await step(600); // generous: five loads of round-robin delivery plus the countdown
+
+    expect(buildings[0].getComponent(Construction)!.ticksLeft).toBe(0); // BUILT
+    expect(buildings[0].getComponent(InputBuffer)!.total()).toBe(0); // tray emptied at completion
+    // Conserved, and the whole bill was really carried: 25 units left the camp,
+    // which is what distinguishes "completed" from "completed early".
+    expect(stockpile.get('wood')).toBe(1000 - 25);
+    expect(errors()).toBe(0);
+  });
+
+  it('a site short of a single unit for any other reason completes too', async () => {
+    // THE GENERAL SHAPE, not the sawmill's arithmetic. A mill site already
+    // holding 20 wood and 9 of its 10 planks owes exactly one plank, and the
+    // shortfall arises from what is already in the tray rather than from
+    // `cost mod capacity` — 10 planks against a carry of 6 would leave a
+    // remainder of 4, comfortably above the floor. An exemption keyed on a
+    // def's cost and a hauler's capacity rather than on the room actually
+    // left passes the case above and fails this one.
+    expect(lastLoad('mill', 'planks', BALANCE.haulCarryCapacity)).toBeGreaterThanOrEqual(BALANCE.minSupplyUnits);
+
+    const { buildings, step, stockpile, errors } = await setup(
+      [{ defId: 'mill', col: 4, row: 1, site: { ticksLeft: BALANCE.buildTicks, tray: { wood: 20, planks: 9 } } }],
+      [HaulSystem, ConstructionSystem],
+      { camp: { planks: 40 }, haulers: 1 },
+    );
+
+    await step(200);
+
+    expect(buildings[0].getComponent(Construction)!.ticksLeft).toBe(0);
+    expect(buildings[0].getComponent(InputBuffer)!.total()).toBe(0);
+    expect(stockpile.get('planks')).toBe(40 - 1); // exactly the one unit outstanding, no more
+    expect(errors()).toBe(0);
+  });
+
+  it('a gatherer\'s hut completes for homeless haulers, whose carry makes ITS bill the awkward one', async () => {
+    // WHICH DEFS ARE AFFECTED IS A PROPERTY OF THE HAULER, not of the catalog:
+    // a homeless hauler carries 3, and 10 wood is 3x3 + 1. So the hut — which
+    // the housed fixtures above build without trouble — is the def that
+    // stranded, at 9/10, while a farm ordered beside it finished normally.
+    // This is why the fix may not be keyed on any particular def or on the
+    // flat `haulCarryCapacity`.
+    const capacity = haulerCapacity(null);
+    expect(capacity).toBeLessThan(BALANCE.haulCarryCapacity); // a real penalty, not the flat rate
+    expect(lastLoad('gatherersHut', 'wood', capacity)).toBe(1);
+    expect(lastLoad('gatherersHut', 'wood', BALANCE.haulCarryCapacity)).toBeGreaterThanOrEqual(BALANCE.minSupplyUnits);
+
+    const { buildings, step, stockpile, errors } = await setup(
+      [
+        { defId: 'gatherersHut', col: 4, row: 1, site: { ticksLeft: BALANCE.buildTicks } },
+        { defId: 'farm', col: 8, row: 1, site: { ticksLeft: BALANCE.buildTicks } },
+      ],
+      [HaulSystem, ConstructionSystem],
+      { camp: { wood: 1000 }, homelessHaulers: 2 },
+    );
+
+    await step(600);
+
+    // The hut, which is the subject — and the farm beside it, which is the
+    // control the measurement used: 20 wood is 6x3 + 2, above the floor, so it
+    // completed even before the fix and its completion here says the fixture
+    // is delivering at all.
+    expect(buildings[0].getComponent(Construction)!.ticksLeft).toBe(0);
+    expect(buildings[1].getComponent(Construction)!.ticksLeft).toBe(0);
+    expect(stockpile.get('wood')).toBe(1000 - 10 - 20);
     expect(errors()).toBe(0);
   });
 });

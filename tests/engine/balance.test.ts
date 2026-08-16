@@ -1856,10 +1856,12 @@ describe('construction, measured — §4.1', () => {
       const near = await siteScenario(defId, { col: 3, row: 0 }, 2, 400);
       const far = await siteScenario(defId, { col: 23, row: 15 }, 2, 600);
       const cost = BUILDINGS[defId].cost;
-      // A site that never completed prints `stalled`, and the sawmill is one:
+      // A site that never completed prints `stalled`. The sawmill WAS one —
       // 25 wood leaves a last unit of 1 against `minSupplyUnits: 2`, so its
-      // in-tray sticks at 24 for the whole run (OBS-9-01). The column has to
-      // be able to say so — a blank would read as a slow build.
+      // in-tray stuck at 24 for the whole run (OBS-9-01, fixed: `worthMoving`
+      // now exempts the load that settles a site's bill). The column keeps the
+      // word: a run that stalls for some later reason must say so rather than
+      // print a blank that reads as a slow build.
       const delivery = (r: BalanceResult) => (r.completions.length === 0 ? 'stalled' : deliveryTicksOf(r));
       lines.push(
         `  ${defId.padEnd(13)}  ${String(unitsOf(cost)).padStart(5)}  ${String(Object.keys(cost).length).padStart(9)}  ` +

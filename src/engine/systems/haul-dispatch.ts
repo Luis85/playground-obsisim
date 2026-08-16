@@ -9,7 +9,7 @@ import type { HaulKind } from '../components';
 import { Building, Construction, HaulTrip, InputBuffer, OutputBuffer, Position, Production, Relocation } from '../components';
 import type { PendingChanges } from '../resources';
 import type { Claims } from './haul-claims';
-import { acceptsSupply, inputRoomOf, siteNeedOf } from './haul-construction';
+import { acceptsSupply, finishesSiteMaterial, inputRoomOf, siteNeedOf } from './haul-construction';
 import { storeSitesOf, type StoreSiteRow } from './haul-sites';
 import {
   drainCandidates, nextTransferTarget, stagingCandidates,
@@ -162,14 +162,27 @@ export function holdsNoneOf(input: InputBuffer, resource: ResourceId): boolean {
 
 /**
  * §2.6's delivery threshold: don't walk thirteen tiles to top a building up by
- * one unit — UNLESS that unit is everything the site has of it, because
- * otherwise the threshold strands the tail. Every recipe today consumes one
- * unit per batch, so a depot holding a single flour can feed a bakery but
- * could never produce a candidate, and that unit would sit there for the rest
- * of the game while the ledger and the UI kept counting it.
+ * one unit — UNLESS the trip is the last one that will ever be made for those
+ * units, because otherwise the threshold strands the tail. There are two ways
+ * to be that trip, one at each end of the leg, and BOTH are needed:
+ *
+ * - `movable >= held`, the SOURCE's half: that unit is everything the source
+ *   has. Every recipe today consumes one unit per batch, so a depot holding a
+ *   single flour can feed a bakery but could never produce a candidate, and
+ *   that unit would sit there for the rest of the game while the ledger and the
+ *   UI kept counting it.
+ * - `finishesNeed`, the TARGET's half (`finishesSiteMaterial`,
+ *   haul-construction.ts): that load is everything the target still needs. Only
+ *   a construction site can say so — a recipe consumer's need refills — and
+ *   without it a site whose remaining need falls under the floor is never
+ *   supplied again, which made a shipped sawmill unbuildable (OBS-9-01).
+ *
+ * A source that is doing its best and a target that will never ask again are
+ * the same argument seen from the two ends, which is why they sit in one
+ * expression rather than in two rules.
  */
-function worthMoving(movable: number, held: number): boolean {
-  return movable > 0 && (movable >= BALANCE.minSupplyUnits || movable >= held);
+function worthMoving(movable: number, held: number, finishesNeed: boolean): boolean {
+  return movable > 0 && (finishesNeed || movable >= BALANCE.minSupplyUnits || movable >= held);
 }
 
 /**
@@ -261,7 +274,7 @@ function supplyCandidates(
       && claimedIn === 0;
     for (const site of sitesHolding(sites, unclaimedAt)) {
       const movable = Math.min(need.room, unclaimedAt(site.id));
-      if (!worthMoving(movable, unclaimedAt(site.id))) continue;
+      if (!worthMoving(movable, unclaimedAt(site.id), finishesSiteMaterial(row, need.resource, claims, movable))) continue;
       candidates.push({
         buildingId: row.building.id, buildingCol: row.position.col, buildingRow: row.position.row,
         siteId: site.id, siteCol: site.col, siteRow: site.row, resource: need.resource, movable, starving,

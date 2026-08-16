@@ -2613,4 +2613,62 @@ describe('a construction site is supplied like any other building that wants thi
     expect(tripOf(haulers[0])).toMatchObject({ kind: 'supply', resource: 'wood', plannedAmount: 6 });
     expect(tripOf(haulers[1])).toMatchObject({ kind: 'supply', resource: 'planks', plannedAmount: 6 });
   });
+
+  it('the load that finishes a material is dispatched however small it is', async () => {
+    // OBS-9-01 at the dispatch decision itself, where the completion cases in
+    // construction-system.test.ts see it as a building that is never built.
+    //
+    // The site owes ONE unit of its 25 wood and the camp holds thirty, so
+    // `worthMoving`'s two older clauses BOTH refuse: one is under
+    // `minSupplyUnits`, and a camp with thirty units to spare is nowhere near
+    // handing over everything it has. Those three numbers are pairwise
+    // distinct on purpose — the load (1), the floor (2) and the source's
+    // holding (30) — so no clause can pass by reading another's value.
+    const OWED = 1;
+    const HELD = 30;
+    expect(OWED).toBeLessThan(BALANCE.minSupplyUnits);
+    expect(OWED).toBeLessThan(HELD);
+
+    const { buildings, haulers, step } = await setup(
+      [{ defId: 'sawmill', ...MILL, site: true, siteTray: { wood: SAWMILL_WOOD - OWED } }], 1, { camp: { wood: HELD } },
+    );
+    await step(1);
+    expect(tripOf(haulers[0])).toMatchObject({ kind: 'supply', resource: 'wood', plannedAmount: OWED });
+
+    // And it lands: the bill is settled rather than merely offered.
+    await step(legTicks(CAMP_TILE, CAMP_TILE) + legTicks(CAMP_TILE, MILL));
+    expect(inputOf(buildings[0]).amounts.get('wood')).toBe(SAWMILL_WOOD);
+  });
+
+  it('a FINISHED building\'s last unit of room is still refused', async () => {
+    // THE EXEMPTION MUST NOT LEAK. Without this fixture `finishesSiteMaterial`
+    // could be written as "always true" and every case above would still pass
+    // — which would take `minSupplyUnits` out of supply dispatch altogether,
+    // and with it the recipe-consumer numbers §4.1 and increment 10 are sized
+    // against.
+    //
+    // A site's bill only ever shrinks; a mill's in-tray refills the moment a
+    // batch pays out of it, so a unit of room under the floor here is a wait
+    // rather than a strand. Same shape as the case above — one unit of room,
+    // thirty units standing at the camp — and the opposite answer.
+    const refused = await setup(
+      [{ defId: 'mill', ...MILL, inputBuffer: { wheat: BALANCE.inputBufferCap - 1 }, crew: 1 }], 1, { camp: { wheat: 30 } },
+    );
+    await refused.step(10); // and it stays refused, tick after tick
+    expect(tripOf(refused.haulers[0])).toMatchObject({ phase: 'idle', plannedAmount: 0 });
+    expect(refused.stockpile.get('wheat')).toBe(30); // nothing left the camp
+    expect(inputOf(refused.buildings[0]).total()).toBe(BALANCE.inputBufferCap - 1);
+
+    // NON-VACUOUS: one more unit of room and the identical fixture dispatches.
+    // So the refusal above is the floor talking, not a mill that was never a
+    // candidate.
+    const dispatched = await setup(
+      [{ defId: 'mill', ...MILL, inputBuffer: { wheat: BALANCE.inputBufferCap - BALANCE.minSupplyUnits }, crew: 1 }],
+      1, { camp: { wheat: 30 } },
+    );
+    await dispatched.step(1);
+    expect(tripOf(dispatched.haulers[0])).toMatchObject({
+      kind: 'supply', resource: 'wheat', plannedAmount: BALANCE.minSupplyUnits,
+    });
+  });
 });

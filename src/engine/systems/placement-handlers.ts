@@ -1,4 +1,3 @@
-import type { BuildingDefId, CostMap, ResourceId } from '../../shared/content-types';
 import type { Command } from '../../shared/commands';
 import { CAMP_SITE_ID, legPositionOf } from '../../shared/haul';
 import { autoPlacePosition, isTileBuildable, isUnderConstruction, relocationTicks, type TileRef } from '../../shared/placement';
@@ -34,79 +33,6 @@ function occupiedTiles(ctx: CommandContext): TileRef[] {
   ];
 }
 
-/**
- * What every construction site the colony already has going still needs, per
- * resource — `Σ over sites of max(0, cost[r] − held[r])` (spec §2.3).
- *
- * Derived from live components at every call, stored nowhere, RESERVING
- * nothing: no claim is written and two haulers racing for the same log are
- * still resolved by the claim machinery that already does that. It is what
- * `pay` used to do implicitly — a second order used to see the first one's
- * cost gone from the ledger, and with the payment moved to delivery every
- * order in a drain would otherwise read the same untouched stock.
- *
- * Both halves of "the sites the colony has going" are needed and neither is
- * sufficient alone: `ctx.buildings` misses every site ordered earlier in THIS
- * drain (invisible to queries until the post-step sync), and
- * `pending.constructed` is only ever this drain's own. A pending site has
- * nothing delivered yet, so its shortfall is its whole cost.
- *
- * Skips `ctx.demolishedIds` for the reason `occupiedTiles` above does:
- * a site cancelled earlier in this drain is still in the query with its
- * `Construction` and its in-tray intact, and charging its shortfall against
- * the very order meant to replace it refuses a rebuild the colony can plainly
- * afford.
- *
- * Deliberately conservative by the amount in transit: a load already picked up
- * has left `Stockpile` and has not yet reached `held`, so it is counted
- * against the player twice. That is the safe direction — it never permits a
- * queue the colony cannot fund — and increment 10 deletes the check outright.
- */
-function outstandingMaterials(ctx: CommandContext): CostMap {
-  const outstanding: CostMap = {};
-  const owe = (defId: BuildingDefId, held: (id: ResourceId) => number): void => {
-    for (const [resource, amount] of Object.entries(BUILDINGS[defId].cost)) {
-      const id = resource as ResourceId;
-      outstanding[id] = (outstanding[id] ?? 0) + Math.max(0, amount - held(id));
-    }
-  };
-  for (const row of ctx.buildings) {
-    if (ctx.demolishedIds.has(row.building.id)) continue;
-    if (!isUnderConstruction(row.construction.ticksLeft)) continue;
-    owe(row.building.defId, (id) => row.input.amounts.get(id) ?? 0);
-  }
-  for (const site of ctx.pending.constructed) owe(site.defId, () => 0);
-  return outstanding;
-}
-
-/**
- * §2.3's rule: an order is refused unless the colony holds its cost ON TOP OF
- * what every site already going still needs.
- *
- * `colonyStock`, not `toJSON`: materials are hauled from any site, so wood in
- * a storehouse funds a build exactly as camp wood does — the same reason the
- * nomad gate reads it.
- *
- * Quantified over the NEW cost's resources rather than over every resource in
- * the catalog. The question being asked is whether this order can be added to
- * the queue, and a colony that has drifted short on a material this order does
- * not want cannot fix that by being refused an unrelated building.
- *
- * An ORDER-TIME check, and it guarantees nothing about completion: it writes
- * nothing down, so goods it counted can leave for a meal or a sawmill before a
- * hauler collects them. Reserving hard enough to close that would mean holding
- * materials against food, which is a worse game than a queue that occasionally
- * stalls — and cancellation recovers it.
- */
-function affordableWithQueue(ctx: CommandContext, cost: CostMap): boolean {
-  const outstanding = outstandingMaterials(ctx);
-  const stock = ctx.stockpile.colonyStock();
-  return Object.entries(cost).every(([resource, amount]) => {
-    const id = resource as ResourceId;
-    return (stock[id] ?? 0) >= (outstanding[id] ?? 0) + amount;
-  });
-}
-
 export function handleConstructBuilding(ctx: CommandContext, command: Extract<Command, { type: 'constructBuilding' }>): void {
   // Checked BEFORE the spawn, with the two below: neither an id nor a tile is
   // recoverable once the entity exists.
@@ -128,16 +54,17 @@ export function handleConstructBuilding(ctx: CommandContext, command: Extract<Co
     ctx.notices.reject('Cannot build there.');
     return;
   }
-  // The REFUSAL survives §2.3, only the PAYMENT goes: `pay` both tested and
-  // debited, so deleting the call would quietly repeal "you cannot order what
-  // you cannot pay for" — which is increment 10's product change, not a
-  // side effect of moving the charge to delivery. Cumulative rather than a
-  // plain `canAfford(def.cost)`, because the debit is what used to stop a
-  // second order spending the first one's wood a second time.
-  if (!affordableWithQueue(ctx, def.cost)) {
-    ctx.notices.reject(`Cannot afford ${def.name}.`);
-    return;
-  }
+  // NO affordability check (spec §2.1, increment 10): an order is a REQUEST,
+  // not a claim, and the colony may hold a queue it cannot yet fund. §2.3's
+  // check — refuse unless the colony holds this cost on top of every site
+  // already going — is gone along with `outstandingMaterials` and
+  // `affordableWithQueue`, which computed it; nothing replaces it, because
+  // nothing should. What was ordering-time insurance against a queue that
+  // starts unfundable bought little (increment 9 §1.1.1 measured a queue that
+  // starts fundable and stalls anyway) and cost the exact feature this
+  // increment exists to ship: "build these three houses" now means what it
+  // says, and dispatch (§2.2, a separate task) is what makes the queue
+  // converge instead of crawl.
   ctx.claimedTiles.push({ col: at.col, row: at.row });
   const id = ctx.ids.take();
   // Component list shared with the save-restore path (src/engine/spawn.ts) so a
@@ -147,9 +74,10 @@ export function handleConstructBuilding(ctx: CommandContext, command: Extract<Co
   // A SITE, not a finished building (§2.5): it occupies its tile from this
   // tick and is counted down by delivered materials, never by the order.
   ctx.spawn(...buildingComponents({ id, defId: def.id, col: at.col, row: at.row, constructionTicks: BALANCE.buildTicks }));
-  // Recorded AFTER every rejection path above: a construction refused for
-  // cost, tiles, or id exhaustion must not appear in this list, or homing
-  // would shelter someone in a house that was never actually built.
+  // Recorded AFTER both rejection paths above (tiles, id exhaustion — cost is
+  // no longer one of them, §2.1): an order refused before the spawn must not
+  // appear in this list, or a later reader would count a site that does not
+  // exist.
   ctx.pending.constructed.push({ id, defId: def.id, col: at.col, row: at.row });
   // STARTED, not built: nothing has been paid, nothing has been delivered and
   // the thing on that tile is a hole in the ground. A success notice reading

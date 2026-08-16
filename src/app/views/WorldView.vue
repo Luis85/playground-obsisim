@@ -59,12 +59,16 @@ function ghostDefId(m: Mode): BuildingDefId | null {
 // Cosmetic pre-validation only — the engine revalidates and rejects with a
 // notice, so a ghost can be wrong for at most one tick. A move's own tile
 // counts as occupied (by the mover), which matches the engine's reject.
+//
+// Tile occupancy is the ONLY thing checked, for both modes alike. A place
+// used to also read `store.affordableDefs[m.defId]` (spec §2.3's rule); §2.1
+// drops that — ordering is a request, not a claim, so an unaffordable def
+// previews exactly as valid as an affordable one, and the queue fills as
+// goods arrive rather than being refused at the tile.
 function tileValid(m: Mode, col: number, row: number): boolean {
   const snapshot = store.snapshot;
   if (!snapshot) return false;
-  if (!isTileBuildable(snapshot.map, snapshot.buildings, col, row)) return false;
-  if (m.kind === 'place') return store.affordableDefs[m.defId];
-  return true;
+  return isTileBuildable(snapshot.map, snapshot.buildings, col, row);
 }
 
 function refreshGhost() {

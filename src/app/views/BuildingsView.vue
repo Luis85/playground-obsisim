@@ -71,9 +71,12 @@ const store = useGameStore();
           <td>{{ BUILDINGS[id].workerSlots }}</td>
           <td>{{ recipeLabel(BUILDINGS[id]) }}</td>
           <td>
+            <!-- NOT disabled on affordability (spec §2.1, increment 10): an
+                 order is a request the queue fills over time, so this button
+                 always dispatches. `affordableDefs` only informs the tooltip
+                 now — the one place left that still says what is short. -->
             <button
               :data-test="`construct-${id}`"
-              :disabled="!store.affordableDefs[id]"
               :title="store.affordableDefs[id] ? 'Placed automatically — pick the tile yourself in the World tab' : 'Not enough resources'"
               @click="engine.dispatch({ type: 'constructBuilding', buildingDefId: id })"
             >

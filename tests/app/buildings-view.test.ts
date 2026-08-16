@@ -76,18 +76,42 @@ describe('BuildingsView', () => {
     expect(engine.dispatch).toHaveBeenCalledWith({ type: 'unassignWorker', buildingId: 7 });
   });
 
-  // affordable is a computed Record<BuildingDefId, boolean>, one entry per
-  // catalog id; only the forester row is asserted here since every other id
-  // goes through the identical `every(cost >= stock)` check.
-  it('construct button dispatches when affordable and disables when not', async () => {
+  it('construct button dispatches when affordable', async () => {
     const rich = mountView({ wood: 100 });
     await rich.wrapper.vm.$nextTick();
     await rich.wrapper.find('[data-test="construct-forester"]').trigger('click');
     expect(rich.engine.dispatch).toHaveBeenCalledWith({ type: 'constructBuilding', buildingDefId: 'forester' });
+  });
 
+  // Spec §2.1, increment 10: ordering is a request, not a claim, so the
+  // table's construct button stops refusing an unaffordable order — this is
+  // the third of three view gates (BuildPalette, WorldView's `tileValid`,
+  // this one), each pinned separately because any ONE gate left standing
+  // would still block the player from expressing a queue the model allows.
+  it('the Buildings table button is enabled on an empty ledger', async () => {
     const poor = mountView({ wood: 0 });
     await poor.wrapper.vm.$nextTick();
-    expect((poor.wrapper.find('[data-test="construct-forester"]').element as HTMLButtonElement).disabled).toBe(true);
+    const button = poor.wrapper.find('[data-test="construct-forester"]');
+    expect((button.element as HTMLButtonElement).disabled).toBe(false);
+    await button.trigger('click');
+    expect(poor.engine.dispatch).toHaveBeenCalledWith({ type: 'constructBuilding', buildingDefId: 'forester' });
+  });
+
+  // `affordableDefs` is not deleted (spec §2.1): it stops gating and starts
+  // informing, so the one thing the player has left is this tooltip. A test
+  // that only checked the button was enabled would pass just as well against
+  // deleting the getter outright, which would lose the missing-resource
+  // message entirely.
+  it('the tooltip still says what is missing', async () => {
+    const poor = mountView({ wood: 0 });
+    await poor.wrapper.vm.$nextTick();
+    const button = poor.wrapper.find('[data-test="construct-forester"]').element as HTMLButtonElement;
+    expect(button.title).toBe('Not enough resources');
+
+    const rich = mountView({ wood: 100 });
+    await rich.wrapper.vm.$nextTick();
+    const richButton = rich.wrapper.find('[data-test="construct-forester"]').element as HTMLButtonElement;
+    expect(richButton.title).toBe('Placed automatically — pick the tile yourself in the World tab');
   });
 
   // Task 4 added the storehouse def and left recipeLabel treating every
@@ -198,31 +222,6 @@ describe('BuildingsView', () => {
     const { wrapper } = mountView();
     await wrapper.vm.$nextTick();
     expect(wrapper.find('[data-test="needs-7"]').text()).toBe('—');
-  });
-
-  // The UI half of acceptance criterion 5 (§2.3/§2.10): two houses each
-  // costing exactly the stockpile, the first already queued. Published stock
-  // is UNCHANGED (Task 2 leaves it alone at order time), so a getter reading
-  // stock alone would still call a second house affordable — this fixture is
-  // what proves `affordableDefs` subtracts the queued site's own shortfall
-  // instead.
-  it('the construct button refuses a second house once one is queued against the same materials', async () => {
-    const wrapper = mount(BuildingsView, {
-      global: {
-        plugins: [createTestingPinia({ createSpy: vi.fn, stubActions: false })],
-        provide: { [ENGINE_KEY as symbol]: { dispatch: vi.fn() } },
-      },
-    });
-    useGameStore().ingest(makeSnapshot({
-      buildings: [makeBuilding(1, {
-        defId: 'house', state: 'underConstruction', constructionTicks: 20,
-        constructionNeeds: { wood: 15, planks: 5 }, // nothing delivered yet: the site's whole cost
-      })],
-    }), { paused: true, speed: 1, error: null });
-    useGameStore().snapshot!.stockpile.wood.stock = 15;
-    useGameStore().snapshot!.stockpile.planks.stock = 5;
-    await wrapper.vm.$nextTick();
-    expect((wrapper.find('[data-test="construct-house"]').element as HTMLButtonElement).disabled).toBe(true);
   });
 
   // A producer and a house in ONE render, because the two share a column: a

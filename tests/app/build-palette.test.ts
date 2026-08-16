@@ -4,24 +4,19 @@ import { mount } from '@vue/test-utils';
 import { createTestingPinia } from '@pinia/testing';
 import BuildPalette from '../../src/app/components/BuildPalette.vue';
 import { useGameStore } from '../../src/app/stores/game-store';
-import { BUILDINGS } from '../../src/engine/content/buildings';
 import type { BuildingDefId, ResourceId } from '../../src/shared/content-types';
-import { makeBuilding, makeSnapshot, stockedWith } from './fixtures';
+import { makeSnapshot, stockedWith } from './fixtures';
 
-// Takes a whole stock map, not just wood: the house is the first def to cost
-// two resources, so a wood-only fixture cannot express "rich in one, short of
-// the other" — the case its gating actually turns on.
 function mountPalette(
   armedDefId: BuildingDefId | null = null,
   stocks: Partial<Record<ResourceId, number>> = { wood: 100 },
-  buildings: ReturnType<typeof makeSnapshot>['buildings'] = [],
 ) {
   const wrapper = mount(BuildPalette, {
     props: { armedDefId },
     global: { plugins: [createTestingPinia({ createSpy: vi.fn, stubActions: false })] },
   });
   useGameStore().ingest(
-    makeSnapshot({ stockpile: stockedWith(stocks), buildings }),
+    makeSnapshot({ stockpile: stockedWith(stocks) }),
     { paused: true, speed: 1, error: null },
   );
   return wrapper;
@@ -48,54 +43,19 @@ describe('BuildPalette', () => {
     expect(wrapper.emitted('arm')).toBeUndefined();
   });
 
-  it('disables unaffordable defs (but never the armed one)', async () => {
-    const wrapper = mountPalette(null, { wood: 0 });
-    await wrapper.vm.$nextTick();
-    expect(disabled(wrapper, 'forester')).toBe(true);
-  });
-
-  it('keeps the armed def enabled even when it became unaffordable', async () => {
-    // disarming must stay possible after the stockpile drains mid-arm
-    const wrapper = mountPalette('forester', { wood: 0 });
+  // Spec §2.1, increment 10: ordering is a request, not a claim, so the
+  // palette no longer refuses to arm an unaffordable def — REQUIRED
+  // separately from the engine-level pin (command-system.test.ts), because
+  // that test passes regardless of whether any of the three view gates were
+  // ever removed, and on its own would let a version ship where the model
+  // allows a queue the player has no way to express through this surface.
+  // `mountPalette`'s own stock default is `{ wood: 100 }`, so `{}` here is
+  // deliberately a genuinely EMPTY ledger, not merely a wood shortfall.
+  it('the palette arms on an empty ledger', async () => {
+    const wrapper = mountPalette(null, {});
     await wrapper.vm.$nextTick();
     expect(disabled(wrapper, 'forester')).toBe(false);
-  });
-
-  // The house is increment 6's new def and the first to cost TWO resources, so
-  // it is also the first whose gating can look right while checking only one
-  // of them. Each resource in the cost is dropped a unit short in turn, read
-  // off BUILDINGS rather than retyped, so a retune moves the test with it.
-  it('lists the house and gates it on every resource in its cost, not just the first', async () => {
-    const cost = Object.entries(BUILDINGS.house.cost) as [ResourceId, number][];
-    expect(cost.length).toBeGreaterThan(1); // the property this test exists for
-    const exact = Object.fromEntries(cost) as Partial<Record<ResourceId, number>>;
-
-    const affordable = mountPalette(null, exact);
-    await affordable.vm.$nextTick();
-    expect(affordable.get('[data-test="palette-house"]').text()).toContain(BUILDINGS.house.name);
-    expect(disabled(affordable, 'house')).toBe(false); // exactly the cost is enough
-
-    for (const [id, amount] of cost) {
-      const short = mountPalette(null, { ...exact, [id]: amount - 1 });
-      await short.vm.$nextTick();
-      expect(disabled(short, 'house'), `one ${id} short must still disable the house`).toBe(true);
-    }
-  });
-
-  // The palette half of acceptance criterion 5 (§2.3/§2.10): published stock
-  // is unchanged the moment a house is ordered (Task 2), so with exactly one
-  // house's cost in stock AND one already queued against it, the palette must
-  // refuse the second — the same rule `affordableDefs` enforces for
-  // BuildingsView, asserted here at the surface the spec names by name.
-  it('refuses a second house once one is queued against the same materials', async () => {
-    const cost = BUILDINGS.house.cost as Partial<Record<ResourceId, number>>;
-    const wrapper = mountPalette(null, cost, [
-      makeBuilding(1, {
-        defId: 'house', state: 'underConstruction', constructionTicks: 20,
-        constructionNeeds: { ...cost },
-      }),
-    ]);
-    await wrapper.vm.$nextTick();
-    expect(disabled(wrapper, 'house')).toBe(true);
+    await wrapper.find('[data-test="palette-forester"]').trigger('click');
+    expect(wrapper.emitted('arm')).toEqual([['forester']]);
   });
 });

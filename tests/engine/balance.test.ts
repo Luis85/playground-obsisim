@@ -1797,40 +1797,44 @@ describe('construction, measured — §4.1', () => {
     expect(deliveryTicksOf(near) * 4).toBeLessThan(BALANCE.buildTicks);
   }, 120000);
 
-  it('several sites at once finish together and late, exactly as §2.4 predicted', async () => {
-    // §4.1's fourth question, and the measurement that sizes increment 10. It
-    // is a READING and not a pass/fail: §2.4 says round-robin filling is the
-    // expected behaviour here, and acceptance criterion 4 deliberately states
-    // nothing about order or timing.
+  it('several sites at once finish ONE AT A TIME, where round-robin finished them together', async () => {
+    // Increment 9's §4.1 fourth question, RE-READ against the age-first
+    // ordering (increment 10 §2.2), because that ordering falsified the reading
+    // this case recorded — it is the very fixture increment 9 measured
+    // round-robin on, and the DIFFERENCE is the evidence increment 10 exists to
+    // produce. Still a READING rather than a pass/fail. Increment 10 §4.1
+    // Step 1 owns the full write-up; this case only keeps its predecessor's
+    // reading honest.
     const alone = await queueScenario(1, 1, 200);
     const queued = await queueScenario(4, 1, 400);
     const hauled = await queueScenario(4, 4, 200);
 
-    // Nothing is lost: every ordered site finishes in all three runs, which is
-    // the half of §2.4 that says round-robin is SLOW rather than BROKEN.
+    // Nothing is lost: every ordered site still finishes in all three runs, and
+    // reordering a queue must not drop anything out of it.
     expect(alone.completions).toHaveLength(1);
     expect(queued.completions).toHaveLength(4);
     expect(hauled.completions).toHaveLength(4);
 
-    // WHAT THE QUEUE COSTS: the FIRST house, not the last. One house alone is
-    // finished at tick 65; order four together and the first of them arrives
-    // at 155, which is 2.4x later for a house the colony could have had at 65.
-    // The last arrives at 185 against a serial ordering's ~230, so the queue
-    // as a whole is not slower — its whole yield is simply deferred to the end.
-    expect(queued.completions[0].tick).toBeGreaterThan(alone.completions[0].tick * 2);
+    // WHAT THE QUEUE COSTS THE FIRST HOUSE: nothing at all, where round-robin
+    // charged it 2.4x. Measured 65 / 105 / 145 / 185 at one hauler against
+    // increment 9's 155 / 165 / 175 / 185 — the first house arrives on the tick
+    // it would have arrived on had it been the only one ordered, and the LAST
+    // one arrives at 185 either way. The queue was never slower overall; its
+    // whole yield was deferred to the end, and this is what undefers it.
+    expect(queued.completions[0].tick).toBe(alone.completions[0].tick);
 
-    // AND THE CURVE IS FLAT, which is the shape §2.4 predicted and the thing
-    // increment 10 is sized against. At four haulers all four sites cross zero
-    // on the SAME TICK — not merely close together, identical — because they
-    // filled round-robin and their last materials landed in the same wave.
-    // A dispatcher that served the oldest site first could not produce this.
-    expect(new Set(hauled.completions.map((c) => c.tick)).size).toBe(1);
-    // At one hauler the curve is a staircase rather than a single step, and
-    // the step is one round trip: 155 / 165 / 175 / 185. Still flat in the
-    // sense that matters — the spread is 30 ticks against a 185-tick wait,
-    // 16% — so nothing useful arrives before nearly everything does.
+    // AND THE CURVE IS A STAIRCASE, NOT A STEP: 35 / 45 / 55 / 65 at four
+    // haulers against increment 9's four completions on the SAME TICK. This is
+    // the assertion that inverts — a dispatcher filling round-robin cannot
+    // produce four distinct completion ticks here, and one serving the oldest
+    // site first cannot produce one.
+    expect(new Set(hauled.completions.map((c) => c.tick)).size).toBe(4);
+    // The spread at one hauler is 120 ticks of a 185-tick wait (65%) where
+    // round-robin left 30 of 185 (16%), which is the same fact stated from the
+    // other end: useful buildings now arrive throughout the queue rather than
+    // all at the end of it.
     const ticksOf = queued.completions.map((c) => c.tick);
-    expect(ticksOf.at(-1)! - ticksOf[0]).toBeLessThan(ticksOf.at(-1)! * 0.25);
+    expect(ticksOf.at(-1)! - ticksOf[0]).toBeGreaterThan(ticksOf.at(-1)! * 0.5);
   }, 180000);
 
   it('prints the construction readings when BALANCE_REPORT is set', async () => {

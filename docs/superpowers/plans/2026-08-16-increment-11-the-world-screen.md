@@ -844,7 +844,7 @@ export function useWorldInteraction(): {
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run --project unit tests/app/interaction.test.ts`
-Expected: PASS, 8 tests.
+Expected: PASS, 10 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -865,7 +865,7 @@ Read `src/app/views/WorldView.vue` in full before starting: this task moves its 
 - Reference: `src/app/views/WorldView.vue` (deleted in Task 6), `tests/app/world-view.test.ts` (its cases are split between this task and Task 6)
 
 **Interfaces:**
-- Consumes: `useWorldInteraction` (Task 4), `useUiStore` (Task 1), the widened `WorldRenderer` (Task 3).
+- Consumes: `useWorldInteraction` (Task 4), `useUiStore` (Task 1), the widened `WorldRenderer` (Task 3), and **`ENGINE_KEY`** — `clickTile` returns a `Command`, and this is the component that sends it.
 - Produces: a component that emits `fatal: [message: string]` and renders a host div with class `obsisim-world-host`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -944,6 +944,28 @@ describe('WorldStage', () => {
     const report = (renderer.onFatal as ReturnType<typeof vi.fn>).mock.calls[0][0] as (m: string) => void;
     report('context lost');
     expect(wrapper.emitted('fatal')![0]).toEqual(['context lost']);
+  });
+
+  it('dispatches the construct command a placing click produces', async () => {
+    const { renderer, factory } = makeFake();
+    const { wrapper, engine } = mountStage(factory);
+    useGameStore().ingest(makeSnapshot({ buildings: [] }), { paused: true, speed: 1, error: null });
+    (renderer.tileAt as ReturnType<typeof vi.fn>).mockReturnValue({ col: 2, row: 2 });
+    useUiStore().armPlace('farm');
+    await wrapper.get('[data-test="world-host"]').trigger('click', { pageX: 40, pageY: 40 });
+    expect(engine.dispatch).toHaveBeenCalledWith({ type: 'constructBuilding', buildingDefId: 'farm', at: { col: 2, row: 2 } });
+  });
+
+  it('dispatches the move command a moving click produces', async () => {
+    const { renderer, factory } = makeFake();
+    const { wrapper, engine } = mountStage(factory);
+    useGameStore().ingest(makeSnapshot({ buildings: [makeBuilding(1, { col: 5, row: 5 })] }), { paused: true, speed: 1, error: null });
+    (renderer.tileAt as ReturnType<typeof vi.fn>).mockReturnValue({ col: 8, row: 8 });
+    const ui = useUiStore();
+    ui.selectBuilding(1);
+    ui.armMove(1);
+    await wrapper.get('[data-test="world-host"]').trigger('click', { pageX: 40, pageY: 40 });
+    expect(engine.dispatch).toHaveBeenCalledWith({ type: 'moveBuilding', buildingId: 1, to: { col: 8, row: 8 } });
   });
 
   it('forwards the computed ghost to the renderer', async () => {
@@ -1062,11 +1084,30 @@ watch(() => ui.highlight, (subjects) => renderer?.setHighlight(subjects), { deep
 watch(interaction.ghost, (ghost) => renderer?.setGhost(ghost), { deep: true });
 ```
 
-`onPointerMove`, `onPointerLeave`, `onClick` and `onContextMenu` come across
-from `WorldView` unchanged in shape, with their mode and selection reads
-redirected to `useWorldInteraction()` and `useUiStore()`. There is no
-drag-to-pan: §2.1 cuts camera work, so a pointer drag is not a gesture this
-canvas has.
+`onPointerMove`, `onPointerLeave` and `onContextMenu` come across from
+`WorldView` unchanged in shape, with their mode and selection reads redirected
+to `useWorldInteraction()` and `useUiStore()`. There is no drag-to-pan: §2.1
+cuts camera work, so a pointer drag is not a gesture this canvas has.
+
+`onClick` is the one that changes, and it is the whole point of the screen:
+
+```ts
+const engine = inject(ENGINE_KEY)!;
+
+// clickTile RETURNS a Command — it deliberately dispatches nothing itself, so
+// that Task 4's composable stays testable with no engine at all. That makes
+// this line the only thing standing between an armed placement and a building:
+// drop it and every construct and move click updates the UI, arms, disarms and
+// previews correctly while the colony never changes.
+function onClick(event: MouseEvent) {
+  if (ui.mode.kind !== 'idle') {
+    const command = interaction.clickTile(renderer?.tileAt(event.pageX, event.pageY) ?? null);
+    if (command !== null) engine.dispatch(command);
+    return;
+  }
+  interaction.clickPick(renderer?.pick(event.pageX, event.pageY) ?? null);
+}
+```
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -2056,6 +2097,17 @@ Add to `tests/app/buildings-view.test.ts`:
     await wrapper.get('[data-test="move-1"]').trigger('click');
     expect(engine.dispatch).toHaveBeenCalledWith({ type: 'moveBuilding', buildingId: 1, to: { col: 9, row: 4 } });
   });
+
+  it('records the coordinates as submitted, not as later edited', async () => {
+    const { wrapper, engine } = mountView(makeSnapshot({ buildings: [makeBuilding(1)] }));
+    await wrapper.get('[data-test="move-col-1"]').setValue('9');
+    await wrapper.get('[data-test="move-row-1"]').setValue('4');
+    await wrapper.get('[data-test="move-1"]').trigger('click');
+    // The queue holds the object it was given; editing after the click must not
+    // reach back into an already-enqueued command.
+    await wrapper.get('[data-test="move-col-1"]').setValue('1');
+    expect(engine.dispatch).toHaveBeenCalledWith({ type: 'moveBuilding', buildingId: 1, to: { col: 9, row: 4 } });
+  });
 ```
 
 - [ ] **Step 2: Run to verify they fail**
@@ -2087,7 +2139,22 @@ export function createGameRouter(): Router {
 
 `LedgerView.vue` composes `DashboardView`, `BuildingsView`, `PopulationView` and `EconomyView` in sequence and owns no figures of its own.
 
-`BuildingsView.vue` gains two number inputs and a Move button per row:
+`BuildingsView.vue` gains two number inputs and a Move button per row.
+
+The handler **copies** the coordinates rather than handing over the reactive
+object, because `GameEngine.dispatch` passes straight to `CommandQueue.push`,
+which stores the reference (`resources.ts`) — nothing in the chain clones. Hand
+over `moveTargets[b.id]` itself and a player can click Move for (9, 4), edit
+either input before the next tick drains the queue, and watch the building go
+somewhere they did not ask for. While paused, that window is unbounded:
+
+```ts
+function moveTo(buildingId: number) {
+  const { col, row } = moveTargets[buildingId];
+  engine.dispatch({ type: 'moveBuilding', buildingId, to: { col, row } });
+}
+```
+
 
 ```vue
           <td>
@@ -2098,7 +2165,7 @@ export function createGameRouter(): Router {
                  nice. Disabled for a site, matching the Inspector and the
                  engine's own refusal. -->
             <button :data-test="`move-${b.id}`" :disabled="b.constructionTicks > 0"
-              @click="engine.dispatch({ type: 'moveBuilding', buildingId: b.id, to: moveTargets[b.id] })">Move</button>
+              @click="moveTo(b.id)">Move</button>
           </td>
 ```
 

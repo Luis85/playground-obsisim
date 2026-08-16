@@ -84,7 +84,7 @@ Everything else consumes this. It lives in `src/app/stores/`, which already carr
   - `type DockPanel = 'inspector' | 'colony' | 'population' | 'economy' | 'attention'`
   - `type Mode = { kind: 'idle' } | { kind: 'place'; defId: BuildingDefId } | { kind: 'move'; buildingId: number }`
   - `useUiStore()` with state `selection`, `panel: DockPanel | null`, `mode`, `highlight: Selection[]`, `narrow: boolean`
-  - actions `select(next: Selection)`, `selectBuilding(id)`, `selectColonist(id)`, `clearSelection()`, `openPanel(p)`, `closeDock()`, `armPlace(defId)`, `armMove(buildingId)`, `cancelMode()`, `setHighlight(subjects)`, `setNarrow(flag)`, `escape(): boolean`
+  - actions `select(next: Selection)`, `selectBuilding(id)`, `selectColonist(id)`, `clearSelection()`, `openPanel(p)`, `closeDock()`, `armPlace(defId)`, `armMove(buildingId)`, `cancelMode()`, `setHighlight(subjects)`, `setNarrow(flag)`, `reportRendererFailure(message)`, `escape(): boolean`
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -186,6 +186,13 @@ describe('ui-store', () => {
     expect(ui.escape()).toBe(false); // nothing left to unwind
   });
 
+  it('records a renderer failure for the app shell to act on', () => {
+    const ui = useUiStore();
+    expect(ui.rendererFailure).toBe(null);
+    ui.reportRendererFailure('no webgl');
+    expect(ui.rendererFailure).toBe('no webgl');
+  });
+
   it('arming a place mode clears the selection', () => {
     const ui = useUiStore();
     ui.selectBuilding(7);
@@ -243,6 +250,14 @@ export const useUiStore = defineStore('ui', {
     highlight: [] as Selection[],
     /** Set by WorldScreen's ResizeObserver; drives the overlay layout (§2.1). */
     narrow: false,
+    /**
+     * A renderer failure, boot or post-boot. Store state rather than an emitted
+     * event because the component that learns about it is rendered by the
+     * ROUTER: `App.vue` has no template handle on a `<router-view>` child, so an
+     * `emit('fatal')` from WorldScreen would reach nobody, and §2.5's "the app
+     * switches to the Ledger and says why" would never fire.
+     */
+    rendererFailure: null as string | null,
   }),
   actions: {
     /**
@@ -289,6 +304,7 @@ export const useUiStore = defineStore('ui', {
 
     setHighlight(subjects: Selection[]) { this.highlight = subjects; },
     setNarrow(flag: boolean) { this.narrow = flag; },
+    reportRendererFailure(message: string) { this.rendererFailure = message; },
 
     /**
      * One rung of the Escape ladder, most transient first. Returns whether
@@ -307,7 +323,7 @@ export const useUiStore = defineStore('ui', {
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run --project unit tests/app/ui-store.test.ts`
-Expected: PASS, 11 tests.
+Expected: PASS, 12 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -1161,6 +1177,21 @@ describe('WorldScreen', () => {
     wrapper.unmount();
   });
 
+  it('overlays the dock rather than shrinking the canvas in a narrow pane', async () => {
+    const wrapper = mountScreen();
+    const ui = useUiStore();
+    ui.openPanel('attention');
+    await nextTick();
+    expect(wrapper.get('[data-test="dock"]').classes()).not.toContain('is-overlay');
+    ui.setNarrow(true);
+    await nextTick();
+    // The other half of criterion 7. Without this, an implementation that
+    // leaves the dock in a grid column and crushes the canvas passes every
+    // other check, because Task 13's CSS is where that decision lives.
+    expect(wrapper.get('[data-test="dock"]').classes()).toContain('is-overlay');
+    wrapper.unmount();
+  });
+
   it('stops listening for Escape while deactivated, and resumes on activate', async () => {
     const active = ref(true);
     const Harness = defineComponent({
@@ -1241,6 +1272,17 @@ const ui = useUiStore();
 const failure = ref<string | null>(null);
 const root = ref<HTMLElement | null>(null);
 
+/*
+ * Two consumers, deliberately. The local ref renders the inline fallback for
+ * the frame before navigation lands (and for a WorldScreen mounted outside the
+ * router, which the tests do). The store write is what `App.vue` watches to
+ * reach the Ledger at all — see ui-store's comment on `rendererFailure`.
+ */
+function onFatal(message: string) {
+  failure.value = message;
+  ui.reportRendererFailure(message);
+}
+
 /** Below this the dock overlays the canvas instead of shrinking it, and the
  * rail collapses. Measured on the PANE, not the window: this view can be
  * dragged into an Obsidian sidebar beside a full-width note (spec §2.1). */
@@ -1306,8 +1348,12 @@ onBeforeUnmount(() => {
     <BuildPalette v-if="paletteVisible" class="obsisim-rail"
       :armed-def-id="ui.mode.kind === 'place' ? ui.mode.defId : null"
       @arm="(id: BuildingDefId) => { ui.armPlace(id); railOpen = false; }" @disarm="ui.cancelMode" />
-    <WorldStage class="obsisim-stage" @fatal="(m: string) => (failure = m)" />
-    <aside v-if="ui.panel" class="obsisim-dock" data-test="dock">
+    <WorldStage class="obsisim-stage" @fatal="onFatal" />
+    <!-- `is-overlay` is state, not a media query, so criterion 7's other half
+         is assertable in jsdom: the CSS keys off this class rather than off a
+         container query alone, and a test can prove the dock stops taking a
+         grid column instead of only proving the rail collapsed. -->
+    <aside v-if="ui.panel" class="obsisim-dock" :class="{ 'is-overlay': ui.narrow }" data-test="dock">
       <!-- Tasks 7-11 replace this with the five panels. -->
     </aside>
     <ResourceStrip class="obsisim-strip" />
@@ -1578,9 +1624,12 @@ describe('ResourceStrip', () => {
     expect(engine.dispatch).toHaveBeenCalledWith({ type: 'unassignHauler' });
   });
 
-  it('disables assign with no idle adults', () => {
+  it('disables assign with no idle adults AND says why', () => {
     const { wrapper } = mountStrip(makeSnapshot({ idleAdults: 0 }));
     expect(wrapper.get('[data-test="assign-hauler"]').attributes('disabled')).toBeDefined();
+    // §2.2: visible, not hidden in a title. A disabled control with no stated
+    // reason is the exact thing that rule exists to stop.
+    expect(wrapper.get('[data-test="hauler-reason"]').text()).toContain('No idle adults');
   });
 
   it('marks a short runway', () => {
@@ -1619,7 +1668,26 @@ Expected: FAIL on the two new files.
 
 - [ ] **Step 3: Write both components**
 
-`ResourceStrip.vue` renders one chip per `RESOURCE_IDS` entry — glyph, stock, and `~Nt` when `store.runways[id]` is defined — with class `obsisim-negative` at or under 30 ticks, and the hauler `−`/`+` pair lifted verbatim from `DashboardView.vue`'s `obsisim-haulers` block.
+`ResourceStrip.vue` renders one chip per `RESOURCE_IDS` entry — glyph, stock, and `~Nt` when `store.runways[id]` is defined — with class `obsisim-negative` at or under 30 ticks, plus the hauler `−`/`+` pair.
+
+The hauler pair is **not** lifted verbatim: the Dashboard's version explains a
+disabled `+` with a `title` alone, and §2.2 requires a refused control to state
+its reason where the player is looking. Same rule the Inspector's staffing and
+Move controls follow, and the engine's own refusal is *"No idle workers
+available"*:
+
+```vue
+    <span class="obsisim-haulers">
+      Haulers: <strong data-test="hauler-count">{{ store.haulerCount }}</strong>
+      <button data-test="unassign-hauler" :disabled="store.haulerCount === 0"
+        @click="engine.dispatch({ type: 'unassignHauler' })">−</button>
+      <button data-test="assign-hauler" :disabled="store.snapshot!.idleAdults === 0"
+        @click="engine.dispatch({ type: 'assignHauler' })">+</button>
+      <small v-if="store.snapshot!.idleAdults === 0" class="obsisim-reason" data-test="hauler-reason">
+        No idle adults — unassign someone first.
+      </small>
+    </span>
+```
 
 `ColonyPanel.vue` is `DashboardView.vue`'s existing `<table>` moved into a panel. Its rows carry `data-test="colony-row-<id>"` and **no click handler at all** — inertness is the absence of a handler, and the test above is what stops a later change adding one silently.
 
@@ -2041,7 +2109,16 @@ Expected: PASS.
 
 - [ ] **Step 5: Route to the Ledger on renderer failure**
 
-In `App.vue`, watch the fatal reported by `WorldScreen` and `router.push('/ledger')`, keeping a persistent banner. Add to `tests/app/world-screen.test.ts`:
+In `App.vue`, watch **`useUiStore().rendererFailure`** — not an event from
+`WorldScreen`, which is rendered by the router and has no template handle in
+`App.vue` — and on a non-null value `router.push('/ledger')` while rendering a
+persistent banner naming the failure:
+
+```ts
+watch(() => ui.rendererFailure, (failure) => {
+  if (failure !== null) void router.push('/ledger');
+});
+``` Add to `tests/app/world-screen.test.ts`:
 
 ```ts
   it('routes to the ledger on a post-boot fatal, not only on a boot failure', async () => {
@@ -2050,7 +2127,30 @@ In `App.vue`, watch the fatal reported by `WorldScreen` and `router.push('/ledge
   });
 ```
 
-Fill that test in fully against the App-level harness before implementing — spec criterion 3 requires **both** failure paths, and the throwing-factory case cannot reach `onFatal` because it is registered only after the factory succeeds.
+Both cases go through `ui.rendererFailure`, so the App-level test mounts the
+real router with a fake renderer factory and asserts the route and the banner:
+
+```ts
+  it('routes to the ledger on a boot failure and on a post-boot fatal', async () => {
+    for (const trigger of ['boot', 'post-boot'] as const) {
+      const { renderer, factory } = makeFakeFactory(trigger === 'boot');
+      const { router } = await mountApp(factory);
+      if (trigger === 'post-boot') {
+        const report = (renderer!.onFatal as ReturnType<typeof vi.fn>).mock.calls[0][0] as (m: string) => void;
+        report('context lost');
+      }
+      await flushPromises();
+      expect(router.currentRoute.value.path).toBe('/ledger');
+      expect(document.querySelector('[data-test="renderer-banner"]')).not.toBeNull();
+    }
+  });
+```
+
+`makeFakeFactory(shouldThrow)` returns a factory that either throws on call or
+returns a working fake — the two paths reach `ui.rendererFailure` differently
+and both must land on the Ledger. Criterion 3 requires both, and the
+throwing-factory case cannot reach `onFatal` at all, because that callback is
+registered only after the factory succeeds.
 
 - [ ] **Step 6: Commit**
 

@@ -34,7 +34,19 @@ const building = computed(
          stuck, minutes after the order (§2.10). -->
     <span v-if="building.constructionTicks > 0" data-test="selection-construction">Under construction: {{ building.constructionTicks }}t left</span>
     <span v-if="building.constructionTicks > 0" data-test="selection-needs">Needs: {{ needsLabel(building.constructionNeeds) }}</span>
-    <button data-test="selection-move" @click="emit('move')">Move</button>
+    <!-- Disabled for a site, because `handleMoveBuilding` always refuses one
+         (§2.6, §2.12) and the refusal is invisible until after the player has
+         armed move mode and picked a tile: `tileValid` only gates PLACE mode,
+         so every buildable destination paints green for a move that cannot
+         happen. Gating here rather than letting the notice explain it — the
+         same rule as the build surfaces, where the engine's refusal and the
+         control that offers it must agree. -->
+    <button
+      data-test="selection-move"
+      :disabled="building.constructionTicks > 0"
+      :title="building.constructionTicks > 0 ? 'A building under construction cannot be moved' : undefined"
+      @click="emit('move')"
+    >Move</button>
     <TwoStepButton label="Demolish" confirm-label="Confirm demolish?" data-test="selection-demolish" @confirm="emit('demolish')" />
     <button data-test="selection-close" title="Deselect" aria-label="Deselect" @click="emit('close')">✕</button>
   </div>

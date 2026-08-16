@@ -167,9 +167,29 @@ from its Inspector, open Attention. The Inspector is gone, the selection is
 correctly still there, and without this rule the move stays armed behind a panel
 that no longer shows it. Criterion 6 tests that route by name.
 
-**No camera work.** The map is a fixed 24×16 and `fitCamera` already fits all of
-it on screen, so "focus this building" is a highlight pulse rather than a pan.
-Pan and zoom are out of scope (§5).
+**A zoom floor, and the panels as the navigation.** The map is *not* fixed at
+24×16. That is `DEFAULT_MAP`; `placement.ts` admits `MIN_MAP` 8×6 through
+`MAX_MAP` 256×256, `save.ts` persists and validates the size, and
+`mapThatFits`/`grownMap` deliberately grow a migrated colony's map past the
+default when its buildings will not fit. `fitCamera` fits whatever it is given,
+so on a grown map in a sidebar it fits by shrinking tiles toward
+unreadability — acceptable when the canvas was one tab of five, not acceptable
+when it is the primary control surface.
+
+So `fitCamera` gains a floor: fit until a tile would fall below a minimum
+readable size, then stop zooming out and let the host element **scroll**. That
+is a CSS overflow container and one clamp, not a camera rig — no pan handles, no
+zoom controls, no new interaction mode, and on a default-map colony in a normal
+pane nothing changes at all, because the floor is never reached.
+
+What makes that sufficient rather than merely cheap is §2.3: **the panels are
+the navigation.** Once a map can exceed the viewport, "focus this building"
+stops being a highlight pulse and becomes *scroll into view, then pulse* — so a
+Buildings row, an Attention row or an Economy stage is how you reach the far
+corner of a 64×48 colony, and the dock earns its keep twice.
+
+Pan and zoom as player-driven controls stay out of scope (§5); the floor and the
+scroll are what replaces them.
 
 **The narrow pane is the layout constraint that matters.** ObsiSim is an
 Obsidian `ItemView` and can be dragged into a sidebar. Below a width threshold
@@ -476,13 +496,20 @@ assumption.
    must cancel the move while leaving the selection standing.
 7. **Below the width threshold the dock overlays and the rail collapses**,
    driven by the `ResizeObserver` flag so it is assertable in jsdom.
-8. **`npm run check:all` green**, no baseline loosened, no suppression added,
+8. **A map larger than `DEFAULT_MAP` stays usable.** Loaded at a size the
+   viewport cannot fit at the tile floor, the canvas scrolls rather than
+   shrinking below it, and selecting a building from a panel row scrolls it
+   into view. Tested at a grown size — the fixture is a save carrying its own
+   `map`, which `save.ts` already validates from `MIN_MAP` to `MAX_MAP` — and
+   at `DEFAULT_MAP`, where the floor must never engage and the canvas must
+   still fit exactly as it does today.
+9. **`npm run check:all` green**, no baseline loosened, no suppression added,
    every `src/` file at or under 500 nonblank lines.
-9. **Coverage floors for `src/app/components/**` and `src/app/views/**` are in
-   place at 80/70/80/80 and met.**
-10. **`check:css`'s `!important` baseline is still empty.**
-11. **`npm run smoke:world` passes** against the restructured DOM.
-12. **`git diff --stat <increment-10 merge base>...HEAD -- src/engine src/shared`
+10. **Coverage floors for `src/app/components/**` and `src/app/views/**` are in
+    place at 80/70/80/80 and met.**
+11. **`check:css`'s `!important` baseline is still empty.**
+12. **`npm run smoke:world` passes** against the restructured DOM.
+13. **`git diff --stat <increment-10 merge base>...HEAD -- src/engine src/shared`
     is empty.** Against the base and the branch head, not the working tree: the
     bare `git diff --stat src/engine src/shared` reports nothing once an engine
     edit has been staged or committed, which is precisely the state this
@@ -496,7 +523,7 @@ assumption.
 
 **None.** No constant is added, moved or read differently. `npm run
 test:balance` and `npm run balance:report` must produce output identical to
-increment 10's, and criterion 12 is the reason to expect that rather than hope
+increment 10's, and criterion 13 is the reason to expect that rather than hope
 for it.
 
 ---
@@ -508,7 +535,11 @@ for it.
 - **Any new mechanic**, build-queue reordering included — increment 10 named it
   a good successor, and it stays one, but a player-set priority is a persisted
   engine field and this increment touches no engine.
-- **Pan and zoom.** The map fits on screen; §2.1 says why this follows.
+- **Player-driven pan and zoom controls.** §2.1's zoom floor plus a scrolling
+  host, with the panels as the way to reach a distant building, is what this
+  increment ships instead. If a colony that has actually grown its map proves
+  that insufficient in play, a camera is a fair successor — but it is a
+  different piece of work from making the canvas primary.
 - **The open engine debt** — OBS-10-01, OBS-10-02, OBS-10-03. A pure UI branch
   neither fixes nor is blocked by any of them.
 - **Sound.**

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BALANCE } from '../../src/engine/content/balance';
+import { BUILDINGS, unitsOf } from '../../src/engine/content/buildings';
 import { CAMP_TILE } from '../../src/shared/haul';
 import type { TileRef } from '../../src/shared/placement';
 import { runScenario, type BalanceResult } from '../support/balance-harness';
@@ -641,6 +642,64 @@ describe('the two-way haul instruments', () => {
     expect(collect + supply + transfer).toBe(fetching + outbound + returning);
     expect(r.haulerIdleTicks).toBe(idle);
   }, 120000);
+
+  /**
+   * THE IN-FLIGHT half only, and deliberately not evidence of the sink on its
+   * own — see the completing scenario below for the fixture that is.
+   *
+   * This run stops well short of the site's countdown ever reaching 0:
+   * `gatherersHut` costs 10 wood, sits one tile from camp, and the crew
+   * assigned to `forester` here is 0 (a producer contributes nothing to this
+   * fixture beyond satisfying `Scenario`'s own required stage), so delivery
+   * lands within a handful of ticks and 15 ticks total is nowhere near
+   * `BALANCE.buildTicks` (30) further. `ConstructionSystem`'s
+   * `input.amounts.clear()` never fires, so `constructionInputs` stays 0 and
+   * `conservationError` is 0 whether or not the sink exists at all — a
+   * delivered-but-uncleared tray is still standing in `goodsStanding`
+   * (`opening`, `made`, everything the sentinel already covered before this
+   * increment). The assertions on `haulerTicks.supply` / `supplyReturns`
+   * confirm goods really did move into that tray rather than never being
+   * dispatched at all — `supplyReturnsLoaded` stays 0 here on purpose: a site
+   * has no output buffer to round-trip a return load from, unlike the
+   * producer `suppliedChain` measures above.
+   */
+  it('goods in a site in-tray are conserved', async () => {
+    const r = await runScenario({
+      defId: 'forester', col: 6, row: 0, crew: 0, haulers: 2, ticks: 15, resource: 'wood',
+      sites: [{ defId: 'gatherersHut', col: 3, row: 0, atTick: 0 }],
+    });
+    expect(r.completions).toEqual([]);
+    expect(r.haulerTicks.supply).toBeGreaterThan(0);
+    expect(r.supplyReturns).toBeGreaterThan(0);
+    expect(r.goods.constructionInputs).toBe(0);
+    expect(r.goods.conservationError).toBe(0);
+  });
+
+  /**
+   * THE ONE THAT CATCHES THE MISSING SINK, and the reason the comment above
+   * insists a fixture must COMPLETE a site rather than merely deliver to one.
+   * `ConstructionSystem` empties the site's in-tray the instant its countdown
+   * reaches 0 (`input.amounts.clear()`), which is bookkeeping on goods
+   * already charged to the colony ledger on delivery — but until this task,
+   * `GoodsAudit` had no term for that emptying, so those units left `final`
+   * with nothing in `predicted` accounting for the drop and every completing
+   * scenario reported `conservationError` equal to the negative of the site's
+   * own cost. Run past the countdown (80 ticks against a delivery that lands
+   * in single digits plus 30 more to finish), not merely up to delivery.
+   */
+  it('a scenario that COMPLETES a supplied site reports conservationError === 0', async () => {
+    const r = await runScenario({
+      defId: 'forester', col: 6, row: 0, crew: 0, haulers: 2, ticks: 80, resource: 'wood',
+      sites: [{ defId: 'gatherersHut', col: 3, row: 0, atTick: 0 }],
+    });
+    expect(r.completions).toHaveLength(1);
+    expect(r.completions[0].defId).toBe('gatherersHut');
+    // Non-vacuous: the sink actually fired, for exactly the site's own cost —
+    // not some other figure that happened to zero the equation out.
+    expect(r.goods.constructionInputs).toBe(unitsOf(BUILDINGS.gatherersHut.cost));
+    expect(r.goods.constructionInputs).toBeGreaterThan(0);
+    expect(r.goods.conservationError).toBe(0);
+  });
 
   it('the transfer counter counts transfers and not supply fetches', async () => {
     // DISCRIMINATING, and it is increment 7's lesson exactly: an instrument

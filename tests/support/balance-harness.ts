@@ -79,6 +79,22 @@ export interface Scenario extends ScenarioStage {
    * costs. */
   moveTo?: { col: number; row: number; atTick: number };
   /**
+   * Construction sites this scenario orders mid-run: one `constructBuilding`
+   * command per entry, issued the tick named — the only way a balance
+   * scenario can put a site on the map at all, since every OTHER building
+   * this harness places (`placeBuilding`) is spawned finished, straight into
+   * the prep world, and never passes through `ConstructionSystem`'s
+   * countdown.
+   *
+   * Each site's tile is reserved in `occupied` before any house is placed
+   * (same treatment as `moveTo` and `storehouses`), so a crew or hauler house
+   * can never be planted on a tile a later tick is about to order a site
+   * onto. Cost is charged on DELIVERY, not on this order — `handleConstructBuilding`
+   * moves no goods — so a house is the only thing this field must keep
+   * clear of.
+   */
+  sites?: { defId: BuildingDefId; col: number; row: number; atTick: number }[];
+  /**
    * House the crew beside their building and the haulers beside the camp, so
    * commute is held at its neutral value (1.0, inside BALANCE.commute
    * .freeTiles) and this instrument keeps measuring logistics rather than
@@ -357,6 +373,22 @@ export interface BalanceResult extends StageResult {
   retirements: number;
   /** The conservation sentinel. `conservationError` must be 0. */
   goods: GoodsAuditResult;
+  /**
+   * Every site `Scenario.sites` ordered that finished inside the run,
+   * IN THE ORDER THEY COMPLETED — a LOG, not a count. §4.1's convergence
+   * question is about ORDER (which site's countdown finishes first when two
+   * are contending for the same haulers), and a count cannot express that: a
+   * scenario where site B finishes before site A and one where A finishes
+   * before B would report the same length-2 array under a count, and only
+   * the sequence published here tells them apart.
+   *
+   * `[]` for a scenario with no `sites` — the zero side, and the one that
+   * catches an instrument that over-counts: a completion log that fires on
+   * something other than a genuine `ticksLeft: 30 -> 0` transition (a
+   * building spawned already finished, say) would report a false entry here
+   * with nothing in `sites` to have produced it.
+   */
+  completions: { buildingId: number; defId: BuildingDefId; tick: number }[];
 }
 
 /**
@@ -769,6 +801,67 @@ function tallyTurnover(snapshot: Snapshot, turnover: { deaths: number; retiremen
   }
 }
 
+/** One construction site `Scenario.sites` ordered: its own descriptor, plus
+ * the two things the tick loop learns about it as the run plays out —
+ * `buildingId` (null until the ordering command has actually landed) and
+ * `completed` (so a finished site is logged exactly once, however many more
+ * ticks the run has left with its countdown sitting at 0). */
+interface SiteState {
+  defId: BuildingDefId;
+  col: number;
+  row: number;
+  atTick: number;
+  buildingId: number | null;
+  completed: boolean;
+}
+
+/**
+ * Issues the `constructBuilding` command for every site whose `atTick` is
+ * THIS tick — split out of the loop for the same reason `tallySites` below
+ * is, and for the same reason `issuingMove` stays a single inline check
+ * while THIS is a function: one command per site, an unbounded number of
+ * sites, so the loop it takes cannot be written as one line the way a single
+ * `moveTo` check can.
+ */
+function issueSiteOrders(world: IRuntimeWorld, t: number, sites: readonly SiteState[]): void {
+  for (const site of sites) {
+    if (t === site.atTick) {
+      enqueue(world, { type: 'constructBuilding', buildingDefId: site.defId, at: { col: site.col, row: site.row } });
+    }
+  }
+}
+
+/**
+ * One tick of construction bookkeeping, split out of the tick loop for the
+ * same reason `tallyHaulers` and `tallyTransfers` are: one concern per
+ * function, and the loop stays a list of one-line readings.
+ *
+ * Resolves a just-ordered site's `buildingId` from the snapshot it first
+ * appears in (there is no other way to learn it — `constructBuilding`'s
+ * command carries no reply channel), then logs a completion the tick a
+ * RESOLVED site's `constructionTicks` reads 0. `t` here is the same loop
+ * counter `moveTo.atTick` is compared against, so a completion's `tick` and a
+ * site's own `atTick` share one clock.
+ */
+function tallySites(
+  snapshot: Snapshot, sites: readonly SiteState[], t: number,
+  completions: { buildingId: number; defId: BuildingDefId; tick: number }[],
+): void {
+  for (const site of sites) {
+    if (site.buildingId === null) {
+      const building = snapshot.buildings.find((b) => b.col === site.col && b.row === site.row);
+      if (building !== undefined) site.buildingId = building.id;
+      else continue;
+    }
+    if (site.completed) continue;
+    const building = snapshot.buildings.find((b) => b.id === site.buildingId);
+    if (building !== undefined && building.constructionTicks === 0) {
+      site.completed = true;
+      completions.push({ buildingId: site.buildingId, defId: site.defId, tick: t });
+    }
+  }
+}
+
 /** Everything measured about one stage, once the run is over. */
 function stageResultOf(
   stage: ScenarioStage, buildingId: number, tally: StageTally, snapshot: Snapshot, audit: GoodsAudit, ticks: number,
@@ -821,6 +914,7 @@ export async function runScenario(scenario: Scenario): Promise<BalanceResult> {
   const occupied: TileRef[] = stages.map((stage) => ({ col: stage.col, row: stage.row }));
   if (moveTo) occupied.push({ col: moveTo.col, row: moveTo.row });
   for (const at of scenario.storehouses ?? []) occupied.push(at);
+  occupied.push(...(scenario.sites ?? []).map((site): TileRef => ({ col: site.col, row: site.row })));
   const buildingIds = stages.map((stage) => placeBuilding(prep, ids, stage.defId, stage));
   for (const at of scenario.storehouses ?? []) placeBuilding(prep, ids, 'storehouse', at);
   populateColony(prep, ids, save.map, scenario, stages, buildingIds, occupied);
@@ -840,6 +934,8 @@ export async function runScenario(scenario: Scenario): Promise<BalanceResult> {
   const storedSeries: number[] = [];
   const turnover = { deaths: 0, retirements: 0 };
   const returns = { total: 0, loaded: 0 };
+  const siteStates: SiteState[] = (scenario.sites ?? []).map((site) => ({ ...site, buildingId: null, completed: false }));
+  const completions: { buildingId: number; defId: BuildingDefId; tick: number }[] = [];
   let relocatingTicks = 0;
   // Whether the PREVIOUS tick ended with the countdown still running — see the
   // downtime comment below for why this, not the snapshot's `relocating`
@@ -862,6 +958,7 @@ export async function runScenario(scenario: Scenario): Promise<BalanceResult> {
     if (issuingMove) {
       enqueue(world, { type: 'moveBuilding', buildingId: buildingIds[0], to: { col: moveTo!.col, row: moveTo!.row } });
     }
+    issueSiteOrders(world, t, siteStates);
     await world.step();
     // Deaths and demolitions go onto RemovalLedger and come off it here and
     // nowhere else (OBS-6-02). No scenario this harness runs today queues one —
@@ -899,6 +996,7 @@ export async function runScenario(scenario: Scenario): Promise<BalanceResult> {
     tallyTransfers(world, transfers, tripPhases);
     storedSeries.push(storedUnits(snapshot));
     tallyTurnover(snapshot, turnover);
+    tallySites(snapshot, siteStates, t, completions);
   }
 
   const snapshot = world.getResource(SnapshotStore).latest!;
@@ -925,5 +1023,6 @@ export async function runScenario(scenario: Scenario): Promise<BalanceResult> {
     deaths: turnover.deaths,
     retirements: turnover.retirements,
     goods: audit.close(snapshot, stockpile),
+    completions,
   };
 }

@@ -186,6 +186,21 @@ describe('ui-store', () => {
     expect(ui.escape()).toBe(false); // nothing left to unwind
   });
 
+  it('drops a standing highlight when a subject is selected', () => {
+    const ui = useUiStore();
+    ui.setHighlight([{ kind: 'building', id: 2 }, { kind: 'building', id: 3 }]);
+    ui.selectColonist(9);
+    expect(ui.highlight).toEqual([]);
+  });
+
+  it('keeps the highlight when the selection is cleared, so a plural row can set one', () => {
+    const ui = useUiStore();
+    ui.selectBuilding(1);
+    ui.clearSelection();
+    ui.setHighlight([{ kind: 'colonist', id: 4 }]);
+    expect(ui.highlight).toEqual([{ kind: 'colonist', id: 4 }]);
+  });
+
   it('records a renderer failure for the app shell to act on', () => {
     const ui = useUiStore();
     expect(ui.rendererFailure).toBe(null);
@@ -274,7 +289,17 @@ export const useUiStore = defineStore('ui', {
       const stillArmed = armed !== null && next.kind === 'building' && next.id === armed;
       if (armed !== null && !stillArmed) this.mode = { kind: 'idle' };
       this.selection = next;
-      if (next.kind !== 'none') this.panel = 'inspector';
+      // A selection and a highlight are alternatives, never both (§2.3's
+      // table gives every row one result). Enforced HERE rather than in each
+      // caller: AttentionPanel's single-subject path already cleared the pulse
+      // by hand, and Population rows, Inspector occupant rows and the canvas
+      // did not — so a stage highlight survived alongside a new selection.
+      // Only the non-none branch clears, which is what lets the plural flow
+      // (clearSelection, then setHighlight) still work.
+      if (next.kind !== 'none') {
+        this.panel = 'inspector';
+        this.highlight = [];
+      }
     },
     selectBuilding(id: number) { this.select({ kind: 'building', id }); },
     selectColonist(id: number) { this.select({ kind: 'colonist', id }); },
@@ -560,7 +585,7 @@ Widen the existing content import at the top of the file to include `BuildingDef
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run --project unit tests/app/attention.test.ts`
-Expected: PASS, 12 tests.
+Expected: PASS, 14 tests.
 
 - [ ] **Step 5: Check the line count**
 
@@ -834,6 +859,21 @@ describe('useWorldInteraction', () => {
     expect(ui.selection).toEqual({ kind: 'building', id: 1 }); // selection survives
   });
 
+  it('forgets the hovered tile when the mode returns to idle, however it got there', () => {
+    const { ui, interaction } = setup();
+    ui.armPlace('farm');
+    interaction.setHoverTile({ col: 2, row: 2 });
+    expect(interaction.ghost.value).not.toBe(null);
+
+    ui.escape(); // cancels the mode without touching this composable
+    expect(interaction.hoverTile.value).toBe(null);
+
+    // Re-arming from a focused palette button moves no pointer, so a stale
+    // tile here would draw a ghost where the pointer no longer is.
+    ui.armPlace('farm');
+    expect(interaction.ghost.value).toBe(null);
+  });
+
   it('selects a building from an idle canvas click and clears on empty ground', () => {
     const { ui, interaction } = setup();
     interaction.clickPick({ kind: 'building', id: 1 });
@@ -860,7 +900,7 @@ Expected: FAIL — cannot resolve `interaction`.
 Create `src/app/world/interaction.ts`:
 
 ```ts
-import { computed, ref, type ComputedRef, type Ref } from 'vue';
+import { computed, ref, watch, type ComputedRef, type Ref } from 'vue';
 import { isTileBuildable } from '../../shared/placement';
 import type { Command } from '../../shared/commands';
 import { useGameStore } from '../stores/game-store';
@@ -917,6 +957,24 @@ export function useWorldInteraction(): {
   });
 
   function setHoverTile(tile: Tile | null) { hoverTile.value = tile; }
+
+  /*
+   * A remembered tile must not outlive the mode that used it.
+   * `WorldView.cancelMode()` cleared `lastTile` alongside the mode, in one
+   * function, because the two were owned by the same component. This split
+   * separates them — the mode lives in the store now — so EVERY store path
+   * that returns to idle (Escape, a panel switch, a selection change, a
+   * completed move) would otherwise leave the tile behind. Arm from a focused
+   * palette button by keyboard, with no pointer event to refresh it, and the
+   * ghost reappears at a position the pointer left long ago.
+   *
+   * Watched rather than fixed at each cancel site, for the same reason the
+   * cancel invariant lives in the selection setter: there are five ways in and
+   * only one of them is this composable's own.
+   */
+  watch(() => ui.mode.kind, (kind) => {
+    if (kind === 'idle') hoverTile.value = null;
+  });
 
   function clickTile(tile: Tile | null): Command | null {
     const mode = ui.mode;
@@ -2260,8 +2318,9 @@ const ui = useUiStore();
  * player is looking at.
  */
 function activate(row: AttentionRow) {
+  // No setHighlight([]) here: `select` drops a standing highlight itself, for
+  // every caller rather than for this one.
   if (row.subject !== null) {
-    ui.setHighlight([]);
     ui.select(row.subject);
     return;
   }

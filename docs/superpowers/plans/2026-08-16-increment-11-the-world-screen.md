@@ -560,7 +560,7 @@ Widen the existing content import at the top of the file to include `BuildingDef
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run --project unit tests/app/attention.test.ts`
-Expected: PASS, 11 tests.
+Expected: PASS, 12 tests.
 
 - [ ] **Step 5: Check the line count**
 
@@ -881,7 +881,7 @@ export function useWorldInteraction(): {
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run --project unit tests/app/interaction.test.ts`
-Expected: PASS, 10 tests.
+Expected: PASS, 11 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -1055,6 +1055,19 @@ describe('WorldStage', () => {
     await nextTick();
     expect(renderer.start).toHaveBeenCalled();
     expect(factory).toHaveBeenCalledOnce(); // never rebuilt
+  });
+
+  // Deactivation stops the clock; only a real unmount releases the WebGL
+  // context. Nothing else asserts this — Task 12's router test deliberately
+  // asserts dispose was NOT called — so without this case an implementation
+  // that omits onBeforeUnmount cleanup passes every prescribed test and leaks
+  // an Excalibur engine on every close and reopen of the Obsidian view.
+  it('disposes the renderer on final unmount, not on deactivate', async () => {
+    const { renderer, factory } = makeFake();
+    const { wrapper } = mountStage(factory);
+    expect(renderer.dispose).not.toHaveBeenCalled();
+    wrapper.unmount();
+    expect(renderer.dispose).toHaveBeenCalledOnce();
   });
 
   it('selects the picked building on an idle canvas click', async () => {
@@ -1700,6 +1713,20 @@ describe('InspectorPanel', () => {
     expect(wrapper.get('[data-test="inspector-colonist"]').text()).toContain('#9');
   });
 
+  // The POSITIVE case, carried over from the deleted selection-panel.test.ts.
+  // Without it, an Inspector that renders TwoStepButton and never wires its
+  // confirm to a dispatch passes the cross-building test below — which only
+  // proves the FIRST tap does nothing — while failing criterion 1 outright.
+  it('demolishes the selected building after the two-step confirm', async () => {
+    const { wrapper, engine, ui } = mountPanel(InspectorPanel, staffable);
+    ui.selectBuilding(1);
+    await wrapper.vm.$nextTick();
+    await wrapper.get('[data-test="selection-demolish"]').trigger('click'); // arms
+    expect(engine.dispatch).not.toHaveBeenCalled();
+    await wrapper.get('[data-test="selection-demolish"]').trigger('click'); // confirms
+    expect(engine.dispatch).toHaveBeenCalledWith({ type: 'demolishBuilding', buildingId: 1 });
+  });
+
   // Carried over from tests/app/world-view.test.ts, which Task 6 deletes. The
   // behaviour it guards is a real one and predates this increment: arm
   // Demolish on A, select B, and B must get a disarmed button. Without the
@@ -2241,6 +2268,18 @@ Add to `tests/app/buildings-view.test.ts`:
     expect(engine.dispatch).toHaveBeenCalledWith({ type: 'moveBuilding', buildingId: 1, to: { col: 9, row: 4 } });
   });
 
+  it('refuses a move to an occupied tile, and says why', async () => {
+    const { wrapper, engine } = mountView(makeSnapshot({
+      buildings: [makeBuilding(1, { col: 4, row: 1 }), makeBuilding(2, { col: 6, row: 1 })],
+    }));
+    await wrapper.get('[data-test="move-col-1"]').setValue('6');
+    await wrapper.get('[data-test="move-row-1"]').setValue('1'); // building 2's tile
+    expect(wrapper.get('[data-test="move-1"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('[data-test="move-reason-1"]').text()).toContain('already taken');
+    await wrapper.get('[data-test="move-1"]').trigger('click');
+    expect(engine.dispatch).not.toHaveBeenCalled();
+  });
+
   it('shows the construction countdown the Inspector shows', async () => {
     const { wrapper } = mountView(makeSnapshot({
       buildings: [makeBuilding(1, { state: 'underConstruction', constructionTicks: 20, constructionNeeds: { wood: 5 } })],
@@ -2316,6 +2355,30 @@ function moveTo(buildingId: number) {
   engine.dispatch({ type: 'moveBuilding', buildingId, to: { col, row } });
 }
 ```
+
+**And it gates on the same rule the canvas does.** `handleMoveBuilding` refuses
+an occupied tile, the camp band, a fractional value and anything outside
+`snapshot.map`, all through `isTileBuildable` — the identical predicate the
+world screen's ghost already uses to paint a tile red. `min="0"` on an input
+constrains the spinner, not the click handler, so without this the Ledger offers
+a Move that is certain to be rejected, which is exactly what §2.2 forbids:
+
+```ts
+// The shared predicate, not a second derivation of it — the same reason
+// WorldView's tileValid calls it rather than re-checking bounds by hand.
+function moveRefusal(b: BuildingSnapshot): string | null {
+  if (b.constructionTicks > 0) return 'A building under construction cannot be moved.';
+  const { col, row } = moveTargets[b.id];
+  if (!Number.isInteger(col) || !Number.isInteger(row)) return 'Whole tiles only.';
+  if (!isTileBuildable(store.snapshot!.map, store.snapshot!.buildings, col, row)) {
+    return 'That tile is off the map, in the camp band, or already taken.';
+  }
+  return null;
+}
+```
+
+`:disabled="moveRefusal(b) !== null"`, with the reason rendered beside it as
+`data-test="move-reason-<id>"` — stated in the row, not in a `title`.
 
 
 ```vue

@@ -274,8 +274,10 @@ inside this increment's scope:
 - `setSelection(buildingId)` becomes `setSelection(Selection)`. Colonists are
   hover-only today and gain a selection ring; they are already pickable, so the
   hit-testing exists and only the drawing is new.
-- A new `setHighlight(ids)` carries the plural case — a transient pulse over a
-  set, with no selection and no Inspector.
+- A new `setHighlight(subjects)` carries the plural case — a transient pulse
+  over a set, with no selection and no Inspector. It takes `Selection[]` rather
+  than building ids, because the plural Attention rows name **colonists**
+  ("3 colonists have no bed"), which a building-id array cannot express.
 
 **An Economy stage row is a def, not a building**, which is why it highlights
 rather than selects. `EconomyView` emits one row per step in `CHAINS` and

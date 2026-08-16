@@ -83,8 +83,8 @@ Everything else consumes this. It lives in `src/app/stores/`, which already carr
   - `type Selection = { kind: 'building'; id: number } | { kind: 'colonist'; id: number } | { kind: 'none' }`
   - `type DockPanel = 'inspector' | 'colony' | 'population' | 'economy' | 'attention'`
   - `type Mode = { kind: 'idle' } | { kind: 'place'; defId: BuildingDefId } | { kind: 'move'; buildingId: number }`
-  - `useUiStore()` with state `selection`, `panel: DockPanel | null`, `mode`, `highlight: number[]`, `narrow: boolean`
-  - actions `select(next: Selection)`, `selectBuilding(id)`, `selectColonist(id)`, `clearSelection()`, `openPanel(p)`, `closeDock()`, `armPlace(defId)`, `armMove(buildingId)`, `cancelMode()`, `setHighlight(ids)`, `setNarrow(flag)`, `escape(): boolean`
+  - `useUiStore()` with state `selection`, `panel: DockPanel | null`, `mode`, `highlight: Selection[]`, `narrow: boolean`
+  - actions `select(next: Selection)`, `selectBuilding(id)`, `selectColonist(id)`, `clearSelection()`, `openPanel(p)`, `closeDock()`, `armPlace(defId)`, `armMove(buildingId)`, `cancelMode()`, `setHighlight(subjects)`, `setNarrow(flag)`, `escape(): boolean`
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -236,8 +236,11 @@ export const useUiStore = defineStore('ui', {
     selection: { kind: 'none' } as Selection,
     panel: null as DockPanel | null,
     mode: { kind: 'idle' } as Mode,
-    /** Building ids pulsing from a plural row click (§2.3). Not a selection. */
-    highlight: [] as number[],
+    /** Subjects pulsing from a plural row click (§2.3). Not a selection — and
+     * `Selection[]` rather than building ids, because the plural Attention rows
+     * name COLONISTS ("3 colonists have no bed"), which a building-id array
+     * cannot express. */
+    highlight: [] as Selection[],
     /** Set by WorldScreen's ResizeObserver; drives the overlay layout (§2.1). */
     narrow: false,
   }),
@@ -284,7 +287,7 @@ export const useUiStore = defineStore('ui', {
     armMove(buildingId: number) { this.mode = { kind: 'move', buildingId }; },
     cancelMode() { this.mode = { kind: 'idle' }; },
 
-    setHighlight(ids: number[]) { this.highlight = ids; },
+    setHighlight(subjects: Selection[]) { this.highlight = subjects; },
     setNarrow(flag: boolean) { this.narrow = flag; },
 
     /**
@@ -326,7 +329,7 @@ Spec §2.4: these live in the store, not in the panel, because `src/app/stores/*
 **Interfaces:**
 - Consumes: `Selection` from Task 1 (for `subject`).
 - Produces: getter `attention: AttentionRow[]` where
-  `interface AttentionRow { id: string; severity: 'warn' | 'danger'; message: string; subject: Selection | null; highlight: number[] }`
+  `interface AttentionRow { id: string; severity: 'warn' | 'danger'; message: string; subject: Selection | null; highlight: Selection[] }`
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -392,14 +395,15 @@ describe('game-store attention', () => {
     expect(row!.highlight).toEqual([]);
   });
 
-  it('groups homeless colonists into one row that highlights nobody and selects nothing', () => {
+  it('groups homeless colonists into one row that pulses them and selects nothing', () => {
     const store = ingest({
-      homeless: 3,
-      colonists: [makeWorker(1), makeWorker(2), makeWorker(3)],
+      homeless: 2,
+      colonists: [makeWorker(1, { homeId: 4 }), makeWorker(2), makeWorker(3)],
     });
     const row = store.attention.find((r) => r.message.includes('no bed'));
     expect(row).toBeDefined();
     expect(row!.subject).toBe(null);
+    expect(row!.highlight).toEqual([{ kind: 'colonist', id: 2 }, { kind: 'colonist', id: 3 }]);
   });
 
   it('is empty for a colony with nothing wrong', () => {
@@ -446,7 +450,7 @@ export interface AttentionRow {
   severity: 'warn' | 'danger';
   message: string;
   subject: Selection | null;
-  highlight: number[];
+  highlight: Selection[];
 }
 
 /** Ticks of runway at or below which a resource is worth naming. The same 30
@@ -471,11 +475,11 @@ Add to `getters`:
       for (const b of snapshot.buildings) {
         const subject: Selection = { kind: 'building', id: b.id };
         if (b.state === 'outputFull') {
-          rows.push({ id: `full-${b.id}`, severity: 'warn', subject, highlight: [b.id],
+          rows.push({ id: `full-${b.id}`, severity: 'warn', subject, highlight: [subject],
             message: `${name(b.defId)} is full — nothing is collecting from it` });
         }
         if (b.state === 'waitingForInput') {
-          rows.push({ id: `starved-${b.id}`, severity: 'warn', subject, highlight: [b.id],
+          rows.push({ id: `starved-${b.id}`, severity: 'warn', subject, highlight: [subject],
             message: `${name(b.defId)} has nothing to work with` });
         }
         // The engine's own verdict, not a re-derivation of it. `workers === 0
@@ -485,11 +489,11 @@ Add to `getters`:
         // `unstaffed` state already excludes sites, which read
         // `underConstruction`.
         if (b.state === 'unstaffed') {
-          rows.push({ id: `unstaffed-${b.id}`, severity: 'warn', subject, highlight: [b.id],
+          rows.push({ id: `unstaffed-${b.id}`, severity: 'warn', subject, highlight: [subject],
             message: `${name(b.defId)} has no one working it` });
         }
         if (Object.keys(b.constructionNeeds).length > 0) {
-          rows.push({ id: `site-${b.id}`, severity: 'warn', subject, highlight: [b.id],
+          rows.push({ id: `site-${b.id}`, severity: 'warn', subject, highlight: [subject],
             message: `${name(b.defId)} site needs ${needsLabel(b.constructionNeeds)}` });
         }
       }
@@ -504,16 +508,26 @@ Add to `getters`:
       }
 
       if (snapshot.homeless > 0) {
-        rows.push({ id: 'homeless', severity: 'warn', subject: null, highlight: [],
+        // Plural rows pulse the people they name (§2.3). `homeId === null` is
+        // the same predicate `commuteLabel` calls homeless, not a second one.
+        rows.push({ id: 'homeless', severity: 'warn', subject: null,
+          highlight: snapshot.colonists.filter((c) => c.homeId === null).map((c) => ({ kind: 'colonist' as const, id: c.id })),
           message: `${snapshot.homeless} colonist${snapshot.homeless === 1 ? ' has' : 's have'} no bed` });
       }
-      const starving = snapshot.colonists.filter((c) => c.starvingTicks > 0).length;
-      if (starving > 0) {
-        rows.push({ id: 'starving', severity: 'danger', subject: null, highlight: [],
-          message: `${starving} colonist${starving === 1 ? ' is' : 's are'} starving` });
+      const starving = snapshot.colonists.filter((c) => c.starvingTicks > 0);
+      if (starving.length > 0) {
+        rows.push({ id: 'starving', severity: 'danger', subject: null,
+          highlight: starving.map((c) => ({ kind: 'colonist' as const, id: c.id })),
+          message: `${starving.length} colonist${starving.length === 1 ? ' is' : 's are'} starving` });
       }
       if (snapshot.idleAdults > 0) {
-        rows.push({ id: 'idle', severity: 'warn', subject: null, highlight: [],
+        // The same three conditions `idleAdults` is counted from: an adult
+        // with no building and no haul duty. Derived here rather than
+        // published, because this increment adds no snapshot field.
+        rows.push({ id: 'idle', severity: 'warn', subject: null,
+          highlight: snapshot.colonists
+            .filter((c) => c.stage === 'adult' && c.buildingId === null && !c.hauling)
+            .map((c) => ({ kind: 'colonist' as const, id: c.id })),
           message: `${snapshot.idleAdults} adult${snapshot.idleAdults === 1 ? ' is' : 's are'} idle` });
       }
 
@@ -526,7 +540,7 @@ Widen the existing content import at the top of the file to include `BuildingDef
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run --project unit tests/app/attention.test.ts`
-Expected: PASS, 8 tests.
+Expected: PASS, 9 tests.
 
 - [ ] **Step 5: Check the line count**
 
@@ -555,7 +569,7 @@ git commit -m "The problem list, derived from what the snapshot already says"
 - Consumes: `Selection` from Task 1.
 - Produces the widened `WorldRenderer`:
   - `setSelection(selection: Selection): void`
-  - `setHighlight(buildingIds: readonly number[]): void`
+  - `setHighlight(subjects: readonly Selection[]): void`
 
 - [ ] **Step 1: Widen the seam**
 
@@ -571,7 +585,7 @@ import type { Selection } from '../stores/ui-store';
   setSelection(selection: Selection): void;
   /** Pulse a set of buildings without selecting any of them — what a plural
    * panel row does (spec §2.3). Passing an empty array clears the pulse. */
-  setHighlight(buildingIds: readonly number[]): void;
+  setHighlight(subjects: readonly Selection[]): void;
 ```
 
 - [ ] **Step 2: Run the typecheck to see every call site break**
@@ -595,8 +609,8 @@ discriminated `Selection` and add `setHighlight`:
     setSelection(selection) {
       if (!disposed) scene.setSelection(selection);
     },
-    setHighlight(buildingIds) {
-      if (!disposed) scene.setHighlight(buildingIds);
+    setHighlight(subjects) {
+      if (!disposed) scene.setHighlight(subjects);
     },
 ```
 
@@ -604,7 +618,8 @@ In the scene, `setSelection` branches on `selection.kind`: a `building` draws
 today's ring on the building actor, a `colonist` draws the same ring on the
 colonist actor (they are already picked by `colonistAt`, so only the drawing is
 new), and `none` clears it. `setHighlight` keeps one short-lived pulse actor per
-id and replaces the whole set on each call, so an empty array clears it.
+subject — building or colonist, branching the same way `setSelection` does —
+and replaces the whole set on each call, so an empty array clears it.
 
 - [ ] **Step 4: Typecheck the renderer in isolation**
 
@@ -840,7 +855,7 @@ Create `tests/app/world-stage.test.ts`. Reuse `makeFake` and the injection patte
 ```ts
 // @vitest-environment happy-dom
 import { describe, expect, it, vi } from 'vitest';
-import { nextTick } from 'vue';
+import { defineComponent, h, KeepAlive, nextTick, ref } from 'vue';
 import { mount } from '@vue/test-utils';
 import { createTestingPinia } from '@pinia/testing';
 import WorldStage from '../../src/app/views/WorldStage.vue';
@@ -911,6 +926,27 @@ describe('WorldStage', () => {
     expect(wrapper.emitted('fatal')![0]).toEqual(['context lost']);
   });
 
+  it('stops the render clock on deactivate and restarts it on activate', async () => {
+    const { renderer, factory } = makeFake();
+    const active = ref(true);
+    const Harness = defineComponent({
+      setup: () => () => h(KeepAlive, null, [active.value ? h(WorldStage) : null]),
+    });
+    mount(Harness, {
+      global: {
+        plugins: [createTestingPinia({ createSpy: vi.fn, stubActions: false })],
+        provide: { [WORLD_RENDERER_KEY as symbol]: factory, [ENGINE_KEY as symbol]: { dispatch: vi.fn() } },
+      },
+    });
+    active.value = false;
+    await nextTick();
+    expect(renderer.stop).toHaveBeenCalled();
+    active.value = true;
+    await nextTick();
+    expect(renderer.start).toHaveBeenCalled();
+    expect(factory).toHaveBeenCalledOnce(); // never rebuilt
+  });
+
   it('selects the picked building on an idle canvas click', async () => {
     const { renderer, factory } = makeFake();
     (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'building', id: 1 });
@@ -929,14 +965,23 @@ Expected: FAIL — cannot resolve `WorldStage.vue`.
 
 - [ ] **Step 3: Write the component**
 
-Create `src/app/views/WorldStage.vue`. Carry over from `WorldView.vue` verbatim: the `onMounted` factory call and try/catch, the `watch` on `store.snapshot` with `{ immediate: true }`, the reset detection (`snapshot.tick <= previousSnapshot.tick`), the id-based selection lifecycle, `revalidateHover`, `armHoverRecheck` and the 2000ms tail, and `onBeforeUnmount` disposal. Replace its mode/selection state with `useUiStore()` and `useWorldInteraction()`.
+Create `src/app/views/WorldStage.vue`. Carry over from `WorldView.vue` verbatim: the `onMounted` factory call and try/catch, the `watch` on `store.snapshot` with `{ immediate: true }`, the reset detection (`snapshot.tick <= previousSnapshot.tick`), the id-based selection lifecycle, `revalidateHover`, `armHoverRecheck` and the 2000ms tail, `onBeforeUnmount` disposal, **and the `onActivated`/`onDeactivated` pair that starts and stops the render clock**:
+
+```ts
+// Not optional, and not obsolete after the dock: WorldScreen is still under
+// <keep-alive>, so a trip to /ledger deactivates this component without
+// unmounting it. Without these the Excalibur clock keeps running behind the
+// Ledger and only final unmount ever stops it (spec §2.1 retains the pair).
+onActivated(() => renderer?.start());
+onDeactivated(() => renderer?.stop());
+``` Replace its mode/selection state with `useUiStore()` and `useWorldInteraction()`.
 
 New in this component — the two watchers that forward store state through the
 seam, replacing the selection state `WorldView` used to own:
 
 ```ts
 watch(() => ui.selection, (selection) => renderer?.setSelection(selection), { deep: true });
-watch(() => ui.highlight, (ids) => renderer?.setHighlight(ids), { deep: true });
+watch(() => ui.highlight, (subjects) => renderer?.setHighlight(subjects), { deep: true });
 ```
 
 `onPointerMove`, `onPointerLeave`, `onClick` and `onContextMenu` come across
@@ -948,7 +993,7 @@ canvas has.
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run --project unit tests/app/world-stage.test.ts`
-Expected: PASS, 5 tests.
+Expected: PASS, 6 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -977,7 +1022,7 @@ Create `tests/app/world-screen.test.ts`:
 ```ts
 // @vitest-environment happy-dom
 import { describe, expect, it, vi } from 'vitest';
-import { nextTick } from 'vue';
+import { defineComponent, h, KeepAlive, nextTick, ref } from 'vue';
 import { mount } from '@vue/test-utils';
 import { createTestingPinia } from '@pinia/testing';
 import WorldScreen from '../../src/app/views/WorldScreen.vue';
@@ -1041,6 +1086,49 @@ describe('WorldScreen', () => {
     wrapper.unmount();
   });
 
+  it('collapses the rail to a Build control in a narrow pane, and the popover still arms', async () => {
+    const wrapper = mountScreen();
+    const ui = useUiStore();
+    expect(wrapper.find('[data-test="rail-toggle"]').exists()).toBe(false);
+    ui.setNarrow(true);
+    await nextTick();
+    expect(wrapper.find('[data-test="build-palette"]').exists()).toBe(false);
+    await wrapper.get('[data-test="rail-toggle"]').trigger('click');
+    await wrapper.get('[data-test="palette-farm"]').trigger('click');
+    expect(ui.mode).toEqual({ kind: 'place', defId: 'farm' });
+    wrapper.unmount();
+  });
+
+  it('stops listening for Escape while deactivated, and resumes on activate', async () => {
+    const active = ref(true);
+    const Harness = defineComponent({
+      setup: () => () => h(KeepAlive, null, [active.value ? h(WorldScreen) : null]),
+    });
+    mount(Harness, {
+      attachTo: document.body,
+      global: {
+        plugins: [createTestingPinia({ createSpy: vi.fn, stubActions: false })],
+        provide: {
+          [WORLD_RENDERER_KEY as symbol]: vi.fn(() => makeFake()),
+          [ENGINE_KEY as symbol]: { dispatch: vi.fn() },
+        },
+      },
+    });
+    const ui = useUiStore();
+    ui.selectBuilding(1);
+    active.value = false;
+    await nextTick();
+
+    // The Ledger is showing. Escape belongs to it, not to the hidden world.
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(ui.selection).toEqual({ kind: 'building', id: 1 });
+
+    active.value = true;
+    await nextTick();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(ui.selection).toEqual({ kind: 'none' });
+  });
+
   it('detaches its Escape listener on unmount', () => {
     const wrapper = mountScreen();
     const ui = useUiStore();
@@ -1077,7 +1165,8 @@ Create `src/app/views/WorldScreen.vue`:
 
 ```vue
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref } from 'vue';
+import type { BuildingDefId } from '../../shared/content-types';
 import { useUiStore } from '../stores/ui-store';
 import WorldStage from './WorldStage.vue';
 import BuildPalette from '../components/BuildPalette.vue';
@@ -1095,21 +1184,52 @@ const root = ref<HTMLElement | null>(null);
  * dragged into an Obsidian sidebar beside a full-width note (spec §2.1). */
 const NARROW_PX = 720;
 
+/*
+ * In a narrow pane the rail collapses to one Build control that opens the
+ * palette as a popover (spec §2.1). This has to be state rather than CSS: CSS
+ * can hide or shrink the palette, but it cannot make an operable popover, and a
+ * rail that collapsed with no replacement control would put constructBuilding
+ * out of reach in exactly the layout the collapse is for.
+ */
+const railOpen = ref(false);
+const paletteVisible = computed(() => !ui.narrow || railOpen.value);
+
 function onKeydown(event: KeyboardEvent) {
   if (event.key !== 'Escape') return;
   if (ui.escape()) event.preventDefault();
 }
 
+/*
+ * The listener is bound to VISIBILITY, not to mount, and that distinction is
+ * load-bearing: this component stays under <keep-alive>, so a trip to /ledger
+ * deactivates it without unmounting it. A mount-scoped listener would keep
+ * running behind the Ledger — clearing the hidden world's mode, selection or
+ * dock, and swallowing an Escape the Ledger or Obsidian itself wanted.
+ *
+ * This is `WorldView`'s `viewActive` guard in its new home. It was written for
+ * the tab switches this increment deletes; the one route trip that survives is
+ * exactly the case it still covers.
+ */
+let listening = false;
+function listen(on: boolean) {
+  if (on === listening) return;
+  if (on) window.addEventListener('keydown', onKeydown);
+  else window.removeEventListener('keydown', onKeydown);
+  listening = on;
+}
+
 let observer: ResizeObserver | null = null;
 onMounted(() => {
-  window.addEventListener('keydown', onKeydown);
+  listen(true);
   if (root.value !== null && typeof ResizeObserver !== 'undefined') {
     observer = new ResizeObserver(([entry]) => ui.setNarrow(entry.contentRect.width < NARROW_PX));
     observer.observe(root.value);
   }
 });
+onActivated(() => listen(true));
+onDeactivated(() => listen(false));
 onBeforeUnmount(() => {
-  window.removeEventListener('keydown', onKeydown);
+  listen(false);
   observer?.disconnect();
 });
 </script>
@@ -1119,8 +1239,11 @@ onBeforeUnmount(() => {
     World view unavailable ({{ failure }}). Open the Ledger to keep playing.
   </div>
   <div v-else ref="root" class="obsisim-world-screen" :class="{ 'is-narrow': ui.narrow }">
-    <BuildPalette class="obsisim-rail" :armed-def-id="ui.mode.kind === 'place' ? ui.mode.defId : null"
-      @arm="ui.armPlace" @disarm="ui.cancelMode" />
+    <button v-if="ui.narrow" data-test="rail-toggle" :class="{ 'is-armed': railOpen }"
+      @click="railOpen = !railOpen">Build</button>
+    <BuildPalette v-if="paletteVisible" class="obsisim-rail"
+      :armed-def-id="ui.mode.kind === 'place' ? ui.mode.defId : null"
+      @arm="(id: BuildingDefId) => { ui.armPlace(id); railOpen = false; }" @disarm="ui.cancelMode" />
     <WorldStage class="obsisim-stage" @fatal="(m: string) => (failure = m)" />
     <aside v-if="ui.panel" class="obsisim-dock" data-test="dock">
       <!-- Tasks 7-11 replace this with the five panels. -->
@@ -1220,6 +1343,18 @@ describe('InspectorPanel', () => {
     expect(wrapper.get('[data-test="inspector-staffing-reason"]').text()).toContain('No idle adults');
   });
 
+  it('refuses staffing on a construction site and states the reason', async () => {
+    const site = makeSnapshot({
+      idleAdults: 3,
+      buildings: [makeBuilding(1, { workers: 0, workerSlots: 3, state: 'underConstruction', constructionTicks: 20, constructionNeeds: { wood: 5 } })],
+    });
+    const { wrapper, ui } = mountPanel(InspectorPanel, site);
+    ui.selectBuilding(1);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('[data-test="inspector-assign"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('[data-test="inspector-staffing-reason"]').text()).toContain('cannot be staffed');
+  });
+
   it('refuses Move on a construction site and states the reason in the panel', async () => {
     const site = makeSnapshot({
       buildings: [makeBuilding(1, { state: 'underConstruction', constructionTicks: 20, constructionNeeds: { wood: 5 } })],
@@ -1285,7 +1420,7 @@ Create `src/app/components/dock/InspectorPanel.vue`. Carry `SelectionPanel.vue`'
         @click="engine.dispatch({ type: 'unassignWorker', buildingId: building.id })">−</button>
       <span>{{ building.workers }} / {{ building.workerSlots }}</span>
       <button data-test="inspector-assign"
-        :disabled="building.workers >= building.workerSlots || store.snapshot!.idleAdults === 0"
+        :disabled="staffingReason !== null"
         @click="engine.dispatch({ type: 'assignWorker', buildingId: building.id })">+</button>
     </div>
     <p v-if="staffingReason" class="obsisim-reason" data-test="inspector-staffing-reason">{{ staffingReason }}</p>
@@ -1297,6 +1432,11 @@ with
 const staffingReason = computed(() => {
   const b = building.value;
   if (b === null) return null;
+  // A site refuses staffing outright (`handleAssignWorker`), and it keeps its
+  // def's workerSlots, so without this the Inspector offers a control the
+  // engine is certain to reject — the same failure the Move button already
+  // guards against, on the same building kind.
+  if (b.constructionTicks > 0) return 'A construction site cannot be staffed until it is finished.';
   if (b.workers >= b.workerSlots) return 'Every slot is filled.';
   if (store.snapshot!.idleAdults === 0) return 'No idle adults — unassign someone first.';
   return null;
@@ -1517,7 +1657,7 @@ describe('EconomyPanel', () => {
     });
     const { wrapper, ui } = mountPanel(EconomyPanel, two);
     await wrapper.get('[data-test="stage-row-farm"]').trigger('click');
-    expect(ui.highlight).toEqual([1, 2]);
+    expect(ui.highlight).toEqual([{ kind: 'building', id: 1 }, { kind: 'building', id: 2 }]);
     expect(ui.selection).toEqual({ kind: 'none' });
   });
 
@@ -1525,7 +1665,7 @@ describe('EconomyPanel', () => {
     const one = makeSnapshot({ buildings: [makeBuilding(1, { defId: 'farm' })] });
     const { wrapper, ui } = mountPanel(EconomyPanel, one);
     await wrapper.get('[data-test="stage-row-farm"]').trigger('click');
-    expect(ui.highlight).toEqual([1]);
+    expect(ui.highlight).toEqual([{ kind: 'building', id: 1 }]);
     expect(ui.selection).toEqual({ kind: 'none' });
   });
 
@@ -1553,7 +1693,9 @@ Expected: FAIL — cannot resolve `EconomyPanel.vue`.
 // from behaving differently depending on a count the player is not looking at
 // (spec §2.3).
 function highlightStage(defId: BuildingDefId) {
-  ui.setHighlight((store.snapshot?.buildings ?? []).filter((b) => b.defId === defId).map((b) => b.id));
+  ui.setHighlight((store.snapshot?.buildings ?? [])
+    .filter((b) => b.defId === defId)
+    .map((b) => ({ kind: 'building' as const, id: b.id })));
 }
 ```
 
@@ -1651,7 +1793,51 @@ Expected: PASS.
 
 - [ ] **Step 5: Wire all five panels into the dock**
 
-In `WorldScreen.vue`'s `<aside>`, render each panel behind its `ui.panel` value, and add the dock's own tab strip (five buttons, `data-test="dock-tab-<panel>"`, calling `ui.openPanel`).
+In `WorldScreen.vue`, render each panel behind its `ui.panel` value inside the
+`<aside>` — and put the **tab strip outside that conditional**, always mounted:
+
+```vue
+    <!-- OUTSIDE the v-if. These five buttons are what replaced the old nav
+         strip, so they cannot live inside the panel body they open: with no
+         panel yet chosen there would be nothing to click, and the only route
+         to Colony, Population, Economy or Attention would be selecting a map
+         subject first to force the Inspector open. -->
+    <nav class="obsisim-dock-tabs">
+      <button v-for="p in DOCK_PANELS" :key="p" :data-test="`dock-tab-${p}`"
+        :class="{ 'is-active': ui.panel === p }" @click="ui.openPanel(p)">{{ DOCK_LABELS[p] }}</button>
+    </nav>
+    <aside v-if="ui.panel" class="obsisim-dock" data-test="dock">
+      <InspectorPanel v-if="ui.panel === 'inspector'" />
+      <ColonyPanel v-else-if="ui.panel === 'colony'" />
+      <PopulationPanel v-else-if="ui.panel === 'population'" />
+      <EconomyPanel v-else-if="ui.panel === 'economy'" />
+      <AttentionPanel v-else />
+      <button data-test="dock-close" aria-label="Close panel" @click="ui.closeDock()">✕</button>
+    </aside>
+```
+
+`DOCK_PANELS` and `DOCK_LABELS` go in `src/app/labels.ts`, keyed by the
+`DockPanel` union so a sixth panel is a compile error rather than an unlabelled
+tab — the same rule `BUILDING_STATE_LABELS` follows.
+
+Add to `tests/app/world-screen.test.ts`:
+
+```ts
+  it('offers every panel from a closed dock', async () => {
+    const wrapper = mountScreen();
+    const ui = useUiStore();
+    expect(ui.panel).toBe(null);
+    expect(wrapper.find('[data-test="dock"]').exists()).toBe(false);
+    for (const panel of ['colony', 'population', 'economy', 'attention'] as const) {
+      await wrapper.get(`[data-test="dock-tab-${panel}"]`).trigger('click');
+      expect(ui.panel).toBe(panel);
+    }
+    await wrapper.get('[data-test="dock-close"]').trigger('click');
+    expect(ui.panel).toBe(null);
+    expect(wrapper.get('[data-test="dock-tab-attention"]').isVisible()).toBe(true);
+    wrapper.unmount();
+  });
+```
 
 - [ ] **Step 6: Commit**
 
@@ -1867,6 +2053,18 @@ Create `docs/requirements/Interface and Play.md` (Epic), `The World Screen.md` (
 
 Run: `npm run check:all`
 Expected: PASS — lint, loc, css, quality, test-projects, typecheck, test, balance, build, artifacts.
+
+Then run the smoke harness **explicitly**, because `check:all` does not include
+it and criterion 11 requires it — it is also the only check that drives the real
+Excalibur renderer at all, and this increment changed it:
+
+```bash
+npm i --no-save playwright-core   # if not already present; see scripts/world-smoke.mjs
+npm run smoke:world
+```
+
+Expected: PASS. A failure here is a real-renderer regression that every other
+gate is blind to.
 
 Then confirm criterion 12 explicitly:
 

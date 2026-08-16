@@ -674,9 +674,48 @@ phase, so each check is discriminating** — and append four phases before the
   () => renderer.setHighlight([]),
 ```
 
-Each frame must differ from its predecessor, which is what the runner already
-asserts. Update the existing `setSelection(1)` / `setSelection(null)` calls to
-the discriminated form in the same pass.
+**The runner does not assert these on its own.** `scripts/world-smoke.mjs`
+drives *fixed indices* by hand — `await step(19)`, `await step(20)`, … each
+followed by explicit `shot()` comparisons — and has no generic
+phase-difference loop. Two consequences, both of which break silently:
+
+- `await step(36)` **is the `dispose()` phase today.** Inserting five phases
+  before it makes 36 the first new selection frame, so `dispose()` is never
+  invoked and the runner's teardown assertions never run.
+- A phase nothing compares is a phase that proves nothing.
+
+So the same pass edits the runner: renumber the disposal step to `step(41)`,
+and add a comparison per new frame, in the house style — one change, one
+assertion, each named for what it would catch:
+
+```js
+await step(36); // a colonist ring, alone — the building-ring phase bundles a ghost
+const colonistRing = await shot();
+assertDiffers(millSite, colonistRing, 'a colonist selection draws no ring');
+
+await step(37); // ONLY change: the ring moves from the colonist to a building
+const buildingRing = await shot();
+assertDiffers(colonistRing, buildingRing, 'the ring did not move to the building');
+
+await step(38); // ONLY change: selection cleared, a building pulse in its place
+const buildingPulse = await shot();
+assertDiffers(buildingRing, buildingPulse, 'setHighlight draws nothing on a building');
+
+await step(39); // ONLY change: the pulse moves to a colonist
+const colonistPulse = await shot();
+assertDiffers(buildingPulse, colonistPulse, 'setHighlight has no colonist branch');
+
+await step(40); // ONLY change: the pulse clears
+const cleared = await shot();
+assertDiffers(colonistPulse, cleared, 'a highlight never clears');
+
+await step(41); // dispose()
+```
+
+Use whatever the file's existing comparison helper is called — read it first;
+the shape above is the pattern, not necessarily the name. Update the existing
+`setSelection(1)` / `setSelection(null)` calls to the discriminated form in the
+same pass.
 
 - [ ] **Step 4: Typecheck the renderer in isolation**
 
@@ -1198,7 +1237,9 @@ import { createTestingPinia } from '@pinia/testing';
 import WorldScreen from '../../src/app/views/WorldScreen.vue';
 import { WORLD_RENDERER_KEY, type WorldRenderer } from '../../src/app/world/renderer-key';
 import { ENGINE_KEY } from '../../src/app/engine-key';
+import { useGameStore } from '../../src/app/stores/game-store';
 import { useUiStore } from '../../src/app/stores/ui-store';
+import { makeBuilding, makeSnapshot } from './fixtures';
 
 function makeFake(): WorldRenderer {
   return {
@@ -1209,10 +1250,20 @@ function makeFake(): WorldRenderer {
 }
 
 function mountScreen() {
+  const pinia = createTestingPinia({ createSpy: vi.fn, stubActions: false });
+  // Seeded BEFORE mount, deliberately. In production `App.vue` gates the
+  // router view on `store.snapshot`, so nothing downstream ever renders
+  // against null — but mounting WorldScreen directly skips that gate, and
+  // ResourceStrip dereferences `store.snapshot!.idleAdults` on its first
+  // render. Without this the component throws before a single assertion runs.
+  useGameStore(pinia).ingest(
+    makeSnapshot({ idleAdults: 1, buildings: [makeBuilding(1)] }),
+    { paused: true, speed: 1, error: null },
+  );
   return mount(WorldScreen, {
     attachTo: document.body, // window keydown listeners need a live document
     global: {
-      plugins: [createTestingPinia({ createSpy: vi.fn, stubActions: false })],
+      plugins: [pinia],
       provide: {
         [WORLD_RENDERER_KEY as symbol]: vi.fn(() => makeFake()),
         [ENGINE_KEY as symbol]: { dispatch: vi.fn() },
@@ -1289,10 +1340,12 @@ describe('WorldScreen', () => {
     const Harness = defineComponent({
       setup: () => () => h(KeepAlive, null, [active.value ? h(WorldScreen) : null]),
     });
+    const pinia = createTestingPinia({ createSpy: vi.fn, stubActions: false });
+    useGameStore(pinia).ingest(makeSnapshot({ idleAdults: 1 }), { paused: true, speed: 1, error: null });
     mount(Harness, {
       attachTo: document.body,
       global: {
-        plugins: [createTestingPinia({ createSpy: vi.fn, stubActions: false })],
+        plugins: [pinia],
         provide: {
           [WORLD_RENDERER_KEY as symbol]: vi.fn(() => makeFake()),
           [ENGINE_KEY as symbol]: { dispatch: vi.fn() },
@@ -2387,10 +2440,14 @@ function moveRefusal(b: BuildingSnapshot): string | null {
             <input :data-test="`move-row-${b.id}`" v-model.number="moveTargets[b.id].row" type="number" min="0" />
             <!-- Deliberately worse than dragging a ghost across a map: this
                  exists so the fallback is complete (spec §2.2), not so it is
-                 nice. Disabled for a site, matching the Inspector and the
-                 engine's own refusal. -->
-            <button :data-test="`move-${b.id}`" :disabled="b.constructionTicks > 0"
+                 nice. Gated on moveRefusal below — which covers the site case
+                 AND every coordinate the engine would reject — with the reason
+                 rendered in the row rather than hidden in a title. -->
+            <button :data-test="`move-${b.id}`" :disabled="moveRefusal(b) !== null"
               @click="moveTo(b.id)">Move</button>
+            <small v-if="moveRefusal(b)" class="obsisim-reason" :data-test="`move-reason-${b.id}`">
+              {{ moveRefusal(b) }}
+            </small>
           </td>
 ```
 

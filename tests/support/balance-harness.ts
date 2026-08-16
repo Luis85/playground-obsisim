@@ -832,26 +832,61 @@ function issueSiteOrders(world: IRuntimeWorld, t: number, sites: readonly SiteSt
 }
 
 /**
+ * The building ONE site descriptor actually ordered, or null while it has not
+ * appeared in a snapshot yet — there is no other way to learn the id, because
+ * `constructBuilding`'s command carries no reply channel.
+ *
+ * FOUR conditions, and matching on the tile alone (which is all this did until
+ * the defect below was found) FABRICATES completions rather than merely
+ * missing them — the failure `BalanceResult.completions` exists to avoid, since
+ * an instrument that over-counts is worse than none because it is believed:
+ *
+ * - the TILE, which is where the descriptor asked for a site;
+ * - the DEF, because `handleConstructBuilding` REFUSES an order onto an
+ *   occupied tile ('Cannot build there.') and leaves the occupant standing
+ *   exactly there. A tile-only match adopts that occupant, whose
+ *   `constructionTicks` is 0, so the very next tally logs a completion for a
+ *   site that was never created;
+ * - an ACTIVE COUNTDOWN, because the def alone does not separate a site from a
+ *   FINISHED building of the same def — every stage, depot and house this
+ *   harness places is spawned complete, and `handleConstructBuilding` also
+ *   refuses a second order onto a tile a site of the same def already holds;
+ * - an id NO OTHER DESCRIPTOR HAS TAKEN, because two descriptors naming one
+ *   tile would otherwise resolve to the same entity and report ONE build as
+ *   two completions.
+ *
+ * A descriptor whose order was refused therefore never resolves — which
+ * `runScenario` turns into a thrown error rather than a plausible-looking zero.
+ */
+function resolveSite(snapshot: Snapshot, site: SiteState, taken: ReadonlySet<number>): void {
+  const building = snapshot.buildings.find((b) => (
+    b.col === site.col && b.row === site.row && b.defId === site.defId
+    && b.constructionTicks > 0 && !taken.has(b.id)
+  ));
+  if (building !== undefined) site.buildingId = building.id;
+}
+
+/**
  * One tick of construction bookkeeping, split out of the tick loop for the
  * same reason `tallyHaulers` and `tallyTransfers` are: one concern per
  * function, and the loop stays a list of one-line readings.
  *
- * Resolves a just-ordered site's `buildingId` from the snapshot it first
- * appears in (there is no other way to learn it — `constructBuilding`'s
- * command carries no reply channel), then logs a completion the tick a
- * RESOLVED site's `constructionTicks` reads 0. `t` here is the same loop
- * counter `moveTo.atTick` is compared against, so a completion's `tick` and a
- * site's own `atTick` share one clock.
+ * Resolves each site's `buildingId` (see `resolveSite` for what a resolution
+ * has to prove), then logs a completion the tick a RESOLVED site's
+ * `constructionTicks` reads 0. `t` here is the same loop counter
+ * `moveTo.atTick` is compared against, so a completion's `tick` and a site's
+ * own `atTick` share one clock.
  */
 function tallySites(
   snapshot: Snapshot, sites: readonly SiteState[], t: number,
   completions: { buildingId: number; defId: BuildingDefId; tick: number }[],
 ): void {
+  const taken = new Set(sites.flatMap((site) => (site.buildingId === null ? [] : [site.buildingId])));
   for (const site of sites) {
     if (site.buildingId === null) {
-      const building = snapshot.buildings.find((b) => b.col === site.col && b.row === site.row);
-      if (building !== undefined) site.buildingId = building.id;
-      else continue;
+      resolveSite(snapshot, site, taken);
+      if (site.buildingId === null) continue;
+      taken.add(site.buildingId);
     }
     if (site.completed) continue;
     const building = snapshot.buildings.find((b) => b.id === site.buildingId);
@@ -860,6 +895,29 @@ function tallySites(
       completions.push({ buildingId: site.buildingId, defId: site.defId, tick: t });
     }
   }
+}
+
+/**
+ * Refuses to publish a result for a scenario whose sites never appeared.
+ *
+ * LOUD RATHER THAN SILENT, and that is the whole point: an unresolved
+ * descriptor used to mean a completion logged against whatever building
+ * happened to stand on its tile, and the narrowed `resolveSite` turns that same
+ * case into an absence instead — which would read as "the site simply never
+ * finished in this many ticks", a perfectly plausible number for a
+ * measurement that never happened at all.
+ */
+function assertSitesResolved(sites: readonly SiteState[]): void {
+  const missing = sites.filter((site) => site.buildingId === null);
+  if (missing.length === 0) return;
+  const named = missing.map((site) => `${site.defId}@(${site.col},${site.row}) ordered at tick ${site.atTick}`);
+  throw new Error(
+    `balance harness: ${missing.length} site order(s) never appeared as a construction site — ${named.join('; ')}. `
+    + 'Either `handleConstructBuilding` refused the order (the tile was already occupied by a stage, a depot, a '
+    + 'house this harness placed, or another site; or the colony could not afford it against the queue), or the '
+    + 'order was issued too close to the end of the run to reach a snapshot. Nothing may be published off this '
+    + 'run: a refused order that quietly measured nothing is exactly what the completion log must not report.',
+  );
 }
 
 /** Everything measured about one stage, once the run is over. */
@@ -999,6 +1057,7 @@ export async function runScenario(scenario: Scenario): Promise<BalanceResult> {
     tallySites(snapshot, siteStates, t, completions);
   }
 
+  assertSitesResolved(siteStates);
   const snapshot = world.getResource(SnapshotStore).latest!;
   const results = stages.map((stage, index) => stageResultOf(stage, buildingIds[index], tallies[index], snapshot, audit, ticks));
   return {

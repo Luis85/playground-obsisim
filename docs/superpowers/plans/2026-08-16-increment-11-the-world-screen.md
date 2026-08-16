@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- **No engine or shared changes.** `git diff --stat <increment-10 merge base>...HEAD -- src/engine src/shared` must be empty (spec criterion 13). No new command, snapshot field, save version or balance constant.
+- **No engine or shared changes.** `git diff --stat <increment-10 merge base>...HEAD -- src/engine src/shared` must be empty (spec criterion 12). No new command, snapshot field, save version or balance constant.
 - **Every `src/` file at or under 500 nonblank lines.** `scripts/loc-baseline.json` is `maxLoc: 500` with an empty `files` map — no exemptions. Check with `npm run check:loc`.
 - **No `!important` in CSS.** `scripts/css-important-baseline.json` has an empty `files` map; `npm run check:css` enforces it.
 - **Tests never import the real Excalibur renderer.** `src/app/world/renderer.ts` touches `window` at module scope and takes seconds under happy-dom. Every app test injects a fake through `WORLD_RENDERER_KEY`. `renderer.ts` is verified by `npm run smoke:world` and by `vue-tsc`, never by unit tests.
@@ -36,7 +36,7 @@ Spec §2.6 assigns the mode machine to `world/interaction.ts` and selection to `
 | `src/app/stores/ui-store.ts` | `Selection`, dock panel, interaction mode, highlight set, narrow flag; the cancel invariant and the Escape ladder |
 | `src/app/world/interaction.ts` | Ghost preview, tile validation, canvas pointer handlers — composable over `ui-store` |
 | `src/app/views/WorldScreen.vue` | The shell: rail, stage, dock, resource strip, Escape listener, `ResizeObserver` |
-| `src/app/views/WorldStage.vue` | Canvas host: renderer lifecycle, snapshot sync, hover tooltip, drag-to-pan, forwarding selection/highlight/focus |
+| `src/app/views/WorldStage.vue` | Canvas host: renderer lifecycle, snapshot sync, hover tooltip, forwarding selection and highlight |
 | `src/app/views/LedgerView.vue` | Composes the four table views; owns no figures |
 | `src/app/components/dock/InspectorPanel.vue` | Selected building or colonist, with staffing / move / demolish |
 | `src/app/components/dock/ColonyPanel.vue` | The full resource table |
@@ -53,8 +53,8 @@ Spec §2.6 assigns the mode machine to `world/interaction.ts` and selection to `
 | File | Change |
 | --- | --- |
 | `src/app/stores/game-store.ts` | Add the Attention derivations (Task 2) |
-| `src/app/world/renderer-key.ts` | Widen `WorldRenderer`: `setSelection(Selection)`, `setHighlight`, `focusOn`, `panBy` |
-| `src/app/world/renderer.ts` | Colonist ring, highlight pulse, `focusOn`, zoom floor, conditional refit |
+| `src/app/world/renderer-key.ts` | Widen `WorldRenderer`: `setSelection(Selection)`, `setHighlight` |
+| `src/app/world/renderer.ts` | Colonist selection ring, highlight pulse. **No camera change** — see OBS-11-01 |
 | `src/app/router.ts` | Five routes → two |
 | `src/app/App.vue` | Nav strip removed; keep-alive retained for the world route |
 | `src/app/views/WorldView.vue` | **Deleted** — split into `WorldScreen` + `WorldStage` + `interaction.ts` |
@@ -83,8 +83,8 @@ Everything else consumes this. It lives in `src/app/stores/`, which already carr
   - `type Selection = { kind: 'building'; id: number } | { kind: 'colonist'; id: number } | { kind: 'none' }`
   - `type DockPanel = 'inspector' | 'colony' | 'population' | 'economy' | 'attention'`
   - `type Mode = { kind: 'idle' } | { kind: 'place'; defId: BuildingDefId } | { kind: 'move'; buildingId: number }`
-  - `useUiStore()` with state `selection`, `panel: DockPanel | null`, `mode`, `highlight: number[]`, `narrow: boolean`, `focusRequest: Selection | null`
-  - actions `select(next: Selection)`, `selectBuilding(id)`, `selectColonist(id)`, `clearSelection()`, `openPanel(p)`, `closeDock()`, `armPlace(defId)`, `armMove(buildingId)`, `cancelMode()`, `setHighlight(ids)`, `setNarrow(flag)`, `escape(): boolean`, `consumeFocusRequest(): Selection | null`
+  - `useUiStore()` with state `selection`, `panel: DockPanel | null`, `mode`, `highlight: number[]`, `narrow: boolean`
+  - actions `select(next: Selection)`, `selectBuilding(id)`, `selectColonist(id)`, `clearSelection()`, `openPanel(p)`, `closeDock()`, `armPlace(defId)`, `armMove(buildingId)`, `cancelMode()`, `setHighlight(ids)`, `setNarrow(flag)`, `escape(): boolean`
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -186,13 +186,6 @@ describe('ui-store', () => {
     expect(ui.escape()).toBe(false); // nothing left to unwind
   });
 
-  it('records a focus request per selection and hands it over exactly once', () => {
-    const ui = useUiStore();
-    ui.selectBuilding(7);
-    expect(ui.consumeFocusRequest()).toEqual({ kind: 'building', id: 7 });
-    expect(ui.consumeFocusRequest()).toBe(null);
-  });
-
   it('arming a place mode clears the selection', () => {
     const ui = useUiStore();
     ui.selectBuilding(7);
@@ -247,8 +240,6 @@ export const useUiStore = defineStore('ui', {
     highlight: [] as number[],
     /** Set by WorldScreen's ResizeObserver; drives the overlay layout (§2.1). */
     narrow: false,
-    /** A selection the canvas has not yet centred on. WorldStage drains it. */
-    focusRequest: null as Selection | null,
   }),
   actions: {
     /**
@@ -265,7 +256,6 @@ export const useUiStore = defineStore('ui', {
       const stillArmed = armed !== null && next.kind === 'building' && next.id === armed;
       if (armed !== null && !stillArmed) this.mode = { kind: 'idle' };
       this.selection = next;
-      this.focusRequest = next.kind === 'none' ? null : next;
       if (next.kind !== 'none') this.panel = 'inspector';
     },
     selectBuilding(id: number) { this.select({ kind: 'building', id }); },
@@ -307,12 +297,6 @@ export const useUiStore = defineStore('ui', {
       if (this.panel !== null) { this.panel = null; return true; }
       return false;
     },
-
-    consumeFocusRequest(): Selection | null {
-      const request = this.focusRequest;
-      this.focusRequest = null;
-      return request;
-    },
   },
 });
 ```
@@ -320,7 +304,7 @@ export const useUiStore = defineStore('ui', {
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run --project unit tests/app/ui-store.test.ts`
-Expected: PASS, 12 tests.
+Expected: PASS, 11 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -558,7 +542,7 @@ git commit -m "The problem list, derived from what the snapshot already says"
 
 ---
 
-## Task 3: Widen the renderer seam, and stop refitting every tick
+## Task 3: Widen the renderer seam
 
 `renderer.ts` cannot be unit tested (Excalibur at module scope). The **seam** is what later tasks assert against with fakes; the implementation is covered by `vue-tsc` and `npm run smoke:world`.
 
@@ -572,8 +556,6 @@ git commit -m "The problem list, derived from what the snapshot already says"
 - Produces the widened `WorldRenderer`:
   - `setSelection(selection: Selection): void`
   - `setHighlight(buildingIds: readonly number[]): void`
-  - `focusOn(selection: Selection): void`
-  - `panBy(dx: number, dy: number): void`
 
 - [ ] **Step 1: Widen the seam**
 
@@ -590,13 +572,6 @@ import type { Selection } from '../stores/ui-store';
   /** Pulse a set of buildings without selecting any of them — what a plural
    * panel row does (spec §2.3). Passing an empty array clears the pulse. */
   setHighlight(buildingIds: readonly number[]): void;
-  /** Centre a subject when the map exceeds the viewport; a no-op when the
-   * whole map is on screen, which is why a default-map colony sees only the
-   * pulse (spec §2.1). */
-  focusOn(selection: Selection): void;
-  /** Pan by a screen-space delta, clamped so the camera cannot leave the map.
-   * A no-op when the whole map is on screen. */
-  panBy(dx: number, dy: number): void;
 ```
 
 - [ ] **Step 2: Run the typecheck to see every call site break**
@@ -604,72 +579,17 @@ import type { Selection } from '../stores/ui-store';
 Run: `npm run typecheck`
 Expected: FAIL — `WorldView.vue` and `renderer.ts` do not satisfy the widened interface. This is the list of places Task 5 must touch.
 
-- [ ] **Step 3: Implement the floor, the conditional refit, and the new methods**
+- [ ] **Step 3: Implement the two new methods**
 
-In `src/app/world/renderer.ts`, add near `COLONIST_PICK_RADIUS`:
+**`fitCamera` and `sync` are not touched.** Spec §2.1 cuts all camera work; a
+grown map keeps behaving exactly as it does today, and OBS-11-01
+(`docs/issues/2026-08-16-a-grown-map-shrinks-below-readability.md`) records why
+and what a fix would need. If this task finds itself editing `fitCamera`,
+`camera.pos` or `camera.zoom`, stop — that is the deferred increment, not this
+one.
 
-```ts
-/**
- * The smallest a tile may be drawn. Below this a grown map "fits" only by
- * becoming unreadable, and since increment 11 this canvas is the primary
- * control surface rather than one tab of five. Past the floor the map is
- * larger than the viewport and the camera pans instead (spec §2.1).
- */
-const MIN_TILE_PX = 12;
-```
-
-Replace `fitCamera` and add a memo field to the scene class:
-
-```ts
-  /** What the last fit was computed from. `fitCamera` recomputes only when one
-   * of these changes — see the comment on `sync` below. */
-  private fittedFor: { cols: number; rows: number; width: number; height: number } | null = null;
-
-  /**
-   * Frame the map, but never below MIN_TILE_PX. Returns whether the floor
-   * engaged, i.e. whether the map is larger than the viewport and panning is
-   * therefore live.
-   */
-  private fitCamera(layout: WorldLayout): boolean {
-    const worldW = layout.cols * TILE;
-    const worldH = layout.rows * TILE;
-    const camera = this.engine.currentScene.camera;
-    const { width, height } = this.engine.screen.resolution;
-    const fitted = Math.min(width / worldW, height / worldH) * 0.95;
-    const floor = MIN_TILE_PX / TILE;
-    const clamped = Math.max(fitted, floor);
-    camera.zoom = clamped;
-    camera.pos = vec(worldW / 2, worldH / 2);
-    this.fittedFor = { cols: layout.cols, rows: layout.rows, width, height };
-    return clamped > fitted;
-  }
-```
-
-In `sync()`, replace the unconditional `this.fitCamera(layout);` with:
-
-```ts
-    // NOT every sync. fitCamera rewrites camera.pos as well as camera.zoom, so
-    // refitting per snapshot would drag a panned or focused camera back to
-    // centre twice a second at 1x — invisible on a map that fits (the camera
-    // is centred anyway) and fatal on one that does not. The framing inputs
-    // are the map size and the viewport size, and neither changes per tick.
-    if (this.needsRefit(layout)) this.fitCamera(layout);
-```
-
-Add the predicate beside it:
-
-```ts
-  private needsRefit(layout: WorldLayout): boolean {
-    const { width, height } = this.engine.screen.resolution;
-    const last = this.fittedFor;
-    return last === null || last.cols !== layout.cols || last.rows !== layout.rows
-      || last.width !== width || last.height !== height;
-  }
-```
-
-`refit()` (the pane-resize path) keeps calling `fitCamera` unconditionally — a resize genuinely changes the frame.
-
-Add the three new methods to the returned renderer object, delegating to scene methods that follow the existing `applySelection` pattern:
+In `src/app/world/renderer.ts`, change `setSelection` to branch on the
+discriminated `Selection` and add `setHighlight`:
 
 ```ts
     setSelection(selection) {
@@ -678,31 +598,29 @@ Add the three new methods to the returned renderer object, delegating to scene m
     setHighlight(buildingIds) {
       if (!disposed) scene.setHighlight(buildingIds);
     },
-    focusOn(selection) {
-      if (!disposed) scene.focusOn(selection);
-    },
-    panBy(dx, dy) {
-      if (!disposed) scene.panBy(dx, dy);
-    },
 ```
 
-In the scene: `setSelection` branches on `selection.kind` and draws the existing ring on a building actor or (new) on a colonist actor; `setHighlight` keeps a short-lived pulse actor per id; `focusOn` and `panBy` move `camera.pos`, both clamped to the map bounds and both early-returning when `fittedFor` shows the floor never engaged.
+In the scene, `setSelection` branches on `selection.kind`: a `building` draws
+today's ring on the building actor, a `colonist` draws the same ring on the
+colonist actor (they are already picked by `colonistAt`, so only the drawing is
+new), and `none` clears it. `setHighlight` keeps one short-lived pulse actor per
+id and replaces the whole set on each call, so an empty array clears it.
 
 - [ ] **Step 4: Typecheck the renderer in isolation**
 
 Run: `npm run typecheck`
-Expected: the only remaining errors are in `WorldView.vue`, which Task 5 deletes. If `renderer.ts` itself errors, fix it here.
+Expected: the only remaining errors are in `WorldView.vue`, which Task 6 deletes. If `renderer.ts` itself errors, fix it here.
 
 - [ ] **Step 5: Check the line count**
 
 Run: `npm run check:loc`
-Expected: PASS. `renderer.ts` is the file most at risk — if it exceeds 500, extract the camera (`fitCamera`, `needsRefit`, `focusOn`, `panBy`, `MIN_TILE_PX`) into `src/app/world/camera.ts` and have the scene hold one.
+Expected: PASS. If `renderer.ts` exceeds 500, extract the selection and highlight actors into `src/app/world/markers.ts` and have the scene hold one.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add src/app/world/renderer-key.ts src/app/world/renderer.ts
-git commit -m "The seam learns about colonists, highlights and a camera that stays put"
+git commit -m "The seam learns about colonists and highlights"
 ```
 
 ---
@@ -936,7 +854,6 @@ function makeFake() {
   const renderer: WorldRenderer = {
     sync: vi.fn(), pick: vi.fn(() => null), tileAt: vi.fn(() => null),
     setGhost: vi.fn(), setSelection: vi.fn(), setHighlight: vi.fn(),
-    focusOn: vi.fn(), panBy: vi.fn(),
     onFatal: vi.fn(), start: vi.fn(), stop: vi.fn(), dispose: vi.fn(),
   };
   return { renderer, factory: vi.fn(() => renderer) };
@@ -980,16 +897,6 @@ describe('WorldStage', () => {
     expect(renderer.setHighlight).toHaveBeenCalledWith([2, 3]);
   });
 
-  it('drains a focus request exactly once', async () => {
-    const { renderer, factory } = makeFake();
-    mountStage(factory);
-    const ui = useUiStore();
-    ui.selectBuilding(1);
-    await nextTick();
-    expect(renderer.focusOn).toHaveBeenCalledWith({ kind: 'building', id: 1 });
-    expect(ui.focusRequest).toBe(null);
-  });
-
   it('emits fatal when the factory throws, and renders no host', () => {
     const factory = vi.fn(() => { throw new Error('no webgl'); });
     const { wrapper } = mountStage(factory);
@@ -1004,22 +911,12 @@ describe('WorldStage', () => {
     expect(wrapper.emitted('fatal')![0]).toEqual(['context lost']);
   });
 
-  it('pans on a drag and selects on a click, split by a movement threshold', async () => {
+  it('selects the picked building on an idle canvas click', async () => {
     const { renderer, factory } = makeFake();
     (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'building', id: 1 });
     const { wrapper } = mountStage(factory);
     useGameStore().ingest(makeSnapshot({ buildings: [makeBuilding(1)] }), { paused: true, speed: 1, error: null });
-    const host = wrapper.get('[data-test="world-host"]');
-
-    await host.trigger('pointerdown', { pageX: 100, pageY: 100 });
-    await host.trigger('pointermove', { pageX: 160, pageY: 100 });
-    await host.trigger('pointerup', { pageX: 160, pageY: 100 });
-    expect(renderer.panBy).toHaveBeenCalled();
-    expect(useUiStore().selection).toEqual({ kind: 'none' }); // a drag is not a click
-
-    await host.trigger('pointerdown', { pageX: 100, pageY: 100 });
-    await host.trigger('pointerup', { pageX: 101, pageY: 100 });
-    await host.trigger('click', { pageX: 101, pageY: 100 });
+    await wrapper.get('[data-test="world-host"]').trigger('click', { pageX: 101, pageY: 100 });
     expect(useUiStore().selection).toEqual({ kind: 'building', id: 1 });
   });
 });
@@ -1034,67 +931,30 @@ Expected: FAIL — cannot resolve `WorldStage.vue`.
 
 Create `src/app/views/WorldStage.vue`. Carry over from `WorldView.vue` verbatim: the `onMounted` factory call and try/catch, the `watch` on `store.snapshot` with `{ immediate: true }`, the reset detection (`snapshot.tick <= previousSnapshot.tick`), the id-based selection lifecycle, `revalidateHover`, `armHoverRecheck` and the 2000ms tail, and `onBeforeUnmount` disposal. Replace its mode/selection state with `useUiStore()` and `useWorldInteraction()`.
 
-New in this component:
-
-```ts
-// A drag pans, a click selects. The threshold is what separates them: without
-// it, panning a grown map would also reselect whatever the pointer came to
-// rest on, and a one-pixel tremor during a click would pan the camera.
-const DRAG_THRESHOLD_PX = 4;
-let dragFrom: { x: number; y: number } | null = null;
-let dragged = false;
-
-function onPointerDown(event: PointerEvent) {
-  dragFrom = { x: event.pageX, y: event.pageY };
-  dragged = false;
-}
-
-function onPointerMove(event: PointerEvent) {
-  if (dragFrom !== null) {
-    const dx = event.pageX - dragFrom.x;
-    const dy = event.pageY - dragFrom.y;
-    if (dragged || Math.abs(dx) > DRAG_THRESHOLD_PX || Math.abs(dy) > DRAG_THRESHOLD_PX) {
-      dragged = true;
-      renderer?.panBy(dx, dy);
-      dragFrom = { x: event.pageX, y: event.pageY };
-      hover.value = null;
-    }
-    return;
-  }
-  /* ...the hover/ghost body carried over from WorldView.onPointerMove... */
-}
-
-function onPointerUp() { dragFrom = null; }
-
-// Suppressed after a drag: the browser fires click after pointerup regardless,
-// and a pan that ended over a building must not also select it.
-function onClick(event: MouseEvent) {
-  if (dragged) { dragged = false; return; }
-  /* ...place / move / idle dispatch via interaction.clickTile / clickPick... */
-}
-```
-
-And the three watchers that forward store state through the seam:
+New in this component — the two watchers that forward store state through the
+seam, replacing the selection state `WorldView` used to own:
 
 ```ts
 watch(() => ui.selection, (selection) => renderer?.setSelection(selection), { deep: true });
 watch(() => ui.highlight, (ids) => renderer?.setHighlight(ids), { deep: true });
-watch(() => ui.focusRequest, () => {
-  const request = ui.consumeFocusRequest();
-  if (request !== null) renderer?.focusOn(request);
-});
 ```
+
+`onPointerMove`, `onPointerLeave`, `onClick` and `onContextMenu` come across
+from `WorldView` unchanged in shape, with their mode and selection reads
+redirected to `useWorldInteraction()` and `useUiStore()`. There is no
+drag-to-pan: §2.1 cuts camera work, so a pointer drag is not a gesture this
+canvas has.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run --project unit tests/app/world-stage.test.ts`
-Expected: PASS, 7 tests.
+Expected: PASS, 5 tests.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/app/views/WorldStage.vue tests/app/world-stage.test.ts
-git commit -m "The canvas host, with a drag that pans and a click that still selects"
+git commit -m "The canvas host, without the selection state it used to own"
 ```
 
 ---
@@ -1129,7 +989,6 @@ function makeFake(): WorldRenderer {
   return {
     sync: vi.fn(), pick: vi.fn(() => null), tileAt: vi.fn(() => null),
     setGhost: vi.fn(), setSelection: vi.fn(), setHighlight: vi.fn(),
-    focusOn: vi.fn(), panBy: vi.fn(),
     onFatal: vi.fn(), start: vi.fn(), stop: vi.fn(), dispose: vi.fn(),
   };
 }
@@ -1675,17 +1534,6 @@ describe('EconomyPanel', () => {
     await wrapper.get('[data-test="stage-row-farm"]').trigger('click');
     expect(ui.highlight).toEqual([]);
   });
-
-  // A plural row surveys, it does not navigate (spec §2.1): the buildings of a
-  // def can sit at opposite corners, so there is no honest single target and
-  // the camera stays put. `focusRequest` is what WorldStage drains into
-  // focusOn, so an untouched request is the assertion.
-  it('does not request a camera focus for a plural row', async () => {
-    const two = makeSnapshot({ buildings: [makeBuilding(1, { defId: 'farm' }), makeBuilding(2, { defId: 'farm' })] });
-    const { wrapper, ui } = mountPanel(EconomyPanel, two);
-    await wrapper.get('[data-test="stage-row-farm"]').trigger('click');
-    expect(ui.focusRequest).toBe(null);
-  });
 });
 ```
 
@@ -2007,6 +1855,12 @@ Add the missing `## Increment 8 — Storehouse Transfer`, `## Increment 9 — Co
 
 - [ ] **Step 4: Backlog surgery**
 
+File OBS-11-01 if it is not already present:
+`docs/issues/2026-08-16-a-grown-map-shrinks-below-readability.md` — the grown-map
+readability limitation this increment accepts rather than fixes. It is written
+already; check it is parented and ordered consistently with its siblings.
+
+
 Create `docs/requirements/Interface and Play.md` (Epic), `The World Screen.md` (Feature), and PBIs for the shell, the Inspector and its verbs, the panels, the Ledger fallback and the visual language. Mark `Per-View Coverage Floors.md` Done. Supersede `Table Parity for Placement.md` with a new PBI carrying the fallback contract. Follow the frontmatter conventions in `docs/README_PRODUCT_BACKLOG.md` — `type`, `parent` as `"[[Note name]]"`, `order` 10 apart.
 
 - [ ] **Step 5: Run the full gate**
@@ -2014,7 +1868,7 @@ Create `docs/requirements/Interface and Play.md` (Epic), `The World Screen.md` (
 Run: `npm run check:all`
 Expected: PASS — lint, loc, css, quality, test-projects, typecheck, test, balance, build, artifacts.
 
-Then confirm criterion 13 explicitly:
+Then confirm criterion 12 explicitly:
 
 ```bash
 git diff --stat $(git merge-base origin/main HEAD)...HEAD -- src/engine src/shared
@@ -2033,7 +1887,7 @@ git commit -m "Document and close out increment 11"
 
 ## Self-Review
 
-**Spec coverage.** §2.1 → Tasks 3, 6, 12. §2.2 → Tasks 7, 8, 9, 12. §2.3 → Tasks 1, 3, 9, 10, 11. §2.4 → Task 2. §2.5 → Tasks 6, 12. §2.6 → Tasks 1, 4, 5, 6, 12. §2.7 → Tasks 8–11 (panels reuse `PopulationSummary` and store getters rather than re-deriving). §2.8 → Task 14. §2.9 → Task 13. Criteria 1–2 → Tasks 7–9, 12. 3 → Task 12 step 5. 4 → Tasks 5, 9, 10, 11. 5 → Tasks 6, 12. 6 → Tasks 1, 6. 7 → Task 6. 8 → Task 3 (implementation) and Task 5 (drag/click split); **the grown-map and camera-survives-snapshots assertions have no home**, because `renderer.ts` cannot be unit tested — they belong in `npm run smoke:world`, and Task 3 step 1 must extend the smoke harness rather than only the seam. 9–12 → Task 14. 13 → Task 14 step 5.
+**Spec coverage.** §2.1 → Tasks 6, 12 (and, for the camera, deliberately nothing — the cut is the requirement, and Task 3 step 3 says so where an implementer would otherwise reach for `fitCamera`). §2.2 → Tasks 7, 8, 9, 12. §2.3 → Tasks 1, 3, 9, 10, 11. §2.4 → Task 2. §2.5 → Tasks 6, 12. §2.6 → Tasks 1, 4, 5, 6, 12. §2.7 → Tasks 8–11 (panels reuse `PopulationSummary` and store getters rather than re-deriving). §2.8 → Task 14. §2.9 → Task 13. Criteria 1–2 → Tasks 7–9, 12. 3 → Task 12 step 5. 4 → Tasks 5, 9, 10, 11. 5 → Tasks 6, 12. 6 → Tasks 1, 6. 7 → Task 6. 8–11 → Task 14. 12 → Task 14 step 5. **No gaps.** The one the previous draft had — criterion 8's grown-map assertions having no unit-test home, because `renderer.ts` cannot be imported by tests — is gone with the criterion: that work is OBS-11-01's, and its untestability is one of the reasons it was cut.
 
 **Placeholder scan.** Task 12 step 5 and Task 13 step 1/step 3 describe tests and CSS without full code. Task 12 step 5 says so explicitly and instructs the implementer to write the test fully before implementing; Task 13's CSS is genuinely open-ended design work rather than a behaviour with an assertion. Both are weaker than the rest of the plan and should be read as such.
 

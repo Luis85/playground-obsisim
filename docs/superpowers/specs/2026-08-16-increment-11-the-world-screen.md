@@ -4,8 +4,9 @@
 **Predecessor:** `docs/superpowers/specs/2026-08-15-increment-10-a-build-queue-that-converges.md`
 **Backlog Feature:** `docs/requirements/The World Screen.md` (new, under a new
 epic — §6)
-**Issues:** resolves none. Touches no engine code, so OBS-10-01, OBS-10-02 and
-OBS-10-03 are all untouched and all still open after it.
+**Issues:** resolves none; **files OBS-11-01** (§2.1). Touches no engine code, so
+OBS-10-01, OBS-10-02 and OBS-10-03 are all untouched and all still open after
+it.
 
 > **This is a presentation increment.** It adds no mechanic, no command, no
 > snapshot field and no save version. Ten increments have built a simulation
@@ -176,76 +177,37 @@ from its Inspector, open Attention. The Inspector is gone, the selection is
 correctly still there, and without this rule the move stays armed behind a panel
 that no longer shows it. Criterion 6 tests that route by name.
 
-**A zoom floor, and the panels as the navigation.** The map is *not* fixed at
-24×16. That is `DEFAULT_MAP`; `placement.ts` admits `MIN_MAP` 8×6 through
-`MAX_MAP` 256×256, `save.ts` persists and validates the size, and
+**No camera work at all, and a limitation named rather than hidden.** The map
+is *not* fixed at 24×16. That is `DEFAULT_MAP`; `placement.ts` admits `MIN_MAP`
+8×6 through `MAX_MAP` 256×256, `save.ts` persists and validates the size, and
 `mapThatFits`/`grownMap` deliberately grow a migrated colony's map past the
 default when its buildings will not fit. `fitCamera` fits whatever it is given,
-so on a grown map in a sidebar it fits by shrinking tiles toward
-unreadability — acceptable when the canvas was one tab of five, not acceptable
-when it is the primary control surface.
+so on a grown map in a narrow pane it fits by shrinking tiles toward
+unreadability.
 
-So `fitCamera` gains a floor: fit until a tile would fall below a minimum
-readable size, then stop zooming out. Past that point the map is larger than the
-viewport, and the camera **pans** — which is the mechanism, and it is a camera
-one rather than a DOM one. The renderer builds its Excalibur engine with
-`DisplayMode.FillContainer`, so the canvas element is always exactly the host's
-size and `fitCamera` moves nothing but `camera.zoom`; clamping that zoom crops
-the world rather than making the host taller, and an `overflow: auto` host would
-have nothing to scroll.
+**This increment does not address that, deliberately.** `fitCamera` is left
+exactly as it is — always fitting, refitting on every sync, no floor, no pan, no
+`focusOn`. A grown map therefore behaves on the world screen precisely as it
+behaves on today's world tab: no better, and no worse.
 
-Panning is cheap here for one specific reason: **`pick` and `tileAt` already go
-through `engine.screen.pageToWorldCoordinates`**, i.e. through the live camera,
-and `COLONIST_PICK_RADIUS` already divides by the live zoom. Hit-testing is
-therefore correct under a moved camera without being touched. What the increment
-adds is a clamp, a `focusOn(selection)` on the renderer seam that centres a
-subject (bounded so the camera cannot leave the map), and drag-to-pan on the
-canvas — with a movement threshold between pointerdown and pointerup, so a drag
-pans and a click still selects or places.
+That is a real limitation and it is filed as one
+(`docs/issues/2026-08-16-a-grown-map-shrinks-below-readability.md`), because a
+canvas that is now the primary control surface has a stronger claim on being
+readable than a canvas that was one tab of five. The reason it is not fixed here
+is scope honesty rather than indifference: a usable answer needs a zoom floor, a
+camera that survives `sync()` refitting it twice a second, drag-to-pan with a
+click threshold, and a `focusOn` whose behaviour on a plural highlight has to be
+decided — four coupled pieces, none of them unit-testable, since `renderer.ts`
+cannot be imported by tests at all. That is its own increment, and the filed
+issue is where it starts.
 
-**And `fitCamera` has to stop running on every snapshot**, or none of the above
-survives contact with a running colony. `WorldScene.sync()` calls it
-unconditionally, and it rewrites `camera.pos` as well as `camera.zoom` — so at
-two ticks a second a panned or focused camera would snap back to centre within
-half a second, and both drag-to-pan and panel navigation would be unusable in
-exactly the case they exist for.
+What follows from the cut, and is load-bearing for §2.3: **"focus this
+building" is a highlight pulse, not a camera move.** A panel row lights its
+subject up where it already is. On a default-map colony — every colony that has
+not migrated a large v1 save — the whole map is on screen anyway, so a pulse is
+the entire correct behaviour and nothing is lost.
 
-The framing inputs are the map size and the viewport size, and neither changes
-per tick. So `sync()` refits only when one of them has changed since the last
-fit, `refit()` (the pane-resize path) always refits, and the camera is otherwise
-left where the player or `focusOn` put it. A map or viewport change does discard
-a pan, which is correct: the frame it was panned within no longer exists.
-
-This is invisible on a map that fits — the camera is centred and refitting
-recomputes the same value — which is precisely why it can be missed until a
-grown map makes it fatal.
-
-On a default-map colony in a normal pane none of this engages: the floor is
-never reached, the camera is fitted exactly as today, and a drag does nothing.
-
-What makes it good rather than merely correct is §2.3: **the panels are the
-navigation.** Once a map can exceed the viewport, "focus this subject" stops
-being a highlight pulse and becomes *centre, then pulse* — so a Buildings row,
-a colonist row or a single-building Attention row is how you reach the far
-corner of a 64×48 colony without hunting for it, and the dock earns its keep
-twice.
-
-**A plural row does not move the camera.** `focusOn` takes a `Selection`, and a
-highlight set is not one: the buildings of a def can sit at opposite corners,
-framing them all would mean zooming below the floor this whole mechanism exists
-to enforce, and centring an arbitrary member is a rule the player cannot
-predict. So an Economy stage row and a multi-colonist Attention row pulse their
-set and leave the camera exactly where it is. On a grown map that means part of
-a highlight can be off-screen — a real limitation, and the honest one: the
-alternative is a camera that jumps somewhere the player did not ask for.
-
-Single-subject rows are therefore the navigation, and plural rows are the
-survey. Criterion 4 tests both, including that a plural row calls `setHighlight`
-and does **not** call `focusOn`.
-
-Player-driven **zoom** stays out of scope (§5). Pan does not, any more: it was
-excluded on the strength of "the map always fits", and that turned out not to be
-a fact about this codebase.
+Pan and zoom are both out of scope (§5).
 
 **The narrow pane is the layout constraint that matters.** ObsiSim is an
 Obsidian `ItemView` and can be dragged into a sidebar. Below a width threshold
@@ -314,9 +276,6 @@ inside this increment's scope:
   hit-testing exists and only the drawing is new.
 - A new `setHighlight(ids)` carries the plural case — a transient pulse over a
   set, with no selection and no Inspector.
-- A new `focusOn(...)` centres a subject when the map exceeds the viewport
-  (§2.1), and is a no-op when the whole map is on screen — which is why a
-  default-map colony sees a pulse and nothing else.
 
 **An Economy stage row is a def, not a building**, which is why it highlights
 rather than selects. `EconomyView` emits one row per step in `CHAINS` and
@@ -537,8 +496,7 @@ assumption.
 4. **Every row click resolves to what §2.3's table says it resolves to** — a
    building selection, a colonist selection, a highlight set, or nothing —
    asserted **both** on the UI store *and* on the injected fake renderer's
-   `setSelection` / `setHighlight` / `focusOn` calls — including that a plural
-   row calls `setHighlight` and does **not** call `focusOn` (§2.1). The store half alone
+   `setSelection` and `setHighlight` calls. The store half alone
    passes for an implementation that records the selection and never forwards it
    through `WorldStage`, which is a colony where clicking a Population row lights
    up nothing at all. Neither half needs pixels. The inert case (Colony's
@@ -563,28 +521,13 @@ assumption.
    `none`" or as "the dock changed".
 7. **Below the width threshold the dock overlays and the rail collapses**,
    driven by the `ResizeObserver` flag so it is assertable in jsdom.
-8. **A map larger than `DEFAULT_MAP` stays usable.** At a size the viewport
-   cannot fit at the tile floor: the zoom clamps at the floor rather than going
-   below it, `focusOn` centres a building selected from a panel row, the camera
-   cannot be panned off the map, and a drag pans while a click still selects.
-   At `DEFAULT_MAP` in a normal pane: the floor never engages, the camera is
-   fitted exactly as today, `focusOn` is a no-op, and a drag does nothing. Both
-   halves are required — the second is what stops this becoming a regression for
-   every colony that will never have a grown map. The fixture is a save carrying
-   its own `map`, which `save.ts` already validates from `MIN_MAP` to `MAX_MAP`.
-
-   **And the camera survives snapshots**: pan or focus, then deliver several
-   more snapshots, and the camera is still where it was put. This is the
-   discriminating half — it fails against today's `sync()`, which refits
-   unconditionally, and a grown-map test that never ticks would pass with that
-   bug fully intact.
-9. **`npm run check:all` green**, no baseline loosened, no suppression added,
+8. **`npm run check:all` green**, no baseline loosened, no suppression added,
    every `src/` file at or under 500 nonblank lines.
-10. **Coverage floors for `src/app/components/**` and `src/app/views/**` are in
+9. **Coverage floors for `src/app/components/**` and `src/app/views/**` are in
     place at 80/70/80/80 and met.**
-11. **`check:css`'s `!important` baseline is still empty.**
-12. **`npm run smoke:world` passes** against the restructured DOM.
-13. **`git diff --stat <increment-10 merge base>...HEAD -- src/engine src/shared`
+10. **`check:css`'s `!important` baseline is still empty.**
+11. **`npm run smoke:world` passes** against the restructured DOM.
+12. **`git diff --stat <increment-10 merge base>...HEAD -- src/engine src/shared`
     is empty.** Against the base and the branch head, not the working tree: the
     bare `git diff --stat src/engine src/shared` reports nothing once an engine
     edit has been staged or committed, which is precisely the state this
@@ -598,7 +541,7 @@ assumption.
 
 **None.** No constant is added, moved or read differently. `npm run
 test:balance` and `npm run balance:report` must produce output identical to
-increment 10's, and criterion 13 is the reason to expect that rather than hope
+increment 10's, and criterion 12 is the reason to expect that rather than hope
 for it.
 
 ---
@@ -610,10 +553,9 @@ for it.
 - **Any new mechanic**, build-queue reordering included — increment 10 named it
   a good successor, and it stays one, but a player-set priority is a persisted
   engine field and this increment touches no engine.
-- **Player-driven zoom.** No zoom controls, no scroll-wheel zoom, no minimap.
-  §2.1's floor sets the zoom and the player never overrides it. Pan *is* in
-  scope, because the map does not always fit and §2.1 explains why the cheap
-  alternative does not work.
+- **All camera work — pan, zoom, a zoom floor, scroll-into-view, a minimap.**
+  §2.1 explains the cut and names the limitation it accepts; the filed issue is
+  where the successor increment starts.
 - **The open engine debt** — OBS-10-01, OBS-10-02, OBS-10-03. A pure UI branch
   neither fixes nor is blocked by any of them.
 - **Sound.**
@@ -648,11 +590,15 @@ into the front page.
 
 ## 7. What comes after
 
-Two of the four failings that framed this increment are deliberately still
-standing, and both become tractable once the world screen exists:
+Three things are deliberately still standing, and each becomes tractable once
+the world screen exists:
 
 - **A new player is lost.** No goals, no first-hour guidance. Onboarding wants
   a stable screen to teach, which is what this increment builds.
+- **A grown map is unreadable** — OBS-11-01, filed by this increment rather than
+  fixed by it. Zoom floor, a camera that survives `sync()`, drag-to-pan, and a
+  decision about plural focus: four coupled pieces, none unit-testable, and the
+  natural first successor now that the canvas is what the game is played on.
 - **You cannot see what is wrong** is *half* addressed, by the Attention panel.
   The other half — history, so a player can see that bread has been falling for
   four hundred ticks rather than only that it is low now — needs a time series

@@ -1,11 +1,12 @@
 import type { ResourceId } from '../../shared/content-types';
 import type { DemandSource, StoreSite } from '../../shared/haul';
 import { CAMP_SITE_ID, siteDemandOf } from '../../shared/haul';
-import { isRelocating, type TileRef } from '../../shared/placement';
+import { isRelocating, isUnderConstruction, type TileRef } from '../../shared/placement';
 import { BALANCE } from '../content/balance';
 import { BUILDINGS } from '../content/buildings';
 import { RESOURCE_IDS } from '../content/resources';
 import type { Claims } from './haul-claims';
+import { acceptsSupply } from './haul-construction';
 import type { HaulBuildingRow, StaffedSet } from './haul-dispatch';
 
 /**
@@ -42,21 +43,56 @@ export interface TransferCandidate {
 }
 
 /**
- * The buildings a site's demand is derived from: staffed, not relocating, and
- * actually consuming something.
+ * What ONE building would have delivered to it: a construction site's `cost`,
+ * or a finished building's recipe inputs.
+ *
+ * A SITE HAS NO RECIPE AND ITS DEMAND IS ITS BILL, exactly as `siteNeedOf` and
+ * `inputRoomOf` (haul-construction.ts) already read it for the supply leg —
+ * asked through `isUnderConstruction` for the same reason they are, so the
+ * three cannot disagree about what a site wants.
+ *
+ * FLAT, like a recipe consumer's: `siteDemandOf` asks a place for
+ * `targetPerSource` of each resource named here regardless of what is already
+ * standing in the building, and a site is treated the same way — a bill half
+ * paid still names both its materials. Sizing this on the REMAINING bill would
+ * make a depot's demand fall as loads land in the site, which is a different
+ * rule from the one every other consumer gets, and staging is bounded by the
+ * depot's own room and floor either way.
+ */
+function demandInputsOf(row: HaulBuildingRow): ResourceId[] {
+  const def = BUILDINGS[row.building.defId];
+  if (isUnderConstruction(row.construction.ticksLeft)) return Object.keys(def.cost) as ResourceId[];
+  return def.recipe === null ? [] : (Object.keys(def.recipe.inputs) as ResourceId[]);
+}
+
+/**
+ * The buildings a site's demand is derived from: anything a supply load may be
+ * aimed at, not relocating, and actually consuming something.
+ *
+ * `acceptsSupply` (haul-construction.ts) IS THE GATE, rather than a second
+ * spelling of "staffed, or a construction site" — the buildings a depot should
+ * hold stock for are exactly the buildings a hauler may deliver to, and
+ * increment 9 §2.5 already decided that question once for both ends of the
+ * supply leg. Goods staged for a building nobody works are goods parked where
+ * nothing will ever eat them; a SITE is the exception it names, because it is
+ * never staffed, is fed anyway, and refunds what it holds if it is cancelled.
  *
  * Both exclusions are ENGINE conditions — `StaffedSet` and `Relocation` — and
  * filtering here rather than inside `siteDemandOf` is what keeps that law free
- * of them, exactly as `supplyCandidates` filters on `staffed` before it asks
- * `needOf` anything. Goods staged for a building nobody works are goods parked
- * where nothing will ever eat them.
+ * of them, exactly as `supplyCandidates` filters before it asks `needOf`
+ * anything.
+ *
+ * UNTIL INCREMENT 10 THIS SKIPPED SITES, and the consequence was not a
+ * rounding error: a site is the one consumer a player can place at an arbitrary
+ * far tile, so a remote site created no depot demand, staging could not fire
+ * for it at any distance, and OBS-8-06's remote fixture could not be measured
+ * at all (§4.2).
  */
 function demandSourcesOf(buildings: readonly HaulBuildingRow[], staffed: StaffedSet): DemandSource[] {
   const sources: DemandSource[] = [];
   for (const row of buildings) {
-    if (!staffed.has(row.building.id) || isRelocating(row.relocation.ticksLeft)) continue;
-    const { recipe } = BUILDINGS[row.building.defId];
-    const inputs = recipe === null ? [] : (Object.keys(recipe.inputs) as ResourceId[]);
+    if (!acceptsSupply(row, staffed) || isRelocating(row.relocation.ticksLeft)) continue;
+    const inputs = demandInputsOf(row);
     if (inputs.length === 0) continue;
     sources.push({ col: row.position.col, row: row.position.row, inputs });
   }

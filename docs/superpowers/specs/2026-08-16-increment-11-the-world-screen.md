@@ -224,10 +224,24 @@ On a default-map colony in a normal pane none of this engages: the floor is
 never reached, the camera is fitted exactly as today, and a drag does nothing.
 
 What makes it good rather than merely correct is §2.3: **the panels are the
-navigation.** Once a map can exceed the viewport, "focus this building" stops
+navigation.** Once a map can exceed the viewport, "focus this subject" stops
 being a highlight pulse and becomes *centre, then pulse* — so a Buildings row,
-an Attention row or an Economy stage is how you reach the far corner of a 64×48
-colony without hunting for it, and the dock earns its keep twice.
+a colonist row or a single-building Attention row is how you reach the far
+corner of a 64×48 colony without hunting for it, and the dock earns its keep
+twice.
+
+**A plural row does not move the camera.** `focusOn` takes a `Selection`, and a
+highlight set is not one: the buildings of a def can sit at opposite corners,
+framing them all would mean zooming below the floor this whole mechanism exists
+to enforce, and centring an arbitrary member is a rule the player cannot
+predict. So an Economy stage row and a multi-colonist Attention row pulse their
+set and leave the camera exactly where it is. On a grown map that means part of
+a highlight can be off-screen — a real limitation, and the honest one: the
+alternative is a camera that jumps somewhere the player did not ask for.
+
+Single-subject rows are therefore the navigation, and plural rows are the
+survey. Criterion 4 tests both, including that a plural row calls `setHighlight`
+and does **not** call `focusOn`.
 
 Player-driven **zoom** stays out of scope (§5). Pan does not, any more: it was
 excluded on the strength of "the map always fits", and that turned out not to be
@@ -354,7 +368,7 @@ a sentence over a field the snapshot already publishes.
 | --- | --- |
 | `state === 'outputFull'` | *Sawmill is full — nothing is collecting from it* |
 | `state === 'waitingForInput'` | *Bakery has nothing to work with* |
-| `workers === 0 && workerSlots > 0` | *Forester has no one working it* |
+| `state === 'unstaffed'` | *Forester has no one working it* |
 | `constructionNeeds` non-empty | *Sawmill site needs 14 wood* |
 | runway at or under 30 ticks | *Bread empties in ~30t* |
 | colonists with no home | *3 colonists have no bed* |
@@ -523,7 +537,8 @@ assumption.
 4. **Every row click resolves to what §2.3's table says it resolves to** — a
    building selection, a colonist selection, a highlight set, or nothing —
    asserted **both** on the UI store *and* on the injected fake renderer's
-   `setSelection` / `setHighlight` / `focusOn` calls. The store half alone
+   `setSelection` / `setHighlight` / `focusOn` calls — including that a plural
+   row calls `setHighlight` and does **not** call `focusOn` (§2.1). The store half alone
    passes for an implementation that records the selection and never forwards it
    through `WorldStage`, which is a colony where clicking a Population row lights
    up nothing at all. Neither half needs pixels. The inert case (Colony's

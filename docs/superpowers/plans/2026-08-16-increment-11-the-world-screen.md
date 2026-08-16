@@ -2393,6 +2393,15 @@ Add to `tests/app/buildings-view.test.ts`:
     expect(engine.dispatch).not.toHaveBeenCalled();
   });
 
+  it('explains a no-idle-adults refusal, not only a construction site', async () => {
+    const { wrapper } = mountView(makeSnapshot({
+      idleAdults: 0,
+      buildings: [makeBuilding(1, { workers: 1, workerSlots: 3, state: 'producing' })],
+    }));
+    expect(wrapper.get('[data-test="assign-1"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('[data-test="assign-reason-1"]').text()).toContain('No idle adults');
+  });
+
   it('refuses a move to an occupied tile, and says why', async () => {
     const { wrapper, engine } = mountView(makeSnapshot({
       buildings: [makeBuilding(1, { col: 4, row: 1 }), makeBuilding(2, { col: 6, row: 1 })],
@@ -2464,14 +2473,30 @@ checks only slot capacity and `idleAdults`, so a site — which keeps its def's
 shows an enabled `+`. Two surfaces per verb means two gates, or the fallback
 becomes the misleading path:
 
+One helper, not three conditions and one message. The reason has to cover every
+branch the button disables on — including `idleAdults === 0`, which §2.2 names
+as the new case, and which a site-only `v-if` leaves silently disabled:
+
+```ts
+// The same three branches, in the same order, as InspectorPanel's
+// staffingReason — the two surfaces disable on one rule, so they explain it
+// with one wording too. Null means the control is live.
+function staffingRefusal(b: BuildingSnapshot): string | null {
+  if (b.constructionTicks > 0) return 'A construction site cannot be staffed until it is finished.';
+  if (b.workers >= b.workerSlots) return 'Every slot is filled.';
+  if (store.snapshot!.idleAdults === 0) return 'No idle adults — unassign someone first.';
+  return null;
+}
+```
+
 ```vue
             <button
               :data-test="`assign-${b.id}`"
-              :disabled="b.constructionTicks > 0 || b.workers >= b.workerSlots || store.snapshot.idleAdults === 0"
+              :disabled="staffingRefusal(b) !== null"
               @click="engine.dispatch({ type: 'assignWorker', buildingId: b.id })"
             >+</button>
-            <small v-if="b.constructionTicks > 0" class="obsisim-reason" :data-test="`assign-reason-${b.id}`">
-              A construction site cannot be staffed until it is finished.
+            <small v-if="staffingRefusal(b)" class="obsisim-reason" :data-test="`assign-reason-${b.id}`">
+              {{ staffingRefusal(b) }}
             </small>
 ```
 
@@ -2704,6 +2729,28 @@ In `vitest.config.ts`, replace the deferral comment and add:
 ```
 
 Leave `src/app/world/**` unfloored: `renderer.ts` cannot be imported by unit tests at all, so a floor there would be unmeetable by construction.
+
+**A glob threshold is an aggregate, and the PBI is called *Per-View* Coverage
+Floors.** By default Vitest checks these numbers against the combined coverage
+of every file the glob matches, so a well-covered `TopBar` and `NoticeBanner`
+can carry a brand-new panel with almost no tests over the line — the floor would
+be green while the thing it was added to protect is uncovered. Step 2's "if a
+view is short, add the missing case" is unenforceable in that mode, because
+nothing reports which view is short.
+
+Enable per-file checking. **Verify the option against the installed Vitest
+before writing it** — `node_modules/vitest`'s types are the authority, not this
+plan — and take whichever branch is true:
+
+- If `perFile` is accepted inside a glob entry, set it on these two entries
+  alone. Preferred: it leaves the engine and shared floors exactly as they are.
+- If `perFile` is only a top-level `thresholds` option, it applies to every
+  glob including `src/engine/**` and `src/shared/**` at 90/85/90/90. Run
+  `npm run test:coverage` before committing: those are aggregates today, so a
+  single thin engine file can newly fail. If one does, that is a real gap and
+  worth a test — but it is **not** this increment's gap, and if it cannot be
+  closed cheaply, record the number and leave per-file off for the engine globs
+  rather than lowering a floor to fit.
 
 - [ ] **Step 2: Run coverage**
 

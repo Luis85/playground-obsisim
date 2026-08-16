@@ -1,8 +1,8 @@
 import { Actions, createSystem, queryComponents, Read, ReadEntity, Write, WriteResource } from 'sim-ecs';
-import { isRelocating } from '../../shared/placement';
+import { isRelocating, isUnderConstruction } from '../../shared/placement';
 import { BUILDINGS } from '../content/buildings';
 import { storeSitesFrom } from './haul-dispatch';
-import { Age, Building, Colonist, HaulTrip, Home, Hunger, JobAssignment, Position, Relocation } from '../components';
+import { Age, Building, Colonist, Construction, HaulTrip, Home, Hunger, JobAssignment, Position, Relocation } from '../components';
 import { IdCounter, NoticeBoard, PendingChanges, RemovalLedger, SimClock, Stockpile } from '../resources';
 import {
   ageEveryone, announceBandChanges, rehome, resolveOldAge, resolveStarvation, standDownNonAdults, tryBirth,
@@ -31,7 +31,9 @@ export const PopulationSystem = () => createSystem({
     entity: ReadEntity(), colonist: Read(Colonist), age: Write(Age), hunger: Read(Hunger),
     job: Write(JobAssignment), trip: Write(HaulTrip), home: Write(Home),
   }),
-  buildings: queryComponents({ building: Read(Building), position: Read(Position), relocation: Read(Relocation) }),
+  buildings: queryComponents({
+    building: Read(Building), position: Read(Position), relocation: Read(Relocation), construction: Read(Construction),
+  }),
 })
   .withName('PopulationSystem')
   .withRunFunction(({ actions, clock, stockpile, ids, notices, removals, pending, colonists, buildings }) => {
@@ -45,44 +47,43 @@ export const PopulationSystem = () => createSystem({
       // HaulSystem uses, so a relocating or same-tick-demolished storehouse is
       // no more a destination here than it is there.
       sites: storeSitesFrom(buildingRows, pending),
-      shelters: [
-        ...buildingRows
-          .filter(({ building }) => BUILDINGS[building.defId].beds > 0)
-          .map(({ building, position, relocation }) => ({
-            id: building.id,
-            beds: BUILDINGS[building.defId].beds,
-            col: position.col,
-            row: position.row,
-            // > 0: is this house relocating RIGHT NOW? The decrement to 0 happens
-            // LATER this same tick, in ProductionSystem — relocation downtime is
-            // a production stall (increment 5 §2.4), which is why that system
-            // owns the countdown. So on the tick ticksLeft counts down from 1 to
-            // 0, homing still reads the pre-decrement 1 and keeps residents
-            // homeless through it, rehoming them only the tick after — a
-            // one-tick lag, accepted deliberately. The alternative (`> 1`) reads
-            // that same landing tick as already-not-relocating and rehomes a
-            // tick early, handing sumWorkPower's full placementFactor to
-            // residents whose house is still mid-move for a tick genuinely
-            // charged as downtime.
-            //
-            // This boundary is no longer private to this call site: it is
-            // `isRelocating` in src/shared/placement.ts, shared by six readers
-            // across the engine (ProductionSystem, buildingState, both shelter
-            // lists here, needOf) — changing it here changes all of them.
-            relocating: isRelocating(relocation.ticksLeft),
-          })),
-        // Buildings constructed THIS tick (PendingChanges.constructed):
-        // invisible to the `buildings` query above until the post-step sync,
-        // but a colonist must still be able to move in on the very tick the
-        // house goes up — see PendingChanges' own doc comment. Always
-        // `relocating: false`, never read from a Relocation component: a
-        // building just spawned via buildingComponents always starts with
-        // Relocation.ticksLeft === 0, so it cannot be mid-move on the tick it
-        // is built.
-        ...pending.constructed
-          .filter((c) => BUILDINGS[c.defId].beds > 0)
-          .map((c) => ({ id: c.id, beds: BUILDINGS[c.defId].beds, col: c.col, row: c.row, relocating: false })),
-      ],
+      // No `pending.constructed` fold any more (spec §2.5): every ordered
+      // building starts as a construction site, so a house built THIS tick
+      // has exactly as many usable beds as one that has not been built at
+      // all — zero. Before construction existed, folding `pending.constructed`
+      // in here was the deliberate same-tick optimisation that let a colonist
+      // move into a house the instant it finished; keeping it would now
+      // shelter someone in a hole in the ground the moment the order lands.
+      shelters: buildingRows
+        .filter(({ building }) => BUILDINGS[building.defId].beds > 0)
+        .map(({ building, position, relocation, construction }) => ({
+          id: building.id,
+          beds: BUILDINGS[building.defId].beds,
+          col: position.col,
+          row: position.row,
+          // > 0: is this house relocating RIGHT NOW? The decrement to 0 happens
+          // LATER this same tick, in ProductionSystem — relocation downtime is
+          // a production stall (increment 5 §2.4), which is why that system
+          // owns the countdown. So on the tick ticksLeft counts down from 1 to
+          // 0, homing still reads the pre-decrement 1 and keeps residents
+          // homeless through it, rehoming them only the tick after — a
+          // one-tick lag, accepted deliberately. The alternative (`> 1`) reads
+          // that same landing tick as already-not-relocating and rehomes a
+          // tick early, handing sumWorkPower's full placementFactor to
+          // residents whose house is still mid-move for a tick genuinely
+          // charged as downtime.
+          //
+          // This boundary is no longer private to this call site: it is
+          // `isRelocating` in src/shared/placement.ts, shared by six readers
+          // across the engine (ProductionSystem, buildingState, both shelter
+          // lists here, needOf) — changing it here changes all of them.
+          relocating: isRelocating(relocation.ticksLeft),
+          // A site never decrements on its own in this task's window (no
+          // ConstructionSystem yet), so this stays true for as long as the
+          // building remains a hole in the ground — `isUnderConstruction`,
+          // `Construction`'s own boundary, mirroring `isRelocating` above.
+          underConstruction: isUnderConstruction(construction.ticksLeft),
+        })),
       spawn: (...components) => {
         let entity = actions.commands.buildEntity();
         for (const component of components) entity = entity.with(component);

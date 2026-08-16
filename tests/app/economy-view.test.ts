@@ -28,7 +28,7 @@ function mountWith(component: typeof EconomyView | typeof DashboardView, snapsho
 const baseBuilding = {
   col: 0, row: 0, workers: 0, workerSlots: 2, progress: 0, batchActive: false,
   progressPct: 0, tooledWorkers: 0, workPower: 0, buffered: 0, inputBuffered: 0, stored: 0, storage: 0,
-  relocatingTicks: 0, beds: 0, occupants: 0,
+  relocatingTicks: 0, constructionTicks: 0, beds: 0, occupants: 0, constructionNeeds: {},
 };
 
 describe('EconomyView', () => {
@@ -120,6 +120,43 @@ describe('EconomyView', () => {
     const pressure = wrapper.find('[data-test="input-pressure"]');
     expect(pressure.text()).toContain('keeping up');
     expect(pressure.classes()).not.toContain('obsisim-negative');
+  });
+
+  // The build-side third of §2.10's three backlogs. unitsNeeded (14 + 3 = 17)
+  // and buildingsUnderConstruction (2) are deliberately distinct, and neither
+  // coincides with the finished forester's own zero — a getter reading the
+  // wrong slot, or counting every building rather than just the sites, fails
+  // this rather than passing by coincidence.
+  it('states the build backlog and how many sites are under construction', async () => {
+    const wrapper = mountWith(EconomyView, makeSnapshot({
+      buildings: [
+        makeBuilding(1, { defId: 'mill', state: 'underConstruction', constructionNeeds: { wood: 14 } }),
+        makeBuilding(2, { defId: 'house', state: 'underConstruction', constructionNeeds: { wood: 3 } }),
+        makeBuilding(3, { defId: 'forester', state: 'producing' }),
+      ],
+    }));
+    await wrapper.vm.$nextTick();
+    const build = wrapper.find('[data-test="build-pressure"]');
+    expect(build.text()).toContain('17 units needed');
+    expect(build.text()).toContain('2 sites under construction');
+  });
+
+  it('uses the singular "site" when exactly one is under construction', async () => {
+    const wrapper = mountWith(EconomyView, makeSnapshot({
+      buildings: [makeBuilding(1, { defId: 'mill', state: 'underConstruction', constructionNeeds: { wood: 14 } })],
+    }));
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-test="build-pressure"]').text()).toContain('1 site under construction');
+  });
+
+  it('says nothing is under construction when the queue is empty', async () => {
+    const wrapper = mountWith(EconomyView, makeSnapshot({
+      buildings: [makeBuilding(1, { defId: 'forester', state: 'producing' })],
+    }));
+    await wrapper.vm.$nextTick();
+    const build = wrapper.find('[data-test="build-pressure"]');
+    expect(build.text()).toContain('Nothing is under construction');
+    expect(build.classes()).not.toContain('obsisim-negative');
   });
 
   it('uses the singular "hauler" when exactly one is on duty', async () => {

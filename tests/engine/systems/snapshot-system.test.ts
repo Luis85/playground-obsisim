@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Building, OutputBuffer, Production } from '../../../src/engine/components';
+import { Building, Construction, OutputBuffer, Production } from '../../../src/engine/components';
 import { IdCounter, NoticeBoard, SnapshotStore, Stockpile } from '../../../src/engine/resources';
 import { HaulSystem } from '../../../src/engine/systems/haul-system';
 import { ProductionSystem } from '../../../src/engine/systems/production-system';
@@ -47,6 +47,37 @@ describe('SnapshotSystem', () => {
 
     expect(snapshot.colonists.map((w) => w.buildingId)).toEqual([buildingId, null]);
     expect(snapshot.colonists[0].toolTicks).toBe(10);
+  });
+
+  // §2.7's table, exclusion 5 of 5 (task 2b) — a PIN, not a change.
+  // `colonyWealth` sums the `Stockpile` ledger alone, and a site's delivered
+  // materials sit in an `InputBuffer`, which never enters that sum: the
+  // exclusion is structural already, on both counts this test names — not in
+  // the ledger the materials left (never added to `Stockpile` here) AND not in
+  // the building they have not become (the site is not finished, so nothing
+  // it holds is `stored` either). No production-code change backs this test;
+  // it exists to catch a FUTURE change that folds `InputBuffer` into the
+  // wealth sum without noticing a site is not a purchase.
+  it('a site is not counted as colony wealth', async () => {
+    const save = initialSave();
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
+    save.stockpile = { wood: 10 };
+    const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
+    const ids = getPrepResource(prep, IdCounter);
+    const site = spawnBuilding(prep, ids, {
+      defId: 'house', progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 0,
+      inputBuffer: { planks: 50 },
+    });
+    site.getComponent(Construction)!.ticksLeft = BALANCE.buildTicks;
+    const world = await prep.prepareRun();
+    await world.step();
+    const snapshot = world.getResource(SnapshotStore).latest!;
+
+    // 50 planks at value 3 would be 150 — dwarfing the 10 wood@1 below — so a
+    // wealth sum that reached into InputBuffer could not pass this by
+    // coincidence.
+    expect(snapshot.colonyWealth).toBe(10 * 1); // wood@1 alone
   });
 
   it('counts food standing in a storehouse toward meals per head', async () => {
@@ -117,6 +148,135 @@ describe('SnapshotSystem', () => {
 
     expect(snapshot.buildings[0].state).toBe('unstaffed');
     expect(snapshot.buildings[1].state).toBe('outputFull');
+  });
+
+  // §2.5/§2.10, and the engine projection's own fixture (task 9): `buildingState`
+  // tested storage, then recipe, then staffing — all three BEFORE construction —
+  // so a storehouse site read 'storing', a house site read 'housing', and only a
+  // producer site read 'unstaffed'. A producer-only fixture cannot catch the
+  // other two mis-reporting, so this is three sites, not one, plus a fourth
+  // condition (staffed AND batchActive) that would otherwise outrank staffing
+  // and read 'producing'. Every InputBuffer here is genuinely LIVE — walked
+  // through `spawnBuilding`'s real `Construction`/`InputBuffer` components, not
+  // a hand-built `BuildingSnapshot` — which is the only way to catch an
+  // implementation that leaves the live path reading the old state or the wrong
+  // shortfall while every other suite (which builds snapshots directly) stays
+  // green regardless.
+  it('reports underConstruction ahead of every other state, and the per-material shortfall, for all three building kinds', async () => {
+    const save = initialSave();
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
+    const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
+    const ids = getPrepResource(prep, IdCounter);
+    // Mill costs { wood: 20, planks: 10 }. 6 wood delivered, no planks: needs
+    // 14 wood (spec §2.10's own example) and the full 10 planks. Staffed AND
+    // mid-batch, so a buggy precedence chain would read 'producing', not
+    // merely 'unstaffed' — the fourth condition this fixture is for.
+    const millSite = spawnBuilding(prep, ids, {
+      defId: 'mill', progress: 1, batchActive: true, col: 4, row: 1, relocatingTicks: 0,
+      constructionTicks: BALANCE.buildTicks, inputBuffer: { wood: 6 },
+    });
+    spawnColonist(prep, ids, { buildingId: millSite.getComponent(Building)!.id, ageTicks: BALANCE.lifeBands.matureTicks });
+    // House costs { wood: 15, planks: 5 }. 3 wood, 2 planks delivered: needs
+    // 12 wood, 3 planks — deliberately distinct from the mill's shortfall, so
+    // a cross-wired def's cost cannot pass by coincidence.
+    const houseSite = spawnBuilding(prep, ids, {
+      defId: 'house', progress: 0, batchActive: false, col: 6, row: 1, relocatingTicks: 0,
+      constructionTicks: BALANCE.buildTicks, inputBuffer: { wood: 3, planks: 2 },
+    });
+    // Storehouse costs { wood: 20, planks: 10 }, same catalog shape as the
+    // mill's — the shortfall (15/6) and the delivered amounts (5/4) are both
+    // distinct from the mill's own (6 wood, needs 14/10), so the two producer-
+    // shaped defs cannot be confused for each other either.
+    const storehouseSite = spawnBuilding(prep, ids, {
+      defId: 'storehouse', progress: 0, batchActive: false, col: 8, row: 1, relocatingTicks: 0,
+      constructionTicks: BALANCE.buildTicks, inputBuffer: { wood: 5, planks: 4 },
+    });
+
+    const world = await prep.prepareRun();
+    await world.step();
+    const snapshot = world.getResource(SnapshotStore).latest!;
+    const byId = new Map(snapshot.buildings.map((b) => [b.id, b]));
+
+    const mill = byId.get(millSite.getComponent(Building)!.id)!;
+    expect(mill.state).toBe('underConstruction'); // was 'unstaffed' (and would be 'producing' unguarded)
+    expect(mill.constructionNeeds).toEqual({ wood: 14, planks: 10 });
+    expect(mill.workerSlots).toBe(0); // was BUILDINGS.mill.workerSlots (2) — the assign-button capacity a site does not have
+
+    const house = byId.get(houseSite.getComponent(Building)!.id)!;
+    expect(house.state).toBe('underConstruction'); // was 'housing'
+    expect(house.constructionNeeds).toEqual({ wood: 12, planks: 3 });
+    expect(house.beds).toBe(0); // was BALANCE.houseBeds
+
+    const store = byId.get(storehouseSite.getComponent(Building)!.id)!;
+    expect(store.state).toBe('underConstruction'); // was 'storing'
+    expect(store.constructionNeeds).toEqual({ wood: 15, planks: 6 });
+    expect(store.storage).toBe(0); // was BALANCE.storehouseCapacity
+  });
+
+  // The clamp itself: a resource delivered to EXACTLY its cost must be
+  // OMITTED from constructionNeeds, not published as a zero entry — the
+  // difference between "needs 0 wood" (a bug: the map is a Partial<Record>
+  // consumers iterate with Object.entries/Object.keys) and genuinely needing
+  // nothing more of it. Wood is delivered to exactly the mill's cost (20);
+  // planks are untouched, so the surviving entry proves the loop still ran.
+  it('omits a fully-delivered resource from the shortfall rather than publishing it at zero', async () => {
+    const save = initialSave();
+    save.colonists = [];
+    save.buildings = [];
+    const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
+    const ids = getPrepResource(prep, IdCounter);
+    spawnBuilding(prep, ids, {
+      defId: 'mill', progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 0,
+      constructionTicks: BALANCE.buildTicks, inputBuffer: { wood: 20 }, // exactly BUILDINGS.mill.cost.wood
+    });
+    const world = await prep.prepareRun();
+    await world.step();
+    const snapshot = world.getResource(SnapshotStore).latest!;
+    const needs = snapshot.buildings[0].constructionNeeds;
+    expect(Object.keys(needs)).not.toContain('wood');
+    expect(needs).toEqual({ planks: 10 });
+  });
+
+  // §2.5's own row, by name: "a site reports underConstruction, not
+  // relocating or waitingForInput". The engine never produces this
+  // combination through a legitimate command (`handleMoveBuilding` refuses a
+  // site, and Task 8's save guard rejects a record carrying both counters) —
+  // but `buildingState`'s precedence order is written down as a formality
+  // for exactly the case where that exclusion is bypassed, so this fixture
+  // sets BOTH counters directly on the live components (as a corrupt-but-
+  // loaded save or a future bug could) to prove the order actually holds
+  // rather than merely being true by construction.
+  it('reports underConstruction ahead of relocating, even for a building carrying both counters', async () => {
+    const save = initialSave();
+    save.colonists = [];
+    save.buildings = [];
+    const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
+    const ids = getPrepResource(prep, IdCounter);
+    spawnBuilding(prep, ids, {
+      defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1,
+      relocatingTicks: 5, constructionTicks: BALANCE.buildTicks,
+    });
+    const world = await prep.prepareRun();
+    await world.step();
+    const snapshot = world.getResource(SnapshotStore).latest!;
+    expect(snapshot.buildings[0].state).toBe('underConstruction');
+  });
+
+  it('publishes no construction shortfall for a finished building', async () => {
+    // The control for the fixture above: constructionNeeds is a SITE-only
+    // field, `{}` the moment a building is not one — a live forester, never
+    // ordered against a countdown at all.
+    const save = initialSave();
+    save.colonists = [];
+    save.buildings = [];
+    const prep = buildColonyPrepWorld({ save, systems: [SnapshotSystem] });
+    const ids = getPrepResource(prep, IdCounter);
+    spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 4, row: 1, relocatingTicks: 0 });
+    const world = await prep.prepareRun();
+    await world.step();
+    const snapshot = world.getResource(SnapshotStore).latest!;
+    expect(snapshot.buildings[0].constructionNeeds).toEqual({});
   });
 
   it('reports the trip target, phase and remaining ticks on BOTH legs', async () => {

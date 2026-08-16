@@ -1,7 +1,7 @@
 import type { IRuntimeWorld } from 'sim-ecs';
 import type { Command } from '../shared/commands';
 import type { EngineStatus, Snapshot } from '../shared/snapshot';
-import type { SaveGameV6 } from '../shared/save';
+import type { SaveGameV7 } from '../shared/save';
 import { LATEST_SAVE_VERSION, MAX_SAVED_COUNTER } from '../shared/save';
 import { BALANCE } from './content/balance';
 import { CommandQueue, IdCounter, RemovalLedger, SimClock, SnapshotStore, Stockpile, WorldMap } from './resources';
@@ -11,7 +11,7 @@ import { applyRemovals, createColonyWorld, initialSave, refreshEntitySections } 
 
 export type UpdateListener = (snapshot: Snapshot | null, status: EngineStatus) => void;
 
-export function buildSaveFromWorld(world: IRuntimeWorld): SaveGameV6 {
+export function buildSaveFromWorld(world: IRuntimeWorld): SaveGameV7 {
   const clock = world.getResource(SimClock);
   const facts = gatherEntityFacts(world);
   const stockpile = world.getResource(Stockpile).toJSON();
@@ -54,11 +54,11 @@ export class GameEngine {
   private stepping = false;
   private inFlight: Promise<void> | null = null;
   private readonly updateListeners: UpdateListener[] = [];
-  private autosaveListener: ((save: SaveGameV6) => void) | null = null;
+  private autosaveListener: ((save: SaveGameV7) => void) | null = null;
 
   private constructor(private world: IRuntimeWorld) {}
 
-  static async create(save?: SaveGameV6 | null): Promise<GameEngine> {
+  static async create(save?: SaveGameV7 | null): Promise<GameEngine> {
     return new GameEngine(await createColonyWorld(save ?? initialSave()));
   }
 
@@ -75,7 +75,7 @@ export class GameEngine {
     listener(this.snapshot, this.status);
   }
 
-  onAutosave(listener: (save: SaveGameV6) => void): void {
+  onAutosave(listener: (save: SaveGameV7) => void): void {
     this.autosaveListener = listener;
   }
 
@@ -215,7 +215,7 @@ export class GameEngine {
     this.publish();
   }
 
-  serialize(): SaveGameV6 {
+  serialize(): SaveGameV7 {
     // live ECS state, never the snapshot — see buildSaveFromWorld
     return buildSaveFromWorld(this.world);
   }

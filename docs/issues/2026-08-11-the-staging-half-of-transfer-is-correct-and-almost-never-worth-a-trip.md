@@ -83,6 +83,34 @@ spec section.
   staging was designed for and is the case this repository cannot currently
   express — which is the first suggestion below rather than an excuse.
 
+## Increment 9 did not measure this, and increment 10 owns the reading (2026-08-16)
+
+`[[Construction as Work]]`'s spec originally claimed this reading. A construction
+site is a consumer at an arbitrary player-chosen tile, which is exactly the remote
+fixture this note says the repository lacks — every existing fixture puts the camp
+within a few tiles of everything that consumes.
+
+**That reasoning still holds. The timing was wrong, and the reading was not
+taken.** Taking it requires teaching `demandSourcesOf` (`haul-transfer.ts:54`)
+about sites: it skips unstaffed buildings and derives demand from `recipe.inputs`
+alone, and a site is deliberately unstaffed and needs `def.cost`. **As the engine
+stands, a remote site creates no depot demand and staging cannot fire for it at
+any distance.** So a measurement taken today would report "staging never fires"
+from an instrument that was never connected — the increment-7 harness failure
+repeating, and the third of the three outcomes below reached by construction
+rather than by evidence.
+
+That is a dispatch change, and increment 9 was scoped to make none: it left
+`compareSupplyCandidates` and `nextSupplyTarget` untouched so that the queue
+ordering could be designed against a measured baseline instead of alongside it.
+Making one exception for an instrument would have put a hand into exactly the
+machinery the scope line was drawn around.
+
+**It moves whole to increment 10** (`docs/superpowers/specs/2026-08-15-increment-10-a-build-queue-that-converges.md`
+§4.2), which changes dispatch anyway, with the warning intact: **connect the
+instrument before taking the reading.** This note stays `Open` and unmeasured
+until then — no evidence has been added for or against it since increment 8.
+
 ## Suggested resolution
 
 Three orderings, and the choice should be made on a measurement rather than on

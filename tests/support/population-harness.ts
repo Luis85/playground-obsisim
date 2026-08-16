@@ -1,7 +1,7 @@
 import { createSystem, queryComponents, Read, Write, WriteResource } from 'sim-ecs';
 import type { IPreptimeWorld } from 'sim-ecs';
 import type { ResourceId } from '../../src/shared/content-types';
-import type { SaveGameV6 } from '../../src/shared/save';
+import type { SaveGameV7 } from '../../src/shared/save';
 import { autoPlaceSequence, type TileRef, type WorldMapSize } from '../../src/shared/placement';
 import { stageOf } from '../../src/shared/population';
 import { BALANCE } from '../../src/engine/content/balance';
@@ -263,7 +263,7 @@ function autoStaffSystem(targetHaulers: number): TColonySystemFactory {
  * which would collide with what this harness places — and `nextEntityId: 1`
  * would mint those ids a second time.
  */
-function blankSave(): SaveGameV6 {
+function blankSave(): SaveGameV7 {
   return { ...initialSave(), buildings: [], colonists: [], stockpile: {} as Partial<Record<ResourceId, number>>, nextEntityId: 1 };
 }
 

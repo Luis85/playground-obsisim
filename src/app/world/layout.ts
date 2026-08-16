@@ -3,6 +3,7 @@ import type { LifeStage } from '../../shared/population';
 import type { BuildingDefId } from '../../shared/content-types';
 import { BUILDINGS } from '../../engine/content';
 import { CAMP_TILE, legPositionOf } from '../../shared/haul';
+import { needsLabel } from '../labels';
 
 export const TILE = 48;
 
@@ -205,6 +206,20 @@ export interface WorldPick {
  */
 function describeBuilding(b: BuildingSnapshot): string[] {
   const name = BUILDINGS[b.defId].name;
+  // A SITE IS ASKED FIRST, because the two branches below are keyed on
+  // capacities a site does not have yet. `beds` and `storage` are both
+  // published as 0 while `constructionTicks > 0` (snapshot-buildings.ts) —
+  // deliberately, since a site shelters nobody and stores nothing — so a house
+  // site and a storehouse site both fall past them into the producer lines and
+  // read "0/0 workers" and "no active batch". That is three wrong statements
+  // about a hole in the ground, on the surface a player hovers first.
+  //
+  // Shows what SelectionPanel shows for the same building: the countdown, and
+  // the per-material shortfall that distinguishes a site still being fed from
+  // one nothing is walking toward.
+  if (b.constructionTicks > 0) {
+    return [name, `under construction — ${b.constructionTicks}t left`, `needs ${needsLabel(b.constructionNeeds)}`];
+  }
   if (b.beds > 0) return [name, `${b.occupants}/${b.beds} residents — ${b.state}`];
   if (b.storage > 0) return [name, `${b.stored}/${b.storage} stored — ${b.state}`];
   return [

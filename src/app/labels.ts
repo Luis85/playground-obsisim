@@ -8,6 +8,7 @@ export const BUILDING_STATE_LABELS: Record<BuildingState, string> = {
   waitingForInput: 'Waiting for input',
   unstaffed: 'Unstaffed',
   outputFull: 'Output full',
+  underConstruction: 'Under construction',
   relocating: 'Relocating',
   housing: 'Housing',
   storing: 'Storing',
@@ -120,6 +121,20 @@ export function commuteLabel(homeId: number | null, tiles: number, factor: numbe
  */
 export function waitingLabel(storage: number, stored: number, buffered: number): string {
   return storage > 0 ? `${stored} / ${storage}` : `${buffered}`;
+}
+
+/**
+ * "14 Wood" for a site still short of one material, "10 Wood, 5 Planks" for
+ * one short of several — the Buildings table's Needs column, spec §2.10's
+ * "needs 14 wood". Reuses `costLabel`'s own formatting (the Construct table's
+ * Cost column already renders a `CostMap` this way) rather than a second
+ * formatter for what is structurally the same map. An em dash for a finished
+ * building, matching `downtimeLabel`'s convention: `constructionNeeds` is `{}`
+ * for everything that is not a site, and a blank cell there would read as a
+ * bug rather than as "nothing owed".
+ */
+export function needsLabel(needs: CostMap): string {
+  return Object.keys(needs).length > 0 ? costLabel(needs) : '—';
 }
 
 /**

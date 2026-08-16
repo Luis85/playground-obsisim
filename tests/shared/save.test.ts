@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { SaveGameV5, SaveGameV6, SavedColonist } from '../../src/shared/save';
-import { isSaveGameV4, isSaveGameV5, isSaveGameV6 } from '../../src/shared/save';
+import type { SaveGameV5, SaveGameV6, SaveGameV7, SavedColonist } from '../../src/shared/save';
+import { isSaveGameV4, isSaveGameV5, isSaveGameV6, isSaveGameV7 } from '../../src/shared/save';
 
 /**
  * The structural v5 guard, probed directly rather than through
@@ -174,5 +174,69 @@ describe('isSaveGameV6', () => {
     expect(isSaveGameV5(v5Fixture())).toBe(true);
     expect(isSaveGameV6(v5Fixture())).toBe(false);
     expect(isSaveGameV5(v6Fixture())).toBe(false);
+  });
+
+  it('a genuine v6 save — no constructionTicks anywhere in it — still passes', () => {
+    // THE FREEZE TEST, at the structural guard. `SavedBuildingV6` is frozen so
+    // that v7's new required field cannot leak into v6 validation: if it did,
+    // every v6 file ever written would be rejected HERE, before the v6 -> v7
+    // migration that supplies the zero could ever run — a correct migration,
+    // made unreachable.
+    const v6 = v6Fixture();
+    expect(JSON.stringify(v6).includes('constructionTicks')).toBe(false);
+    expect(isSaveGameV6(v6)).toBe(true);
+  });
+});
+
+
+/**
+ * The v7 fixture: a v6 one whose building carries the construction countdown.
+ *
+ * 4 rather than 0, and distinct from every other number in the fixture (3
+ * wheat, 8 planks, 10 wood, id 1, tick 100), so an assertion cannot pass by
+ * reading a neighbour's value — and so "the field is present" is genuinely
+ * checked rather than satisfied by the falsy default a missing field reads as.
+ */
+function v7Fixture(): SaveGameV7 {
+  return {
+    ...v6Fixture(),
+    version: 7,
+    buildings: [{ ...v6Fixture().buildings[0], constructionTicks: 4 }],
+  };
+}
+
+describe('isSaveGameV7', () => {
+  it('accepts a well-formed v7 save', () => {
+    expect(isSaveGameV7(v7Fixture())).toBe(true);
+  });
+
+  it('requires constructionTicks on every building record', () => {
+    const save = v7Fixture();
+    const building = { ...save.buildings[0] } as Record<string, unknown>;
+    delete building.constructionTicks;
+    save.buildings = [building as unknown as SaveGameV7['buildings'][number]];
+    expect(isSaveGameV7(save)).toBe(false);
+  });
+
+  it('rejects a negative or fractional constructionTicks', () => {
+    // The guard must be `isTickCounter` — the one `starvingTicks` and
+    // `ageTicks` use — NOT the bare `Number.isFinite` that guards
+    // `relocatingTicks`. -1 and 1.5 both pass `Number.isFinite`, so they are
+    // the two values that tell the two guards apart; NaN and 'abc' are covered
+    // by either and are here only so the walk is complete.
+    for (const bad of [-1, 1.5, Number.NaN, 'abc', null]) {
+      const save = v7Fixture();
+      save.buildings = [{ ...save.buildings[0], constructionTicks: bad as never }];
+      expect(isSaveGameV7(save), `constructionTicks=${String(bad)}`).toBe(false);
+    }
+  });
+
+  it('rejects a v6 save, and isSaveGameV6 rejects a v7 one', () => {
+    // The non-overlap rule every adjacent pair above states, restated for the
+    // pair whose freeze this version turns on: a v6 that also passed the v7
+    // guard would skip the migration that supplies the countdown, and every
+    // site in the file would load as a finished building.
+    expect(isSaveGameV7(v6Fixture())).toBe(false);
+    expect(isSaveGameV6(v7Fixture())).toBe(false);
   });
 });

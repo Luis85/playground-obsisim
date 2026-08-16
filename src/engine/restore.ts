@@ -1,10 +1,11 @@
 import type { ResourceId } from '../shared/content-types';
-import type { SavedBuilding, SavedColonist, SaveGameV6 } from '../shared/save';
+import type { SavedBuilding, SavedColonist, SaveGameV7 } from '../shared/save';
 import { lifespanFor, stageOf } from '../shared/population';
+import { isUnderConstruction } from '../shared/placement';
 import { BALANCE } from './content/balance';
 import { BUILDINGS } from './content/buildings';
 import type { Stockpile } from './stockpile';
-import { clampedAge, clampedBuffer, clampedHunger, clampedStarving, clampedToolTicks } from './spawn';
+import { clampedAge, clampedBuffer, clampedConstruction, clampedHunger, clampedStarving, clampedToCost, clampedToolTicks } from './spawn';
 
 /**
  * The roster a save actually restores as.
@@ -26,7 +27,7 @@ import { clampedAge, clampedBuffer, clampedHunger, clampedStarving, clampedToolT
  * that deliberately spawns an elder holding a job — to prove
  * `standDownNonAdults` clears it — would become vacuous rather than fail.
  */
-export function restoredColonists(save: SaveGameV6): SavedColonist[] {
+export function restoredColonists(save: SaveGameV7): SavedColonist[] {
   // Before the bed count, not after: a colonist the rules have already killed
   // must not hold one of the beds `settledHomes` is handing out, or the repair
   // for one balance retune displaces a living colonist on behalf of a dead one
@@ -114,13 +115,22 @@ function hasLifeLeft(saved: SavedColonist): boolean {
  *
  * The same exclusion governs the FILL half below, for the same one-line reason:
  * a bed in a house in transit is not a bed to move anyone into either.
+ *
+ * A house still UNDER CONSTRUCTION is excluded on the identical argument, and
+ * save v7 is what first makes one expressible: a site provides none of its
+ * service (`isUnderConstruction`, spec §2.5), so its beds do not exist yet.
+ * Without the term an unfinished house seats colonists at load and the PAUSED
+ * initial snapshot reports them housed — for as long as the player leaves it
+ * paused — until the first tick's `rehome` evicts them.
  */
-function usableBeds(buildings: SaveGameV6['buildings']): Map<number, number> {
+function usableBeds(buildings: SaveGameV7['buildings']): Map<number, number> {
   const beds = new Map<number, number>();
   for (const b of buildings) {
     if (!Object.hasOwn(BUILDINGS, b.defId)) continue;
     const { beds: count } = BUILDINGS[b.defId];
-    if (count > 0 && b.relocatingTicks === 0) beds.set(b.id, count);
+    if (count > 0 && b.relocatingTicks === 0 && !isUnderConstruction(clampedConstruction(b.constructionTicks))) {
+      beds.set(b.id, count);
+    }
   }
   return beds;
 }
@@ -179,7 +189,7 @@ function claimOpening(openings: [number, number][]): number | null {
  */
 function settledHomes(
   colonists: readonly SavedColonist[],
-  buildings: SaveGameV6['buildings'],
+  buildings: SaveGameV7['buildings'],
 ): ReadonlyMap<number, number | null> {
   const beds = usableBeds(buildings);
   const rows = [...colonists].sort((a, b) => a.id - b.id);
@@ -232,6 +242,39 @@ export function seedStoredGoods(stockpile: Stockpile, buildings: readonly SavedB
     for (const [id, amount] of Object.entries(saved.stored)) {
       const spilled = (amount ?? 0) - (kept.get(id as ResourceId) ?? 0);
       if (spilled > 0) stockpile.refund(id as ResourceId, spilled);
+    }
+  }
+}
+
+/**
+ * Materials a restored construction site may no longer legally hold, banked at
+ * the camp — the conservation half of `clampedToCost` (spawn.ts).
+ *
+ * `seedStoredGoods` above spills an over-capacity `stored` for the same reason
+ * and through the same call, and this is that rule applied to the OTHER pile
+ * whose bound is content rather than balance. The difference from every other
+ * buffer clamp: an over-cap out-tray or in-tray is trimmed silently because
+ * the engine itself wrote it under a cap that has not moved, while a site's
+ * bill is its def's `cost`, and rebalancing a cost DOWN would otherwise
+ * confiscate materials haulers already walked out and the ledger already
+ * recorded as consumed. A site's tray sits outside `Stockpile`, so there is
+ * nowhere for them to fall back to.
+ *
+ * `refund`, never `add`: this reconstructs a state the engine previously wrote
+ * and no hauler carried anything, so recording it as a delivery would inflate
+ * the Economy view's Delivered/t on the first tick after every load.
+ *
+ * A finished building is untouched — `restoredInputBuffer` bounds its in-tray
+ * by `inputBufferCap` instead, which is balance and trims as it always has.
+ */
+export function refundTrimmedMaterials(stockpile: Stockpile, buildings: readonly SavedBuilding[]): void {
+  for (const saved of buildings) {
+    if (!Object.hasOwn(BUILDINGS, saved.defId)) continue;
+    if (!isUnderConstruction(clampedConstruction(saved.constructionTicks))) continue;
+    const kept = clampedToCost(saved.inputBuffer, saved.defId);
+    for (const [id, amount] of Object.entries(saved.inputBuffer)) {
+      const declined = (amount ?? 0) - (kept.get(id as ResourceId) ?? 0);
+      if (declined > 0) stockpile.refund(id as ResourceId, declined);
     }
   }
 }

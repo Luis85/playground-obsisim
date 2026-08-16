@@ -52,7 +52,7 @@ describe('BuildingsView', () => {
 
     useGameStore().ingest(makeSnapshot({ buildings: [] }), { paused: true, speed: 1, error: null });
     await waiting.wrapper.vm.$nextTick();
-    const cell = waiting.wrapper.get('td[colspan="11"]');
+    const cell = waiting.wrapper.get('td[colspan="12"]');
     expect(cell.text()).toContain('Forester');
     expect(cell.text()).toMatch(/Gatherer.?s Hut/);
     expect(cell.text()).toContain('10 wood each');
@@ -166,6 +166,63 @@ describe('BuildingsView', () => {
     const { wrapper } = mountView({}, 'producing', { relocatingTicks: 0 });
     await wrapper.vm.$nextTick();
     expect(wrapper.find('[data-test="downtime-7"]').text()).toBe('—');
+  });
+
+  // §2.10: a site's Workers column reads 0/0 (the assign-button capacity a
+  // site does not have — `workerSlots` is zeroed by the projection, not by a
+  // template-level state check) and the Needs column names what it still
+  // owes. idleAdults: 3 rules out the OTHER disabled reason
+  // (`idleAdults === 0`), so the button is disabled by workerSlots alone.
+  it('a producer site reports underConstruction, names its shortfall, and disables the assign button', async () => {
+    const wrapper = mount(BuildingsView, {
+      global: {
+        plugins: [createTestingPinia({ createSpy: vi.fn, stubActions: false })],
+        provide: { [ENGINE_KEY as symbol]: { dispatch: vi.fn() } },
+      },
+    });
+    useGameStore().ingest(makeSnapshot({
+      buildings: [makeBuilding(7, {
+        defId: 'mill', state: 'underConstruction', workers: 0, workerSlots: 0,
+        constructionTicks: 20, constructionNeeds: { wood: 14, planks: 10 },
+      })],
+      idleAdults: 3,
+    }), { paused: true, speed: 1, error: null });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).toContain('Under construction');
+    expect(wrapper.find('[data-test="needs-7"]').text()).toBe('14 Wood, 10 Planks');
+    expect(wrapper.text()).toContain('0 / 0'); // Workers column: 0 staffed of 0 slots, the capacity a site does not have
+    expect((wrapper.find('[data-test="assign-7"]').element as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('shows an em dash in the Needs column for a finished building', async () => {
+    const { wrapper } = mountView();
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-test="needs-7"]').text()).toBe('—');
+  });
+
+  // The UI half of acceptance criterion 5 (§2.3/§2.10): two houses each
+  // costing exactly the stockpile, the first already queued. Published stock
+  // is UNCHANGED (Task 2 leaves it alone at order time), so a getter reading
+  // stock alone would still call a second house affordable — this fixture is
+  // what proves `affordableDefs` subtracts the queued site's own shortfall
+  // instead.
+  it('the construct button refuses a second house once one is queued against the same materials', async () => {
+    const wrapper = mount(BuildingsView, {
+      global: {
+        plugins: [createTestingPinia({ createSpy: vi.fn, stubActions: false })],
+        provide: { [ENGINE_KEY as symbol]: { dispatch: vi.fn() } },
+      },
+    });
+    useGameStore().ingest(makeSnapshot({
+      buildings: [makeBuilding(1, {
+        defId: 'house', state: 'underConstruction', constructionTicks: 20,
+        constructionNeeds: { wood: 15, planks: 5 }, // nothing delivered yet: the site's whole cost
+      })],
+    }), { paused: true, speed: 1, error: null });
+    useGameStore().snapshot!.stockpile.wood.stock = 15;
+    useGameStore().snapshot!.stockpile.planks.stock = 5;
+    await wrapper.vm.$nextTick();
+    expect((wrapper.find('[data-test="construct-house"]').element as HTMLButtonElement).disabled).toBe(true);
   });
 
   // A producer and a house in ONE render, because the two share a column: a

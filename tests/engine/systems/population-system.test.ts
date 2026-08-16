@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { IRuntimeWorld } from 'sim-ecs';
-import { Building, Colonist, HaulTrip, JobAssignment } from '../../../src/engine/components';
+import { Building, Colonist, Construction, HaulTrip, JobAssignment } from '../../../src/engine/components';
 import { IdCounter, SimClock, SnapshotStore, Stockpile } from '../../../src/engine/resources';
 import {
-  ALL_SYSTEMS, buildColonyPrepWorld, getPrepResource, initialSave, isLoadableSave, spawnBuilding, spawnColonist,
+  ALL_SYSTEMS, buildColonyPrepWorld, getPrepResource, initialSave, isLoadableSave, refreshEntitySections, spawnBuilding, spawnColonist,
 } from '../../../src/engine/world';
 import { buildSaveFromWorld } from '../../../src/engine/game-engine';
 import { BALANCE } from '../../../src/engine/content/balance';
@@ -435,6 +435,49 @@ describe('PopulationSystem — homing', () => {
     expect(snap().buildings.find((b) => b.id === houseId)!.occupants).toBe(1);
   });
 
+  // §2.7's table, exclusion 1 of 5 (task 2b): a house under construction is a
+  // hole in the ground, not a shelter. Two mechanisms both used to shelter
+  // someone into whatever was ordered THIS tick — command-system.ts's
+  // nomadGate/shelterWithRoom (recruitWorker) and PopulationSystem's own
+  // rehome — and both are exercised here in one drain, because "the one that
+  // will be missed" (the `pending.constructed` same-tick optimisation) lives
+  // in the first and would go untested by the second alone.
+  it('a house under construction shelters nobody, including on its own construction tick', async () => {
+    // Just enough to order a house (wood 15, planks 5) and feed a nomad, with
+    // no live shelter anywhere: any bed a founder or an arrival ends up in
+    // this tick can only have come from the site itself.
+    const save = { ...initialSave(), colonists: [], buildings: [], stockpile: { wood: 30, planks: 5, bread: 5_000 }, nextEntityId: 100 };
+    const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
+    const ids = getPrepResource(prep, IdCounter);
+    spawnColonist(prep, ids, { id: 1, ageTicks: BALANCE.lifeBands.matureTicks });
+    spawnColonist(prep, ids, { id: 2, ageTicks: BALANCE.lifeBands.matureTicks });
+    const world = await prep.prepareRun();
+    const snap = () => world.getResource(SnapshotStore).latest!;
+
+    // Order the house AND try to recruit a nomad, in the SAME drain: before
+    // this task, `pending.constructed` folded the just-ordered site straight
+    // into the nomad gate's free-bed count and rehome's own shelter list.
+    enqueue(world, { type: 'constructBuilding', buildingDefId: 'house' }, { type: 'recruitWorker' });
+    await stepTick(world);
+    expect(snap().notices.map((n) => n.message)).toEqual([
+      'Started building a House.',
+      'No free bed: build a house first.',
+    ]);
+    expect(snap().population).toBe(2);          // the nomad was refused, not seated in the site
+    expect(snap().homeless).toBe(2);             // both founders, still nowhere to sleep
+    expect(snap().colonists.every((c) => c.homeId === null)).toBe(true);
+    expect(snap().beds).toEqual({ total: 0, occupied: 0 }); // nothing published either
+
+    // Ride it out: the site is now a LIVE building (post-sync) and still
+    // under construction — no ConstructionSystem exists yet to count it down
+    // — exactly as much a hole in the ground several ticks later as it was
+    // the tick it was ordered.
+    for (let i = 0; i < 3; i++) await stepTick(world);
+    expect(snap().buildings).toHaveLength(1);
+    expect(snap().homeless).toBe(2);
+    expect(snap().beds).toEqual({ total: 0, occupied: 0 });
+  });
+
   it('evicts the highest-id resident first when a house holds more than its current beds allow', async () => {
     // Spec 4.5: a save can legitimately carry more residents than a
     // retuned houseBeds currently permits, and the load principle clamps
@@ -514,13 +557,19 @@ describe('PopulationSystem — homing', () => {
     expect(snap().buildings.find((b) => b.id === houseId)!.occupants).toBe(1);
   });
 
-  // sim-ecs defers entity creation to the post-step sync, so on the tick a
-  // house is built, PopulationSystem's `buildings` query cannot see it yet.
-  // Without telling homing about it separately, a homeless colonist would
-  // stay homeless for this one tick even though the house they'll move into
-  // already exists — resolving itself the tick after, but persisting forever
-  // if the game is paused right after building.
-  it('houses a homeless colonist on the tick its house is built, not the tick after', async () => {
+  // REVERSED by task 2b (spec §2.5). Before construction existed, sim-ecs's
+  // deferred entity sync meant a homeless colonist would otherwise stay
+  // homeless for one whole tick after a house they could move into already
+  // existed — `pending.constructed` closed that gap on purpose, as a
+  // deliberate same-tick optimisation. Since §2.5 an ordered building is a
+  // construction SITE, not a finished house, so the optimisation would now
+  // shelter someone in a hole in the ground the instant the order lands. This
+  // test used to assert the optimisation; it now asserts its removal — see
+  // 'a house under construction shelters nobody, including on its own
+  // construction tick' above for the fuller scenario (a same-tick nomad
+  // recruit as well as an already-homeless founder, ridden out past the
+  // order tick).
+  it('does not house a homeless colonist on the tick its house is merely ordered', async () => {
     const save = { ...initialSave(), colonists: [], buildings: [], stockpile: { wood: 100, planks: 100 }, nextEntityId: 100 };
     const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
     const ids = getPrepResource(prep, IdCounter);
@@ -531,117 +580,57 @@ describe('PopulationSystem — homing', () => {
     enqueue(world, { type: 'constructBuilding', buildingDefId: 'house' });
     await stepTick(world);
 
-    const house = snap().buildings.find((b) => b.defId === 'house')!;
-    expect(snap().colonists[0].homeId).toBe(house.id);
-  });
-
-  // Same tick as above, but the player-visible half: test 1 could pass while
-  // the published snapshot still shows the old, stale aggregates (free beds
-  // beside a homeless colonist), because homeless/beds are derived from the
-  // same Home components rehome just wrote. Distinct assertion, same defect.
-  it('does not publish free beds beside a homeless colonist on the tick its house is built', async () => {
-    const save = { ...initialSave(), colonists: [], buildings: [], stockpile: { wood: 100, planks: 100 }, nextEntityId: 100 };
-    const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
-    const ids = getPrepResource(prep, IdCounter);
-    spawnColonist(prep, ids, { id: 1, ageTicks: BALANCE.lifeBands.matureTicks });
-    const world = await prep.prepareRun();
-    const snap = () => world.getResource(SnapshotStore).latest!;
-
-    enqueue(world, { type: 'constructBuilding', buildingDefId: 'house' });
-    await stepTick(world);
-
-    expect(snap().homeless).toBe(0);
-    expect(snap().beds.occupied).toBeGreaterThan(0);
-  });
-
-  // PendingChanges.clear() must wipe `constructed` every tick, the same as
-  // `arrivals` and `demolished`: by the tick after construction, the building
-  // is live in the `buildings` query, so a lingering pending entry is a STALE
-  // duplicate of it — frozen with `relocating: false` from the tick it was
-  // built, forever after. That stale copy sits AFTER the live one in
-  // ctx.shelters, so anything keyed by shelter id (rehome's `byId` map) reads
-  // the stale, wrong value once the live building's actual state diverges
-  // from it — e.g. once the house starts relocating. Without the clear, this
-  // relocation would go completely unnoticed: freeBeds would still hand out
-  // the relocating house's beds as free, and rehome would not evict its
-  // resident, both because the stale entry's hard-coded `relocating: false`
-  // outvotes the live, now-`true` value.
-  it('does not let a pending-constructed house shelter its resident through a later relocation', async () => {
-    const save = { ...initialSave(), colonists: [], buildings: [], stockpile: { wood: 100, planks: 100 }, nextEntityId: 100 };
-    const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
-    const ids = getPrepResource(prep, IdCounter);
-    spawnColonist(prep, ids, { id: 1, ageTicks: BALANCE.lifeBands.matureTicks });
-    const world = await prep.prepareRun();
-    const snap = () => world.getResource(SnapshotStore).latest!;
-
-    enqueue(world, { type: 'constructBuilding', buildingDefId: 'house' });
-    await stepTick(world);
-    const house = snap().buildings.find((b) => b.defId === 'house')!;
-    expect(snap().colonists[0].homeId).toBe(house.id); // precondition: housed the tick it was built
-
-    // A tile far enough away that the move is not instantaneous — irrelevant
-    // to this test beyond needing ticksLeft > 0 the instant it is issued.
-    enqueue(world, { type: 'moveBuilding', buildingId: house.id, to: { col: 23, row: 15 } });
-    await stepTick(world);
-
+    // The site IS visible here — `stepTick` (unlike a bare `world.step()`)
+    // refreshes the snapshot's entity sections, so the building itself synced
+    // in this same tick. The point is what it is NOT: a shelter.
+    expect(snap().buildings.find((b) => b.defId === 'house')).toBeDefined();
     expect(snap().colonists[0].homeId).toBeNull();
+  });
+
+  // The player-visible half, reversed alongside the test above: the published
+  // aggregates must not advertise a bed the engine will not actually hand out.
+  it('does not publish free beds beside a homeless colonist on the tick its house is merely ordered', async () => {
+    const save = { ...initialSave(), colonists: [], buildings: [], stockpile: { wood: 100, planks: 100 }, nextEntityId: 100 };
+    const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
+    const ids = getPrepResource(prep, IdCounter);
+    spawnColonist(prep, ids, { id: 1, ageTicks: BALANCE.lifeBands.matureTicks });
+    const world = await prep.prepareRun();
+    const snap = () => world.getResource(SnapshotStore).latest!;
+
+    enqueue(world, { type: 'constructBuilding', buildingDefId: 'house' });
+    await stepTick(world);
+
     expect(snap().homeless).toBe(1);
     expect(snap().beds).toEqual({ total: 0, occupied: 0 });
   });
 
-  // No test for "a house constructed and demolished in the same tick shelters
-  // nobody": that scenario is unreachable. handleDemolishBuilding looks its
-  // target up through findBuilding -> ctx.buildings, a snapshot materialized
-  // BEFORE the drain loop starts — the same reason ctx.pending.constructed is
-  // needed at all. A demolishBuilding command naming a building constructed
-  // earlier in the same drain always rejects with "Building not found.": the
-  // construction stands, and its colonist ends up HOUSED, not homeless.
-  // Verified experimentally (constructBuilding then demolishBuilding for the
-  // predicted id, one drain): the notice board shows the rejection and the
-  // colonist's homeId is the new house's id. freeBeds' ctx.pending.demolished
-  // check is exercised by the existing "makes a demolished house homeless
-  // immediately" test above instead, against a building that already existed
-  // before the tick — the only way a demolish can ever reach one.
-
-  // Housing a colonist and CHARGING them as housed are two different things,
-  // and for a while only the first was true. rehome seats the colonist in the
-  // pending house, but ProductionSystem resolves a homeId to a TILE, and its
-  // own query cannot see that house until the post-step sync — so it fell
-  // through to homelessFactor and charged the colonist half power on the very
-  // tick they were housed, while refreshEntitySections published them housed
-  // moments later. Same defect as the two tests above, one layer down.
-  it('charges a colonist housed by a same-tick construction as housed, not homeless', async () => {
-    const save = { ...initialSave(), colonists: [], buildings: [], stockpile: { wood: 100, planks: 100 }, nextEntityId: 100 };
-    const prep = buildColonyPrepWorld({ save, systems: ALL_SYSTEMS });
-    const ids = getPrepResource(prep, IdCounter);
-    const forester = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 5, row: 2, relocatingTicks: 0 });
-    const buildingId = forester.getComponent(Building)!.id;
-    spawnColonist(prep, ids, { id: 1, ageTicks: BALANCE.lifeBands.matureTicks, buildingId });
-    const world = await prep.prepareRun();
-    const snap = () => world.getResource(SnapshotStore).latest!;
-
-    // Adjacent to the workplace, so the commute is inside commute.freeTiles
-    // and a correctly-resolved home scores exactly 1.0 against
-    // homelessFactor's 0.5 — the separation the assertion below rests on.
-    enqueue(world, { type: 'constructBuilding', buildingDefId: 'house', at: { col: 6, row: 2 } });
-    await stepTick(world);
-    expect(snap().colonists[0].homeId).not.toBeNull();   // precondition, not the point
-
-    // Asserts on PRODUCTION, not on the published workPower. The snapshot's
-    // workPower comes from buildEntitySections, which runs after the
-    // post-step sync and could always see the new house — it was never the
-    // broken reader, so asserting on it passes with the fix reverted. Only
-    // ProductionSystem's own pre-sync lookup was wrong, and the sole place
-    // that surfaces is the batch it advances.
-    //
-    // forester is 3 worker-ticks per batch. Charged as housed, this colonist
-    // contributes 1.0/tick and banks a unit on the third tick. Charged as
-    // homeless for the construction tick only, they contribute
-    // 0.5 + 1.0 + 1.0 = 2.5 and bank nothing.
-    await stepTick(world);
-    await stepTick(world);
-    expect(snap().buildings.find((b) => b.id === buildingId)!.buffered).toBe(1);
-  });
+  // RETIRED by task 2b (spec §2.5), not merely reversed: this test pinned a
+  // stale-`pending.constructed`-copy defect ('does not let a pending-constructed
+  // house shelter its resident through a later relocation') whose precondition
+  // — a colonist actually seated by the pending-constructed fold on the order
+  // tick — is now categorically unreachable. Neither `command-system.ts` nor
+  // `population-system.ts` reads `pending.constructed` for shelter purposes at
+  // all any more (see both files' `shelters`), so there is no stale copy left
+  // to go stale. The exclusion across a later tick is covered directly by 'a
+  // house under construction shelters nobody...' above, which rides a site out
+  // over several ticks the same way this test rode a relocation out over one.
+  //
+  // What that test does NOT carry over is this one's incidental second job:
+  // it was the only thing that reddened when `PendingChanges.clear()` stopped
+  // emptying `constructed`, because a stale copy is exactly what it staged.
+  // `clear()` is still load-bearing — `outstandingMaterials`
+  // (placement-handlers.ts) charges every entry's whole cost against the next
+  // order — so that invariant was re-pinned, on the consequence rather than
+  // the mechanism, by command-system.test.ts's 'charges a standing site once,
+  // not once more for every tick since it was ordered'.
+  //
+  // RETIRED alongside it: 'charges a colonist housed by a same-tick
+  // construction as housed, not homeless' pinned ProductionSystem's pre-sync
+  // homeId-to-tile lookup against the SAME same-tick housing this task
+  // removes — a colonist can no longer be housed by construction on the order
+  // tick at all, so there is nothing left for that lookup to resolve early.
+  // ProductionSystem's `pending.constructed` fold is gone with it: a workplace
+  // tile cannot reach it either, since `handleAssignWorker` refuses a site.
 });
 
 /** Shelters in ascending id — the order every seating rule here walks. */
@@ -764,7 +753,12 @@ function tally(seen: Exercised, snap: Snapshot, recruitFirst: boolean, spare: nu
   const reached: Record<keyof Exercised, boolean> = {
     joined,
     moved,
-    demolished: said(/Demolished the/),
+    // Matches either wording a demolishBuilding success can land on: a
+    // FINISHED house ("Demolished the...— cost refunded") or a SITE one still
+    // under construction ("Cancelled the...— nothing was charged", added
+    // alongside Task 2's cost-refund branch). This tally is about the command
+    // being accepted, not about which of the two it hit.
+    demolished: said(/(Demolished|Cancelled) the/),
     saturated: snap.beds.total <= snap.population,
     contested,
     spare: spare > 0,
@@ -794,17 +788,26 @@ function tally(seen: Exercised, snap: Snapshot, recruitFirst: boolean, spare: nu
  *
  * The figure `rehome` saw is instead the PREVIOUS tick's published countdown,
  * because the only thing that can change it in between is this tick's own drain
- * — hence `movedThisTick`. A house built this tick is in neither map and scores
- * 0 from `?? 0`, which is right: `rehome` folds `pending.constructed` in with
- * `relocating: false`.
+ * — hence `movedThisTick`.
+ *
+ * `realHouseIds` is the THIRD exclusion, added for task 2b (spec §2.5): a
+ * house built by churn is a construction SITE from the tick it appears, and
+ * `rehome` refuses it exactly as it refuses a relocating one — but nothing
+ * published on `BuildingSnapshot` says so (this task deliberately does not
+ * add an `underConstruction` state; that is Task 9's). `rideOutTheChurn`
+ * tracks it itself instead, the same way it tracks `relocatingBefore`: it is
+ * the one thing driving each site's simulated completion (`ConstructionSystem`
+ * is not built yet either), so it already knows which ids are real.
  */
 function usableBedsStandingFree(
   snap: Snapshot,
   movedThisTick: ReadonlySet<number>,
   relocatingBefore: ReadonlyMap<number, number>,
+  realHouseIds: ReadonlySet<number>,
 ): number {
   const perHouse = residentsByHouse(snap);
   return housesOf(snap)
+    .filter((h) => realHouseIds.has(h.id))
     .filter((h) => !movedThisTick.has(h.id) && (relocatingBefore.get(h.id) ?? 0) === 0)
     .reduce((free, h) => free + Math.max(0, h.beds - (perHouse.get(h.id) ?? 0)), 0);
 }
@@ -1038,8 +1041,35 @@ describe('PopulationSystem — births and the nomad gate', () => {
     // carried across the loop — see `usableBedsStandingFree` for why the
     // published figure cannot be read on the tick it is wanted.
     let relocatingBefore = new Map(housesOf(snap()).map((h) => [h.id, h.relocatingTicks]));
+    // The starter house is finished from the start (fedColony spawns it with
+    // no Construction override); every id churn adds joins this set only once
+    // `ConstructionSystem`'s stand-in below has completed it. See
+    // `usableBedsStandingFree`'s own doc comment on why this task needs it.
+    const realHouseIds = new Set(housesOf(snap()).map((h) => h.id));
 
     for (let t = 0; t < 600; t++) {
+      // Task 2b (spec §2.5): construction churn now orders a SITE, and
+      // `ConstructionSystem` — the thing that counts one down to 0 — is
+      // Task 5's, not built yet. Simulated here instead: any site still
+      // standing from a PRIOR iteration finishes at the very start of this
+      // one, before `before` is read, so a house built by churn keeps
+      // relieving bed pressure starting the tick after it is ordered —
+      // exactly the one-tick delay this file's other homing tests pin
+      // directly — without which no site ordered by churn ever finishes and
+      // every number this property measures below collapses toward the
+      // colony's very first spare bed. Completing it at the TOP of the loop
+      // (not right after the tick that creates it) is load-bearing: doing it
+      // the same tick would recreate the exact same-tick shelter bug this
+      // task exists to close, since the site would never have stood as a
+      // site at all.
+      for (const entity of world.getEntities()) {
+        const construction = entity.getComponent(Construction);
+        if (construction !== undefined && construction.ticksLeft > 0) {
+          construction.ticksLeft = 0;
+          realHouseIds.add(entity.getComponent(Building)!.id);
+        }
+      }
+      refreshEntitySections(world);
       const before = snap();
       const churn = churnFor(t, before);
       const moving = movingThisTick(churn);
@@ -1051,7 +1081,7 @@ describe('PopulationSystem — births and the nomad gate', () => {
       // `relocatingBefore` is the right map on both sides: last tick's
       // published countdown IS the live `ticksLeft` CommandSystem reads this
       // tick, because ProductionSystem decrements after it.
-      const slackBefore = usableBedsStandingFree(before, moving, relocatingBefore);
+      const slackBefore = usableBedsStandingFree(before, moving, relocatingBefore, realHouseIds);
       // Both drain orders across the run: `4012dd2` fixed one defect per order
       // — a stale `shelters` snapshot seating a nomad in a house the SAME
       // drain had already started moving (move first), and a move that could
@@ -1080,7 +1110,7 @@ describe('PopulationSystem — births and the nomad gate', () => {
       // Numbering: the OBS-6-07 issue note calls this "the fourth clause".
       // It is the FIFTH here — this file counts the aggregate cap and the
       // per-house cap as two, where the note counts them as one.
-      const spare = usableBedsStandingFree(s, moving, relocatingBefore);
+      const spare = usableBedsStandingFree(s, moving, relocatingBefore, realHouseIds);
       expect({ tick: s.tick, strandedBeds: s.homeless > 0 ? spare : 0 }).toEqual({ tick: s.tick, strandedBeds: 0 });
       tally(seen, s, recruitFirst, spare, slackBefore);
       relocatingBefore = new Map(housesOf(s).map((h) => [h.id, h.relocatingTicks]));
@@ -1113,9 +1143,12 @@ describe('PopulationSystem — births and the nomad gate', () => {
     // assertion above passes trivially against a colony that never admits
     // anyone, never moves or demolishes a house, or always has a bed going
     // spare. Bounds are well under what the runs actually reach —
-    // 12 / 26 / 5 / 412 / 0 / 180 / 0 offering every tick,
-    // 11 / 26 / 5 / 322 / 8 / 267 / 2 saving the cooldown (joined, moved,
-    // demolished, saturated, contested, spare, contestedWithSlack) — so
+    // 13 / 26 / 5 / 421 / 1 / 171 / 0 offering every tick,
+    // 11 / 26 / 5 / 314 / 8 / 274 / 2 saving the cooldown (joined, moved,
+    // demolished, saturated, contested, spare, contestedWithSlack) — re-measured
+    // for task 2b, whose removal of the same-tick construction shelter shifts
+    // exactly when a churn-built house starts relieving bed pressure (see
+    // `rideOutTheChurn`'s own `ConstructionSystem` stand-in) — so
     // ordinary drift does not trip them, but a balance change that made this
     // colony comfortable would fail HERE, loudly, instead of quietly turning
     // the invariants above back into decoration.
@@ -1129,10 +1162,23 @@ describe('PopulationSystem — births and the nomad gate', () => {
     // `contested` is asked of the second regime alone, and it is the number
     // that stopped this test being decoration: it counts the ticks on which an
     // arrival and a relocation actually drained together, recruit first. It
-    // reads ZERO for the first regime — with every other number there healthy.
-    // A fixture can exercise all the churn in the world and still never stage
-    // the one interaction it was built for.
-    expect(always.contested).toBe(0);
+    // reads exactly ONE for the first regime against 8 for the second — with
+    // every other number there healthy — so the interaction stays overwhelmingly
+    // the second regime's, even though it is no longer strictly impossible under
+    // the first. Before task 2b it read exactly zero: a bed only ever opened
+    // just after a construction, and under `EVERY_TICK` the 30-tick recruit
+    // cooldown was always still running on the very next tick a relocation
+    // could contest, so the two states could not coincide. Task 2b's
+    // `ConstructionSystem` stand-in (`rideOutTheChurn`, above) opens that same
+    // bed one tick LATER than the removed same-tick shelter did, which is
+    // enough to let exactly one construction-tick and one contested-move-tick
+    // land together across 600 ticks — a timing shift, not a housing defect:
+    // the fifth clause (no stranded bed) holds throughout this same run either
+    // way.
+    // Pinned exactly, not bounded: the run is deterministic and 1 is what it
+    // measures, so `<= 1` would silently readmit the 0 this comment says is no
+    // longer reachable — the very shift task 2b made.
+    expect(always.contested).toBe(1);
     expect(saved.contested).toBeGreaterThan(3);
     // And the conjunction, which is the one the fifth clause actually needs: a
     // contested drain WITH a bed free elsewhere. Guarding `contested > 3` and

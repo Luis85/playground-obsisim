@@ -239,6 +239,18 @@ describe('layoutWorld', () => {
     expect(layout.tile).toBe(TILE);
   });
 
+  // The fill gauge's own guard (PlacedBuilding's doc comment: storage === 0
+  // is how the renderer knows there is nothing to draw) genuinely reads 0 for
+  // a storehouse site, not merely for a producer — proving `placeBuildings`
+  // passes the projection's zeroed `storage`/`stored` straight through rather
+  // than re-deriving anything from `defId`.
+  it('carries a storehouse site\'s state and its suppressed fill gauge through', () => {
+    const layout = layoutWorld(makeSnapshot({
+      buildings: [makeBuilding(1, { defId: 'storehouse', state: 'underConstruction', storage: 0, stored: 0, constructionTicks: 12 })],
+    }));
+    expect(layout.buildings[0]).toMatchObject({ state: 'underConstruction', storage: 0, stored: 0 });
+  });
+
   it('reports each worker\'s post: the building id, or null at the camp', () => {
     const layout = layoutWorld(makeSnapshot({
       buildings: [makeBuilding(1)],
@@ -296,6 +308,61 @@ describe('layoutWorld', () => {
     expect(lines[0]).toBe('Storehouse');
     expect(lines.join(' ')).toContain('24/60 stored');
     expect(lines.join(' ')).not.toContain('workers');
+    expect(lines.join(' ')).not.toContain('batch');
+  });
+
+  // §2.10: a site's beds/storage are zeroed by the SNAPSHOT projection (task
+  // 9's own change to buildingSnapshotsOf), which means describeBuilding's
+  // `beds > 0`/`storage > 0` split cannot see them — a house site and a
+  // storehouse site both fall PAST those branches. An earlier version of this
+  // test pinned that fall-through as correct and asserted the producer wording
+  // it produces. It is not correct: "0/0 workers" and "no active batch" are
+  // three wrong statements about a hole in the ground, on the surface a player
+  // hovers first. The site branch is asked before either capacity branch, and
+  // says what SelectionPanel says for the same building.
+  it('describes a site by its countdown and what it still needs, whatever it will become', () => {
+    const snapshot = makeSnapshot({
+      buildings: [
+        makeBuilding(1, {
+          defId: 'house', state: 'underConstruction', beds: 0, storage: 0, workerSlots: 0, occupants: 0,
+          constructionTicks: 20, constructionNeeds: { wood: 9 },
+        }),
+        makeBuilding(2, {
+          defId: 'storehouse', state: 'underConstruction', beds: 0, storage: 0, workerSlots: 0, stored: 0,
+          constructionTicks: 20, constructionNeeds: { wood: 4, planks: 2 },
+        }),
+      ],
+    });
+    const house = describePick(snapshot, { kind: 'building', id: 1 });
+    expect(house[0]).toBe('House');
+    expect(house.join(' ')).toContain('under construction — 20t left');
+    expect(house.join(' ')).toContain('needs 9 Wood');
+    // None of the three producer statements, and no capacity it does not have.
+    expect(house.join(' ')).not.toContain('workers');
+    expect(house.join(' ')).not.toContain('batch');
+    expect(house.join(' ')).not.toContain('residents');
+
+    const store = describePick(snapshot, { kind: 'building', id: 2 });
+    expect(store[0]).toBe('Storehouse');
+    expect(store.join(' ')).toContain('under construction — 20t left');
+    expect(store.join(' ')).toContain('needs 4 Wood, 2 Planks');
+    expect(store.join(' ')).not.toContain('workers');
+    expect(store.join(' ')).not.toContain('batch');
+    expect(store.join(' ')).not.toContain('stored');
+  });
+
+  // A PRODUCER site takes the same branch — the site test above uses defs with
+  // no worker slots, so on its own it cannot tell "asked before the capacity
+  // branches" from "asked instead of them".
+  it('describes a producer site by its countdown too, not by the crew it will one day have', () => {
+    const snapshot = makeSnapshot({
+      buildings: [makeBuilding(1, {
+        defId: 'bakery', state: 'underConstruction', workers: 0, workerSlots: 2,
+        constructionTicks: 7, constructionNeeds: { planks: 3 },
+      })],
+    });
+    const lines = describePick(snapshot, { kind: 'building', id: 1 });
+    expect(lines.join(' ')).toContain('under construction — 7t left');
     expect(lines.join(' ')).not.toContain('batch');
   });
 

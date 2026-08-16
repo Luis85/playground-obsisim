@@ -37,6 +37,99 @@ describe('balance harness', () => {
   });
 
   /**
+   * `Increment 8's own Task 10 is the precedent this one is named after: an
+   * instrument that over-counts is worse than none, because it is believed.
+   * `completions` is a LOG rather than a count for exactly that reason — §4.1
+   * asks a question about ORDER (which of two contending sites finishes
+   * first), and a count cannot answer it. This is the test that would catch
+   * an implementation that counts correctly but reports the wrong sequence —
+   * one that echoes `Scenario.sites`' own array order, say, rather than the
+   * tick each site actually crossed `ticksLeft: 0`.
+   *
+   * The three sites are listed gatherersHut, forester, house — and ordered
+   * (`atTick`) house first, forester second, gatherersHut last, 40 ticks
+   * apart, so the three finish 40-ish ticks apart in EXACTLY the reverse of
+   * their array position. A round-robin count sees three completions either
+   * way; only reading the real finishing tick reproduces this sequence.
+   */
+  it('the completion log records order, not just totals', async () => {
+    const r = await runScenario({
+      defId: 'sawmill', col: 10, row: 0, crew: 0, haulers: 4, ticks: 140, resource: 'planks',
+      sites: [
+        { defId: 'gatherersHut', col: 3, row: 4, atTick: 80 },
+        { defId: 'forester', col: 3, row: 5, atTick: 40 },
+        { defId: 'house', col: 3, row: 6, atTick: 0 },
+      ],
+    });
+    expect(r.completions.map((c) => c.defId)).toEqual(['house', 'forester', 'gatherersHut']);
+    expect(r.completions[0].tick).toBeLessThan(r.completions[1].tick);
+    expect(r.completions[1].tick).toBeLessThan(r.completions[2].tick);
+    // Every entry names the real building the command spawned, not a
+    // placeholder — three distinct ids, one per site.
+    expect(new Set(r.completions.map((c) => c.buildingId)).size).toBe(3);
+  });
+
+  /**
+   * THE ZERO SIDE, and the one that actually catches an over-counting
+   * instrument: a completion log that fires on anything other than a
+   * genuine `Scenario.sites` order — a building that starts finished, say,
+   * or a stray notice a future change starts publishing — has nothing here
+   * to produce a false entry from, and would still have to report `[]`.
+   */
+  it('a scenario with no sites reports no completions', async () => {
+    const r = await runScenario({ defId: 'forester', col: 8, row: 4, crew: 2, haulers: 1, ticks: 30, resource: 'wood' });
+    expect(r.completions).toEqual([]);
+  });
+
+  /**
+   * THE FABRICATION GUARD, and the case that found it: a site ordered onto a
+   * tile something is already standing on.
+   *
+   * `handleConstructBuilding` refuses that order ('Cannot build there.'), so
+   * NO site is ever created — but the occupant is a real building at exactly
+   * those coordinates with `constructionTicks: 0`, and a resolution matching
+   * on the tile alone adopts it and logs a completion for a build that never
+   * happened. That is the over-counting instrument increment 8's Task 10 named
+   * as worse than no instrument at all, landing on the one reading §4.1 cannot
+   * take any other way.
+   *
+   * The scenario below orders a `house` onto the SAWMILL STAGE'S OWN TILE, so
+   * the occupant is a building the harness itself placed and the run is
+   * otherwise ordinary. Asserting the REJECTION rather than `completions == []`
+   * is the stronger form and the deliberate one: an unresolved descriptor is a
+   * measurement that never happened, and a run that reports a plausible zero
+   * for it is the same class of defect as one that reports a false completion.
+   * Nothing may be published off it, so nothing is returned.
+   *
+   * DISCRIMINATING BY CONSTRUCTION: revert the resolution to a tile-only match
+   * and this run stops throwing and reports one completion — verified by
+   * reverting the guard and re-running, not by inspection.
+   */
+  it('a site ordered onto an occupied tile yields no result at all', async () => {
+    await expect(runScenario({
+      defId: 'sawmill', col: 10, row: 0, crew: 0, haulers: 2, ticks: 40, resource: 'planks',
+      sites: [{ defId: 'house', col: 10, row: 0, atTick: 0 }],
+    })).rejects.toThrow(/never appeared as a construction site/);
+  }, 30000);
+
+  /**
+   * The same fabrication through the OTHER door: two descriptors on one tile.
+   * The first order is accepted and the second refused, so exactly one site
+   * exists — and a resolution that does not exclude ids another descriptor has
+   * already taken hands both descriptors the same entity and reports one build
+   * as two completions.
+   */
+  it('two site orders on one tile yield no result at all', async () => {
+    await expect(runScenario({
+      defId: 'sawmill', col: 10, row: 0, crew: 0, haulers: 2, ticks: 60, resource: 'planks',
+      sites: [
+        { defId: 'gatherersHut', col: 3, row: 4, atTick: 0 },
+        { defId: 'gatherersHut', col: 3, row: 4, atTick: 1 },
+      ],
+    })).rejects.toThrow(/never appeared as a construction site/);
+  }, 30000);
+
+  /**
    * THE GUARD the reachability argument's second conjunct hangs on, pinned
    * directly rather than left as prose (OBS-8-01).
    *

@@ -1,19 +1,21 @@
 import { buildWorld } from 'sim-ecs';
 import type { IEntity, IPreptimeWorld, IRuntimeWorld } from 'sim-ecs';
-import { isSaveGameV6, LATEST_SAVE_VERSION, MAX_SAVED_COUNTER } from '../shared/save';
+import { isSaveGameV7, MAX_SAVED_COUNTER } from '../shared/save';
 import { migrateSaveToLatest } from '../shared/save-migration';
-import type { SaveGameV6, SavedBuilding } from '../shared/save';
+import type { SaveGameV7, SavedBuilding } from '../shared/save';
 import type { ResourceId } from '../shared/content-types';
-import { autoPlacePosition, DEFAULT_MAP } from '../shared/placement';
-import { SALT, spreadFor } from '../shared/population';
-import { BALANCE, STARTING_STOCK, STARTING_COLONISTS } from './content/balance';
 import {
-  Age, Building, Efficiency, HaulTrip, Home, Hunger, InputBuffer, JobAssignment, OutputBuffer, Position, Production, Relocation, ToolCoverage,
-  Colonist, WorkerSlots,
+  Age, Building, Construction, Efficiency, HaulTrip, Home, Hunger, InputBuffer, JobAssignment, OutputBuffer, Position, Production, Relocation,
+  ToolCoverage, Colonist, WorkerSlots,
 } from './components';
 import { isBuffersValid, isBuildingsValid, isIdsValid, isPositionsValid, isStockpileValid, isColonistsValid } from './save-guard';
 import { buildingComponents, colonistComponents } from './spawn';
-import { restoredColonists, seedStoredGoods } from './restore';
+import { refundTrimmedMaterials, restoredColonists, seedStoredGoods } from './restore';
+import { initialSave } from './initial-save';
+// Re-exported: every call site outside this file reaches initialSave through
+// world.ts, and the extraction (moving the function itself to its own file,
+// to make room here) must not force every one of those imports to be rewritten.
+export { initialSave } from './initial-save';
 import {
   CommandQueue, IdCounter, NoticeBoard, PendingChanges, ProductionLedger, RemovalLedger, SimClock, SnapshotStore, StatsHistory, Stockpile,
   WorldMap,
@@ -26,6 +28,7 @@ import { PopulationSystem } from './systems/population-system';
 import { EfficiencySystem } from './systems/efficiency-system';
 import { ProductionSystem } from './systems/production-system';
 import { HaulSystem } from './systems/haul-system';
+import { ConstructionSystem } from './systems/construction-system';
 import { StatsSystem } from './systems/stats-system';
 import { SnapshotSystem } from './systems/snapshot-system';
 
@@ -52,6 +55,7 @@ export const ALL_SYSTEMS: TColonySystemFactory[] = [
   EfficiencySystem,
   ProductionSystem,
   HaulSystem,
+  ConstructionSystem,
   StatsSystem,
   SnapshotSystem,
 ];
@@ -83,49 +87,11 @@ export function getPrepResource<T extends object>(prep: IPreptimeWorld, type: ne
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors sim-ecs's own TTypeProto<T> constructor-parameter shape exactly
 export const COMPONENT_TYPES: (new (...args: any[]) => object)[] = [
   Building, WorkerSlots, Production, Colonist, Hunger, JobAssignment, Efficiency, ToolCoverage, Position, OutputBuffer, InputBuffer, HaulTrip,
-  Relocation, Age, Home,
+  Relocation, Age, Home, Construction,
 ];
 
-/** The starter house's id, and therefore every founder's `homeId`. Taking id 1
- * keeps the founders on the ids that follow, so the first thing the player
- * builds still gets the id after the last founder. */
-const STARTER_HOUSE_ID = 1;
-
-export function initialSave(): SaveGameV6 {
-  return {
-    version: LATEST_SAVE_VERSION,
-    tick: 0,
-    lastRecruitTick: -BALANCE.recruitCooldownTicks,
-    lastBirthTick: -BALANCE.birthCooldownTicks,
-    stockpile: { ...STARTING_STOCK },
-    map: { ...DEFAULT_MAP },
-    // The first pre-placed building in the game's history, and worth the
-    // exception: a house costs planks, planks need a sawmill, and a colony that
-    // opens with 30 wood cannot build one for a long time — so without this the
-    // whole opening is spent at homelessFactor for reasons the player cannot act
-    // on. With it, the pressure starts legibly: you are housed, you have one
-    // spare bed, and the fourth colonist is the first thing you must build for.
-    buildings: [{
-      id: STARTER_HOUSE_ID, defId: 'house', ...autoPlacePosition(DEFAULT_MAP, [])!,
-      progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0, inputBuffer: {}, stored: {},
-    }],
-    colonists: Array.from({ length: STARTING_COLONISTS }, (_, index) => ({
-      id: index + 1 + STARTER_HOUSE_ID,
-      hunger: 0,
-      buildingId: null,
-      toolTicks: 0,
-      hauling: false,
-      ageTicks: BALANCE.startingAgeTicks
-        + spreadFor(index + 1 + STARTER_HOUSE_ID, BALANCE.lifeBands.spreadTicks, SALT.startingAge),
-      homeId: STARTER_HOUSE_ID,
-      starvingTicks: 0,
-    })),
-    nextEntityId: STARTING_COLONISTS + 1 + STARTER_HOUSE_ID,
-  };
-}
-
 /**
- * Structural validity (isSaveGameV6) plus referential integrity against the content
+ * Structural validity (isSaveGameV7) plus referential integrity against the content
  * catalog, for a save that is ALREADY at the current version. This is the internal
  * current-version validator, not the shell's entry point: it has no idea how to
  * migrate an older save, so calling it directly on unmigrated data would crash
@@ -143,8 +109,8 @@ export function initialSave(): SaveGameV6 {
  * grandfathered at load (see spawnColonist) so retuning balance down never
  * orphans a previously valid save.
  */
-export function isLoadableSave(data: unknown): data is SaveGameV6 {
-  if (!isSaveGameV6(data)) return false;
+export function isLoadableSave(data: unknown): data is SaveGameV7 {
+  if (!isSaveGameV7(data)) return false;
   // SAFE integers: a fractional tick would desync every modulo-based cadence
   // (autosave, recruit cooldown) forever; past 2^53, ++ stops incrementing.
   // No upper REJECT bound: any hard accept-bound would orphan a save that
@@ -188,14 +154,14 @@ export function isLoadableSave(data: unknown): data is SaveGameV6 {
  * 7.2). Kept here rather than in src/shared/ because isLoadableSave needs the
  * content catalog, while the migration chain is pure structure.
  */
-export function prepareLoadedSave(data: unknown): SaveGameV6 | null {
+export function prepareLoadedSave(data: unknown): SaveGameV7 | null {
   const migrated = migrateSaveToLatest(data);
   return migrated !== null && isLoadableSave(migrated) ? migrated : null;
 }
 
 /** The three things the shell can do after reading data.json's `save` field. */
 export type LoadDecision =
-  | { kind: 'restore'; save: SaveGameV6 }
+  | { kind: 'restore'; save: SaveGameV7 }
   | { kind: 'backup' }
   | { kind: 'fresh' };
 
@@ -233,10 +199,13 @@ function attach(prep: IPreptimeWorld, components: object[]): IEntity {
 export function spawnBuilding(
   prep: IPreptimeWorld,
   ids: IdCounter,
-  saved: Omit<SavedBuilding, 'id' | 'buffer' | 'inputBuffer' | 'stored'> & {
+  saved: Omit<SavedBuilding, 'id' | 'buffer' | 'inputBuffer' | 'stored' | 'constructionTicks'> & {
     id?: number;
     buffer?: Partial<Record<ResourceId, number>>;
     inputBuffer?: Partial<Record<ResourceId, number>>;
+    // Optional for the reason the two buffers are: a fixture (and the live
+    // construct path's own spawn) means a finished building, a countdown of 0.
+    constructionTicks?: number;
   },
 ): IEntity {
   return attach(prep, buildingComponents({ ...saved, id: saved.id ?? ids.take() }));
@@ -287,7 +256,7 @@ function assertSystemOrder(systems: readonly TColonySystemFactory[]): void {
 }
 
 export function buildColonyPrepWorld(
-  options: { save?: SaveGameV6; systems?: readonly TColonySystemFactory[] } = {},
+  options: { save?: SaveGameV7; systems?: readonly TColonySystemFactory[] } = {},
 ): IPreptimeWorld {
   const save = options.save ?? initialSave();
   const systems = options.systems ?? ALL_SYSTEMS;
@@ -340,6 +309,12 @@ export function buildColonyPrepWorld(
   // serialized off its building, so restoring it is a second pass over the same
   // list rather than anything spawnBuilding could carry (see seedStoredGoods).
   seedStoredGoods(stockpile, save.buildings);
+  // Second pass over the same records, for the same reason and through the
+  // same restore-only banking path: materials a SITE may no longer legally
+  // hold (its `cost` was rebalanced down) are banked at the camp rather than
+  // destroyed. A site's in-tray is outside `Stockpile`, so there is nowhere
+  // else for them to go — see refundTrimmedMaterials.
+  refundTrimmedMaterials(stockpile, save.buildings);
   // Through restoredColonists, never straight off `save.colonists`: it is the
   // one place the load-time clamps and repairs live, and buildInitialSnapshot
   // reads the very same records — so the seeded snapshot and the entities
@@ -511,6 +486,6 @@ export function applyRemovals(world: IRuntimeWorld): number {
 // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type -- mirrors sim-ecs's TExecutionFunction callback type exactly
 const runSynchronously = (callback: Function): void => (callback as () => void)();
 
-export async function createColonyWorld(save?: SaveGameV6): Promise<IRuntimeWorld> {
+export async function createColonyWorld(save?: SaveGameV7): Promise<IRuntimeWorld> {
   return buildColonyPrepWorld({ save }).prepareRun({ executionFunction: runSynchronously });
 }

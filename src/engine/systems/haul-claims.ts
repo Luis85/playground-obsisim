@@ -40,10 +40,24 @@ export interface Claims {
    * their way to it — of BOTH kinds, since a supply hauler loads output on
    * arrival too. */
   output(buildingId: number): number;
-  /** Units of input room at a building already promised by supply haulers,
+  /**
+   * Units of input room at a building already promised by supply haulers,
    * so every idle hauler in the colony does not leave for the same empty mill
-   * on the same tick. */
-  input(buildingId: number): number;
+   * on the same tick.
+   *
+   * `resource` NARROWS IT TO ONE MATERIAL, and the two callers want different
+   * answers rather than one of them being a tidier version of the other. A
+   * finished building's in-tray is capped ACROSS every resource
+   * (`BALANCE.inputBufferCap`), so every inbound claim of any material eats
+   * the same room and the aggregate is the correct subtrahend — narrowing
+   * there would reintroduce the over-claim increment 8 spent a family of cases
+   * closing. A construction SITE's room is per-resource (`cost[r] − held[r]`),
+   * so the aggregate is wrong the moment a consumer wants two materials: wood
+   * already walking to a mill site would subtract from that site's PLANK room
+   * and stall the second material behind the first. Multi-input construction
+   * costs are the first shipped content where the difference is reachable.
+   */
+  input(buildingId: number, resource?: ResourceId): number;
   /** A site's occupancy as a destination lookup must see it: what it
    * physically holds, plus what returning haulers have been promised room
    * for. A trip releases its own reservation (by clearing `destSiteId`)
@@ -238,8 +252,13 @@ export function claimsOf(
       }
       return total;
     },
-    input: (buildingId) => sumOverTrips(workers, (trip) => (
+    // The resource filter is an ADDITIONAL clause, never a replacement for the
+    // kind-and-target one: an omitted `resource` must answer exactly what this
+    // lookup answered before it existed, because `supplyCandidates` still sizes
+    // a finished building's shared-cap room against the aggregate.
+    input: (buildingId, resource) => sumOverTrips(workers, (trip) => (
       trip.kind === 'supply' && trip.targetId === buildingId
+        && (resource === undefined || trip.resource === resource)
         ? trip.plannedAmount + (trip.phase === 'outbound' ? trip.amount : 0)
         : 0
     )),

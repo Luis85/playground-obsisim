@@ -120,6 +120,21 @@ export function resolveWorldTheme(read: VarReader): WorldTheme {
       // Purple, deliberately outside the green/orange production language: this
       // building is not short of anything, it has nowhere to put what it made.
       outputFull: pick(read, '--color-purple', '#8f6fbf'),
+      // A site is not a stall, not a home, not a store — its own hue, checked
+      // FIRST in the precedence chain (snapshot-buildings.ts's buildingState),
+      // so it gets its own ring rather than borrowing the relocating cyan it
+      // sits beside here. Every named vault colour is already claimed (see
+      // `storing`'s own comment below), so this is hardcoded the same way
+      // `storing` and `unstaffed` are: a warm scaffolding amber, distinct from
+      // both the waiting-for-input orange and the storehouse brown it sits
+      // between in this object. Required now, same reason `relocating` below
+      // was required in the task that added it: tests/app/world-theme.test.ts
+      // pins every stateRing entry pairwise-distinct, and graphics-cache
+      // indexes stateRing[b.state] unconditionally, so adding
+      // 'underConstruction' to BuildingState without a ring color here would
+      // fail that pre-existing test AND leave a real site with an undefined
+      // ring at runtime.
+      underConstruction: '#cf8b2f',
       // Cyan-adjacent, matching the carried-load hue: both say "in transit".
       // Required now (not deferred to the UI task that otherwise owns this
       // file): tests/app/world-theme.test.ts already pins every stateRing

@@ -2,7 +2,7 @@ import type { IEntity } from 'sim-ecs';
 import type { BuildingDefId, ResourceId } from '../shared/content-types';
 import type { Command } from '../shared/commands';
 import type { NoticeMessage, Snapshot } from '../shared/snapshot';
-import type { TileRef, WorldMapSize } from '../shared/placement';
+import type { WorldMapSize } from '../shared/placement';
 import { MAX_SAVED_COUNTER } from '../shared/save';
 import { BALANCE } from './content/balance';
 import type { Home } from './components';
@@ -273,11 +273,11 @@ export class RemovalLedger {
  * query for the rest of the tick, so rehome would put those same colonists
  * straight back into a building that no longer exists.
  *
- * `constructed` is the mirror image: a house built this tick is absent from
- * PopulationSystem's `buildings` query for the rest of the tick, so without
- * it rehome would leave that house's future residents homeless for the tick
- * it was built on — resolving itself the tick after, but persisting
- * indefinitely if the game is paused right after building.
+ * `constructed` is the mirror image: a building ordered this tick is absent
+ * from every query for the rest of the tick, so without it the order-time
+ * affordability check (`outstandingMaterials`, placement-handlers.ts) cannot
+ * see the site a command earlier in this same drain just queued, and accepts
+ * two orders that share one building's materials.
  *
  * `arrivals` is the third of the same shape, and since Task 8 it carries real
  * traffic: `spawnArrival` pushes every nomad and every newborn onto it, and
@@ -316,33 +316,29 @@ export class PendingChanges {
   /** Buildings demolished this tick. Still in every query until the sync. */
   readonly demolished = new Set<number>();
   /**
-   * Buildings constructed this tick. Absent from every query until the sync,
-   * the mirror image of `demolished` — and the reason homing must be told
-   * about them: a house built this tick would otherwise shelter nobody until
-   * the next one, publishing free beds beside homeless colonists.
+   * Construction SITES ordered this tick. Absent from every query until the
+   * sync, the mirror image of `demolished`.
+   *
+   * Since §2.5 its one reader is `outstandingMaterials` (placement-handlers.ts),
+   * which charges each entry its WHOLE cost against the next order's
+   * affordability check — the tile, defId and id are carried because that
+   * check needs the def, and because homing used to read the tile before a
+   * site stopped being a shelter.
    */
   readonly constructed: { id: number; defId: BuildingDefId; col: number; row: number }[] = [];
-
-  /**
-   * Where a building constructed earlier THIS tick stands, or null if no
-   * pending construction has that id.
-   *
-   * Every reader that resolves a building id to a tile needs this, not just
-   * homing. `rehome` seats a colonist in a house built this tick; if
-   * `ProductionSystem` and `HaulSystem` then resolve that `homeId` against
-   * their own pre-sync queries alone, they find nothing and charge the
-   * colonist `homelessFactor` on the very tick they were housed — while the
-   * post-sync `refreshEntitySections` publishes them as housed. One method,
-   * so the three readers cannot drift apart on what "pending" means.
-   */
-  tileOf(id: number): TileRef | null {
-    const built = this.constructed.find((b) => b.id === id);
-    return built === undefined ? null : { col: built.col, row: built.row };
-  }
 
   // Called through an interface-typed value (PopulationContext.pending,
   // CommandContext.pending), which fallow's static analysis cannot trace
   // back to this class.
+  //
+  // Every field, and `constructed` is not the cosmetic one: it is THIS drain's
+  // record of sites ordered a moment ago, and `outstandingMaterials` charges
+  // each entry's whole cost on top of the live site row the post-step sync has
+  // since published. A `constructed` that survived its tick would charge every
+  // standing site twice and grow without bound, so the colony would
+  // progressively refuse orders it can plainly afford — see command-system
+  // .test.ts's 'charges a standing site once, not once more for every tick
+  // since it was ordered'.
   // fallow-ignore-next-line unused-class-member
   clear(): void {
     this.arrivals.length = 0;

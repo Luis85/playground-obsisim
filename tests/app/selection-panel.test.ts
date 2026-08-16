@@ -107,4 +107,52 @@ describe('SelectionPanel', () => {
     await wrapper.vm.$nextTick();
     expect(wrapper.find('[data-test="selection-relocating"]').exists()).toBe(false);
   });
+
+  // The construction countdown, alongside the relocating one above for the
+  // same reason Step 1's grep pairs the two files. constructionTicks (14) is
+  // distinct from every other numeric field on the fixture, and the shortfall
+  // is asserted alongside it — the only way this panel can tell a site that
+  // is waiting from one that is stuck.
+  it('shows the construction countdown and the per-material shortfall for a site', async () => {
+    const wrapper = mountPanel(7, {
+      state: 'underConstruction', constructionTicks: 14, constructionNeeds: { wood: 9, planks: 2 },
+    });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-test="selection-construction"]').text()).toBe('Under construction: 14t left');
+    expect(wrapper.find('[data-test="selection-needs"]').text()).toBe('Needs: 9 Wood, 2 Planks');
+    expect(wrapper.text()).toContain('Under construction'); // the state label too, via BUILDING_STATE_LABELS
+  });
+
+  it('shows no construction lines for a settled building', async () => {
+    const wrapper = mountPanel(7, { state: 'producing', constructionTicks: 0 });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-test="selection-construction"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="selection-needs"]').exists()).toBe(false);
+  });
+
+  // `handleMoveBuilding` ALWAYS refuses a site (§2.6, §2.12), and the refusal
+  // is invisible until after the player has armed move mode and picked a tile
+  // — `tileValid` gates PLACE mode only, so every buildable destination paints
+  // green for a move that cannot happen. The control and the engine's refusal
+  // have to agree, the same way the build surfaces do.
+  it('cannot arm a move for a site, and says why', async () => {
+    const wrapper = mountPanel(7, { state: 'underConstruction', constructionTicks: 14 });
+    await wrapper.vm.$nextTick();
+    const move = wrapper.find('[data-test="selection-move"]');
+    expect(move.attributes('disabled')).toBeDefined();
+    expect(move.attributes('title')).toContain('cannot be moved');
+    await move.trigger('click');
+    expect(wrapper.emitted('move')).toBeUndefined();
+  });
+
+  // The other side of the branch: a settled building must still be movable,
+  // or "disabled for a site" is indistinguishable from "disabled always".
+  it('a settled building can still be moved', async () => {
+    const wrapper = mountPanel(7, { state: 'producing', constructionTicks: 0 });
+    await wrapper.vm.$nextTick();
+    const move = wrapper.find('[data-test="selection-move"]');
+    expect(move.attributes('disabled')).toBeUndefined();
+    await move.trigger('click');
+    expect(wrapper.emitted('move')).toHaveLength(1);
+  });
 });

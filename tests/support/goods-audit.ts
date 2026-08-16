@@ -4,6 +4,7 @@ import type { Snapshot } from '../../src/shared/snapshot';
 import { BUILDINGS, unitsOf } from '../../src/engine/content/buildings';
 import { HaulTrip, InputBuffer, OutputBuffer } from '../../src/engine/components';
 import { ProductionLedger, Stockpile } from '../../src/engine/resources';
+import { ConstructionSystem } from '../../src/engine/systems/construction-system';
 import { HungerSystem } from '../../src/engine/systems/hunger-system';
 import { ProductionSystem } from '../../src/engine/systems/production-system';
 import { StatsSystem } from '../../src/engine/systems/stats-system';
@@ -17,7 +18,8 @@ import type { TColonySystemFactory } from '../../src/engine/world';
  * The law it enforces, stated once:
  *
  *   opening holdings + gross production - recipe inputs paid - eaten
- *     + whatever commands and removals moved  ===  goods standing at the end
+ *     + whatever commands and removals moved - construction inputs spent
+ *     ===  goods standing at the end
  *
  * counting every store site, every input and output buffer, and every load in
  * a hauler's hands. Increment 7 moves goods through four places plus a pair of
@@ -43,6 +45,17 @@ import type { TColonySystemFactory } from '../../src/engine/world';
  *   every processed unit appear twice — and §4's headline scenarios are
  *   forester -> sawmill chains, so a correct run would fail this sentinel on
  *   its own conversions.
+ *
+ * A THIRD correction, added in increment 9's own balance task: construction
+ * inputs. `ConstructionSystem` empties a site's in-tray the tick its countdown
+ * reaches zero (`input.amounts.clear()`), and that emptying records no
+ * consumption of its own — the goods were already charged to the colony
+ * ledger on delivery (`Stockpile.recordConsumed` in `unload`,
+ * haul-system.ts), the same tick they landed in the tray. Without a term for
+ * it, those units leave `final` (`goodsStanding` no longer counts an emptied
+ * tray) with nothing in `predicted` accounting for the drop, and every
+ * scenario that completes a site reports `conservationError` equal to the
+ * negative of that site's cost — believed, because nothing here catches it.
  */
 
 /**
@@ -56,7 +69,12 @@ interface TickWindows {
   afterCommands: number;
   /** After HungerSystem/PopulationSystem/EfficiencySystem: meals and tool wear. */
   beforeProduction: number;
-  /** After ProductionSystem and HaulSystem — the window the sentinel PREDICTS. */
+  /** After ProductionSystem and HaulSystem, before ConstructionSystem — the
+   * window `constructionInputs` is measured OUT of, by comparing this to
+   * `afterHauling` below. */
+  beforeConstruction: number;
+  /** After ProductionSystem, HaulSystem and ConstructionSystem — the window
+   * the sentinel PREDICTS. */
   afterHauling: number;
 }
 
@@ -131,6 +149,17 @@ export interface GoodsAuditResult {
    * nothing, and worth asserting as such: it is where a depot's lost stock
    * would hide. */
   commandFlow: number;
+  /** Cumulative drop across `ConstructionSystem`: the sum, over every tick of
+   * the run, of `input.amounts.clear()` firing on a site whose countdown just
+   * reached 0. A SINK, not a spend already counted elsewhere — `recipeInputs`
+   * only ever reads `ProductionLedger` and a producer's own batches, and a
+   * construction site is neither. Zero in a scenario that completes no site,
+   * and worth asserting as such (see `Scenario.sites`): a fixture that only
+   * delivers to a site's in-tray without completing it can pass with this
+   * term absent from `predicted` entirely, because the tray's goods are still
+   * standing and `goodsStanding` counts them — completing the site is what
+   * exercises this term at all. */
+  constructionInputs: number;
   /** The same, for the drain after the LAST tick — the only one no window
    * covers. */
   removalFlow: number;
@@ -146,7 +175,10 @@ export class GoodsAudit {
   private endOfTick = 0;
   private commandFlow = 0;
   private eaten = 0;
-  private readonly windows: TickWindows = { afterCommands: 0, beforeProduction: 0, afterHauling: 0 };
+  private constructionInputs = 0;
+  private readonly windows: TickWindows = {
+    afterCommands: 0, beforeProduction: 0, beforeConstruction: 0, afterHauling: 0,
+  };
   private readonly madeByResource = new Map<ResourceId, number>();
   private readonly deliveredByResource = new Map<ResourceId, number>();
 
@@ -175,6 +207,7 @@ export class GoodsAudit {
     const probes: [TColonySystemFactory, Probe][] = [
       [HungerSystem, (goods) => { this.windows.afterCommands = goods; }],
       [ProductionSystem, (goods) => { this.windows.beforeProduction = goods; }],
+      [ConstructionSystem, (goods) => { this.windows.beforeConstruction = goods; }],
       [StatsSystem, (goods, stockpile, ledger) => {
         this.windows.afterHauling = goods;
         accumulate(this.madeByResource, ledger.madeThisTick);
@@ -206,6 +239,11 @@ export class GoodsAudit {
     // A SINK, so it counts the drop: goods only ever leave the colony across
     // this window, and the law subtracts it.
     this.eaten += this.windows.afterCommands - this.windows.beforeProduction;
+    // The other SINK: whatever `ConstructionSystem` cleared out of a
+    // completing site's in-tray this tick. 0 on every tick no site completes,
+    // by construction — the two probes read the same total when nothing runs
+    // between them.
+    this.constructionInputs += this.windows.beforeConstruction - this.windows.afterHauling;
     this.endOfTick = this.windows.afterHauling;
     this.previousEnd = this.endOfTick;
   }
@@ -216,13 +254,15 @@ export class GoodsAudit {
     for (const amount of this.madeByResource.values()) made += amount;
     const recipeInputs = this.recipeInputsPaid(snapshot);
     const removalFlow = final - this.endOfTick;
-    const predicted = this.opening + made - recipeInputs - this.eaten + this.commandFlow + removalFlow;
+    const predicted = this.opening + made - recipeInputs - this.eaten + this.commandFlow + removalFlow
+      - this.constructionInputs;
     return {
       opening: this.opening,
       made,
       recipeInputs,
       eaten: this.eaten,
       commandFlow: this.commandFlow,
+      constructionInputs: this.constructionInputs,
       removalFlow,
       final,
       conservationError: final - predicted,

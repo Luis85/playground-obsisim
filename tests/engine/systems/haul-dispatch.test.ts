@@ -5,7 +5,9 @@ import { CAMP_SITE_ID, CAMP_TILE, haulTicksBetween, legPositionOf, type StoreSit
 import type { TileRef } from '../../../src/shared/placement';
 import { lifespanFor } from '../../../src/shared/population';
 import { BALANCE } from '../../../src/engine/content/balance';
-import { Age, Building, Colonist, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Relocation } from '../../../src/engine/components';
+import {
+  Age, Building, Colonist, Construction, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Relocation,
+} from '../../../src/engine/components';
 import { IdCounter, SnapshotStore, Stockpile } from '../../../src/engine/resources';
 import { CommandSystem } from '../../../src/engine/systems/command-system';
 import { PopulationSystem } from '../../../src/engine/systems/population-system';
@@ -20,7 +22,7 @@ import {
   applyRemovals, buildColonyPrepWorld, createColonyWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist,
   type TColonySystemFactory,
 } from '../../../src/engine/world';
-import type { SaveGameV6 } from '../../../src/shared/save';
+import type { SaveGameV7 } from '../../../src/shared/save';
 
 /**
  * A supply trip is a state machine, so these fixtures are read tick by tick
@@ -51,6 +53,17 @@ interface Spec {
   crew?: number;
   /** Ledger stock standing IN this building, for a storehouse. */
   stored?: Partial<Record<ResourceId, number>>;
+  /** A CONSTRUCTION SITE rather than a finished building (§2.5): it occupies
+   * its tile, provides nothing, and wants its `cost` delivered to it. Applied
+   * after `prepareRun` because `spawnBuilding` takes a save record and sites
+   * have no save field until Task 8 — the same reach-into-the-component move
+   * command-system.test.ts's `finishSite` makes from the other direction. */
+  site?: boolean;
+  /** This building's in-tray seeded PAST `BALANCE.inputBufferCap`, which is
+   * what a site's tray legitimately holds: its room is its cost (20 wood for a
+   * mill), not the shared 12-unit cap. `inputBuffer` above cannot express it —
+   * it goes through `clampedInputBuffer`, which trims to the cap. */
+  siteTray?: Partial<Record<ResourceId, number>>;
 }
 
 interface Options {
@@ -101,6 +114,8 @@ async function setup(specs: readonly Spec[], haulerCount: number, options: Optio
     // refundAt, not addAt: seeding a depot must not register as a delivery, or
     // the flow-accounting cases below would start from a dirtied ledger.
     for (const [id, amount] of Object.entries(spec.stored ?? {})) stockpile.refundAt(siteOf(buildings[i]), id as ResourceId, amount);
+    if (spec.site === true) buildings[i].getComponent(Construction)!.ticksLeft = BALANCE.buildTicks;
+    for (const [id, amount] of Object.entries(spec.siteTray ?? {})) inputOf(buildings[i]).amounts.set(id as ResourceId, amount);
   });
   const step = async (times: number) => {
     for (let i = 0; i < times; i++) { await world.step(); applyRemovals(world); }
@@ -134,7 +149,7 @@ describe('where a hauler starts', () => {
   // from the map's corner, a tile it has never stood on. Both paths into the
   // world are checked, because they were once allowed to drift apart (OBS-4-02).
   it('a restored hauler stands at the camp tile, not at the map corner', async () => {
-    const save: SaveGameV6 = { ...initialSave() };
+    const save: SaveGameV7 = { ...initialSave() };
     save.colonists = save.colonists.map((worker) => ({ ...worker, hauling: true }));
     const world = await createColonyWorld(save);
     const trips = [...world.getEntities()].map((e) => e.getComponent(HaulTrip)).filter((t) => t !== undefined);
@@ -145,7 +160,7 @@ describe('where a hauler starts', () => {
   });
 
   it('a hauler recruited during play stands at the camp tile too', async () => {
-    const save: SaveGameV6 = { ...initialSave(), stockpile: { bread: 5000 } };
+    const save: SaveGameV7 = { ...initialSave(), stockpile: { bread: 5000 } };
     const prep = buildColonyPrepWorld({ save, systems: [CommandSystem] });
     const world = await prep.prepareRun();
     const before = new Set([...world.getEntities()].filter((e) => e.getComponent(JobAssignment) !== undefined));
@@ -456,11 +471,11 @@ describe('a remote depot is reachable by anyone', () => {
   });
 
   it('...after a reload, when every hauler wakes at the camp with no memory', async () => {
-    const save: SaveGameV6 = { ...initialSave(), colonists: [], buildings: [], stockpile: {} };
+    const save: SaveGameV7 = { ...initialSave(), colonists: [], buildings: [], stockpile: {} };
     save.buildings = [
-      { inputBuffer: {}, stored: {}, id: 40, defId: 'house', col: 3, row: 0, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 },
-      { inputBuffer: {}, stored: { wheat: 30 }, id: 41, defId: 'storehouse', ...DEPOT, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 },
-      { inputBuffer: {}, stored: {}, id: 42, defId: 'mill', ...BESIDE_DEPOT, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0 },
+      { inputBuffer: {}, stored: {}, id: 40, defId: 'house', col: 3, row: 0, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0, constructionTicks: 0},
+      { inputBuffer: {}, stored: { wheat: 30 }, id: 41, defId: 'storehouse', ...DEPOT, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0, constructionTicks: 0},
+      { inputBuffer: {}, stored: {}, id: 42, defId: 'mill', ...BESIDE_DEPOT, progress: 0, batchActive: false, buffer: {}, relocatingTicks: 0, constructionTicks: 0},
     ];
     save.colonists = [
       { id: 43, hunger: 0, buildingId: 42, toolTicks: 0, hauling: false, ageTicks: BALANCE.startingAgeTicks, homeId: 40, starvingTicks: 0 },
@@ -501,8 +516,19 @@ describe('a remote depot is reachable by anyone', () => {
       { systems: [CommandSystem, ProductionSystem, HaulSystem], camp: { wood: 200, planks: 200 } },
     );
     enqueue(world, { type: 'constructBuilding', buildingDefId: 'storehouse', at: DEPOT });
-    await step(2); // built, and the entity is in the world
+    await step(1); // ordered; the entity is in the world but no query has seen it yet
     const depot = [...world.getEntities()].find((e) => e.getComponent(Building)?.defId === 'storehouse')!;
+    // A SITE since spec §2.5 — `ConstructionSystem` (Task 5) does not exist
+    // yet to finish it on its own, and this case is about a depot built
+    // during play being reachable, not about construction itself.
+    //
+    // FINISHED ON THE ORDER TICK, before HaulSystem's query can see it. Since
+    // Task 3 a site is a supply candidate for its own cost, and this depot
+    // costs 20 wood and 10 planks — both standing at the camp — so leaving it
+    // a site for even one dispatch tick sends this fixture's ONE hauler on a
+    // 22-tick round trip that has nothing to do with what the case asserts,
+    // and RUN is sized to ask whether the cluster starts, not to absorb that.
+    depot.getComponent(Construction)!.ticksLeft = 0;
     stockpile.refundAt(siteOf(depot), 'wheat', 30);
     await step(RUN);
     expect(produced(world)).toBeGreaterThan(0);
@@ -519,14 +545,10 @@ describe('a remote depot is reachable by anyone', () => {
 });
 
 describe('what a leg cannot assume', () => {
-  it('a construction ordered mid-fetch cannot make the hauler create goods', async () => {
-    // WOOD, because the resource has to be both a recipe input and a
-    // construction cost or the fixture cannot discriminate at all: no building
-    // costs wheat, so a wheat-fetching hauler's source can never be drained by
-    // a build order.
+  it('a ledger spend mid-fetch cannot make the hauler create goods', async () => {
     const { world, haulers, step, stockpile } = await setup(
       [{ defId: 'storehouse', ...DEPOT, stored: { wood: 12 } }, { defId: 'sawmill', ...BESIDE_DEPOT, crew: 1 }], 1,
-      { systems: [CommandSystem, ProductionSystem, HaulSystem] },
+      { systems: [ProductionSystem, HaulSystem] },
     );
     expect(colonyTotal(world, 'wood')).toBe(12);
     const out = legTicks(CAMP_TILE, DEPOT);
@@ -535,12 +557,16 @@ describe('what a leg cannot assume', () => {
     // be satisfied by.
     expect(tripOf(haulers[0])).toMatchObject({ phase: 'fetching', plannedAmount: 6, amount: 0 });
 
-    // A gatherer's hut costs 10 wood and the camp holds none, so `pay` draws it
-    // straight out of the depot this hauler is walking toward — a legitimate
-    // spend the source claim does not bind.
+    // A ledger spend of 10 wood draws straight out of the depot this hauler is
+    // walking toward — `pay` reaches across every site, and a source claim does
+    // not bind it. Spent directly rather than through a build order, which is
+    // what this fixture used until §2.3 moved a building's cost from the order
+    // to the delivery: an order now takes nothing, so it can no longer drain
+    // anything. Meals are the shipped spender that still can, and no meal is
+    // made of wood — hence the bare `pay`, which is the same call a meal makes.
     await step(out - 1);
-    enqueue(world, { type: 'constructBuilding', buildingDefId: 'gatherersHut' });
-    await step(1); // the build lands, then this same tick brings the hauler in
+    expect(stockpile.pay({ wood: 10 })).toBe(true);
+    await step(1); // the spend lands, then this same tick brings the hauler in
     expect(stockpile.get('wood')).toBe(0);
     expect(colonyTotal(world, 'wood')).toBe(2); // NOT 6: what was there, not what was claimed
   });
@@ -2390,5 +2416,259 @@ describe('a transfer interrupted', () => {
     expect(stockpile.getAt(sourceId, 'wheat')).toBe(SOURCE_STOCK - BALANCE.haulCarryCapacity); // NOT sent home
     expect(stockpile.getAt(CAMP_SITE_ID, 'wheat')).toBe(0);
     expect(colonyTotal(world, 'wheat')).toBe(total);
+  });
+});
+
+/**
+ * SUPPLYING A CONSTRUCTION SITE (§2.5, Task 3).
+ *
+ * A site is a building that WANTS THINGS, so increment 7's machinery already
+ * knows how to feed one — there is no second delivery mechanism here, only
+ * four gates opened along the one that exists. Three of them sit outside the
+ * candidate builder, and each one alone stops every material dead while every
+ * `needOf` unit case below still passes, which is why the whole-cost case is
+ * written first and asserted end to end.
+ *
+ * A SITE IS NEVER STAFFED — Task 2b forbids assigning workers to one, and a
+ * house or storehouse def has `workerSlots: 0` regardless — so every fixture
+ * here has `crew` unset and that is the subject rather than an omission.
+ */
+const SITE_MILL: Spec = { defId: 'mill', ...MILL, site: true };
+/** A mill costs 20 wood and 10 planks (§2.5's first multi-material demand);
+ * a sawmill costs 25 wood and nothing else. Written out rather than read off
+ * `BUILDINGS` on purpose: an assertion that derives its expectation from the
+ * same catalog lookup the implementation reads cannot tell "delivers the cost"
+ * from "delivers whatever this map happens to say". */
+const MILL_WOOD = 20;
+const MILL_PLANKS = 10;
+const SAWMILL_WOOD = 25;
+
+describe('a construction site is supplied like any other building that wants things', () => {
+  it('a mill site receives its full 30-unit cost', async () => {
+    // THE END-TO-END PROOF, and the one case that fails if ANY single one of
+    // the four changes is missed: the dispatch staffing gate, the cost-shaped
+    // want, the arrival staffing recheck, or the arrival cap. Four of the six
+    // mutations for this task leave a plausible compiling implementation that
+    // delivers nothing or stalls at 12 units, and only this case sees it.
+    //
+    // TWO HAULERS, because a site's per-resource room is claimable by several
+    // at once and a single-hauler fixture cannot show an over-claim — that is
+    // how increment 8's whole over-claim family passed.
+    //
+    // IT ASSERTS THE TRAY REACHES 30 AND STOPS. `ConstructionSystem` is Task
+    // 5's, so nothing here may assert a site COMPLETING: between Tasks 2 and 5
+    // a site never finishes, and a completion assertion could not go green.
+    const { world, buildings, step } = await setup(
+      [SITE_MILL], 2, { camp: { wood: MILL_WOOD, planks: MILL_PLANKS } },
+    );
+    let systemErrors = 0;
+    world.eventBus.subscribe(SystemError, () => { systemErrors++; });
+
+    await step(150);
+    expect(Object.fromEntries(inputOf(buildings[0]).amounts)).toEqual({ wood: MILL_WOOD, planks: MILL_PLANKS });
+    expect(inputOf(buildings[0]).total()).toBe(MILL_WOOD + MILL_PLANKS);
+    // Conservation across the whole run: the 30 units the camp started with are
+    // the 30 units standing in the tray, none minted and none dropped.
+    expect(colonyTotal(world, 'wood')).toBe(MILL_WOOD);
+    expect(colonyTotal(world, 'planks')).toBe(MILL_PLANKS);
+
+    await step(50); // and it STOPS there — no ConstructionSystem, nothing consumed
+    expect(inputOf(buildings[0]).total()).toBe(MILL_WOOD + MILL_PLANKS);
+    // sim-ecs catches a throwing system and publishes a SystemError rather than
+    // failing the step, so a mutation that throws would otherwise look green.
+    expect(systemErrors).toBe(0);
+  });
+
+  it('a site wants its cost, and stops wanting a material once it has it', async () => {
+    // DISCRIMINATING AGAINST A CAP-BASED ROOM: the tray already holds exactly
+    // `inputBufferCap`, so a room of `input.room(inputBufferCap)` is ZERO and
+    // this site drops out of dispatch entirely. Its cost-shaped room is
+    // 25 - 12 = 13, and the wood offer below is the whole difference.
+    //
+    // A SAWMILL, whose cost is wood ALONE. On a mill the ratio walk would hand
+    // a 12-wood tray to the planks it holds none of, and the wood offer this
+    // case exists to see would never be made.
+    const wanting = await setup(
+      [{ defId: 'sawmill', ...MILL, site: true, siteTray: { wood: BALANCE.inputBufferCap } }], 1, { camp: { wood: 30 } },
+    );
+    await wanting.step(1);
+    expect(tripOf(wanting.haulers[0])).toMatchObject({ kind: 'supply', resource: 'wood', plannedAmount: 6 });
+
+    // The other half of the same sentence: with all 20 of its wood standing in
+    // the tray, wood is no longer wanted at all and planks are.
+    const satisfied = await setup(
+      [{ ...SITE_MILL, siteTray: { wood: MILL_WOOD } }], 1, { camp: { wood: 30, planks: 30 } },
+    );
+    await satisfied.step(1);
+    expect(tripOf(satisfied.haulers[0])).toMatchObject({ kind: 'supply', resource: 'planks', plannedAmount: 6 });
+  });
+
+  it('two haulers cannot claim more of a site\'s room than it has left', async () => {
+    // A ONE-MATERIAL cost, so the ratio walk cannot rescue the second hauler by
+    // handing it the other resource: there is no other resource, and four units
+    // of room are all that exist. One hauler cannot over-claim, which is why
+    // this needs two.
+    const { haulers, step } = await setup(
+      [{ defId: 'sawmill', ...MILL, site: true, siteTray: { wood: SAWMILL_WOOD - 4 } }], 2, { camp: { wood: 30 } },
+    );
+    await step(1);
+    expect(tripOf(haulers[0])).toMatchObject({ kind: 'supply', resource: 'wood', plannedAmount: 4 });
+    expect(tripOf(haulers[1])).toMatchObject({ phase: 'idle', plannedAmount: 0 });
+  });
+
+  it('a site with two materials outstanding asks for the proportionally shortest', async () => {
+    // §2.2's multi-input path, on the first SHIPPED content to exercise it —
+    // every recipe in the catalog has 0 or 1 input, so proportional shortfall
+    // has only ever been unit-tested against a fixture-local def.
+    const shortOfPlanks = await setup(
+      [{ ...SITE_MILL, siteTray: { wood: 16 } }], 1, { camp: { wood: 30, planks: 30 } },
+    );
+    await shortOfPlanks.step(1); // wood 16/20 = 0.8, planks 0/10 = 0
+    expect(tripOf(shortOfPlanks.haulers[0])).toMatchObject({ resource: 'planks' });
+
+    // Reversed. THE CASE ABOVE IS THE DISCRIMINATING ONE — wood stands earlier
+    // in RESOURCE_IDS, so picking planks can only be a proportion talking —
+    // and this one is its companion rather than a second proof: catalog order
+    // and proportional shortfall give the same answer here, and the point is
+    // that a site short of the FIRST id still asks for it.
+    const shortOfWood = await setup(
+      [{ ...SITE_MILL, siteTray: { planks: 8 } }], 1, { camp: { wood: 30, planks: 30 } },
+    );
+    await shortOfWood.step(1);
+    expect(tripOf(shortOfWood.haulers[0])).toMatchObject({ resource: 'wood' });
+  });
+
+  it('a finished building still wants its recipe, not its cost', async () => {
+    // The other side of the branch, and it needs its own fixture or the clause
+    // is untested: a finished mill's recipe wants WHEAT, while its cost is wood
+    // and planks. All three stand at the camp, so the answer is a choice.
+    const { haulers, step } = await setup(
+      [{ defId: 'mill', ...MILL, crew: 1 }], 1, { camp: { wheat: 30, wood: 30, planks: 30 } },
+    );
+    await step(1);
+    expect(tripOf(haulers[0])).toMatchObject({ kind: 'supply', resource: 'wheat' });
+  });
+
+  it('an unstaffed site is a supply candidate', async () => {
+    // `supplyCandidates` gates on `staffed.has(id)` BEFORE it asks `needOf`
+    // anything, so every case above is unreachable until this gate exempts a
+    // site. A fixture that staffed the site would prove nothing — and could
+    // not be built anyway, since Task 2b refuses to assign a worker to one.
+    const { haulers, step } = await setup([SITE_MILL], 1, { camp: { wood: 30 } });
+    await step(1);
+    expect(tripOf(haulers[0])).toMatchObject({ kind: 'supply', phase: 'fetching', resource: 'wood' });
+  });
+
+  it('an unstaffed producer is still NOT a supply candidate', async () => {
+    // Increment 7 §2.6's rule survives for everything that is not a site.
+    // Without this the exemption could be written as "always true" and pass
+    // every other case in this block. The mill is FINISHED and has no crew;
+    // the wheat it wants is standing at the camp.
+    const { haulers, step } = await setup([{ defId: 'mill', ...MILL }], 1, { camp: { wheat: 30 } });
+    await step(1);
+    expect(tripOf(haulers[0])).toMatchObject({ phase: 'idle', plannedAmount: 0 });
+  });
+
+  it('a site accepts a delivery larger than inputBufferCap', async () => {
+    // The ARRIVAL cap, which is a separate gate from the dispatch one: with
+    // `input.room(inputBufferCap)` still in `unload`, a site holding 10 accepts
+    // 2 of the next 6 and refuses every unit after that while dispatch keeps
+    // offering them — a livelock, not a shortfall. A one-material cost so the
+    // two haulers below both carry wood, and 22 > 12 so the two limits cannot
+    // be confused.
+    const { buildings, step } = await setup(
+      [{ defId: 'sawmill', ...MILL, site: true, siteTray: { wood: 10 } }], 2, { camp: { wood: 12 } },
+    );
+    await step(1 + legTicks(CAMP_TILE, CAMP_TILE) + legTicks(CAMP_TILE, MILL));
+    expect(inputOf(buildings[0]).amounts.get('wood')).toBe(22);
+    expect(inputOf(buildings[0]).total()).toBeGreaterThan(BALANCE.inputBufferCap);
+  });
+
+  it('wood in flight does not consume the site\'s plank room', async () => {
+    // `Claims.input`'s missing resource filter. Two units of planks already in
+    // the tray make planks the SECOND pick (wood 0/20 = 0 beats planks
+    // 2/10 = 0.2), so the first hauler leaves with 6 wood and the second reads
+    // the plank room. That room is 10 - 2 = 8, and the offer is a full load of
+    // 6; an unfiltered claim subtracts the SIX WOOD in flight and offers 2.
+    const { haulers, step } = await setup(
+      [{ ...SITE_MILL, siteTray: { planks: 2 } }], 2, { camp: { wood: 30, planks: 30 } },
+    );
+    await step(1);
+    expect(tripOf(haulers[0])).toMatchObject({ resource: 'wood', plannedAmount: 6 });
+    expect(tripOf(haulers[1])).toMatchObject({ resource: 'planks', plannedAmount: 6 });
+  });
+
+  it('two materials can be in flight to one site at the same time', async () => {
+    // The consequence, on an EMPTY site — the case that forces claims into the
+    // RATIO rather than merely filtering the candidates. Both ratios start at
+    // 0, so wood wins the tie and the first hauler claims 6. Nothing has been
+    // DELIVERED, so `held` is still 0 and a filter-only implementation reads
+    // both ratios at 0 again, picks wood again on the tie, finds 14 units of
+    // unclaimed room, and serializes the whole delivery.
+    //
+    // With the claim in the ratio, wood reads (0 + 6) / 20 = 0.3 against planks
+    // at 0, and the two materials walk concurrently.
+    const { haulers, step } = await setup([SITE_MILL], 2, { camp: { wood: 30, planks: 30 } });
+    await step(1);
+    expect(tripOf(haulers[0])).toMatchObject({ kind: 'supply', resource: 'wood', plannedAmount: 6 });
+    expect(tripOf(haulers[1])).toMatchObject({ kind: 'supply', resource: 'planks', plannedAmount: 6 });
+  });
+
+  it('the load that finishes a material is dispatched however small it is', async () => {
+    // OBS-9-01 at the dispatch decision itself, where the completion cases in
+    // construction-system.test.ts see it as a building that is never built.
+    //
+    // The site owes ONE unit of its 25 wood and the camp holds thirty, so
+    // `worthMoving`'s two older clauses BOTH refuse: one is under
+    // `minSupplyUnits`, and a camp with thirty units to spare is nowhere near
+    // handing over everything it has. Those three numbers are pairwise
+    // distinct on purpose — the load (1), the floor (2) and the source's
+    // holding (30) — so no clause can pass by reading another's value.
+    const OWED = 1;
+    const HELD = 30;
+    expect(OWED).toBeLessThan(BALANCE.minSupplyUnits);
+    expect(OWED).toBeLessThan(HELD);
+
+    const { buildings, haulers, step } = await setup(
+      [{ defId: 'sawmill', ...MILL, site: true, siteTray: { wood: SAWMILL_WOOD - OWED } }], 1, { camp: { wood: HELD } },
+    );
+    await step(1);
+    expect(tripOf(haulers[0])).toMatchObject({ kind: 'supply', resource: 'wood', plannedAmount: OWED });
+
+    // And it lands: the bill is settled rather than merely offered.
+    await step(legTicks(CAMP_TILE, CAMP_TILE) + legTicks(CAMP_TILE, MILL));
+    expect(inputOf(buildings[0]).amounts.get('wood')).toBe(SAWMILL_WOOD);
+  });
+
+  it('a FINISHED building\'s last unit of room is still refused', async () => {
+    // THE EXEMPTION MUST NOT LEAK. Without this fixture `finishesSiteMaterial`
+    // could be written as "always true" and every case above would still pass
+    // — which would take `minSupplyUnits` out of supply dispatch altogether,
+    // and with it the recipe-consumer numbers §4.1 and increment 10 are sized
+    // against.
+    //
+    // A site's bill only ever shrinks; a mill's in-tray refills the moment a
+    // batch pays out of it, so a unit of room under the floor here is a wait
+    // rather than a strand. Same shape as the case above — one unit of room,
+    // thirty units standing at the camp — and the opposite answer.
+    const refused = await setup(
+      [{ defId: 'mill', ...MILL, inputBuffer: { wheat: BALANCE.inputBufferCap - 1 }, crew: 1 }], 1, { camp: { wheat: 30 } },
+    );
+    await refused.step(10); // and it stays refused, tick after tick
+    expect(tripOf(refused.haulers[0])).toMatchObject({ phase: 'idle', plannedAmount: 0 });
+    expect(refused.stockpile.get('wheat')).toBe(30); // nothing left the camp
+    expect(inputOf(refused.buildings[0]).total()).toBe(BALANCE.inputBufferCap - 1);
+
+    // NON-VACUOUS: one more unit of room and the identical fixture dispatches.
+    // So the refusal above is the floor talking, not a mill that was never a
+    // candidate.
+    const dispatched = await setup(
+      [{ defId: 'mill', ...MILL, inputBuffer: { wheat: BALANCE.inputBufferCap - BALANCE.minSupplyUnits }, crew: 1 }],
+      1, { camp: { wheat: 30 } },
+    );
+    await dispatched.step(1);
+    expect(tripOf(dispatched.haulers[0])).toMatchObject({
+      kind: 'supply', resource: 'wheat', plannedAmount: BALANCE.minSupplyUnits,
+    });
   });
 });

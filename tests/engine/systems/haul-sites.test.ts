@@ -10,7 +10,7 @@ import { PendingChanges } from '../../../src/engine/resources';
 // (CAMP_TILE), and none coinciding with each other — so a test that asserts
 // "site X is present/absent" cannot pass by accident of a shared value.
 function row(overrides: Partial<StoreSiteRow> = {}): StoreSiteRow {
-  return { id: 7, col: 11, row: 6, capacity: 60, relocating: false, ...overrides };
+  return { id: 7, col: 11, row: 6, capacity: 60, relocating: false, underConstruction: false, ...overrides };
 }
 
 describe('storeSitesOf', () => {
@@ -38,6 +38,18 @@ describe('storeSitesOf', () => {
     const settled = row({ id: 3, col: 9, row: 4, capacity: 60, relocating: false });
     const moving = row({ id: 5, col: 12, row: 8, capacity: 60, relocating: true });
     const sites = storeSitesOf([settled, moving], new PendingChanges());
+    expect(sites.map((s) => s.id)).toEqual([CAMP_SITE_ID, 3]);
+  });
+
+  it('excludes a storehouse still under construction', () => {
+    // A site is a hole in the ground, not a depot (spec §2.5) — the same rule
+    // `relocating` applies above, on the other reason a building can be
+    // standing on its tile while providing none of its service. A live row,
+    // NOT a pending one: this is the site the post-step sync has already
+    // published, so the exclusion has to come from the row's own flag.
+    const built = row({ id: 3, col: 9, row: 4, capacity: 60, underConstruction: false });
+    const site = row({ id: 5, col: 12, row: 8, capacity: 60, underConstruction: true });
+    const sites = storeSitesOf([built, site], new PendingChanges());
     expect(sites.map((s) => s.id)).toEqual([CAMP_SITE_ID, 3]);
   });
 

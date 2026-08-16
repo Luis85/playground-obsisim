@@ -1,8 +1,9 @@
 import type {
-  SaveGameV1, SaveGameV2, SaveGameV3, SaveGameV4, SaveGameV5, SaveGameV6, SavedColonist, SavedColonistV4,
+  SaveGameV1, SaveGameV2, SaveGameV3, SaveGameV4, SaveGameV5, SaveGameV6, SaveGameV7, SavedColonist, SavedColonistV4,
 } from './save';
 import {
-  isSaveGameV1, isSaveGameV2, isSaveGameV3, isSaveGameV4, isSaveGameV5, isSaveGameV6, LATEST_SAVE_VERSION, MAX_SAVED_ENTITIES,
+  isSaveGameV1, isSaveGameV2, isSaveGameV3, isSaveGameV4, isSaveGameV5, isSaveGameV6, isSaveGameV7, LATEST_SAVE_VERSION,
+  MAX_SAVED_ENTITIES,
 } from './save';
 import type { WorldMapSize } from './placement';
 import { autoPlacePosition, autoPlaceSequence, CAMP_COLS, MAX_MAP, mapThatFits } from './placement';
@@ -34,7 +35,7 @@ export interface MigrationStep {
 export type SaveGuards = Partial<Record<number, (data: unknown) => boolean>>;
 
 const SAVE_GUARDS: SaveGuards = {
-  1: isSaveGameV1, 2: isSaveGameV2, 3: isSaveGameV3, 4: isSaveGameV4, 5: isSaveGameV5, 6: isSaveGameV6,
+  1: isSaveGameV1, 2: isSaveGameV2, 3: isSaveGameV3, 4: isSaveGameV4, 5: isSaveGameV5, 6: isSaveGameV6, 7: isSaveGameV7,
 };
 
 /**
@@ -145,6 +146,13 @@ const jitter = (id: number) => spreadFor(id, MIGRATION_CONSTANTS.spreadTicks, SA
  * them, and that agreement is the whole point: this must produce the
  * assignment the first homing pass would, or the seed contradicts the engine
  * the instant it runs.
+ *
+ * There is deliberately NO construction term beside `relocatingTicks === 0`,
+ * even though `usableBeds` (restore.ts) and `colonistTargets` (save-guard.ts)
+ * both grew one for save v7. A migration step only ever sees a PRE-v7 save,
+ * and no build before v7 could write an unfinished building — the v6 -> v7
+ * migration is total for exactly that reason — so the term could never fire.
+ * A condition that cannot fire is a condition nothing can test.
  *
  * This answers the SEATING question only — where to put people. It is not the
  * question of whether the colony owns a shelter at all: `savedHasShelter`
@@ -331,11 +339,31 @@ const migrateV5toV6: MigrationStep = {
   },
 };
 
+/**
+ * v6 -> v7: construction becomes work. Every building in a pre-v7 save is
+ * FINISHED — no build before v7 could order a site, let alone persist one — so
+ * this is total rather than heuristic: a zero for every record, and no
+ * question about which buildings deserve one. That totality is also what lets
+ * `savedShelterIds` above keep its bare `relocatingTicks === 0`.
+ */
+const migrateV6toV7: MigrationStep = {
+  from: 6,
+  to: 7,
+  migrate: (save) => {
+    const v6 = save as SaveGameV6; // the runner guard-validated this shape
+    return {
+      ...v6,
+      version: 7,
+      buildings: v6.buildings.map((b) => ({ ...b, constructionTicks: 0 })),
+    };
+  },
+};
+
 /** The registration tables this module owns, edited in place when a version
  * lands. Deliberately not exported: tests inject fakes through
  * migrateSaveToLatest's parameters instead. */
 const SAVE_MIGRATIONS: readonly MigrationStep[] = [
-  migrateV1toV2, migrateV2toV3, migrateV3toV4, migrateV4toV5, migrateV5toV6,
+  migrateV1toV2, migrateV2toV3, migrateV3toV4, migrateV4toV5, migrateV5toV6, migrateV6toV7,
 ];
 
 export function readSaveVersion(data: unknown): number | null {
@@ -418,7 +446,7 @@ export function migrateSaveToLatest(
   guards: SaveGuards = SAVE_GUARDS,
   steps: readonly MigrationStep[] = SAVE_MIGRATIONS,
   target: number = LATEST_SAVE_VERSION,
-): SaveGameV6 | null {
+): SaveGameV7 | null {
   const version = readSaveVersion(data);
   if (version === null || version > target) return null; // a save from a NEWER build is not downgradable
   if (!passesGuard(guards[version], data)) return null;  // validate at the version it claims
@@ -431,5 +459,5 @@ export function migrateSaveToLatest(
   // same value. Kept so a future change to runSteps or to the early-return
   // above doesn't silently stop being caught here.
   if (migrated === null || !passesGuard(guards[target], migrated)) return null;
-  return migrated as SaveGameV6;
+  return migrated as SaveGameV7;
 }

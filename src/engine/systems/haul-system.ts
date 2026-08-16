@@ -5,9 +5,10 @@ import { isRelocating, type TileRef } from '../../shared/placement';
 import { commuteFactor } from '../../shared/population';
 import { BALANCE } from '../content/balance';
 import { RESOURCE_IDS } from '../content/resources';
-import { Building, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Production, Relocation } from '../components';
+import { Building, Construction, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Position, Production, Relocation } from '../components';
 import { PendingChanges, Stockpile } from '../resources';
 import { arrivesAt, claimsOf, type Claims, type HaulWorkerRow } from './haul-claims';
+import { acceptsSupply, inputRoomOf } from './haul-construction';
 import type { DispatchInputs, HaulBuildingRow, StaffedSet } from './haul-dispatch';
 import { chooseJob, storeSitesFrom } from './haul-dispatch';
 import { bankLoad, destinationFor } from './haul-sites';
@@ -40,18 +41,17 @@ export function haulerCapacity(homeTile: TileRef | null): number {
 
 /** Where a hauler sleeps, or null when nowhere — the input haulerCapacity
  * charges. Resolved against the same building rows the haul targets come from,
- * so a house is just another row here. */
-function homeTileOf(homeId: number | null, byId: ReadonlyMap<number, HaulBuildingRow>, pending: PendingChanges): TileRef | null {
+ * so a house is just another row here.
+ *
+ * The query is the WHOLE answer, with no `pending.constructed` fallback for a
+ * house built earlier this tick: since §2.5 an ordered house is a construction
+ * site that shelters nobody, and homing only ever seats a colonist into a live
+ * row (`shelters`, population-system.ts). So a `homeId` naming a building this
+ * query cannot see no longer arises, and "absent" means what it says — no home
+ * this tick, hence the homeless carry capacity. */
+function homeTileOf(homeId: number | null, byId: ReadonlyMap<number, HaulBuildingRow>): TileRef | null {
   if (homeId === null) return null;
-  const row = byId.get(homeId);
-  // A house built earlier THIS tick is absent from the query until the
-  // post-step sync, yet homing has already seated its residents. Without this
-  // fallback a hauler housed on the construction tick resolves to no tile and
-  // takes the homeless carry capacity, while the snapshot published moments
-  // later reports them housed. ProductionSystem folds the same pending tiles
-  // into its own map; here byId carries whole rows a pending building has no
-  // counterpart for, so the tile is resolved on its own.
-  return row === undefined ? pending.tileOf(homeId) : row.position;
+  return byId.get(homeId)?.position ?? null;
 }
 
 /** Everything the leg handlers below read, gathered once per tick. */
@@ -215,11 +215,20 @@ function fetchArrival(ctx: TickContext, trip: HaulTrip, capacity: number): void 
  * is demolished mid-relocation: exactly what each rule prevents, defeated by
  * travel time. The load stays in hand instead; `pickedUp` stays false, so it
  * is an undelivered remainder and goes home to its source.
+ *
+ * BOTH CONDITIONS ARE ASKED THROUGH THE SAME FUNCTIONS DISPATCH ASKED THEM
+ * WITH — `acceptsSupply` for staffing, `inputRoomOf` for the cap — because a
+ * construction site answers each of them differently from a finished building
+ * and it must answer them the same way at both ends of the leg. A recheck that
+ * still asked `staffed.has(id)` would refuse every load dispatched to a site,
+ * which is never staffed; one that still capped at `BALANCE.inputBufferCap`
+ * would take 12 of a mill site's 30 units and refuse the rest while dispatch
+ * went on offering them, which is a livelock rather than a shortfall.
  */
 function unload(ctx: TickContext, trip: HaulTrip, row: HaulBuildingRow): void {
   if (trip.kind !== 'supply' || trip.resource === null || trip.amount === 0) return;
-  if (!ctx.staffed.has(row.building.id) || isRelocating(row.relocation.ticksLeft)) return;
-  const placed = Math.min(trip.amount, row.input.room(BALANCE.inputBufferCap));
+  if (!acceptsSupply(row, ctx.staffed) || isRelocating(row.relocation.ticksLeft)) return;
+  const placed = Math.min(trip.amount, inputRoomOf(row, trip.resource));
   if (placed <= 0) return;
   row.input.add(trip.resource, placed);
   // Consumption is recorded HERE, not when the load left its site: this is the
@@ -345,7 +354,7 @@ export const HaulSystem = () => createSystem({
   stockpile: WriteResource(Stockpile),
   buildings: queryComponents({
     building: Read(Building), position: Read(Position), buffer: Write(OutputBuffer),
-    input: Write(InputBuffer), relocation: Read(Relocation), production: Read(Production),
+    input: Write(InputBuffer), relocation: Read(Relocation), production: Read(Production), construction: Read(Construction),
   }),
   workers: queryComponents({ job: Read(JobAssignment), trip: Write(HaulTrip), home: Read(Home) }),
   pending: ReadResource(PendingChanges),
@@ -361,7 +370,7 @@ export const HaulSystem = () => createSystem({
     // from under it, which is a question about a site's LIVE tile. One map,
     // read by that claim and by every arrival handler.
     const siteById = new Map(sites.map((site) => [site.id, site]));
-    const capacityOf = (row: HaulWorkerRow) => haulerCapacity(homeTileOf(row.home.buildingId, byId, pending));
+    const capacityOf = (row: HaulWorkerRow) => haulerCapacity(homeTileOf(row.home.buildingId, byId));
     const claims = claimsOf(workerRows, stockpile, siteById, capacityOf);
     // ONE derivation, read by the dispatch filter and by the arrival recheck.
     // They are the same rule seen from two ends of a leg, so a second copy of

@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import type { IEntity, IPreptimeWorld, IRuntimeWorld } from 'sim-ecs';
 import type { TileRef } from '../../../src/shared/placement';
-import { Building, HaulTrip, Home, JobAssignment, OutputBuffer, Colonist } from '../../../src/engine/components';
+import { Building, Construction, HaulTrip, Home, InputBuffer, JobAssignment, OutputBuffer, Colonist } from '../../../src/engine/components';
 import { IdCounter, Stockpile } from '../../../src/engine/resources';
 import { BALANCE } from '../../../src/engine/content/balance';
 import { BUILDINGS } from '../../../src/engine/content/buildings';
 import { HaulSystem, haulerCapacity } from '../../../src/engine/systems/haul-system';
 import { CommandSystem } from '../../../src/engine/systems/command-system';
 import { PopulationSystem } from '../../../src/engine/systems/population-system';
-import { CAMP_TILE } from '../../../src/shared/haul';
+import { CAMP_SITE_ID, CAMP_TILE } from '../../../src/shared/haul';
 import { campAdjacentFreeTile, enqueue } from '../fixtures';
 import {
   applyRemovals, buildColonyPrepWorld, createColonyWorld, getPrepResource, initialSave, spawnBuilding, spawnColonist,
@@ -376,15 +376,21 @@ describe('HaulSystem', () => {
     expect(stockpile.get('wood')).toBe(2 * reduced);
   });
 
-  // OBS-6-07 path 2. `homeTileOf` falls back to `PendingChanges.tileOf` for a
-  // home the `buildings` query cannot see yet, and this is the only test that
-  // reaches it. ProductionSystem's twin of the same lookup is pinned by
-  // population-system.test.ts's 'charges a colonist housed by a same-tick
-  // construction as housed, not homeless'; this is the haulage half, and it has
-  // to assert on the LOAD, for the same reason that one asserts on the batch:
-  // the published `carrying`/commute figures are built after the post-step sync
-  // and could always see the new house, so they were never the broken reader.
-  it('a hauler housed by a construction earlier in the same tick carries a full load, not a homeless one', async () => {
+  // OBS-6-07 path 2, REVERSED by task 2b (spec §2.5). `homeTileOf` used to fall
+  // back to `PendingChanges.tileOf` for a home the `buildings` query cannot see
+  // yet, and this was the only test that reached it; the fallback is gone with
+  // the same-tick housing that was its only way in, so the query alone answers
+  // now. The assertion is still on the LOAD rather than the published
+  // `carrying`/commute figures: those are built after the post-step sync and
+  // could always see the new house, so they were never the interesting reader.
+  // Before construction existed,
+  // `pending.constructed` folded a same-tick house straight into homing so a
+  // hauler landing on the very tick it was ordered could be housed — and
+  // therefore loaded at full capacity — immediately. Since §2.5 an ordered
+  // building is a construction SITE, not a finished house, so that same fold
+  // would now seat this hauler in a hole in the ground. This test used to
+  // assert the fold; it now asserts its removal.
+  it('a house ordered on a hauler\'s arrival tick does not house them, so they carry a reduced load', async () => {
     const save = initialSave();
     save.colonists = [];
     save.buildings = [];
@@ -408,20 +414,21 @@ describe('HaulSystem', () => {
     await world.step();                                       // dispatched, one tick out
     expect(tripOf(hauler)).toMatchObject({ phase: 'outbound', ticksLeft: 1 });
 
-    // The construction lands on the ARRIVAL tick, so the same tick houses this
-    // hauler (rehome reads pending.constructed) and loads them. The tile is
-    // commute-neutral, so a correctly-resolved home scores capacity exactly
-    // haulCarryCapacity against haulerCapacity(null)'s halved figure.
+    // The order lands on the ARRIVAL tick — a construction site, not a
+    // shelter (neither `command-system.ts`'s nomad-gate fold nor
+    // `population-system.ts`'s own `shelters` reads `pending.constructed` for
+    // housing purposes any more).
     const at = campAdjacentFreeTile([{ col: 3, row: 0 }]);
     enqueue(world, { type: 'constructBuilding', buildingDefId: 'house', at });
     await world.step();
 
-    // Precondition, not the point: the house went up and homing seated them.
-    expect(hauler.getComponent(Home)!.buildingId).not.toBeNull();
-    // The point. Resolved through the pending ledger, this hauler carries a
-    // full load; resolved to no tile, they would carry haulerCapacity(null).
-    expect(tripOf(hauler).amount).toBe(BALANCE.haulCarryCapacity);
-    expect(bufferOf(forester).total()).toBe(0); // and the buffer really is cleared
+    // Precondition, not the point: the site went up, but nobody was seated.
+    expect(hauler.getComponent(Home)!.buildingId).toBeNull();
+    // The point. Still homeless, this hauler carries the reduced,
+    // `haulerCapacity(null)` load — full capacity is what a same-tick seat
+    // would have bought them, and it does not.
+    expect(tripOf(hauler).amount).toBe(haulerCapacity(null));
+    expect(bufferOf(forester).total()).toBe(BALANCE.haulCarryCapacity - haulerCapacity(null));
   });
 
   it('a hauler housed beside the camp carries a full load, one housed far away carries less', async () => {
@@ -448,6 +455,60 @@ describe('HaulSystem', () => {
     for (let i = 0; i < 6; i++) await world.step();
     expect(idle.getComponent(HaulTrip)!.phase).toBe('idle');
     expect(world.getResource(Stockpile).get('wood')).toBe(0);
+  });
+});
+
+// §2.7's table, exclusion 2 of 5 (task 2b): a construction site provides no
+// storage. `storeSitesFrom` (haul-dispatch.ts) is threaded through three
+// separate queries — this one (`HaulSystem`'s own `buildings`),
+// `CommandSystem`'s and `PopulationSystem`'s — and this is the one that
+// actually routes a hauler's load, so it is where the second-order proof
+// belongs: not just that the site is absent from the site list, but that a
+// load collected right beside it walks straight past to the camp instead,
+// exactly as it would have before the site was ordered.
+describe('HaulSystem — construction sites', () => {
+  it('a storehouse under construction is not a store destination', async () => {
+    const save = initialSave();
+    save.colonists = [];
+    save.buildings = [];   // no starter house: this fixture builds its own world
+    save.stockpile = {};
+    const prep = buildColonyPrepWorld({ save, systems: [HaulSystem] });
+    const ids = getPrepResource(prep, IdCounter);
+    // Beside the camp: EVERY hauler is homeless in this fixture (`houseHaulers`
+    // is `setup()`'s own default, not used here), so a homeless hauler's short
+    // carry has to still walk all the way home if the site does not count.
+    const forester = spawnBuilding(prep, ids, { defId: 'forester', progress: 0, batchActive: false, col: 5, row: 4, relocatingTicks: 0 });
+    forester.getComponent(OutputBuffer)!.add('wood', BALANCE.haulCarryCapacity);
+    // ONE TILE from the forester — nearer than the camp by a wide margin — so
+    // a predicate that still counts this site would send the load here
+    // instead, not merely fail to notice the difference.
+    const site = spawnBuilding(prep, ids, {
+      defId: 'storehouse', progress: 0, batchActive: false, col: 5, row: 3, relocatingTicks: 0,
+    });
+    site.getComponent(Construction)!.ticksLeft = BALANCE.buildTicks;
+    // ITS WOOD ALREADY DELIVERED. Since Task 3 a site is a supply target for
+    // its own cost, and a storehouse costs 20 wood — so an empty-trayed site
+    // would pull the collected load straight back out of the camp and this
+    // case would be measuring supply instead of the store list. With its wood
+    // met and no planks anywhere in this colony, the site wants nothing and
+    // the only question left is the one the case is named for. Written past
+    // `BALANCE.inputBufferCap` on purpose: a site's tray holds its bill.
+    site.getComponent(InputBuffer)!.amounts.set('wood', BUILDINGS.storehouse.cost.wood!);
+    const idle = spawnColonist(prep, ids, { hauling: true });
+    const world = await prep.prepareRun();
+
+    // Exercised well past any notion of an "order tick" — this fixture never
+    // dispatches `constructBuilding` at all, so there is no pending-ledger
+    // shortcut to coincidentally get this right; the site is live in the
+    // query from tick one, and the predicate alone has to reject it every
+    // tick it does.
+    for (let i = 0; i < 20; i++) await world.step();
+
+    // The second-order proof: dispatch itself routed past the site — the
+    // trip's own reservation names the camp, not the site next door.
+    expect(idle.getComponent(HaulTrip)!.destSiteId).toBe(CAMP_SITE_ID);
+    expect(world.getResource(Stockpile).toJSON().wood).toBe(BALANCE.haulCarryCapacity);
+    expect(world.getResource(Stockpile).siteJSON(site.getComponent(Building)!.id).wood ?? 0).toBe(0);
   });
 });
 
@@ -598,7 +659,7 @@ describe('HaulSystem lifecycle', () => {
     // restore that carried one across timelines, fails here.
     const save = initialSave();
     save.colonists = save.colonists.map((worker) => ({ ...worker, hauling: true }));
-    save.buildings = [{ inputBuffer: {}, stored: {}, id: 10, defId: 'forester', progress: 0, batchActive: false, col: 5, row: 4, buffer: { wood: 9 }, relocatingTicks: 0 }];
+    save.buildings = [{ inputBuffer: {}, stored: {}, id: 10, defId: 'forester', progress: 0, batchActive: false, col: 5, row: 4, buffer: { wood: 9 }, relocatingTicks: 0, constructionTicks: 0}];
     save.nextEntityId = 11;
     const world = await createColonyWorld(save);
 

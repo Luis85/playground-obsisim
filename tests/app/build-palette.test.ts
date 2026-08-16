@@ -6,18 +6,22 @@ import BuildPalette from '../../src/app/components/BuildPalette.vue';
 import { useGameStore } from '../../src/app/stores/game-store';
 import { BUILDINGS } from '../../src/engine/content/buildings';
 import type { BuildingDefId, ResourceId } from '../../src/shared/content-types';
-import { makeSnapshot, stockedWith } from './fixtures';
+import { makeBuilding, makeSnapshot, stockedWith } from './fixtures';
 
 // Takes a whole stock map, not just wood: the house is the first def to cost
 // two resources, so a wood-only fixture cannot express "rich in one, short of
 // the other" — the case its gating actually turns on.
-function mountPalette(armedDefId: BuildingDefId | null = null, stocks: Partial<Record<ResourceId, number>> = { wood: 100 }) {
+function mountPalette(
+  armedDefId: BuildingDefId | null = null,
+  stocks: Partial<Record<ResourceId, number>> = { wood: 100 },
+  buildings: ReturnType<typeof makeSnapshot>['buildings'] = [],
+) {
   const wrapper = mount(BuildPalette, {
     props: { armedDefId },
     global: { plugins: [createTestingPinia({ createSpy: vi.fn, stubActions: false })] },
   });
   useGameStore().ingest(
-    makeSnapshot({ stockpile: stockedWith(stocks) }),
+    makeSnapshot({ stockpile: stockedWith(stocks), buildings }),
     { paused: true, speed: 1, error: null },
   );
   return wrapper;
@@ -76,5 +80,22 @@ describe('BuildPalette', () => {
       await short.vm.$nextTick();
       expect(disabled(short, 'house'), `one ${id} short must still disable the house`).toBe(true);
     }
+  });
+
+  // The palette half of acceptance criterion 5 (§2.3/§2.10): published stock
+  // is unchanged the moment a house is ordered (Task 2), so with exactly one
+  // house's cost in stock AND one already queued against it, the palette must
+  // refuse the second — the same rule `affordableDefs` enforces for
+  // BuildingsView, asserted here at the surface the spec names by name.
+  it('refuses a second house once one is queued against the same materials', async () => {
+    const cost = BUILDINGS.house.cost as Partial<Record<ResourceId, number>>;
+    const wrapper = mountPalette(null, cost, [
+      makeBuilding(1, {
+        defId: 'house', state: 'underConstruction', constructionTicks: 20,
+        constructionNeeds: { ...cost },
+      }),
+    ]);
+    await wrapper.vm.$nextTick();
+    expect(disabled(wrapper, 'house')).toBe(true);
   });
 });

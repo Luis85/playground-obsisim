@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BALANCE } from '../../src/engine/content/balance';
+import { BUILDINGS, unitsOf } from '../../src/engine/content/buildings';
+import type { BuildingDefId } from '../../src/shared/content-types';
 import { CAMP_TILE } from '../../src/shared/haul';
 import type { TileRef } from '../../src/shared/placement';
 import { runScenario, type BalanceResult } from '../support/balance-harness';
@@ -641,6 +643,64 @@ describe('the two-way haul instruments', () => {
     expect(collect + supply + transfer).toBe(fetching + outbound + returning);
     expect(r.haulerIdleTicks).toBe(idle);
   }, 120000);
+
+  /**
+   * THE IN-FLIGHT half only, and deliberately not evidence of the sink on its
+   * own — see the completing scenario below for the fixture that is.
+   *
+   * This run stops well short of the site's countdown ever reaching 0:
+   * `gatherersHut` costs 10 wood, sits one tile from camp, and the crew
+   * assigned to `forester` here is 0 (a producer contributes nothing to this
+   * fixture beyond satisfying `Scenario`'s own required stage), so delivery
+   * lands within a handful of ticks and 15 ticks total is nowhere near
+   * `BALANCE.buildTicks` (30) further. `ConstructionSystem`'s
+   * `input.amounts.clear()` never fires, so `constructionInputs` stays 0 and
+   * `conservationError` is 0 whether or not the sink exists at all — a
+   * delivered-but-uncleared tray is still standing in `goodsStanding`
+   * (`opening`, `made`, everything the sentinel already covered before this
+   * increment). The assertions on `haulerTicks.supply` / `supplyReturns`
+   * confirm goods really did move into that tray rather than never being
+   * dispatched at all — `supplyReturnsLoaded` stays 0 here on purpose: a site
+   * has no output buffer to round-trip a return load from, unlike the
+   * producer `suppliedChain` measures above.
+   */
+  it('goods in a site in-tray are conserved', async () => {
+    const r = await runScenario({
+      defId: 'forester', col: 6, row: 0, crew: 0, haulers: 2, ticks: 15, resource: 'wood',
+      sites: [{ defId: 'gatherersHut', col: 3, row: 0, atTick: 0 }],
+    });
+    expect(r.completions).toEqual([]);
+    expect(r.haulerTicks.supply).toBeGreaterThan(0);
+    expect(r.supplyReturns).toBeGreaterThan(0);
+    expect(r.goods.constructionInputs).toBe(0);
+    expect(r.goods.conservationError).toBe(0);
+  });
+
+  /**
+   * THE ONE THAT CATCHES THE MISSING SINK, and the reason the comment above
+   * insists a fixture must COMPLETE a site rather than merely deliver to one.
+   * `ConstructionSystem` empties the site's in-tray the instant its countdown
+   * reaches 0 (`input.amounts.clear()`), which is bookkeeping on goods
+   * already charged to the colony ledger on delivery — but until this task,
+   * `GoodsAudit` had no term for that emptying, so those units left `final`
+   * with nothing in `predicted` accounting for the drop and every completing
+   * scenario reported `conservationError` equal to the negative of the site's
+   * own cost. Run past the countdown (80 ticks against a delivery that lands
+   * in single digits plus 30 more to finish), not merely up to delivery.
+   */
+  it('a scenario that COMPLETES a supplied site reports conservationError === 0', async () => {
+    const r = await runScenario({
+      defId: 'forester', col: 6, row: 0, crew: 0, haulers: 2, ticks: 80, resource: 'wood',
+      sites: [{ defId: 'gatherersHut', col: 3, row: 0, atTick: 0 }],
+    });
+    expect(r.completions).toHaveLength(1);
+    expect(r.completions[0].defId).toBe('gatherersHut');
+    // Non-vacuous: the sink actually fired, for exactly the site's own cost —
+    // not some other figure that happened to zero the equation out.
+    expect(r.goods.constructionInputs).toBe(unitsOf(BUILDINGS.gatherersHut.cost));
+    expect(r.goods.constructionInputs).toBeGreaterThan(0);
+    expect(r.goods.conservationError).toBe(0);
+  });
 
   it('the transfer counter counts transfers and not supply fetches', async () => {
     // DISCRIMINATING, and it is increment 7's lesson exactly: an instrument
@@ -1648,4 +1708,178 @@ describe('dispatch cost at scale', () => {
     for (const haulers of [4, 12, 40, 80]) await timed('stress 100 buildings, 8 depots', 100, haulers, () => stressColony(haulers));
     console.log(lines.join('\n'));
   }, 900000);
+});
+
+// ---------------------------------------------------------------------------
+// §4.1 of the increment-9 spec: construction, measured. Everything below this
+// line produces a number for that section rather than guarding a behaviour,
+// so each `it` pins the ONE relationship its measurement establishes and the
+// report block prints the curves those relationships were read off.
+//
+// Every fixture here is a site beside an INERT stage — `crew: 0`, so the
+// forester produces nothing and never competes for a hauler. A one-stage
+// scenario seeds every recipe input at the camp (`seededResourcesFor`), so
+// wood and planks are inexhaustible: the affordability check never binds and
+// nothing else in the colony wants the goods. That is deliberate. It isolates
+// delivery and the countdown, which is what §4.1's first and fourth questions
+// ask about; the CONTENDED readings (§4.1's third question) cannot be taken on
+// this harness at all, and §4.1 says so rather than substituting these for
+// them.
+// ---------------------------------------------------------------------------
+
+const siteScenario = (defId: BuildingDefId, at: TileRef, haulers: number, ticks: number) => runScenario({
+  defId: 'forester', col: 6, row: 0, crew: 0, haulers, ticks, resource: 'wood',
+  sites: [{ defId, col: at.col, row: at.row, atTick: 0 }],
+});
+
+/**
+ * Ticks a site spent WAITING FOR MATERIALS, derived from its completion tick
+ * rather than instrumented separately: `ConstructionSystem` decrements only on
+ * a tick whose in-tray already holds the full cost, and a delivered material
+ * can only leave a site by completion or cancellation, so a site that
+ * completed at tick `c` had its last unit land at `c - buildTicks + 1`. One
+ * derivation, so the delivery half and the countdown half of a wait can never
+ * add up to something other than the wait.
+ */
+const deliveryTicksOf = (r: BalanceResult) => r.completions[0].tick - BALANCE.buildTicks + 1;
+
+/** N house sites ordered on the same tick, at tiles that are ALL leg 4 from
+ * the camp — so the completion curve is a fact about dispatch order and not
+ * about one site being further out than another. */
+const SITE_TILES: readonly TileRef[] = [
+  { col: 9, row: 1 }, { col: 9, row: 2 }, { col: 9, row: 3 }, { col: 8, row: 3 },
+  { col: 8, row: 4 }, { col: 8, row: 5 }, { col: 7, row: 5 }, { col: 7, row: 6 },
+];
+
+const queueScenario = (n: number, haulers: number, ticks: number) => runScenario({
+  defId: 'forester', col: 6, row: 0, crew: 0, haulers, ticks, resource: 'wood',
+  sites: SITE_TILES.slice(0, n).map((t) => ({ defId: 'house' as const, col: t.col, row: t.row, atTick: 0 })),
+});
+
+describe('construction, measured — §4.1', () => {
+  it('the countdown is not invisible beside the walk — beside the camp it IS the wait', async () => {
+    // §4.1's first question, asked the way the spec asks it: is `buildTicks`
+    // doing anything the delivery leg is not already doing? The answer is the
+    // opposite of the shape the question expects. A house (15 wood, 5 planks)
+    // at the camp's elbow is delivered in 7 ticks and then stands still for 30;
+    // the same house at the far corner is delivered in 43.
+    //
+    // The FULL SWEEP is taken by editing `BALANCE.buildTicks` between runs and
+    // putting the shipped value back — the same procedure §4.2 of the
+    // increment-8 spec uses for its constants, and the report block below
+    // prints the current value in its header so a row cannot be filed under
+    // the wrong one. Measured, delivery ticks first and total second:
+    //
+    //   buildTicks     10     30     60    120
+    //   leg  1        7/16   7/36   7/66   7/126
+    //   leg  8       28/37  28/57  28/87  28/147
+    //   leg 13       43/52  43/72  43/102 43/162
+    //
+    // The delivery column does not move with the constant, which is what makes
+    // the two halves separable at all, and the constant is 81% of the wait at
+    // leg 1 and 41% of it at leg 13.
+    const near = await siteScenario('house', { col: 3, row: 0 }, 2, 200);
+    const far = await siteScenario('house', { col: 23, row: 15 }, 2, 200);
+
+    expect(near.completions).toHaveLength(1);
+    expect(far.completions).toHaveLength(1);
+    // THE READING, as the one relationship it establishes: beside the camp the
+    // countdown outweighs the walk, and at the far corner the walk outweighs
+    // the countdown. The bar between them is the shipped constant itself, so
+    // this states a relationship rather than pinning two magnitudes — and it
+    // is a READING, not a guard: retuning `buildTicks` far enough is meant to
+    // falsify it, and §4.1 has to be re-measured if it does.
+    expect(deliveryTicksOf(near)).toBeLessThan(BALANCE.buildTicks);
+    expect(deliveryTicksOf(far)).toBeGreaterThan(BALANCE.buildTicks);
+    // And not marginally: the walk beside the camp is under a quarter of the
+    // countdown (7 against 30), which is what "the countdown IS the wait"
+    // means and what a bare inequality would let slide.
+    expect(deliveryTicksOf(near) * 4).toBeLessThan(BALANCE.buildTicks);
+  }, 120000);
+
+  it('several sites at once finish together and late, exactly as §2.4 predicted', async () => {
+    // §4.1's fourth question, and the measurement that sizes increment 10. It
+    // is a READING and not a pass/fail: §2.4 says round-robin filling is the
+    // expected behaviour here, and acceptance criterion 4 deliberately states
+    // nothing about order or timing.
+    const alone = await queueScenario(1, 1, 200);
+    const queued = await queueScenario(4, 1, 400);
+    const hauled = await queueScenario(4, 4, 200);
+
+    // Nothing is lost: every ordered site finishes in all three runs, which is
+    // the half of §2.4 that says round-robin is SLOW rather than BROKEN.
+    expect(alone.completions).toHaveLength(1);
+    expect(queued.completions).toHaveLength(4);
+    expect(hauled.completions).toHaveLength(4);
+
+    // WHAT THE QUEUE COSTS: the FIRST house, not the last. One house alone is
+    // finished at tick 65; order four together and the first of them arrives
+    // at 155, which is 2.4x later for a house the colony could have had at 65.
+    // The last arrives at 185 against a serial ordering's ~230, so the queue
+    // as a whole is not slower — its whole yield is simply deferred to the end.
+    expect(queued.completions[0].tick).toBeGreaterThan(alone.completions[0].tick * 2);
+
+    // AND THE CURVE IS FLAT, which is the shape §2.4 predicted and the thing
+    // increment 10 is sized against. At four haulers all four sites cross zero
+    // on the SAME TICK — not merely close together, identical — because they
+    // filled round-robin and their last materials landed in the same wave.
+    // A dispatcher that served the oldest site first could not produce this.
+    expect(new Set(hauled.completions.map((c) => c.tick)).size).toBe(1);
+    // At one hauler the curve is a staircase rather than a single step, and
+    // the step is one round trip: 155 / 165 / 175 / 185. Still flat in the
+    // sense that matters — the spread is 30 ticks against a 185-tick wait,
+    // 16% — so nothing useful arrives before nearly everything does.
+    const ticksOf = queued.completions.map((c) => c.tick);
+    expect(ticksOf.at(-1)! - ticksOf[0]).toBeLessThan(ticksOf.at(-1)! * 0.25);
+  }, 180000);
+
+  it('prints the construction readings when BALANCE_REPORT is set', async () => {
+    if (!process.env.BALANCE_REPORT) return;
+    // §4.1's first, second and fourth questions in three blocks, all read off
+    // `completions`. The header prints the constant under test, because the
+    // sweep is taken by editing it between runs (see the first case above).
+    const lines = ['', `construction — buildTicks=${BALANCE.buildTicks}`,
+      '', '  the wait, split into the walk and the countdown — one house site, 2 haulers',
+      '  tile        leg  completion  delivery  countdown%'];
+    for (const [at, leg] of [[{ col: 3, row: 0 }, 1], [{ col: 15, row: 8 }, 8], [{ col: 23, row: 15 }, 13]] as const) {
+      const r = await siteScenario('house', at, 2, 400);
+      const done = r.completions[0].tick;
+      lines.push(
+        `  (${String(at.col).padStart(2)},${String(at.row).padStart(2)})   ${String(leg).padStart(8)}  ` +
+        `${String(done).padStart(10)}  ${String(deliveryTicksOf(r)).padStart(8)}  ` +
+        `${((BALANCE.buildTicks / (done + 1)) * 100).toFixed(0).padStart(10)}`,
+      );
+    }
+    lines.push('', '  does the wait already scale with cost? one site, 2 haulers, near and far',
+      '  def            units  materials  near delivery  far delivery');
+    for (const defId of ['gatherersHut', 'house', 'workshop', 'mill', 'sawmill'] as const) {
+      const near = await siteScenario(defId, { col: 3, row: 0 }, 2, 400);
+      const far = await siteScenario(defId, { col: 23, row: 15 }, 2, 600);
+      const cost = BUILDINGS[defId].cost;
+      // A site that never completed prints `stalled`. The sawmill WAS one —
+      // 25 wood leaves a last unit of 1 against `minSupplyUnits: 2`, so its
+      // in-tray stuck at 24 for the whole run (OBS-9-01, fixed: `worthMoving`
+      // now exempts the load that settles a site's bill). The column keeps the
+      // word: a run that stalls for some later reason must say so rather than
+      // print a blank that reads as a slow build.
+      const delivery = (r: BalanceResult) => (r.completions.length === 0 ? 'stalled' : deliveryTicksOf(r));
+      lines.push(
+        `  ${defId.padEnd(13)}  ${String(unitsOf(cost)).padStart(5)}  ${String(Object.keys(cost).length).padStart(9)}  ` +
+        `${String(delivery(near)).padStart(13)}  ${String(delivery(far)).padStart(12)}`,
+      );
+    }
+    lines.push('', '  the completion CURVE: N house sites ordered together, all at leg 4',
+      '  haulers  N  first  last  spread  per-site completion ticks');
+    for (const haulers of [1, 4]) {
+      for (const n of [1, 2, 3, 4, 6, 8]) {
+        const r = await queueScenario(n, haulers, 1200);
+        const ticksOf = r.completions.map((c) => c.tick).sort((a, b) => a - b);
+        lines.push(
+          `  ${String(haulers).padStart(7)}  ${n}  ${String(ticksOf[0]).padStart(5)}  ` +
+          `${String(ticksOf.at(-1)).padStart(4)}  ${String(ticksOf.at(-1)! - ticksOf[0]).padStart(6)}  ${ticksOf.join(' ')}`,
+        );
+      }
+    }
+    console.log(lines.join('\n'));
+  }, 1800000);
 });

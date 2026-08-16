@@ -24,8 +24,8 @@ function building(id: number, defId: BuildingSnapshot['defId'], col: number, row
   return {
     id, defId, col, row, workers: 0, workerSlots: 2, state: 'unstaffed',
     progress: 0, batchActive: false, progressPct: 0, tooledWorkers: 0, workPower: 0, buffered: 0,
-    inputBuffered: 0, stored: 0, storage: 0, relocatingTicks: 0,
-    beds: 0, occupants: 0,
+    inputBuffered: 0, stored: 0, storage: 0, relocatingTicks: 0, constructionTicks: 0,
+    beds: 0, occupants: 0, constructionNeeds: {},
     ...overrides,
   };
 }
@@ -208,6 +208,19 @@ const homeScene = (tick: number, resident: Partial<ColonistSnapshot> = {}) => sn
   })],
   [worker(4, resident), worker(5)]);
 
+/**
+ * §2.10's own precedent for how a state is drawn — same move as the
+ * relocating phase above (a ring colour, nothing else): a mill site, plain
+ * and unstaffed at (4,1), no colonists. `workerSlots: 0` and `state`
+ * unchanged between the two phases below are what keep the frame otherwise
+ * IDENTICAL to `unstaffed` — a site's assign-button capacity really is zero
+ * (task 9), so nothing here is standing in for a producer any more than a
+ * real one would.
+ */
+const constructionScene = (tick: number, mill: Partial<BuildingSnapshot> = {}) => snap(tick,
+  [building(1, 'mill', 4, 1, { workerSlots: 0, state: 'unstaffed', ...mill })],
+  []);
+
 // Phase script, advanced from the runner. Worker 12 walks in phase 1; the
 // batch progresses in both; phase 4 adds a building and a tooled worker.
 const phases: Array<() => void> = [
@@ -296,7 +309,18 @@ const phases: Array<() => void> = [
   // dot is on the canvas and positioned from its frozen leg, so "identical" in
   // 32 cannot mean "absent in both".
   () => renderer.sync(storeScene(19, depotHolding({ stored: 45 }), { ...DRAIN_LEG, haulKind: 'transfer', haulTargetId: null, haulTicksLeft: 0 }, neighborAt(50))), // 33
-  () => renderer.dispose(),                                         // 34
+  // Two construction phases, appended (not inserted) so every step() index
+  // above keeps its meaning — see constructionScene. The whole scene changing
+  // from the transfer depot to a bare mill site is itself a many-pixel jump,
+  // so this frame carries no check of its own, the same role phases 20, 24,
+  // 27, 29 and 31 already play.
+  () => renderer.sync(constructionScene(20)),                                                          // 34: baseline — a plain unstaffed mill, no ring drawn yet by this frame's own check
+  // ONLY change: state, unstaffed -> underConstruction (plus constructionTicks,
+  // which nothing on the canvas reads — graphics-cache indexes stateRing by
+  // `state` alone). §2.10's own precedent: 'relocating' got its ring proven
+  // this same way (step 10 above).
+  () => renderer.sync(constructionScene(21, { state: 'underConstruction', constructionTicks: 20 })),    // 35
+  () => renderer.dispose(),                                         // 36
 ];
 
 window.__step = (index: number) => {

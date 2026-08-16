@@ -21,7 +21,7 @@ import { BALANCE } from '../../src/engine/content/balance';
 import { Stockpile } from '../../src/engine/resources';
 
 const refreshMock = vi.mocked(worldModule.refreshEntitySections);
-import type { SaveGameV6 } from '../../src/shared/save';
+import type { SaveGameV7 } from '../../src/shared/save';
 import { MAX_SAVED_COUNTER } from '../../src/shared/save';
 
 /** The forester scriptedRun builds: the starter house holds id 1 and the
@@ -66,7 +66,7 @@ function stageDetachFailure(engine: GameEngine): () => void {
 }
 
 /** Deterministic scripted session used by both determinism tests. */
-async function scriptedRun(ticks: number, save?: SaveGameV6): Promise<GameEngine> {
+async function scriptedRun(ticks: number, save?: SaveGameV7): Promise<GameEngine> {
   const engine = await GameEngine.create(save ?? null);
   if (!save) {
     engine.dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
@@ -133,7 +133,7 @@ describe('GameEngine', () => {
     await steps(engine, 99);
     engine.dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
     await engine.stepOnce(); // tick 100 -> autosave fires
-    const save: SaveGameV6 = autosave.mock.calls[0][0];
+    const save: SaveGameV7 = autosave.mock.calls[0][0];
     expect(save.buildings.find((b) => b.id === FORESTER_ID))
       .toEqual({
         id: FORESTER_ID, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1,
@@ -141,8 +141,12 @@ describe('GameEngine', () => {
         // whole record is what makes a producer that stopped writing either
         // field fail here as well as in the round-trip cases.
         buffer: {}, inputBuffer: {}, stored: {}, relocatingTicks: 0,
+        // A SITE, not a finished forester (spec §2.5): the order spawns one
+        // and save v7 persists the countdown, so an autosave taken on the
+        // ordering tick must carry it or the reload completes it for free.
+        constructionTicks: BALANCE.buildTicks,
       });
-    expect(save.stockpile.wood).toBe(20); // cost paid AND building present
+    expect(save.stockpile.wood).toBe(30); // building present, and NOT charged for at the order (§2.3)
   });
 
   it('a save written on the tick after a die-off holds nobody the colony has already killed', async () => {
@@ -183,7 +187,7 @@ describe('GameEngine', () => {
 
     await engine.stepOnce(); // tick 100 -> autosave fires
     expect(autosave).toHaveBeenCalledTimes(1);
-    const written: SaveGameV6 = autosave.mock.calls[0][0];
+    const written: SaveGameV7 = autosave.mock.calls[0][0];
     expect(written.tick).toBe(100);
     expect(written.colonists.map((c) => c.id)).toEqual([survivor.id]);
   });
@@ -238,8 +242,12 @@ describe('GameEngine', () => {
         id: FORESTER_ID, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1,
         // Same reasoning as the autosave case above: both empty, both asserted.
         buffer: {}, inputBuffer: {}, stored: {}, relocatingTicks: 0,
+        // A SITE, not a finished forester (spec §2.5): the order spawns one
+        // and save v7 persists the countdown, so an autosave taken on the
+        // ordering tick must carry it or the reload completes it for free.
+        constructionTicks: BALANCE.buildTicks,
       });
-    expect(save.stockpile.wood).toBe(20); // cost paid AND building present
+    expect(save.stockpile.wood).toBe(30); // building present, and NOT charged for at the order (§2.3)
     await engine.flush(); // empty queue: no extra tick
     expect(engine.serialize().tick).toBe(1);
   });
@@ -251,8 +259,8 @@ describe('GameEngine', () => {
   it('serializes entities in ascending id order regardless of spawn order', async () => {
     const save = initialSave();
     save.buildings = [
-      { inputBuffer: {}, stored: {}, id: 6, defId: 'sawmill', progress: 0, batchActive: false, col: 8, row: 1, buffer: {}, relocatingTicks: 0 },
-      { inputBuffer: {}, stored: {}, id: 5, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0 },
+      { inputBuffer: {}, stored: {}, id: 6, defId: 'sawmill', progress: 0, batchActive: false, col: 8, row: 1, buffer: {}, relocatingTicks: 0, constructionTicks: 0},
+      { inputBuffer: {}, stored: {}, id: 5, defId: 'forester', progress: 0, batchActive: false, col: 6, row: 1, buffer: {}, relocatingTicks: 0, constructionTicks: 0},
       ...initialSave().buildings, // the starter house, id 1, listed LAST on purpose
     ];
     save.colonists = [4, 2, 3].map((id) => ({
@@ -277,14 +285,19 @@ describe('GameEngine', () => {
     save.stockpile = { wood: 60 };
     const engine = await GameEngine.create(save);
 
-    // A is queued BEFORE the tick, so tick 1's CommandSystem pays for it.
+    // A is queued BEFORE the tick, so tick 1's CommandSystem handles it.
+    const idsBefore = engine.serialize().nextEntityId;
     engine.dispatch({ type: 'constructBuilding', buildingDefId: 'forester' });
     const inFlight = engine.stepOnce(); // deliberately not awaited
 
-    // Spin until A's cost is paid: that proves tick 1 has drained its queue,
-    // while the tick itself is still in flight (inFlight is not awaited yet).
+    // Spin until A has taken its entity id: that proves tick 1 has drained its
+    // queue, while the tick itself is still in flight (inFlight is not awaited
+    // yet). The id counter, not the stockpile — since §2.3 an order charges
+    // nothing, so the ledger no longer moves when a command is handled — and
+    // it is the same kind of witness: a resource the handler writes
+    // synchronously, before the step's own deferred entity sync.
     let spins = 0;
-    while (engine.serialize().stockpile.wood === 60) {
+    while (engine.serialize().nextEntityId === idsBefore) {
       await Promise.resolve();
       if (++spins > 1000) throw new Error('in-flight tick never drained its queue');
     }
@@ -306,7 +319,7 @@ describe('GameEngine', () => {
     await engine.stepOnce(); // paused manual step: no follow-up tick will come
     expect(engine.snapshot!.buildings).toHaveLength(2); // the starter house and the new forester
     expect(engine.snapshot!.buildings[1].defId).toBe('forester');
-    expect(engine.snapshot!.stockpile.wood.stock).toBe(20);
+    expect(engine.snapshot!.stockpile.wood.stock).toBe(30); // a site is charged on delivery, not at the order
   });
 
   it('save/restore preserves entity ids and the id counter keeps incrementing past them', async () => {
@@ -503,17 +516,18 @@ describe('buildSaveFromWorld writes all four places goods can be', () => {
   function colonyWithADepot(
     stored: Partial<Record<ResourceId, number>>, camp: Partial<Record<ResourceId, number>>,
     millInput: Partial<Record<ResourceId, number>> = {},
-  ): SaveGameV6 {
+  ): SaveGameV7 {
     const save = initialSave();
     save.stockpile = { ...camp };
     save.buildings.push(
       {
         id: DEPOT_ID, defId: 'storehouse', ...DEPOT_TILE,
         progress: 0, batchActive: false, buffer: {}, inputBuffer: {}, stored, relocatingTicks: 0,
+      constructionTicks: 0,
       },
       {
         id: MILL_ID, defId: 'mill', ...MILL_TILE,
-        progress: 0, batchActive: false, buffer: {}, inputBuffer: millInput, stored: {}, relocatingTicks: 0,
+        progress: 0, batchActive: false, buffer: {}, inputBuffer: millInput, stored: {}, relocatingTicks: 0, constructionTicks: 0,
       },
     );
     save.nextEntityId = MILL_ID + 1;

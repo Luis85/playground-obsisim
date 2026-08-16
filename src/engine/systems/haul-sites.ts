@@ -18,6 +18,9 @@ export interface StoreSiteRow {
   /** A storehouse in transit stores nothing until it lands — `beds.total`'s
    * existing rule for a relocating house (increment 6), applied to storage. */
   relocating: boolean;
+  /** A storehouse that is still a construction site stores nothing either
+   * (spec §2.5): the tile it occupies is a hole in the ground, not a depot. */
+  underConstruction: boolean;
 }
 
 /**
@@ -40,11 +43,14 @@ const CAMP_STORE_SITE: StoreSite = Object.freeze({
  * `HaulSystem` needs in order to answer "where can this load go" (spec §2.3,
  * §2.7).
  *
- * Two exclusions apply to a storehouse row, each borrowed from a rule that
+ * Three exclusions apply to a storehouse row, each borrowed from a rule that
  * already governs the same tick elsewhere in this engine:
  *
  * - `relocating`: a building mid-move provides none of its service — the
  *   same rule `beds.total` already applies to a relocating house.
+ * - `underConstruction`: a building that has not been built yet provides
+ *   none of its service either (spec §2.5) — `beds.total`'s rule again,
+ *   applied to storage rather than shelter.
  * - `pending.demolished`: `CommandSystem` runs before `HaulSystem`, and a
  *   demolished entity survives in every query until the post-step sync (see
  *   `PendingChanges` in resources.ts). Without this exclusion a hauler would
@@ -66,7 +72,7 @@ const CAMP_STORE_SITE: StoreSite = Object.freeze({
  */
 export function storeSitesOf(rows: readonly StoreSiteRow[], pending: PendingChanges): StoreSite[] {
   const storehouses = rows
-    .filter((row) => !row.relocating && !pending.demolished.has(row.id))
+    .filter((row) => !row.relocating && !row.underConstruction && !pending.demolished.has(row.id))
     .map((row): StoreSite => ({ id: row.id, col: row.col, row: row.row, capacity: row.capacity }))
     .sort((a, b) => a.id - b.id);
   return [CAMP_STORE_SITE, ...storehouses];

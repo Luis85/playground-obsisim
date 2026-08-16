@@ -224,9 +224,10 @@ type Selection =
 
 | Row | Click does |
 | --- | --- |
-| Attention row naming one building; Economy stage row | selects that building |
+| Attention row naming one building | selects that building |
 | Population colonist row; Inspector occupant row | selects that colonist |
 | Attention row naming several colonists (*"3 colonists have no bed"*) | highlights that set; selects nothing |
+| Economy stage row | highlights every building of that def; selects nothing |
 | Attention runway row (*"Bread empties in ~30t"*); Colony resource row | **nothing** — a resource has no subject on the map |
 
 Two consequences for the renderer seam, both inside `src/app/world/` and so
@@ -238,7 +239,20 @@ inside this increment's scope:
 - A new `setHighlight(ids)` carries the plural case — a transient pulse over a
   set, with no selection and no Inspector.
 
-The inert row is inert in **both** panels, which is why the last line pairs
+**An Economy stage row is a def, not a building**, which is why it highlights
+rather than selects. `EconomyView` emits one row per step in `CHAINS` and
+aggregates it through `staffingByDef[step.building]`, so a stage stands for
+however many buildings of that def exist — none, one, or six — and it renders a
+`not built` row when there are none. Selecting requires a subject and a stage
+does not reliably have one.
+
+It highlights the whole set **even when the set has exactly one member**, and
+the empty set highlights nothing. A rule that selected single-instance stages
+and highlighted multi-instance ones would behave differently on the same click
+depending on a count the player is not looking at, which is worse than the
+slightly weaker behaviour being consistent.
+
+The inert row is inert in **both** panels, which is why its line pairs
 them: a runway warning in Attention names bread exactly as a Colony row does,
 and one of them selecting nothing while the other highlighted every bakery
 would be a rule the player has to learn per panel. Highlighting every building
@@ -431,9 +445,16 @@ assumption.
    `unassignWorker`, `assignHauler`, `unassignHauler` and `recruitWorker`.
 2. **Every one of the eight also dispatches from the Ledger**, `moveBuilding`
    included. Fails today for `moveBuilding`, which has never had a table.
-3. **A renderer boot failure lands the player on the Ledger with a banner, and
-   the colony stays playable.** Driven through the injected-factory seam by
-   making the factory throw; no WebGL involved.
+3. **A renderer failure lands the player on the Ledger with a banner, and the
+   colony stays playable — in both of §2.5's two failures.** A boot failure,
+   driven by making the injected factory throw; *and* a post-boot fatal, driven
+   by letting the factory succeed and then invoking the `onFatal` callback it
+   captured. Both assert the same navigation and the same persistent banner. The
+   second case needs stating because `onFatal` is only registered after the
+   factory succeeds, so the throwing-factory test cannot reach it — an
+   implementation could pass a boot-only criterion while leaving a mid-session
+   WebGL loss stranded on the world route with a dead canvas. No WebGL involved
+   in either.
 4. **Every row click resolves to what §2.3's table says it resolves to** — a
    building selection, a colonist selection, a highlight set, or nothing —
    asserted against the UI store rather than against pixels. The inert case

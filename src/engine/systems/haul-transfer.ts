@@ -77,10 +77,10 @@ function demandInputsOf(row: HaulBuildingRow): ResourceId[] {
  * nothing will ever eat them; a SITE is the exception it names, because it is
  * never staffed, is fed anyway, and refunds what it holds if it is cancelled.
  *
- * Both exclusions are ENGINE conditions — `StaffedSet` and `Relocation` — and
- * filtering here rather than inside `siteDemandOf` is what keeps that law free
- * of them, exactly as `supplyCandidates` filters before it asks `needOf`
- * anything.
+ * Every condition read here is an ENGINE one — `StaffedSet` and `Construction`
+ * through `acceptsSupply`, `Relocation` directly — and filtering here rather
+ * than inside `siteDemandOf` is what keeps that law free of them, exactly as
+ * `supplyCandidates` filters before it asks `needOf` anything.
  *
  * UNTIL INCREMENT 10 THIS SKIPPED SITES, and the consequence was not a
  * rounding error: a site is the one consumer a player can place at an arbitrary

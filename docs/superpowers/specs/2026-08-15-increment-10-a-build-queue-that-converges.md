@@ -470,7 +470,10 @@ ticks of a 345-tick wait (**81%**) where round-robin left 70 of 345 (20%).
 Useful buildings now arrive throughout a queue instead of all at the end of it.
 
 **2. How reachable the §2.3 stall is: at no queue length up to ten does the
-first completion stop happening.** A separate sweep, as §4.1 required, because
+first completion stop happening BECAUSE OF THE QUEUE.** The qualifier is
+load-bearing — four rows of the table below never complete at all, at a queue of
+one as surely as at ten, and the paragraph on those rows says why that is a
+different failure. A separate sweep, as §4.1 required, because
 the convergence fixture has no dependency chain in it and could not have
 produced this at any N. The fixture: `house` sites (15 wood **and** 5 planks
 each) against a two-crew forester feeding a staffed sawmill, three haulers, 900
@@ -638,19 +641,58 @@ with a demand that outlives one hauler wave as readily as with a single site's.
 **Nothing ever used what was staged.** The depot's closing level equals its peak
 in every run, so not one unit was fetched back out of it, and the loaded leg
 (`outbound` hauler-ticks) is 52 and 156 with the depot and without — every load
-that reached a site walked the full leg from the camp. The reason is in the
-supply ranking rather than in staging: a supply candidate is priced on the whole
-hauler → source → building route, and these haulers idle at the camp, where
-camp → corner (25.8 tiles) beats camp → depot → corner (27.4). **The depot can
-only pay for a hauler that is already standing near it**, which is what increment
-8 §4.3 found for the ordinary chain fixtures and is now confirmed at the remote
-fixture OBS-8-06 said the repository lacked.
+that reached a site walked the full leg from the camp.
 
-**What the depot did buy is a shorter walk home and a relabelling.** The `supply`
-bucket falls from 108 hauler-ticks to 84 at four haulers, and `returning` from
-52 to 42 at one, because a hauler that has just unloaded at the corner returns to
-the nearer site; the ticks that leave the supply bucket reappear in the transfer
-one. No building arrives earlier for any of it.
+**The reason is in the supply ranking rather than in staging, and the margin is
+a hair.** `supplyRouteDistance` (haul.ts) prices a candidate on the whole
+hauler → source → building route as a sum of RAW euclidean legs, and an idle
+hauler stands on the camp tile (2,0). Drawing from the camp is therefore
+0 + hypot(21,15) = **25.807** tiles; drawing from the depot is
+hypot(10,8) + hypot(11,7) = 12.806 + 13.038 = **25.845**. The camp wins by
+**0.038 tiles**. Converted into the ticks the engine actually charges
+(`ticksForDistance`: ceil per leg at two tiles a tick, floored at one) the two
+routes come out EQUAL, 1 + 13 against 7 + 7 — the ranking is decided far below
+the granularity of any walk it could have saved.
+
+**That hair is not a fixture accident, it is the triangle inequality**, and this
+is the part worth carrying forward. A route through an intermediate point is
+never shorter than the direct one, so for a hauler standing at the camp a depot
+between camp and site can at best TIE and can never win; the whole 0.038 is the
+depot's 0.70-tile offset from the straight line. **The depot can only pay for a
+hauler that is already standing near it** — not because this depot was sited
+badly, but because no depot on this route can be sited well enough. That is what
+increment 8 §4.3 found for the ordinary chain fixtures and is now confirmed at
+the remote fixture OBS-8-06 said the repository lacked.
+
+**What the depot did buy is MORE hauler work, and this is the reading the tick
+buckets actually support.** They must not be read as one partition: `supply` is a
+**kind** bucket (which job a hauler is on, beside `collect` and `transfer`) while
+`fetching` / `outbound` / `returning` are **phase** buckets (which leg it is
+walking), and the two cover the same non-idle ticks — measured, the two sums are
+identical in all twelve runs, with `collect` at zero throughout because the
+forester is crewed at 0. So a tick leaving `supply` has not been saved; it has
+only been re-attributed. The total is the thing to read:
+
+| sites | haulers | non-idle hauler-ticks, no depot | with the depot | change | `supply` kind | `transfer` kind |
+| ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 1 | 1 | 108 | 130 | **+22** | 108 → 102 | 28 |
+| 1 | 2 | 108 | 152 | **+44** | 108 → 96 | 56 |
+| 1 | 4 | 108 | 140 | **+32** | 108 → 84 | 56 |
+| 3 | 1 | 324 | 346 | **+22** | 324 → 318 | 28 |
+| 3 | 2 | 324 | 368 | **+44** | 324 → 312 | 56 |
+| 3 | 4 | 324 | 356 | **+32** | 324 → 300 | 56 |
+
+**Non-idle hauling rises in all six pairs** — by 22 to 44 ticks, which is 20% to
+41% more walking at one site. `supply` does fall, by 6, 12 or 24 ticks, but two
+to five times that many ticks reappear under `transfer` (28, 56), and the
+difference is the rise. Nor is there a shorter walk home to set against it:
+`returning` runs 52 → 42 in exactly ONE of the six pairs, RISES 52 → 56 in two of
+them, and the three-site pairs go 156 → 98 / 112 / 112.
+
+**So the ledger is one-sided, with nothing on the credit side at all.** The depot
+costs 22 to 44 extra hauler-ticks per run, parks 12 or 24 units it never gives
+back, and does not move a single completion tick. It is not a relabelling and not
+a trade — it is a net loss of hauler work.
 
 **So OBS-8-06's second hypothesis is NOT the live one.** The trigger is not
 narrower than situational — it fired on the first fixture written for it. What

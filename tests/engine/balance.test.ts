@@ -2044,6 +2044,11 @@ describe('construction, measured — §4.1', () => {
     // while its first completion slips 113 -> 186 as N goes 1 -> 10: §2.3's
     // mechanism, arriving as a 1.65x delay rather than as a stall. Both
     // arrangements are in the report block and in §4.1.
+    //
+    // These three are a READING, not a guard: they pin the failure §2.3 records
+    // rather than a behaviour worth protecting, so a §2.3 remedy that lets the
+    // parity rows complete is MEANT to falsify them, and §4.1 has to be
+    // re-measured if one lands.
     const parity = await stallScenario(1, 3, 900, 2);
     expect(parity.completions).toEqual([]);
     expect(parity.siteInputUnits).toBe(0);

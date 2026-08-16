@@ -2672,3 +2672,157 @@ describe('a construction site is supplied like any other building that wants thi
     });
   });
 });
+
+/**
+ * A BUILD QUEUE THAT CONVERGES (increment 10 §2.2).
+ *
+ * Increment 9 left dispatch alone, so several queued sites fill ROUND-ROBIN:
+ * `movable` is bounded by the room left in a site's tray, so the site nearest
+ * completion has the LEAST movable and loses to one ordered later and still
+ * empty. Every case below is written against the guarantee §2.2 actually makes
+ * — *the oldest site that has a candidate this tick is served first* — and not
+ * against "the oldest site is always the one served", which is false at more
+ * than one hauler and would fail against a correct implementation.
+ */
+const FARM_WOOD = 20;
+/**
+ * Five queued sites, the OLDEST placed farthest from the camp and left four
+ * units short of its bill. It therefore loses every pre-existing term at once
+ * — least `movable`, longest route, and (holding wood already) not in the
+ * starvation band the four EMPTY sites below it all enter — so nothing but age
+ * can select it. Distances from the camp are 22.8 / 4.2 / 6.4 / 8.6 / 10.8:
+ * pairwise distinct, so no route tie can decide anything by accident.
+ */
+const QUEUE_TILES: readonly TileRef[] = [
+  { col: 20, row: 14 }, { col: 5, row: 3 }, { col: 7, row: 4 }, { col: 9, row: 5 }, { col: 11, row: 6 },
+];
+/** What the oldest site still owes, and what already stands in its tray. */
+const OLDEST_OWES = 4;
+/** Four more than the queue's 84-unit outstanding bill, so no dispatch is ever
+ * sized by an empty camp rather than by the ranking under test. */
+const QUEUE_WOOD = 88;
+
+describe('a queue of sites is filled oldest-first rather than round-robin', () => {
+  /** `Claims.input` narrowed to wood, read off the same live trips the engine
+   * reads it off — a site's unclaimed room is the quantity criterion 2 is
+   * stated in, and it cannot be read from the tray alone. */
+  const claimedWoodAt = (haulers: readonly IEntity[], buildingId: number) => haulers.reduce((total, hauler) => {
+    const trip = tripOf(hauler);
+    if (trip.kind !== 'supply' || trip.targetId !== buildingId || trip.resource !== 'wood') return total;
+    return total + trip.plannedAmount + (trip.phase === 'outbound' ? trip.amount : 0);
+  }, 0);
+
+  /**
+   * ACCEPTANCE CRITERION 2, run tick by tick because it is a rule about
+   * DISPATCH: completion order is explicitly not guaranteed (§2.2 — unequal
+   * legs can let a younger site finish first with nothing wrong), so a fixture
+   * that only read the end state would assert something this increment does
+   * not promise.
+   *
+   * A hauler that is idle before a step and carrying a supply job after it was
+   * dispatched during that step: `chooseJob` runs on an idle trip and
+   * `continue`s, so a trip dispatched this tick starts walking next tick and
+   * the two states cannot be confused.
+   */
+  async function expectQueueConverges(haulerCount: number) {
+    const specs: Spec[] = QUEUE_TILES.map((tile, i) => ({
+      defId: 'farm', col: tile.col, row: tile.row, site: true,
+      ...(i === 0 ? { siteTray: { wood: FARM_WOOD - OLDEST_OWES } } : {}),
+    }));
+    const { world, buildings, haulers, step, stockpile } = await setup(specs, haulerCount, { camp: { wood: QUEUE_WOOD } });
+    let systemErrors = 0;
+    world.eventBus.subscribe(SystemError, () => { systemErrors++; });
+    const siteIds = buildings.map(idOf);
+    // NON-VACUOUS: ids ascend with spawn order, which is the whole reason a
+    // building id can stand in for "which site did the player order first".
+    expect(siteIds).toEqual([...siteIds].sort((a, b) => a - b));
+
+    const violations: string[] = [];
+    const served: number[] = [];
+    // 320 ticks is the whole 84-unit bill at ONE hauler (~200) with margin; at
+    // four the run finishes long before, and the idle tail asserts nothing.
+    for (let tick = 1; tick <= 320; tick++) {
+      const idleBefore = haulers.map((hauler) => tripOf(hauler).phase === 'idle');
+      await step(1);
+      haulers.forEach((hauler, h) => {
+        const trip = tripOf(hauler);
+        if (!idleBefore[h] || trip.phase === 'idle' || trip.kind !== 'supply') return;
+        const site = siteIds.indexOf(trip.targetId!);
+        served.push(site);
+        for (let older = 0; older < site; older++) {
+          const held = inputOf(buildings[older]).amounts.get('wood') ?? 0;
+          const room = FARM_WOOD - held - claimedWoodAt(haulers, siteIds[older]);
+          if (room > 0) violations.push(`t${tick}: site ${site} served while site ${older} still had ${room} unclaimed`);
+        }
+      });
+    }
+
+    expect(violations).toEqual([]);
+    expect(served[0]).toBe(0); // and the oldest is where the very first load went
+    // Every site was served and nothing else was: this also fails loudly if a
+    // dispatch went to a target `siteIds` does not name, which `indexOf` would
+    // otherwise have folded into a silently skipped -1.
+    expect([...new Set(served)].sort()).toEqual([0, 1, 2, 3, 4]);
+    // The queue drains completely: this is a convergence case, not a stall one.
+    expect(buildings.map((site) => inputOf(site).amounts.get('wood'))).toEqual(Array(5).fill(FARM_WOOD));
+    // Conservation across the whole run, the seeded tray included: nothing
+    // minted, nothing dropped, and the camp keeps the four units nobody owed.
+    expect(colonyTotal(world, 'wood')).toBe(QUEUE_WOOD + FARM_WOOD - OLDEST_OWES);
+    expect(stockpile.get('wood')).toBe(QUEUE_WOOD - (OLDEST_OWES + 4 * FARM_WOOD));
+    // sim-ecs catches a throwing system and publishes a SystemError rather than
+    // failing the step, so a mutation that throws would otherwise look green.
+    expect(systemErrors).toBe(0);
+  }
+
+  it('with one hauler, no younger site is served while an older one has unclaimed room', async () => {
+    await expectQueueConverges(1);
+  });
+
+  it('with four haulers, no younger site is served while an older one has unclaimed room', async () => {
+    // The round-robin is WORSE with more haulers, so the single-hauler fixture
+    // above understates it — and this is also the count at which "always the
+    // oldest" would be a false assertion: the oldest site's four units of room
+    // are fully claimed by the first hauler on the first tick, so the other
+    // three correctly walk to the next-oldest while that load is still walking.
+    await expectQueueConverges(4);
+  });
+});
+
+describe('a queue of sites does not starve the producer that makes what they need', () => {
+  /** Three mill sites (20 wood + 10 planks each) beside the camp, and the
+   * sawmill that would make their planks stranded out at (20, 14). Both
+   * materials are wanted, so the sites compete with the sawmill for WOOD — a
+   * plank-only cost would never contend for the same resource at all, and the
+   * fixture could not see the inversion. */
+  const PLANK_QUEUE: readonly Spec[] = [
+    { ...SITE_MILL, col: 5, row: 3 }, { ...SITE_MILL, col: 7, row: 4 }, { ...SITE_MILL, col: 9, row: 5 },
+  ];
+  const BLOCKED_SAWMILL: Spec = { defId: 'sawmill', col: 20, row: 14, crew: 1 };
+
+  it('a staffed sawmill with an empty in-tray is served before any site', async () => {
+    // ACCEPTANCE CRITERION 3, and the priority inversion guarded from the
+    // direction that matters: a site's cost is planks, planks come from the
+    // sawmill, and sites outranking it send every log to the sites, so the
+    // planks never exist. The sawmill loses on ROUTE to all three sites and
+    // ties them on `movable` (6 either way), so only the starvation band —
+    // which a site is never in — can lift it.
+    //
+    // THE SITES ARE OLDER THAN THE SAWMILL here, so an ordering that ranked on
+    // age across kinds, or put sites first outright, fails this.
+    //
+    // TWO HAULERS, because the guarantee is about the FIRST claim and a
+    // single-hauler fixture cannot show what the queue does with the next one:
+    // the sawmill leaves the band the moment it is served (§2.3), and the
+    // second hauler must then go to the OLDEST site rather than the nearest.
+    const { world, buildings, haulers, step } = await setup(
+      [...PLANK_QUEUE, BLOCKED_SAWMILL], 2, { camp: { wood: 40 } },
+    );
+    let systemErrors = 0;
+    world.eventBus.subscribe(SystemError, () => { systemErrors++; });
+
+    await step(1);
+    expect(tripOf(haulers[0])).toMatchObject({ kind: 'supply', resource: 'wood', targetId: idOf(buildings[3]) });
+    expect(tripOf(haulers[1])).toMatchObject({ kind: 'supply', resource: 'wood', targetId: idOf(buildings[0]) });
+    expect(systemErrors).toBe(0);
+  });
+});

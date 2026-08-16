@@ -9,7 +9,7 @@ import type { HaulKind } from '../components';
 import { Building, Construction, HaulTrip, InputBuffer, OutputBuffer, Position, Production, Relocation } from '../components';
 import type { PendingChanges } from '../resources';
 import type { Claims } from './haul-claims';
-import { acceptsSupply, finishesSiteMaterial, inputRoomOf, siteNeedOf } from './haul-construction';
+import { acceptsSupply, finishesSiteMaterial, inputRoomOf, siteAgeOf, siteNeedOf } from './haul-construction';
 import { storeSitesOf, type StoreSiteRow } from './haul-sites';
 import {
   drainCandidates, nextTransferTarget, stagingCandidates,
@@ -272,12 +272,16 @@ function supplyCandidates(
       && need.couldStartBatch
       && holdsNoneOf(row.input, need.resource)
       && claimedIn === 0;
+    // Derived once per BUILDING for the reason `claimedIn` and `starving` are:
+    // it is a fact about the building, so every candidate for it must carry the
+    // same answer. `siteAgeOf` (haul-construction.ts) has why it is an id.
+    const siteAge = siteAgeOf(row);
     for (const site of sitesHolding(sites, unclaimedAt)) {
       const movable = Math.min(need.room, unclaimedAt(site.id));
       if (!worthMoving(movable, unclaimedAt(site.id), finishesSiteMaterial(row, need.resource, claims, movable))) continue;
       candidates.push({
         buildingId: row.building.id, buildingCol: row.position.col, buildingRow: row.position.row,
-        siteId: site.id, siteCol: site.col, siteRow: site.row, resource: need.resource, movable, starving,
+        siteId: site.id, siteCol: site.col, siteRow: site.row, resource: need.resource, movable, starving, siteAge,
       });
     }
   }

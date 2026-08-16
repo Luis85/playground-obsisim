@@ -102,9 +102,11 @@ export interface BuildingSnapshot {
    * Also what `affordableDefs` (game-store.ts) sums across every site to
    * subtract the colony's outstanding queue from a fresh order's cost — the
    * SAME per-material shortfall the Buildings table reads, not a second
-   * derivation of it, which is what keeps the getter and the engine's own
-   * `outstandingMaterials` (placement-handlers.ts) agreeing without a new
-   * engine field.
+   * derivation of it. Increment 10 §2.1 deletes the engine's matching
+   * order-time check (`outstandingMaterials`, once in placement-handlers.ts),
+   * so this field no longer needs to agree with a second computation — it is
+   * now the only place the figure is computed at all, and `affordableDefs`
+   * reads it purely to inform, not to gate.
    */
   constructionNeeds: Partial<Record<ResourceId, number>>;
 }

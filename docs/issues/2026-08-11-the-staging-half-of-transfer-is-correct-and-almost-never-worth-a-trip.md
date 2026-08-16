@@ -111,6 +111,122 @@ machinery the scope line was drawn around.
 instrument before taking the reading.** This note stays `Open` and unmeasured
 until then — no evidence has been added for or against it since increment 8.
 
+## Increment 10 took the reading, and the missing fixture now exists (2026-08-16)
+
+**The instrument was connected first, as the section above insisted.**
+`demandSourcesOf` (`haul-transfer.ts`) now gates on `acceptsSupply` — the rule
+that already decides which buildings a hauler may deliver to — and reads a site's
+`cost` where a finished building's demand comes from `recipe.inputs`. It is
+proved by a fixture in `tests/engine/systems/haul-transfer.test.ts` where a depot
+beside a `house` site acquires a wood and planks demand from it, with the site
+asserted **unstaffed** so the demand cannot have arrived through the staffing
+gate, and with a FINISHED house of the same def as the control that pulls
+nothing. Three mutations redden it, including the exact pre-increment form.
+
+**So the question this note left open is answered rather than re-asked.** The
+first suggestion below — "build the fixture staging was designed for" — asked for
+a consumer far enough from the camp that its supply leg dominates, and said this
+repository could not express one. A construction site is that consumer, and it
+now exists: one or three `house` sites at (23, 15), 26 tiles of walking from the
+only goods in the colony, with a depot at (12, 8) on the line between them.
+
+**The reading is the SECOND of the three outcomes, and nothing was tuned toward
+it: staging FIRES, and it does not pay.** Increment 10 spec §4.2 has the full
+tables; the four figures that decide it:
+
+- **Two staging dispatches at one hauler and four at two and four haulers**, in
+  every run. The trigger is not narrower than situational — it fired on the first
+  fixture written for it, so this note's second hypothesis is **not** the live one.
+- **Every completion tick is digit-for-digit identical with the depot and without
+  it**, in all six with/without pairs: 128 / 72 / 44 for one site at one, two and
+  four haulers, and 128, 240, 352 / 72, 128, 184 / 44, 72, 100 for three.
+- **Nothing ever used what was staged.** The depot's closing level equals its peak
+  in every run — 12 units at one hauler, 24 at two and four — so not one unit was
+  fetched back out of it, and the loaded leg (`outbound` hauler-ticks) is 52 and
+  156 with the depot and without. Every load that reached a site walked the full
+  leg from the camp. The drain half did not fire at all: 24 units is far below the
+  48-unit staging ceiling, so the parked stock is inert rather than silted.
+- **Non-idle hauler-ticks RISE in all six pairs, by 22 to 44** — 20% to 41% more
+  walking at one site. `supply` falls by 6, 12 or 24 ticks and two to five times
+  that many reappear under `transfer`; the two bucket families cover the same
+  non-idle ticks (`supply` is a *kind*, `fetching`/`outbound`/`returning` are
+  *phases*), so a tick leaving `supply` was re-attributed rather than saved.
+
+**And the reason is the triangle inequality, not this depot's siting.** For a
+hauler standing on the camp tile (2, 0), `supplyRouteDistance` prices drawing
+from the camp at 0 + hypot(21, 15) = **25.807** tiles and drawing from the depot
+at hypot(10, 8) + hypot(11, 7) = 12.806 + 13.038 = **25.845**. The camp wins by
+**0.038 tiles** — the whole of which is the depot's 0.70-tile offset from the
+straight line — and in the ticks the engine actually charges the two routes come
+out EQUAL, 1 + 13 against 7 + 7. **A route through an intermediate point is never
+shorter than the direct one**, so a depot between the camp and a site can at best
+TIE and can never beat drawing from the camp. It is not that this depot was sited
+badly; no depot on this route can be sited well enough.
+
+That confirms at the remote fixture what increment 8 §4.3 found for the ordinary
+chain fixtures, and it sharpens rather than softens this note: **staging is
+reachable and correct and is not worth its trips even at the fixture it was
+written for.**
+
+**The weakness, stated rather than left for a successor:** one depot tile on one
+map, with haulers whose house is beside the camp. The shape that could still make
+staging pay is a colony whose haulers idle NEAR the depot — a producer standing
+next to it, say — because that is the only arrangement in which the first leg is
+not paid twice. That fixture was not run: §4.2 asked for a remote SITE and that
+is what was built.
+
+### The site-demand change ships ON, and that was a decision rather than an oversight
+
+**Decision, 2026-08-16, taken by the repo owner: ship the `demandSourcesOf`
+change ON.** The reason, recorded here rather than left in a conversation:
+increment 10 spec §2.5 and §4.2 scope that increment to *measure* OBS-8-06 and
+not to act on it, and turning the instrument off after reading it would be acting
+on it — quietly, and in the one direction that also destroys the ability to
+re-take the reading.
+
+What that decision buys and what it costs, stated together: the change is what
+makes staging fire at a site at all, so it is the only reason the table above
+exists; and on every fixture in that table it prices as **pure cost** — it buys
+nothing and spends 22 to 44 hauler-ticks a run.
+
+**So this note stays `Open`, and it now owns a decision rather than a question.**
+Acting on the reading is still OBS-8-06's business, and the follow-up below is
+the specific thing that has to be decided.
+
+## FOLLOW-UP F1 — should staging fire at a construction site at all? (open)
+
+**The decision a successor must take**, named here rather than left inside the
+paragraphs above, because a measured net-negative behaviour is currently shipping
+and a cost that lives only in narrative gets lost.
+
+**The number, from increment 10 spec §4.2 and re-takeable from
+`tests/engine/balance.test.ts`:**
+
+- **+22 to +44 non-idle hauler-ticks per run**, in **all six** with/without pairs
+  — which is **20% to 41% more walking** at the one-site fixture.
+- **12 or 24 units parked at a depot that nothing ever drew back from.** The
+  depot's closing level equals its peak in every run.
+- **Zero completion ticks moved.** Every completion tick is digit-for-digit
+  identical with the depot and without it, in all six pairs.
+
+So the ledger is one-sided: cost on one side, nothing at all on the other. The
+code is correct, the fixture is committed, and the mechanic is doing exactly what
+§2.4 specifies — this is not a bug report, it is a **behaviour that is measured
+to lose and is switched on.**
+
+**What could still change the answer, and what could not.** The triangle
+inequality is arithmetic: for a hauler standing at the source, a route through an
+intermediate depot can at best tie, so no value of `siteStagingTarget` and no
+re-siting of this depot reaches it. The one arrangement that is untested is a
+colony whose haulers idle **near** the depot — a producer standing beside it —
+and that fixture has still not been built. Anything decided on the numbers above
+alone should say so.
+
+**F1 is narrower than option 3 below** and does not wait on it: gating site
+demand is a question about `demandSourcesOf` and one class of consumer, where
+option 3 removes `stageInto`, `siteDemandOf`, `inboundAt` and half of §2.4 for
+every consumer. Declining option 3 does not settle F1.
+
 ## Suggested resolution
 
 Three orderings, and the choice should be made on a measurement rather than on
@@ -139,3 +255,16 @@ measurement argued for it, and increment 8 declined to move
 `storehouseFreeFloor` because one fixture family is not enough to move a
 constant. Removing a shipped mechanic on evidence from fixtures that were never
 built to exercise it would be the same error with the sign flipped.
+
+**Option 1 is discharged (2026-08-16).** The remote fixture exists and has been
+run, so the bar that stood in front of options 2 and 3 is cleared and the
+evidence it produced is the section above. Option 2's question — *why does
+staging lose to supply?* — is now answered too, and more strongly than it was
+posed: not because `chooseJob` offers supply first, but because a two-leg route
+through a depot cannot be shorter than the one-leg route it replaces for a hauler
+standing at the source. That is arithmetic rather than tuning, and no value of
+`siteStagingTarget` reaches it. What remains genuinely undecided is option 3
+against a fourth option this reading suggests — keep staging but require the
+hauler to already be nearer the depot than the source — and the fixture that
+would separate them, a colony whose haulers idle near the depot, has still not
+been built.

@@ -296,14 +296,14 @@ describe('WorldView interaction', () => {
     expect(wrapper.find('[data-test="palette-forester"]').classes()).toContain('is-armed');
   });
 
-  // The ghost's half of acceptance criterion 5 (§2.3/§2.10): armed while
-  // affordable (rich stock, as every other arming test here is), then the
-  // stockpile drops to exactly one house's cost with a house already queued
-  // against it — published stock UNCHANGED at order time (Task 2), so a
-  // ghost reading stock alone would still preview `valid: true`. Proves
-  // `tileValid`'s `store.affordableDefs[m.defId]` read picks up the
-  // cumulative getter rather than a stale one.
-  it('a queued site\'s outstanding demand invalidates the placement ghost for the same materials', async () => {
+  // Spec §2.1, increment 10: the exact inversion of increment 9's rule. The
+  // fixture is unchanged from the one that used to prove the ghost went
+  // invalid — a house already queued against exactly its own cost, published
+  // stock UNCHANGED at order time — because that is the strongest case for
+  // the OLD rule and therefore the sharpest regression check for its removal:
+  // if `tileValid` still read `affordableDefs` anywhere, this is the fixture
+  // that would catch it.
+  it('a queued site\'s outstanding demand no longer invalidates the placement ghost', async () => {
     const { renderer, wrapper } = armedHarness();
     await nextTick();
     await wrapper.find('[data-test="palette-house"]').trigger('click');
@@ -320,7 +320,37 @@ describe('WorldView interaction', () => {
     }), { paused: false, speed: 1, error: null });
     await nextTick();
     await wrapper.find('[data-test="world-host"]').trigger('pointermove', { pageX: 40, pageY: 40 });
-    expect(renderer.setGhost).toHaveBeenLastCalledWith({ defId: 'house', col: 8, row: 4, valid: false });
+    expect(renderer.setGhost).toHaveBeenLastCalledWith({ defId: 'house', col: 8, row: 4, valid: true });
+  });
+
+  // `tileValid`'s own gate, in its own file: BuildPalette and BuildingsView
+  // cannot exercise it — it is WorldView's independent predicate, and the
+  // PRIMARY canvas flow, so its gate mattered most of the three. The fixture
+  // is a genuinely EMPTY ledger (every RESOURCE_IDS entry at 0 via
+  // `stockedWith()`), not merely a rich snapshot that happens to cover the
+  // def: `richSnapshot` above (wood: 100, planks: 100) would pass this
+  // assertion whether or not the gate still existed, which is exactly the
+  // false-positive the brief calls out.
+  it('WorldView accepts the tile for an unaffordable def', async () => {
+    const { renderer, wrapper, engine } = armedHarness();
+    await nextTick();
+    useGameStore().ingest(makeSnapshot({
+      tick: 1,
+      buildings: [makeBuilding(7, { defId: 'bakery', col: 6, row: 3 })],
+      stockpile: stockedWith(), // every resource at 0
+    }), { paused: false, speed: 1, error: null });
+    await nextTick();
+    await wrapper.find('[data-test="palette-forester"]').trigger('click');
+    await wrapper.find('[data-test="world-host"]').trigger('pointermove', { pageX: 40, pageY: 40 });
+    expect(renderer.setGhost).toHaveBeenLastCalledWith({ defId: 'forester', col: 8, row: 4, valid: true });
+    // The predicate alone proves nothing if the click handler still refused
+    // separately — pin the player-visible outcome too: an unaffordable order
+    // actually dispatches, the same as the primary click-dispatch assertions
+    // above.
+    await wrapper.find('[data-test="world-host"]').trigger('click', { pageX: 40, pageY: 40 });
+    expect(engine.dispatch).toHaveBeenCalledWith({
+      type: 'constructBuilding', buildingDefId: 'forester', at: { col: 8, row: 4 },
+    });
   });
 
   it('switching armed definitions over a parked pointer swaps the ghost in place', async () => {

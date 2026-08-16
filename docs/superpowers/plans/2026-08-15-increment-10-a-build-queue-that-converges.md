@@ -237,7 +237,36 @@ it('with five sites, no younger site is served while an older one has unclaimed 
 
 - [ ] **Step 2: Implement, mutation-test, commit**
 
-Mutations: add a site-before-building term; reverse age; move age into the comparator; apply the starvation band to sites; **drop phase 1's second step so it returns the first lowest-age candidate it finds**. **The third is the one that matters** — it leaves a plausible-looking ordering that still round-robins, and only the five-site integration test catches it.
+Mutations: add a site-before-building term; reverse age; move age into the comparator; apply the starvation band to sites; **drop phase 1's second step so it returns the first lowest-age candidate it finds**.
+
+> **Corrected after the fact (2026-08-16, task 4).** This paragraph originally
+> read "**The third is the one that matters** — it leaves a plausible-looking
+> ordering that still round-robins, and only the five-site integration test
+> catches it." **Both halves of that are wrong**, and the mutations were run to
+> find out. Moving age into the comparator (with `nextSupplyTarget` collapsed
+> back to a single reduction, which is what "in the comparator" means) leaves the
+> **five-site tests green** — the candidates there happen to arrive in age order,
+> so the non-transitive reduction still lands on the oldest site — and is caught
+> by the **permutation tests**, exactly as acceptance criterion 4 says it should
+> be. Measured against `tests/shared/haul.test.ts` and
+> `tests/engine/systems/haul-dispatch.test.ts`:
+>
+> | mutation | reddens |
+> | --- | --- |
+> | site-before-building term | 'a site is never in the starvation band'; **4a**, the mixed-kind six-permutation test |
+> | reverse age | 'picks an older site over a newer one…'; **4a**; 'a staffed sawmill… is served before any site'; **both five-site tests** |
+> | move age into the comparator | **4a**, the mixed-kind six-permutation test; **4b**, the same-site source permutations |
+> | starvation band applied to sites | 'a STARVING producer outranks a site'; 'a site is never in the starvation band'; the sawmill integration test |
+> | drop phase 1's second step | **4b alone** — no other test in either file sees it |
+>
+> So the mutation that is caught by exactly one test is the **fifth**, and the
+> test is **4b**, not the five-site fixture. And nothing is caught *only* by the
+> five-site tests: the one mutation they catch (reverse age) is caught by four
+> other tests as well. That does not demote them — they are acceptance criterion
+> 2 at integration scale, and they were confirmed red against the unmodified
+> ranking before implementing — but it does mean **the permutation tests, not the
+> integration one, are what stand between this design and the non-transitive
+> version it exists to avoid.**
 
 ---
 

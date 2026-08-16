@@ -124,6 +124,30 @@ export function finishesSiteMaterial(
 }
 
 /**
+ * HOW OLD A BUILD ORDER IS: a site's own building id, or null when the row is a
+ * finished building (increment 10 §2.2).
+ *
+ * DERIVED, NEVER STORED. `IdCounter.take()` is monotone, so a site's id already
+ * IS the order the player queued it in — age needs no component, no save field
+ * and no new save version, and dispatch keeps the "no memory between ticks"
+ * property it has always had.
+ *
+ * THE NULL IS NOT AN ABSENCE TO BE DEFAULTED AWAY. It is what tells
+ * `nextSupplyTarget` (shared/haul.ts) that a candidate belongs to the non-site
+ * phase, where age means nothing at all: a finished building has no build order
+ * to be older than, and giving it one would put the whole colony into a single
+ * age ranking — which is the priority inversion §2.2 spends its length on.
+ *
+ * Here rather than at the candidate builder because it answers a question about
+ * a SITE and decides nothing, which is this module's seam; and it asks
+ * `isUnderConstruction` because that is how `inputRoomOf`,
+ * `finishesSiteMaterial` and `acceptsSupply` all ask the same question.
+ */
+export function siteAgeOf(row: HaulBuildingRow): number | null {
+  return isUnderConstruction(row.construction.ticksLeft) ? row.building.id : null;
+}
+
+/**
  * May a supply load be aimed at this building, and put into it on arrival?
  *
  * ONE DERIVATION, TWO READERS, the same shape `StaffedSet` itself is: dispatch

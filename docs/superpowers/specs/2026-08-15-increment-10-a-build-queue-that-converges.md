@@ -417,67 +417,308 @@ number.
 ## 4. Balance values
 
 **No new constants.** This increment removes a check and reorders a selection;
-`BALANCE.buildTicks` is increment 9's and is not retuned here unless §4.1 finds
-the queue behaviour makes its measured value wrong.
+`BALANCE.buildTicks` is increment 9's, and §4.1 measured the queue behaviour
+that could have made its value wrong. It did not: the ordering moved completion
+ORDER and left the per-site countdown untouched, so the constant ships
+unretuned.
 
-### 4.1 What must be measured
+### 4.1 What the harness measured
 
-- **Convergence, against increment 9's baseline.** N sites ordered
-  simultaneously, completion order and the completion *curve* recorded, at one
-  hauler and at four. Increment 9's §4.1 measured the same fixture under
-  round-robin; **the reading here is the difference**, and it is the only
-  evidence that this increment did what it exists to do. A curve that has not
-  changed shape means the ordering rule is not reaching the case it was written
-  for.
-- **How reachable the §2.3 stall is.** Sites costing both wood and planks, queued
-  against a chain that makes the planks, at queue lengths of 1 / 3 / 5 / 10. The
-  reading is the queue length at which the first completion stops happening —
-  which is the number that decides whether the residual hazard needs the
-  dependency graph, the global throttle, or nothing at all. Report it even if it
-  is "never at any length this fixture can express", because that is the result
-  that would close the question.
+Every figure below comes from a **committed harness fixture** in
+`tests/engine/balance.test.ts`, printed by `npm run balance:report`, and every
+one of them can be re-taken by running that command. No scratch rig was built
+and none is needed — which is the one thing this section can claim that
+increment 9's §4.3 could not, and it was bought with a single new field on
+`BalanceResult` (`siteInputUnits`, the units standing in ordered sites' in-trays
+at the last tick). `buildTicks` is 30 throughout, unretuned, and nothing in §4
+below argues for moving it.
 
-  **This is a separate sweep from the convergence one** and must not be folded
-  into it: the convergence fixture has no dependency chain in it, so it cannot
-  produce the stall at any N, and reporting "no stall observed" from that fixture
-  would be a confident wrong answer.
-- **What a queue costs a colony.** Ticks from order to first output for the last
-  site in a queue of N, against the same site built alone. This prices the thing
-  the player is actually being offered — "queue it and forget it" — and is the
-  reading that would justify or kill a future priority UI.
+**1. Convergence: the queue's whole cost moved off the first building, and the
+last one did not pay for it.** Increment 9's §4.1 fourth reading, re-taken on
+the identical fixture — N `house` sites ordered on the same tick at tiles that
+are all leg 4 from the camp, so nothing in the curve is distance. Completion
+ticks, increment 9's round-robin against this increment's age-first:
+
+| N | 1 hauler, increment 9 | 1 hauler, now | 4 haulers, increment 9 | 4 haulers, now |
+| ---: | --- | --- | --- | --- |
+| 1 | 65 | **65** | 35 | **35** |
+| 2 | 95, 105 | **65, 105** | 45, 45 | **35, 45** |
+| 3 | 125, 135, 145 | **65, 105, 145** | 55, 55, 55 | **35, 45, 55** |
+| 4 | 155, 165, 175, 185 | **65, 105, 145, 185** | 65, 65, 65, 65 | **35, 45, 55, 65** |
+| 6 | 215 … 265 | **65, 105 … 265** | 75, 75, 85, 85, 85, 85 | **35, 45 … 85** |
+| 8 | 275 … 345 | **65, 105 … 345** | 95 ×4, 105 ×4 | **35, 45 … 105** |
+
+**The first completion is now constant in N** — 65 at one hauler and 35 at four,
+at every queue length from one to eight. Increment 9 published that same column
+as 65 / 95 / 125 / 155 / 215 / 275 (up to **4.2×**) and 35 / 45 / 55 / 65 / 75 /
+95 (up to **2.7×**); the whole of that table is now 1.00× at every row. The
+sizing input §1.1.1 asked for — "three sites is fine and six is where it turns"
+— no longer describes anything: at these fixtures there is no N at which the
+first building arrives later than it would have alone.
+
+**And the last completion did not move by a single tick.** 185 at N=4 and 345 at
+N=8 at one hauler; 65, 85 and 105 at N=4, 6 and 8 at four. Every ordered site
+completed in every run, at both hauler counts and every N. So this is a pure
+redistribution: the ordering did not buy throughput and did not spend any
+either, which is exactly what §2.2 claimed for it and is worth stating as a
+measured fact rather than as an argument.
+
+**The shape inverted as §2.2 predicted, in both directions.** At four haulers
+increment 9's flat step — four sites crossing zero on the same tick — is now a
+10-tick staircase, one site per wave. At one hauler the spread at N=8 is 280
+ticks of a 345-tick wait (**81%**) where round-robin left 70 of 345 (20%).
+Useful buildings now arrive throughout a queue instead of all at the end of it.
+
+**2. How reachable the §2.3 stall is: at no queue length up to ten does the
+first completion stop happening BECAUSE OF THE QUEUE.** The qualifier is
+load-bearing — four rows of the table below never complete at all, at a queue of
+one as surely as at ten, and the paragraph on those rows says why that is a
+different failure. A separate sweep, as §4.1 required, because
+the convergence fixture has no dependency chain in it and could not have
+produced this at any N. The fixture: `house` sites (15 wood **and** 5 planks
+each) against a two-crew forester feeding a staffed sawmill, three haulers, 900
+ticks, and **nothing seeded** — a two-stage scenario withholds every resource a
+stage produces, so the only wood in the colony is the forester's and the only
+planks are the sawmill's.
+
+| sawmill crew | sawmill leg | queue | first completion | last | completed | wood made | planks made |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2 (parity) | 2 | 1 | **never** | — | 0 of 1 | 600 | 592 |
+| 2 (parity) | 2 | 3 | **never** | — | 0 of 3 | 600 | 592 |
+| 2 (parity) | 2 | 5 | **never** | — | 0 of 5 | 600 | 592 |
+| 2 (parity) | 2 | 10 | **never** | — | 0 of 10 | 600 | 592 |
+| 1 (half) | 2 | 1 | 116 | 116 | 1 of 1 | 600 | 297 |
+| 1 (half) | 2 | 3 | 116 | 209 | 3 of 3 | 600 | 297 |
+| 1 (half) | 2 | 5 | 116 | 296 | 5 of 5 | 600 | 297 |
+| 1 (half) | 2 | 10 | **116** | 520 | 10 of 10 | 600 | 297 |
+| 2 (parity) | 10 | 1 | 113 | 113 | 1 of 1 | 488 | 454 |
+| 2 (parity) | 10 | 3 | 137 | 244 | 3 of 3 | 494 | 430 |
+| 2 (parity) | 10 | 5 | 186 | 364 | 5 of 5 | 510 | 413 |
+| 2 (parity) | 10 | 10 | **186** | 655 | 10 of 10 | 536 | 363 |
+
+**Where the queue is served at all, its length does not delay the first
+building.** At half crew the first house completes at tick 116 whether one site
+was ordered or ten, and all ten finish inside the run — the convergence property
+of reading 1, holding under production contention rather than under haulage
+alone.
+
+**Where a queue DOES bite, it is a delay of 1.65× and not a stall.** With the
+sawmill at leg 10 and at crew parity, the first completion slips 113 → 137 → 186
+→ 186 as the queue goes 1 → 3 → 5 → 10, and every site still finishes. That is
+§2.3's mechanism, measured: the oldest site's room fills, it drops out of the
+candidate set while its planks are still unmade, and the wood that follows lands
+in younger sites' in-trays instead of in the sawmill — whose output falls 454 →
+363 (**−20%**) across the same sweep. **This is the number the §2.3 decision
+should be made against, and it does not buy the dependency graph.** Nothing
+freezes, nothing needs cancelling, and the worst case measured is a first
+building arriving two-thirds later than it would have alone. Of the three
+options §2.3 records, the cheap global cap is the only one this figure argues
+for at all, and "nothing" is defensible.
+
+**THE PARITY ROWS ARE A DIFFERENT FAILURE, AND IT RUNS THE OTHER WAY ROUND FROM
+§2.3.** With the sawmill beside the camp and at crew parity, **nothing completes
+at any queue length including ONE**, the sites' in-trays are empty at the end,
+and 592 of 600 logs became planks. §2.3 describes sites taking every remaining
+log from a producer; what this fixture shows is the producer taking every log
+from the sites. A sawmill re-enters the starvation band after each batch, a site
+is never in it (§2.2), and a camp-adjacent producer's claim cycle is short
+enough to catch each log as it lands — move the same sawmill ten legs out and
+the sites are served, which is what makes this a fact about the claim CYCLE
+rather than about the band alone. **A queue of one suffers it in full, so it is
+not reachable by queueing and this increment does not make it worse** — but it
+is worth recording twice over: it is increment 9's third reading arriving from
+the other side, and it is the case §2.3's third remedy ("widen the band" until a
+producer can run a whole batch) would make **worse** rather than better.
+
+**3. What a queue costs a colony: the last building pays for the whole queue,
+and a priority UI would only choose who pays.** `gatherersHut` sites (10 wood) —
+a hut has a recipe, so "first output" is a question that can be asked of it —
+ordered together at the same leg-4 tiles:
+
+| haulers | N | first | last | last vs the same hut alone |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 1 | 45 | 45 | 1.00× |
+| 1 | 3 | 45 | 85 | 1.89× |
+| 1 | 5 | 45 | 125 | 2.78× |
+| 1 | 8 | 45 | 185 | **4.11×** |
+| 4 | 1 | 35 | 35 | 1.00× |
+| 4 | 3 | 35 | 45 | 1.29× |
+| 4 | 5 | 35 | 55 | 1.57× |
+| 4 | 8 | 35 | 65 | **1.86×** |
+
+"Queue it and forget it" prices out as: **the first building arrives exactly when
+it would have arrived alone, and the eighth arrives four times later at one
+hauler and not quite twice as late at four.** Reading 1 already showed the last
+completion is the same tick a round-robin dispatcher produced, so **the total is
+fixed and only its distribution is in play** — which is the answer §4.1 wanted
+about a future priority UI. Such a UI cannot make a colony grow faster; it can
+only let a player choose which building is the one that arrives first, and age
+already gives them that for free by ordering. **That is an argument against
+building it, not for it**, at least until a queue can be reordered for a reason
+other than latency.
+
+**The "first output" half is DERIVED rather than measured, and here is the error
+bar.** This harness issues one command (`constructBuilding`) and cannot assign a
+worker, so the last step of increment 9's fifth reading — a colonist assigned on
+the completion tick, one batch run — is not reproducible here. Adding
+`completion + ticksPerBatch` to a hut built alone gives:
+
+| fixture | derived | increment 9 §4.1 reading 5 |
+| --- | ---: | ---: |
+| hut beside the camp, 1 hauler | 36 + 3 = **39** | 41 |
+| hut at the far corner, 1 hauler | 72 + 3 = **75** | 74 |
+| hut beside the camp, 2 haulers | 32 + 3 = **35** | 35 |
+
+Within two ticks, and exact on one row against a rig that no longer exists.
+Anyone re-taking this should treat first output as "completion plus one batch,
+±2", and the honest reading of the table above is that a queue's cost is a
+completion-tick cost: the batch that follows is a constant both arms pay.
+
+**4. What was not measured, and what is weak about what was.**
+
+- **Two- and three-hauler columns were not taken**, for increment 9's reason:
+  the one- and four-hauler rows bracket the behaviour and the balance project is
+  already four minutes long. **That reason is worth carrying forward with a
+  number on it, and the two readings taken disagree by 3×**: increment 10's
+  whole-branch review timed `npm run test:balance` at **757 s** on its machine
+  and read that as roughly a threefold growth against the plan's four minutes;
+  the fix pass that followed timed the same command at **239 s** on another
+  machine, which is the four minutes the plan already cited. No before/after was
+  taken on ONE box, so **the threefold reading is the review's and is not
+  reproduced here** — what both agree on is the shape of the cost: this project
+  is 239 s of a 268 s `check:all` on the faster machine, the three sweeps added
+  here (the stall sweep, the queue-cost sweep, the OBS-8-06 pairs) are the
+  largest single-commit addition to it, and **an added sweep is priced in
+  minutes, not seconds.** Nothing above was deleted or trimmed to buy time back:
+  the readings are what this increment was for, and a shorter suite bought by
+  dropping one would be the worse trade.
+- **The stall sweep ran at three haulers only**, and at two crew arrangements
+  and two sawmill tiles. The 1.65× above is one point in a space with at least
+  four dimensions in it, and it should be quoted as "measured at this fixture"
+  rather than as the cost of a queue in general.
+- **Both queue fixtures start from an empty ledger.** `runScenario` seeds a
+  resource at 1,000,000 or withholds it entirely, so a chain fixture has no
+  opening pile at all — where increment 9's stall reading gave its colony 60
+  wood. A player queueing against a real pile sits between the two, and neither
+  instrument can express that.
+- **A site's in-tray is still only sampled at the END of a run**
+  (`siteInputUnits`). Increment 9's "ticks short, longest unbroken stretch"
+  instrument was a scratch-rig capability and remains one; this section
+  therefore says "did not complete" where that one could say "was short for 884
+  of 900 ticks".
+- **`buildTicks` is not retuned**, and this section found no reason to. It sits
+  outside every difference measured here — the queue moved completion ORDER and
+  left the per-site countdown alone — so increment 9's decision to keep the
+  value and withdraw its stated rationale stands unchanged.
 
 ### 4.2 OBS-8-06, measured and not resolved
 
-`OBS-8-06` records that the staging half of the transfer mechanic is reachable,
-correct and almost never worth a trip — 0 dispatches on the headline fixture
-against 145 drains — and argues the case for deleting it is **not yet made**,
-because every fixture in the repository puts the camp within a few tiles of
-everything that consumes.
+**The instrument was connected first, and it had to be.** `demandSourcesOf`
+(haul-transfer.ts) skipped every unstaffed building and derived demand from
+`recipe.inputs` alone. A construction site is never staffed and has no recipe —
+its demand is its `cost` map — so **a remote site created no depot demand, no
+depot ever had a deficit to be staged into, and staging could not fire for a
+site at any distance.** It now gates on `acceptsSupply` (the rule that already
+decides which buildings a hauler may deliver to) and reads a site's cost, proved
+by a fixture in `tests/engine/systems/haul-transfer.test.ts` where a depot
+beside a house site acquires a wood and planks demand from it — with the site
+asserted unstaffed, so the demand cannot have arrived through the staffing gate,
+and with a FINISHED house of the same def as the control that pulls nothing.
+Three mutations redden it, including the exact pre-increment form.
 
-A construction site is a consumer at an arbitrary player-chosen tile, which is
-precisely the remote fixture that issue says is missing. It lands here rather
-than in increment 9 because taking the reading requires a dispatch change, and
-increment 9 deliberately made none.
+**The reading.** One or three `house` sites at the far corner (23,15), 26 tiles
+of walking from the only goods in the colony, with a depot at (12,8) on the line
+between them; 400 ticks:
 
-**Connect the instrument before taking the reading.** `demandSourcesOf`
-(`haul-transfer.ts:54`) skips unstaffed buildings and derives demand from
-`recipe.inputs` alone, so as the engine stands **a remote site creates no depot
-demand and staging cannot fire for it at any distance.** Teach it about sites —
-unstaffed, demand from `cost` — and prove it with a fixture showing a depot
-acquiring demand from a nearby site. Measuring first would produce a confident
-zero from an instrument that was never wired up, which is the increment-7 harness
-failure repeating.
+| sites | haulers | depot | completions | staging dispatches | depot peak | depot at end | supply ticks | loaded-leg ticks |
+| ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| 1 | 1 | no | 128 | 0 | 0 | 0 | 108 | 52 |
+| 1 | 1 | yes | **128** | 2 | 12 | 12 | 102 | 52 |
+| 1 | 2 | no | 72 | 0 | 0 | 0 | 108 | 52 |
+| 1 | 2 | yes | **72** | 4 | 24 | 24 | 96 | 52 |
+| 1 | 4 | no | 44 | 0 | 0 | 0 | 108 | 52 |
+| 1 | 4 | yes | **44** | 4 | 24 | 24 | 84 | 52 |
+| 3 | 1 | no | 128, 240, 352 | 0 | 0 | 0 | 324 | 156 |
+| 3 | 1 | yes | **128, 240, 352** | 2 | 12 | 12 | 318 | 156 |
+| 3 | 2 | no | 72, 128, 184 | 0 | 0 | 0 | 324 | 156 |
+| 3 | 2 | yes | **72, 128, 184** | 4 | 24 | 24 | 312 | 156 |
+| 3 | 4 | no | 44, 72, 100 | 0 | 0 | 0 | 324 | 156 |
+| 3 | 4 | yes | **44, 72, 100** | 4 | 24 | 24 | 300 | 156 |
 
-Then: a site ordered far from the camp with a depot between. Report whether
-staging fires, how often, and whether the site completes sooner with the depot.
-Three outcomes are possible and **all three are worth having — do not tune to
-reach one of them**:
+**The second of §4.2's three outcomes, and nothing was tuned toward it: staging
+FIRES, and it does not pay.** Two dispatches at one hauler and four at two and
+four, moving 12 or 24 units out to the depot — and **every completion tick is
+digit-for-digit identical with the depot and without it**, in all six pairs,
+with a demand that outlives one hauler wave as readily as with a single site's.
 
-- **Staging fires and pays** — OBS-8-06 closes, the deletion case is dead, and
-  the mechanic has found the fixture it was written for.
-- **Staging fires and does not pay** — the mechanic works and is not worth its
-  trips even at its own best fixture, which is what OBS-8-06 asks for.
-- **Staging still does not fire** — the trigger condition is narrower than
-  situational, and OBS-8-06's second hypothesis is the live one.
+**Nothing ever used what was staged.** The depot's closing level equals its peak
+in every run, so not one unit was fetched back out of it, and the loaded leg
+(`outbound` hauler-ticks) is 52 and 156 with the depot and without — every load
+that reached a site walked the full leg from the camp.
 
-This increment reports which. Acting on it belongs to OBS-8-06.
+**The reason is in the supply ranking rather than in staging, and the margin is
+a hair.** `supplyRouteDistance` (haul.ts) prices a candidate on the whole
+hauler → source → building route as a sum of RAW euclidean legs, and an idle
+hauler stands on the camp tile (2,0). Drawing from the camp is therefore
+0 + hypot(21,15) = **25.807** tiles; drawing from the depot is
+hypot(10,8) + hypot(11,7) = 12.806 + 13.038 = **25.845**. The camp wins by
+**0.038 tiles**. Converted into the ticks the engine actually charges
+(`ticksForDistance`: ceil per leg at two tiles a tick, floored at one) the two
+routes come out EQUAL, 1 + 13 against 7 + 7 — the ranking is decided far below
+the granularity of any walk it could have saved.
+
+**That hair is not a fixture accident, it is the triangle inequality**, and this
+is the part worth carrying forward. A route through an intermediate point is
+never shorter than the direct one, so for a hauler standing at the camp a depot
+between camp and site can at best TIE and can never win; the whole 0.038 is the
+depot's 0.70-tile offset from the straight line. **The depot can only pay for a
+hauler that is already standing near it** — not because this depot was sited
+badly, but because no depot on this route can be sited well enough. That is what
+increment 8 §4.3 found for the ordinary chain fixtures and is now confirmed at
+the remote fixture OBS-8-06 said the repository lacked.
+
+**What the depot did buy is MORE hauler work, and this is the reading the tick
+buckets actually support.** They must not be read as one partition: `supply` is a
+**kind** bucket (which job a hauler is on, beside `collect` and `transfer`) while
+`fetching` / `outbound` / `returning` are **phase** buckets (which leg it is
+walking), and the two cover the same non-idle ticks — measured, the two sums are
+identical in all twelve runs, with `collect` at zero throughout because the
+forester is crewed at 0. So a tick leaving `supply` has not been saved; it has
+only been re-attributed. The total is the thing to read:
+
+| sites | haulers | non-idle hauler-ticks, no depot | with the depot | change | `supply` kind | `transfer` kind |
+| ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 1 | 1 | 108 | 130 | **+22** | 108 → 102 | 28 |
+| 1 | 2 | 108 | 152 | **+44** | 108 → 96 | 56 |
+| 1 | 4 | 108 | 140 | **+32** | 108 → 84 | 56 |
+| 3 | 1 | 324 | 346 | **+22** | 324 → 318 | 28 |
+| 3 | 2 | 324 | 368 | **+44** | 324 → 312 | 56 |
+| 3 | 4 | 324 | 356 | **+32** | 324 → 300 | 56 |
+
+**Non-idle hauling rises in all six pairs** — by 22 to 44 ticks, which is 20% to
+41% more walking at one site. `supply` does fall, by 6, 12 or 24 ticks, but two
+to five times that many ticks reappear under `transfer` (28, 56), and the
+difference is the rise. Nor is there a shorter walk home to set against it:
+`returning` runs 52 → 42 in exactly ONE of the six pairs, RISES 52 → 56 in two of
+them, and the three-site pairs go 156 → 98 / 112 / 112.
+
+**So the ledger is one-sided, with nothing on the credit side at all.** The depot
+costs 22 to 44 extra hauler-ticks per run, parks 12 or 24 units it never gives
+back, and does not move a single completion tick. It is not a relabelling and not
+a trade — it is a net loss of hauler work.
+
+**So OBS-8-06's second hypothesis is NOT the live one.** The trigger is not
+narrower than situational — it fired on the first fixture written for it. What
+survives is the issue's own first sentence, now with the missing case filled in:
+staging is reachable and correct and **is not worth its trips even at the
+fixture it was written for**. This increment reports that and does nothing about
+it; deleting or re-siting the mechanic is OBS-8-06's decision, and it must be
+taken with the DRAIN half in view, which is a different rule solving increment
+7's silting defect and did not fire here at all (24 units is far below the
+48-unit staging ceiling, so the parked stock is inert rather than silted).
+
+**The weakness in this reading, stated rather than left for a successor to
+find:** it is one depot tile on one map with haulers whose house is beside the
+camp. The shape that could still make staging pay is a colony whose haulers idle
+NEAR the depot — a producer standing next to it, say — and that fixture was not
+run here, because §4.2 asked for a remote SITE and that is what was built.

@@ -104,11 +104,13 @@ function buildingState(
 
 /**
  * What THIS site still owes, per material — `max(0, cost[r] - inputBuffer[r])`
- * for each resource its own def's `cost` names. Mirrors `outstandingMaterials`'s
- * `owe` closure (placement-handlers.ts) one building at a time rather than
- * summed across the colony's whole queue — that colony-wide sum is
+ * for each resource its own def's `cost` names, one building at a time rather
+ * than summed across the colony's whole queue — that colony-wide sum is
  * `affordableDefs`'s job (game-store.ts), reading this per-building figure
- * back rather than recomputing it a third time. Resources already fully
+ * back rather than recomputing it. (Through increment 9 the engine's own
+ * order-time check, `outstandingMaterials` in placement-handlers.ts, summed
+ * the identical `owe` shape a second time; §2.1 deletes that check, so this
+ * is now the one place the figure is computed.) Resources already fully
  * delivered are OMITTED, not zeroed, so a partial-record consumer (`costLabel`,
  * `unitsOf`) reads "what is still short" without a caller filtering zeros out.
  */

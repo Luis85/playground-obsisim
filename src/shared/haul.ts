@@ -375,6 +375,19 @@ export interface SupplyCandidate {
    * for a reason no player could see.
    */
   starving: boolean;
+  /**
+   * The target's building id when it is a CONSTRUCTION SITE, null when it is a
+   * finished building. Both halves are read: the null tells `nextSupplyTarget`
+   * which of its two phases a candidate belongs to, and the number orders the
+   * sites within one of them.
+   *
+   * A LOWER ID IS AN EARLIER BUILD ORDER, because `IdCounter.take()` is
+   * monotone — so §2.2's age needs no component, no save field and no memory
+   * between ticks. It is `buildingId` above read a second way: the comparator's
+   * tie-break chain already falls back on that number, and `nextSupplyTarget`
+   * promotes the same one to the front for sites alone.
+   */
+  siteAge: number | null;
 }
 
 /** Hauler-to-site-to-building: the full trip a supply candidate costs,
@@ -386,13 +399,13 @@ function supplyRouteDistance(candidate: SupplyCandidate, from: TileRef): number 
 }
 
 /**
- * THE supply job-selection order: serve a STOPPED building before a running
- * one, then clear the most movable stock, then prefer the cheapest whole route
- * (hauler to source to building — not the building's distance alone, or two
- * candidates for the same building from different sites could not be told
- * apart), then lowest building id, then lowest site id. The final tie-break is
- * what makes selection independent of candidate order, the same guarantee
- * `compareHaulCandidates` gives collect.
+ * THE supply job-selection order: serve a STOPPED building (never a site — see
+ * below) before a running one, then clear the most movable stock, then prefer
+ * the cheapest whole route (hauler to source to building — not the building's
+ * distance alone, or two candidates for the same building from different sites
+ * could not be told apart), then lowest building id, then lowest site id. The
+ * final tie-break makes THIS comparator a total order, as `compareHaulCandidates`
+ * is for collect; `nextSupplyTarget`'s two phases extend it across the site boundary.
  *
  * `starving` is a FLOOR, not a rival priority, and the distinction is the whole
  * reason it is safe to put at the front (OBS-7-01). The condition it ranks on
@@ -420,9 +433,27 @@ function supplyRouteDistance(candidate: SupplyCandidate, from: TileRef): number 
  * order decides in full, which is what stops the floor becoming the opposite
  * failure, a hauler crossing the map past a building it could have served on
  * the way.
+ *
+ * A SITE IS NEVER IN THE BAND (increment 10 §2.2), and that is the ONLY thing
+ * this comparator gains for construction. `starving` stays a true statement
+ * about the building — an empty site satisfies all four of its clauses — so the
+ * exclusion is written here, where the ranking POLICY lives, rather than by
+ * lying about the physical fact at the candidate builder. The band promotes a
+ * building that is BLOCKED: a producer at zero produces nothing while one
+ * holding some is working. A site produces nothing by definition; it is not
+ * blocked, it is unbuilt, and no output is being lost while it waits. Reading
+ * "holds zero" as starvation for a site would also promote the NEWEST site over
+ * the one closest to completion — the round-robin failure arriving through the
+ * fairness fix instead of through `movable`.
+ *
+ * It is also what keeps a queue of sites from starving the chain that supplies
+ * it, with no dependency machinery at all: a sawmill with an empty in-tray IS
+ * starving and a site never is, so a blocked producer outranks the whole queue
+ * that needs its planks. Drop this and the queue takes every log, the planks
+ * are never made, and the oldest site waits on a material nothing can produce.
  */
 export function compareSupplyCandidates(a: SupplyCandidate, b: SupplyCandidate, from: TileRef): number {
-  const byStarving = Number(b.starving) - Number(a.starving);
+  const byStarving = Number(b.starving && b.siteAge === null) - Number(a.starving && a.siteAge === null);
   if (byStarving !== 0) return byStarving;
   const byMovable = b.movable - a.movable;
   if (byMovable !== 0) return byMovable;
@@ -433,15 +464,60 @@ export function compareSupplyCandidates(a: SupplyCandidate, b: SupplyCandidate, 
   return a.siteId - b.siteId;
 }
 
-/** The building-source pair a hauler should supply next, or null when
- * nothing is movable. */
+/**
+ * The building-source pair a hauler should supply next, or null when nothing
+ * is movable.
+ *
+ * TWO PHASES, AND §2.2's AGE LIVES HERE RATHER THAN IN THE COMPARATOR: the
+ * best SITE candidate, the best non-site candidate by the existing order, and
+ * then one ordinary comparison between those two winners. Without age a queue
+ * ROUND-ROBINS — `movable` is bounded by the room left in the target's tray, so
+ * the site nearest completion has the SMALLEST movable and loses to one ordered
+ * later and still empty, and none of twenty sites finishes until nearly all of
+ * them do.
+ *
+ * AGE CANNOT BE A COMPARATOR TERM, which an earlier draft got wrong by applying
+ * it "when both candidates are sites". That makes the comparator NON-TRANSITIVE
+ * — an old site (movable 1) beats a newer one (movable 6) on age, the newer
+ * beats a finished building (movable 4) on `movable`, and the building beats the
+ * old site on `movable` — and a single reduction over a cycle returns whichever
+ * candidate the array happened to start with, the one property every selection
+ * in this codebase commits to not having. Two phases are transitive by
+ * construction: each is a total order over a disjoint set, and the last step is
+ * a single pairwise comparison rather than a reduction over a mixed set.
+ *
+ * PHASE 1 IS TWO STEPS, and collapsing it reintroduces exactly what the phases
+ * were introduced to remove. A candidate is a building-SOURCE pair, so one site
+ * whose material sits at both the camp and a depot yields several candidates
+ * with the SAME `siteAge`; "lowest age wins" leaves them tied and the winner
+ * falls to array order. That failure is quieter than the non-transitive
+ * comparator rather than smaller — the site served is right every time and only
+ * the route wobbles. So: lowest `siteAge`, then the existing comparator among
+ * that one site's own candidates. No new tie-break is invented.
+ *
+ * SITES DO NOT GO AHEAD OF FINISHED BUILDINGS, and the final step is deliberately
+ * the ordinary comparison rather than a preference. A site's cost is planks,
+ * planks come from a sawmill, and sites outranking the sawmill send it no wood,
+ * so the planks the queue is waiting for are never made.
+ */
 export function nextSupplyTarget(
   candidates: readonly SupplyCandidate[], from: TileRef,
 ): SupplyCandidate | null {
-  let best: SupplyCandidate | null = null;
+  let bestSite: SupplyCandidate | null = null;
+  let bestAge = Infinity;
+  let bestBuilding: SupplyCandidate | null = null;
   for (const candidate of candidates) {
     if (candidate.movable <= 0) continue;
-    if (best === null || compareSupplyCandidates(candidate, best, from) < 0) best = candidate;
+    const age = candidate.siteAge;
+    if (age === null) {
+      if (bestBuilding === null || compareSupplyCandidates(candidate, bestBuilding, from) < 0) bestBuilding = candidate;
+    } else if (bestSite === null || age < bestAge
+      || (age === bestAge && compareSupplyCandidates(candidate, bestSite, from) < 0)) {
+      bestSite = candidate;
+      bestAge = age;
+    }
   }
-  return best;
+  if (bestSite === null) return bestBuilding;
+  if (bestBuilding === null) return bestSite;
+  return compareSupplyCandidates(bestSite, bestBuilding, from) < 0 ? bestSite : bestBuilding;
 }

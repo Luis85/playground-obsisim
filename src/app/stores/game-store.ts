@@ -63,10 +63,15 @@ function stockAmounts(snapshot: Snapshot | null): Record<string, number> {
  * What every construction site the colony already has going still needs, per
  * resource — summed straight off `BuildingSnapshot.constructionNeeds`, the
  * SAME per-material shortfall the Buildings table reads, not a second
- * derivation of it. This is the app-side half of `outstandingMaterials`
- * (`placement-handlers.ts`): the engine sums a site's shortfall off its own
- * live `InputBuffer`, this sums the identical figure off the published
- * snapshot, so the two agree without a new engine field (spec §2.10).
+ * derivation of it (spec §2.10).
+ *
+ * This was once the app-side half of the engine's own order-time check
+ * (`outstandingMaterials`, `placement-handlers.ts`) — the two summed the
+ * identical figure so a refusal here and a refusal at order time always
+ * agreed. Increment 10 §2.1 deletes that engine check outright: an order is
+ * a request now, not a claim, so nothing refuses. This function keeps its
+ * job anyway, because `affordableDefs` below still uses it to tell the
+ * player which def a queue has already spoken for — advisory, not a gate.
  */
 function outstandingSiteDemand(snapshot: Snapshot | null): Partial<Record<ResourceId, number>> {
   const outstanding: Partial<Record<ResourceId, number>> = {};
@@ -188,21 +193,28 @@ export const useGameStore = defineStore('game', {
       return statuses;
     },
     /**
-     * One affordability flag per catalog def — the construct table and the
-     * build palette bind to this, so the check exists exactly once.
+     * One affordability flag per catalog def. Through increment 9 the
+     * construct table AND the build palette bound their `:disabled` to this,
+     * so the check existed exactly once; increment 10 §2.1 makes ordering a
+     * request instead of a claim, and drops the check everywhere it gated —
+     * BuildPalette, WorldView's `tileValid`, and this getter's own reader in
+     * BuildingsView's `:disabled`. What survives is the tooltip: the getter
+     * is unchanged, and BuildingsView's Construct button still reads it to
+     * TELL the player what a def is still short of, even though clicking it
+     * now works either way.
      *
-     * CUMULATIVE, matching `affordableWithQueue` (`placement-handlers.ts`):
-     * ordering a building deliberately leaves `snapshot.stockpile` untouched
-     * (§2.3), so a getter comparing a fresh def's cost against stock alone
-     * would keep offering a second house after the first has already claimed
-     * that exact stock. `outstandingSiteDemand` is subtracted first — the
-     * colony's whole queue, summed once — and then each def is checked
-     * against ONLY ITS OWN cost resources, never the whole catalog: the
-     * engine's own comment on why is worth repeating here, because getting
-     * this backwards self-detonates. Outstanding demand already counts
-     * material in transit twice (picked up, not yet delivered) as a
-     * safety margin; spreading that margin across resources a def does not
-     * even want would refuse orders the colony can plainly afford.
+     * CUMULATIVE: ordering a building deliberately leaves `snapshot.stockpile`
+     * untouched (§2.3), so a getter comparing a fresh def's cost against stock
+     * alone would keep calling a second house affordable after the first has
+     * already claimed that exact stock. `outstandingSiteDemand` is subtracted
+     * first — the colony's whole queue, summed once — and then each def is
+     * checked against ONLY ITS OWN cost resources, never the whole catalog:
+     * outstanding demand already counts material in transit twice (picked up,
+     * not yet delivered), which is deliberate PESSIMISM rather than a safety
+     * margin — over-counting was the safe direction while this gated a refusal,
+     * and for advice there is no safe direction, only accurate or gloomy — and
+     * spreading that pessimism across resources a def does not even want would
+     * call orders the colony can plainly cover unaffordable.
      */
     affordableDefs(state): Record<BuildingDefId, boolean> {
       const snapshot = state.snapshot;

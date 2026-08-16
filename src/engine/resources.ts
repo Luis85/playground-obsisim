@@ -274,10 +274,17 @@ export class RemovalLedger {
  * straight back into a building that no longer exists.
  *
  * `constructed` is the mirror image: a building ordered this tick is absent
- * from every query for the rest of the tick, so without it the order-time
- * affordability check (`outstandingMaterials`, placement-handlers.ts) cannot
- * see the site a command earlier in this same drain just queued, and accepts
- * two orders that share one building's materials.
+ * from every query for the rest of the tick. Through increment 9 that made it
+ * load-bearing for the order-time affordability check (`outstandingMaterials`,
+ * once in placement-handlers.ts), which needed it to see a site a command
+ * earlier in this same drain had just queued. Increment 10 §2.1 deletes that
+ * check outright — ordering is a request now, so nothing at order time reads
+ * the colony's outstanding queue, and `constructed` currently has no reader.
+ * Every OTHER system's "does not fold in `constructed`" comment
+ * (population-system.ts, haul-sites.ts, haul-system.ts, command-system.ts)
+ * predates this and records a SEPARATE decision — those systems were never
+ * going to treat a same-tick site as live regardless of what read this list —
+ * so the field stays rather than being pulled out from under them.
  *
  * `arrivals` is the third of the same shape, and since Task 8 it carries real
  * traffic: `spawnArrival` pushes every nomad and every newborn onto it, and
@@ -319,11 +326,14 @@ export class PendingChanges {
    * Construction SITES ordered this tick. Absent from every query until the
    * sync, the mirror image of `demolished`.
    *
-   * Since §2.5 its one reader is `outstandingMaterials` (placement-handlers.ts),
-   * which charges each entry its WHOLE cost against the next order's
-   * affordability check — the tile, defId and id are carried because that
-   * check needs the def, and because homing used to read the tile before a
-   * site stopped being a shelter.
+   * From §2.5 through increment 9 its one reader was `outstandingMaterials`
+   * (placement-handlers.ts), which charged each entry its WHOLE cost against
+   * the next order's affordability check — `defId` and `id` because that
+   * check needed the def and a site to key its shortfall on, `col`/`row`
+   * because homing once read the tile before a site stopped being a shelter.
+   * Increment 10 §2.1 deletes that check, so nothing currently reads this
+   * list — see the class doc above for why it stays rather than coming out
+   * with its one reader.
    */
   readonly constructed: { id: number; defId: BuildingDefId; col: number; row: number }[] = [];
 
@@ -331,14 +341,10 @@ export class PendingChanges {
   // CommandContext.pending), which fallow's static analysis cannot trace
   // back to this class.
   //
-  // Every field, and `constructed` is not the cosmetic one: it is THIS drain's
-  // record of sites ordered a moment ago, and `outstandingMaterials` charges
-  // each entry's whole cost on top of the live site row the post-step sync has
-  // since published. A `constructed` that survived its tick would charge every
-  // standing site twice and grow without bound, so the colony would
-  // progressively refuse orders it can plainly afford — see command-system
-  // .test.ts's 'charges a standing site once, not once more for every tick
-  // since it was ordered'.
+  // Every field, `constructed` included even though nothing reads it any
+  // more (see its own doc above): a list that survived its tick would just
+  // grow without bound, and clearing costs nothing to keep doing on the
+  // off chance a future reader forgets this is a THIS-DRAIN-ONLY record.
   // fallow-ignore-next-line unused-class-member
   clear(): void {
     this.arrivals.length = 0;

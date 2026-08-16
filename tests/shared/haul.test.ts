@@ -192,7 +192,7 @@ function supplyCandidate(overrides: Partial<SupplyCandidate> = {}): SupplyCandid
   return {
     buildingId: 1, buildingCol: 4, buildingRow: 1,
     siteId: CAMP_SITE_ID, siteCol: CAMP_TILE.col, siteRow: CAMP_TILE.row,
-    resource: 'wheat', movable: 4, starving: false,
+    resource: 'wheat', movable: 4, starving: false, siteAge: null,
     ...overrides,
   };
 }
@@ -346,6 +346,148 @@ describe('the starvation floor', () => {
     });
     expect(nextSupplyTarget([viaA, viaB], from)?.siteId).toBe(3);
     expect(nextSupplyTarget([viaB, viaA], from)?.siteId).toBe(3);
+  });
+});
+
+/** Every ordering of a candidate list. Order-independence is asserted over ALL
+ * of them rather than over a forward and a reversed pass: a three-element cycle
+ * is only visible from some of the six, and the two passes the existing cases
+ * use happen to be two that agree. */
+function permutations<T>(items: readonly T[]): T[][] {
+  if (items.length <= 1) return [[...items]];
+  return items.flatMap((item, i) => permutations([...items.slice(0, i), ...items.slice(i + 1)])
+    .map((rest) => [item, ...rest]));
+}
+
+/**
+ * AGE FIRST (increment 10 §2.2): which SITE a hauler serves, and why the answer
+ * is not a comparator term.
+ *
+ * `movable` is bounded by the room left in the target's tray, so the site
+ * nearest completion has the LEAST movable and loses to one ordered later and
+ * still empty — twenty queued sites round-robin and none of them finishes.
+ * Age fixes that in `nextSupplyTarget`, in two phases, and NOT in
+ * `compareSupplyCandidates`, which gains only the rule that a site is never in
+ * the starvation band.
+ */
+describe('age first: which site a queue serves', () => {
+  const from: TileRef = { col: 2, row: 0 };
+
+  it('picks an older site over a newer one that is emptier and nearer', () => {
+    // Through THE SELECTOR rather than the comparator, because that is where
+    // age lives: a comparator-level test of it cannot pass, and would push an
+    // implementer straight back to the non-transitive version this design
+    // exists to avoid.
+    //
+    // DISCRIMINATING: the older site loses EVERY comparator term — one unit
+    // movable against six, twenty tiles of route against two, and it is not in
+    // the band the empty younger site genuinely enters. `siteAge` IS the
+    // building id for a site, so those two cannot be varied independently; the
+    // id tie-break is the one term the older site also wins, and every term
+    // above it is stacked against it.
+    const older = supplyCandidate({
+      buildingId: 3, siteAge: 3, buildingCol: 20, buildingRow: 10, movable: 1,
+    });
+    const newer = supplyCandidate({
+      buildingId: 9, siteAge: 9, buildingCol: 4, buildingRow: 0, movable: 6, starving: true,
+    });
+    expect(nextSupplyTarget([older, newer], from)?.buildingId).toBe(3);
+    expect(nextSupplyTarget([newer, older], from)?.buildingId).toBe(3);
+  });
+
+  it('leaves compareSupplyCandidates unchanged for two finished buildings', () => {
+    // The comparator's own regression guard. Age must not appear in it at all,
+    // so the OLDER building (id 2) with less movable stock still loses to the
+    // newer one — an age term keyed on the building id rather than on `siteAge`
+    // reverses this.
+    const older = supplyCandidate({ buildingId: 2, buildingCol: 4, buildingRow: 0, movable: 2 });
+    const newer = supplyCandidate({ buildingId: 8, buildingCol: 20, buildingRow: 10, movable: 9 });
+    expect(compareSupplyCandidates(older, newer, from)).toBeGreaterThan(0);
+    expect(nextSupplyTarget([older, newer], from)?.buildingId).toBe(8);
+  });
+
+  it('a STARVING producer outranks a site', () => {
+    // The priority inversion guarded from the direction that matters: a site's
+    // cost is planks, planks come from a sawmill, and a queue that outranked
+    // the sawmill would wait forever for planks nobody can make. The site here
+    // beats the producer on movable, on route and on id, and carries the
+    // `starving` flag honestly — an empty site satisfies all four of its
+    // clauses — so only its exclusion from the band can lift the producer.
+    const producer = supplyCandidate({ buildingId: 7, buildingCol: 20, buildingRow: 10, movable: 3, starving: true });
+    const site = supplyCandidate({
+      buildingId: 2, siteAge: 2, buildingCol: 4, buildingRow: 0, movable: 9, starving: true,
+    });
+    expect(nextSupplyTarget([producer, site], from)?.buildingId).toBe(7);
+    expect(nextSupplyTarget([site, producer], from)?.buildingId).toBe(7);
+  });
+
+  it('a site is never in the starvation band', () => {
+    // The same rule stated at the comparator, where it is implemented: a site
+    // holding zero must not be PROMOTED the way a producer holding zero is.
+    // Neutralised, the site loses on movable to a building that is farther away
+    // and carries the higher id, so nothing else could have produced this.
+    const site = supplyCandidate({
+      buildingId: 1, siteAge: 1, buildingCol: 4, buildingRow: 0, movable: 2, starving: true,
+    });
+    const building = supplyCandidate({ buildingId: 5, buildingCol: 20, buildingRow: 10, movable: 4 });
+    expect(compareSupplyCandidates(site, building, from)).toBeGreaterThan(0);
+    expect(nextSupplyTarget([site, building], from)?.buildingId).toBe(5);
+    expect(nextSupplyTarget([building, site], from)?.buildingId).toBe(5);
+  });
+
+  it('the winner does not depend on candidate order, across the site boundary', () => {
+    // THE TRANSITIVITY CASE, and it must use a MIXED set: the cycle only exists
+    // across the site / non-site boundary, so a same-kind shuffle cannot see
+    // it. Applying age "when both are sites" makes the comparator
+    // non-transitive — old beats new on age, new beats the building on movable,
+    // the building beats old on movable — and `nextSupplyTarget` is a
+    // reduction, so the winner then falls out of the order the candidates
+    // happen to arrive in. Two phases are transitive by construction.
+    //
+    // The building wins on movable, which is the answer §2.2 wants: sites do
+    // NOT go ahead of finished buildings.
+    const oldSite = supplyCandidate({ buildingId: 2, siteAge: 2, buildingCol: 6, buildingRow: 0, movable: 1 });
+    const newSite = supplyCandidate({ buildingId: 8, siteAge: 8, buildingCol: 5, buildingRow: 0, movable: 6 });
+    const building = supplyCandidate({ buildingId: 5, buildingCol: 4, buildingRow: 0, movable: 4 });
+    const orders = permutations([oldSite, newSite, building]);
+    expect(orders).toHaveLength(6);
+    expect([...new Set(orders.map((list) => nextSupplyTarget(list, from)?.buildingId))]).toEqual([5]);
+  });
+
+  it('the SOURCE chosen for the oldest site does not depend on candidate order', () => {
+    // A candidate is a building-SOURCE pair, so one site whose material sits at
+    // three places is three candidates with the SAME `siteAge`. "Lowest age
+    // wins" leaves them tied and the winner falls to array order — the quieter
+    // half of the same bug, since the SITE served would be right every time and
+    // only the ROUTE would wobble. Phase 1's second step is the existing
+    // comparator, asked among that one site's own candidates.
+    //
+    // Routes from (0, 0) to the building at (10, 10): 14.45 via site 3, 14.14
+    // via site 7, 16.18 via site 9 — all distinct, and site 7 carries neither
+    // the lowest id nor the shortest first leg.
+    const site = { buildingId: 4, siteAge: 4, buildingCol: 10, buildingRow: 10, movable: 6 };
+    const orders = permutations([
+      supplyCandidate({ ...site, siteId: 3, siteCol: 1, siteRow: 0 }),
+      supplyCandidate({ ...site, siteId: 7, siteCol: 9, siteRow: 9 }),
+      supplyCandidate({ ...site, siteId: 9, siteCol: 0, siteRow: 5 }),
+    ]);
+    expect(orders).toHaveLength(6);
+    expect([...new Set(orders.map((list) => nextSupplyTarget(list, { col: 0, row: 0 })?.siteId))]).toEqual([7]);
+  });
+
+  it('among finished buildings nothing has changed, band included', () => {
+    // The regression guard for increments 7 and 8's ranking work, over a list
+    // that exercises every term at once: the starving building first however
+    // far away and however little it can take, then movable descending, then
+    // the whole route, and the id last.
+    const list = [
+      supplyCandidate({ buildingId: 1, buildingCol: 4, buildingRow: 0, movable: 9 }),
+      supplyCandidate({ buildingId: 2, buildingCol: 20, buildingRow: 10, movable: 3, starving: true }),
+      supplyCandidate({ buildingId: 3, buildingCol: 6, buildingRow: 0, movable: 9 }),
+      supplyCandidate({ buildingId: 4, buildingCol: 5, buildingRow: 0, movable: 2 }),
+    ];
+    const sorted = [...list].sort((a, b) => compareSupplyCandidates(a, b, from));
+    expect(sorted.map((c) => c.buildingId)).toEqual([2, 1, 3, 4]);
   });
 });
 

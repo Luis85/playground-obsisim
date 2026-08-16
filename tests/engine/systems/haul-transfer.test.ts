@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { BuildingDefId, ResourceId } from '../../../src/shared/content-types';
 import { CAMP_SITE_ID, CAMP_TILE, type StoreSite } from '../../../src/shared/haul';
-import type { TileRef } from '../../../src/shared/placement';
+import { isUnderConstruction, type TileRef } from '../../../src/shared/placement';
 import { BALANCE } from '../../../src/engine/content/balance';
 import { BUILDINGS } from '../../../src/engine/content/buildings';
 import { RESOURCE_IDS } from '../../../src/engine/content/resources';
@@ -80,6 +80,17 @@ function consumer(defId: BuildingDefId, at: TileRef): HaulBuildingRow {
   };
 }
 
+/**
+ * A CONSTRUCTION SITE: the same row, mid-countdown, and never in the staffed
+ * set — `colonyOf` derives staffing from the countdown for exactly this row
+ * (increment 10 §4.2).
+ */
+function underConstruction(defId: BuildingDefId, at: TileRef): HaulBuildingRow {
+  const row = consumer(defId, at);
+  row.construction = new Construction(BALANCE.buildTicks);
+  return row;
+}
+
 type Stocked = readonly (readonly [StoreSite, Partial<Record<ResourceId, number>>])[];
 
 /** The trip Task 6 will begin: a transfer that has reserved its source stock,
@@ -121,7 +132,14 @@ function colonyOf(sites: readonly StoreSite[], buildings: readonly HaulBuildingR
     for (const [id, amount] of Object.entries(contents)) stockpile.refundAt(site, id as ResourceId, amount);
   }
   const trips: HaulTrip[] = [];
-  const staffed: StaffedSet = new Set(buildings.map((row) => row.building.id));
+  // A CONSTRUCTION SITE IS NEVER STAFFED, and the engine agrees: Task 2b of
+  // increment 9 refuses to assign a worker to one, and `house`/`storehouse`
+  // have no worker slots regardless (`acceptsSupply`, haul-construction.ts).
+  // Deriving it here rather than letting a caller pass a staffed set keeps the
+  // site fixtures below from proving their point through a hand-made exemption.
+  const staffed: StaffedSet = new Set(
+    buildings.filter((row) => !isUnderConstruction(row.construction.ticksLeft)).map((row) => row.building.id),
+  );
   const claims = () => claimsOf(
     trips.map((trip) => ({ trip, job: new JobAssignment(null, true), home: new Home(null) })),
     stockpile,
@@ -278,6 +296,41 @@ describe('staging: a site pulls what the buildings around it eat', () => {
     expect(trip).toMatchObject({
       kind: 'supply', phase: 'fetching', sourceSiteId: B_ID, resource: 'wheat', plannedAmount: 1,
     });
+  });
+
+  it('a depot beside a construction site pulls the SITE\'s materials from the camp', () => {
+    // INCREMENT 10 §4.2, AND THE INSTRUMENT OBS-8-06's READING DEPENDS ON.
+    // `demandSourcesOf` skipped unstaffed buildings and read demand off
+    // `recipe.inputs` alone; a site is never staffed and has no recipe, so a
+    // site at an arbitrary far tile — the one remote consumer a player can
+    // actually place — created NO depot demand, and staging could not fire for
+    // it at any distance. Measuring the remote fixture before this was wired
+    // up would have reported a confident zero from a disconnected instrument.
+    const site = underConstruction('house', NEAR_A);
+    const colony = colonyOf([CAMP, A], [site], [[CAMP, { wood: 30, planks: 30 }]]);
+
+    // The site is NOT staffed, so the demand below cannot have come in through
+    // the staffing gate — it is the site exemption (`acceptsSupply`) doing it.
+    expect(colony.staffed.has(site.building.id)).toBe(false);
+    // Both materials of the house's cost, at the ordinary per-source target.
+    expect(colony.demand().get(A_ID)).toEqual(new Map([
+      ['wood', BALANCE.siteStagingTarget], ['planks', BALANCE.siteStagingTarget],
+    ]));
+    expect(colony.candidates()).toMatchObject([
+      { sourceSiteId: CAMP_SITE_ID, destSiteId: A_ID, resource: 'wood', movable: CAPACITY, staging: true },
+      { sourceSiteId: CAMP_SITE_ID, destSiteId: A_ID, resource: 'planks', movable: CAPACITY, staging: true },
+    ]);
+  });
+
+  it('a FINISHED building of the same def pulls nothing — it is the site that demands', () => {
+    // The control for the case above, and it is what keeps that one from
+    // passing for the wrong reason: a `house` has no recipe and no worker slots,
+    // so once it is built there is nothing to stage toward it and the depot's
+    // demand goes away. Demand comes from the COST while the countdown runs,
+    // not from the def standing there.
+    const colony = colonyOf([CAMP, A], [consumer('house', NEAR_A)], [[CAMP, { wood: 30, planks: 30 }]]);
+    expect(colony.demand().get(A_ID)).toBeUndefined();
+    expect(colony.candidates()).toEqual([]);
   });
 });
 

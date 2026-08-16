@@ -560,7 +560,7 @@ Widen the existing content import at the top of the file to include `BuildingDef
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run --project unit tests/app/attention.test.ts`
-Expected: PASS, 9 tests.
+Expected: PASS, 11 tests.
 
 - [ ] **Step 5: Check the line count**
 
@@ -1568,6 +1568,7 @@ Create `tests/app/dock-panels.test.ts`:
 ```ts
 // @vitest-environment happy-dom
 import { describe, expect, it, vi } from 'vitest';
+import { defineComponent, h } from 'vue';
 import { mount } from '@vue/test-utils';
 import { createTestingPinia } from '@pinia/testing';
 import InspectorPanel from '../../src/app/components/dock/InspectorPanel.vue';
@@ -1575,6 +1576,24 @@ import { ENGINE_KEY } from '../../src/app/engine-key';
 import { useGameStore } from '../../src/app/stores/game-store';
 import { useUiStore } from '../../src/app/stores/ui-store';
 import { makeBuilding, makeSnapshot, makeWorker } from './fixtures';
+
+/** Mounts the Inspector the way WorldScreen does — through the key — so the
+ * remount behaviour under test is the one that actually ships. */
+function mountKeyedInspector(snapshot = makeSnapshot()) {
+  const engine = { dispatch: vi.fn() };
+  const pinia = createTestingPinia({ createSpy: vi.fn, stubActions: false });
+  useGameStore(pinia).ingest(snapshot, { paused: true, speed: 1, error: null });
+  const ui = useUiStore(pinia);
+  const Harness = defineComponent({
+    setup: () => () => h(InspectorPanel, {
+      key: `${ui.selection.kind}-${'id' in ui.selection ? ui.selection.id : 0}`,
+    }),
+  });
+  const wrapper = mount(Harness, {
+    global: { plugins: [pinia], provide: { [ENGINE_KEY as symbol]: engine } },
+  });
+  return { wrapper, engine, ui };
+}
 
 function mountPanel(component: unknown, snapshot = makeSnapshot()) {
   const engine = { dispatch: vi.fn() };
@@ -1615,6 +1634,18 @@ describe('InspectorPanel', () => {
     await wrapper.vm.$nextTick();
     expect(wrapper.get('[data-test="inspector-assign"]').attributes('disabled')).toBeDefined();
     expect(wrapper.get('[data-test="inspector-staffing-reason"]').text()).toContain('No idle adults');
+  });
+
+  it('shows a site\'s materials as have over need, not as a bare shortfall', async () => {
+    // A sawmill costs 25 wood; 14 outstanding means 11 have arrived. The
+    // shortfall alone reads identically at 0/25 and at 24/25.
+    const site = makeSnapshot({
+      buildings: [makeBuilding(1, { defId: 'sawmill', state: 'underConstruction', constructionTicks: 20, constructionNeeds: { wood: 14 } })],
+    });
+    const { wrapper, ui } = mountPanel(InspectorPanel, site);
+    ui.selectBuilding(1);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('[data-test="selection-needs"]').text()).toContain('11 / 25 Wood');
   });
 
   it('refuses staffing on a construction site and states the reason', async () => {
@@ -1669,6 +1700,23 @@ describe('InspectorPanel', () => {
     expect(wrapper.get('[data-test="inspector-colonist"]').text()).toContain('#9');
   });
 
+  // Carried over from tests/app/world-view.test.ts, which Task 6 deletes. The
+  // behaviour it guards is a real one and predates this increment: arm
+  // Demolish on A, select B, and B must get a disarmed button. Without the
+  // key above, TwoStepButton's internal `armed` ref survives the subject
+  // change and B is one tap from demolition.
+  it('resets an armed demolish when the subject changes — no cross-building confirm', async () => {
+    const two = makeSnapshot({ buildings: [makeBuilding(1), makeBuilding(2)] });
+    const { wrapper, engine, ui } = mountKeyedInspector(two);
+    ui.selectBuilding(1);
+    await wrapper.vm.$nextTick();
+    await wrapper.get('[data-test="selection-demolish"]').trigger('click'); // arms
+    ui.selectBuilding(2);
+    await wrapper.vm.$nextTick();
+    await wrapper.get('[data-test="selection-demolish"]').trigger('click'); // must only ARM, not fire
+    expect(engine.dispatch).not.toHaveBeenCalled();
+  });
+
   it('renders nothing when nothing is selected', () => {
     const { wrapper } = mountPanel(InspectorPanel, staffable);
     expect(wrapper.find('[data-test="inspector"]').exists()).toBe(false);
@@ -1683,7 +1731,34 @@ Expected: FAIL — cannot resolve `InspectorPanel.vue`.
 
 - [ ] **Step 3: Write the panel**
 
-Create `src/app/components/dock/InspectorPanel.vue`. Carry `SelectionPanel.vue`'s per-kind detail across (buffers, storage, relocation countdown, construction countdown and `needsLabel`), branch first on `ui.selection.kind`, and add:
+**First, a new label.** §2.3 promises a site's materials as `have / need`, and
+`needsLabel` cannot express that — it renders the outstanding shortfall alone
+(`14 Wood`). What a site *has* of a material is its def's cost minus its
+remaining need, so add to `src/app/labels.ts`, beside `needsLabel`:
+
+```ts
+/**
+ * "11 / 25 Wood, 5 / 5 Planks" — what a construction site holds against what it
+ * takes, which is the progress `needsLabel`'s shortfall cannot show: "14 Wood"
+ * reads the same on a site that has just been ordered as on one load from
+ * finishing.
+ *
+ * `have` is derived, not published: `BuildingSnapshot.constructionNeeds` is the
+ * REMAINING need, so cost minus need is what has arrived. Reads the def's cost
+ * from BUILDINGS rather than taking it as an argument, the same way
+ * `recipeLabel` does, so a cost change cannot desync the two halves.
+ */
+export function suppliedLabel(defId: BuildingDefId, needs: CostMap): string {
+  const cost = BUILDINGS[defId].cost;
+  const parts = Object.entries(cost).map(([id, total]) => {
+    const outstanding = needs[id as ResourceId] ?? 0;
+    return `${total - outstanding} / ${total} ${RESOURCES[id as ResourceId].name}`;
+  });
+  return parts.length > 0 ? parts.join(', ') : '—';
+}
+```
+
+Then create `src/app/components/dock/InspectorPanel.vue`. Carry `SelectionPanel.vue`'s per-kind detail across (buffers, storage, relocation countdown, construction countdown), use **`suppliedLabel`** for a site's materials rather than `needsLabel`, branch first on `ui.selection.kind`, and add:
 
 ```vue
     <!-- Stated in the panel rather than in a `title`: spec §2.2 makes explicit
@@ -2071,7 +2146,13 @@ In `WorldScreen.vue`, render each panel behind its `ui.panel` value inside the
          undo criterion 7's overlay half — the dock would take its grid column
          back and shrink the canvas in a sidebar-width pane. -->
     <aside v-if="ui.panel" class="obsisim-dock" :class="{ 'is-overlay': ui.narrow }" data-test="dock">
-      <InspectorPanel v-if="ui.panel === 'inspector'" />
+      <!-- Keyed by the subject, exactly as WorldView keyed SelectionPanel by
+           `selectedId`. TwoStepButton holds its armed state internally, so an
+           unkeyed panel that is merely re-rendered for a new building keeps
+           Demolish armed from the old one — and a touch client never blurs the
+           button, so the first tap on B dispatches against B. The remount is
+           what guarantees a fresh, disarmed confirm. -->
+      <InspectorPanel v-if="ui.panel === 'inspector'" :key="`${ui.selection.kind}-${'id' in ui.selection ? ui.selection.id : 0}`" />
       <ColonyPanel v-else-if="ui.panel === 'colony'" />
       <PopulationPanel v-else-if="ui.panel === 'population'" />
       <EconomyPanel v-else-if="ui.panel === 'economy'" />
@@ -2160,6 +2241,13 @@ Add to `tests/app/buildings-view.test.ts`:
     expect(engine.dispatch).toHaveBeenCalledWith({ type: 'moveBuilding', buildingId: 1, to: { col: 9, row: 4 } });
   });
 
+  it('shows the construction countdown the Inspector shows', async () => {
+    const { wrapper } = mountView(makeSnapshot({
+      buildings: [makeBuilding(1, { state: 'underConstruction', constructionTicks: 20, constructionNeeds: { wood: 5 } })],
+    }));
+    expect(wrapper.get('[data-test="building-ticks-1"]').text()).toBe('20t');
+  });
+
   it('records the coordinates as submitted, not as later edited', async () => {
     const { wrapper, engine } = mountView(makeSnapshot({ buildings: [makeBuilding(1)] }));
     await wrapper.get('[data-test="move-col-1"]').setValue('9');
@@ -2201,7 +2289,19 @@ export function createGameRouter(): Router {
 
 `LedgerView.vue` composes `DashboardView`, `BuildingsView`, `PopulationView` and `EconomyView` in sequence and owns no figures of its own.
 
-`BuildingsView.vue` gains two number inputs and a Move button per row.
+`BuildingsView.vue` gains **a construction countdown column** and two number
+inputs plus a Move button per row.
+
+The countdown is a fallback-contract obligation, not decoration: the Inspector
+shows `constructionTicks`, and §2.5 promises every number a panel shows is also
+in a table. Today's row has State (`Under construction`), Needs (the shortfall)
+and Downtime (`relocatingTicks`) — none of which is the countdown, so a renderer
+failure would currently lose a figure the panel had. Reuse `downtimeLabel`'s em
+dash convention for a settled building:
+
+```vue
+          <td :data-test="`building-ticks-${b.id}`">{{ downtimeLabel(b.constructionTicks) }}</td>
+```
 
 The handler **copies** the coordinates rather than handing over the reactive
 object, because `GameEngine.dispatch` passes straight to `CommandQueue.push`,

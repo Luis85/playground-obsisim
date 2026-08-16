@@ -2453,6 +2453,23 @@ describe('LedgerView', () => {
 Add to `tests/app/buildings-view.test.ts`:
 
 ```ts
+  it('renders a Ledger row without a pre-seeded target, defaulting to the current tile', () => {
+    const { wrapper } = mountView(makeSnapshot({ buildings: [makeBuilding(1, { col: 7, row: 3 })] }));
+    // Fails against an uninitialised record: the render throws before this.
+    expect((wrapper.get('[data-test="move-col-1"]').element as HTMLInputElement).value).toBe('7');
+    expect((wrapper.get('[data-test="move-row-1"]').element as HTMLInputElement).value).toBe('3');
+  });
+
+  it('seeds a target for a building that appears in a later snapshot', async () => {
+    const { wrapper, store } = mountView(makeSnapshot({ tick: 1, buildings: [makeBuilding(1)] }));
+    store.ingest(
+      makeSnapshot({ tick: 2, buildings: [makeBuilding(1), makeBuilding(2, { col: 9, row: 5 })] }),
+      { paused: true, speed: 1, error: null },
+    );
+    await wrapper.vm.$nextTick();
+    expect((wrapper.get('[data-test="move-col-2"]').element as HTMLInputElement).value).toBe('9');
+  });
+
   it('moves a building to typed coordinates', async () => {
     const { wrapper, engine } = mountView(makeSnapshot({ buildings: [makeBuilding(1)] }));
     await wrapper.get('[data-test="move-col-1"]').setValue('9');
@@ -2601,6 +2618,39 @@ the table. Same call, same arguments:
             {{ b.constructionTicks > 0 ? suppliedLabel(b.defId, b.constructionNeeds) : '—' }}
           </td>
 ```
+
+**The targets have to exist before anything binds to them.** `v-model` on
+`moveTargets[b.id].col` and `moveRefusal`'s read both dereference an entry the
+plan never created: a bare `reactive<Record<number, Tile>>({})` type-checks
+perfectly and throws on `.col` at first render, which takes down the Ledger —
+the route that exists so a broken renderer is survivable. Seed from the
+snapshot, and keep seeding, because buildings appear while the Ledger is open
+(a site completes) as well as at mount:
+
+```ts
+const moveTargets = reactive<Record<number, { col: number; row: number }>>({});
+
+// Defaulted to the building's CURRENT tile, which is both a valid value and
+// the useful one: the fields show where it is before you change them, so a
+// mistyped move is a visible edit rather than a jump from (0, 0).
+//
+// `immediate` covers the first render; re-running on every snapshot covers
+// buildings that arrive later. Existing entries are never overwritten — that
+// would wipe what the player is halfway through typing, twice a second.
+watch(
+  () => store.snapshot?.buildings,
+  (buildings) => {
+    for (const b of buildings ?? []) {
+      if (moveTargets[b.id] === undefined) moveTargets[b.id] = { col: b.col, row: b.row };
+    }
+  },
+  { immediate: true },
+);
+```
+
+Entries for demolished buildings are left behind deliberately: nothing renders
+them, and pruning invites the id-reuse bug a colony reset already causes
+elsewhere (`renderer.ts` recycles entity ids from 1).
 
 The handler **copies** the coordinates rather than handing over the reactive
 object, because `GameEngine.dispatch` passes straight to `CommandQueue.push`,

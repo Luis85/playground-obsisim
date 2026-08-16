@@ -2453,6 +2453,13 @@ describe('LedgerView', () => {
 Add to `tests/app/buildings-view.test.ts`:
 
 ```ts
+  it('shows the starving count the Attention panel shows', () => {
+    const { wrapper } = mountView(makeSnapshot({
+      colonists: [makeWorker(1, { starvingTicks: 40 }), makeWorker(2, { starvingTicks: 12 }), makeWorker(3)],
+    }));
+    expect(wrapper.get('[data-test="starving"]').text()).toContain('2');
+  });
+
   it('renders a Ledger row without a pre-seeded target, defaulting to the current tile', () => {
     const { wrapper } = mountView(makeSnapshot({ buildings: [makeBuilding(1, { col: 7, row: 3 })] }));
     // Fails against an uninitialised record: the render throws before this.
@@ -2559,6 +2566,39 @@ export function createGameRouter(): Router {
 `App.vue`: drop the `tabs` array and the `<nav>`; add one Ledger toggle to the top bar area; **keep** `<keep-alive include="WorldScreen">` (the include name changes with the component) — the Ledger round trip is the one remaining unmount path and this is what stops it tearing down WebGL.
 
 `LedgerView.vue` composes `DashboardView`, `BuildingsView`, `PopulationView` and `EconomyView` in sequence and owns no figures of its own.
+
+**Audit the Attention panel against the tables before writing anything.** §2.5
+promises every number a panel shows is also in a table, and Attention is the
+panel most likely to break that, because its rows are derived rather than
+copied from an existing view. Walk all eight and confirm each has a home —
+this is the whole check, not a sample of it:
+
+| Attention row | Ledger home | Present today? |
+| --- | --- | --- |
+| *X is full* | `BuildingsView` State (`Output full`) | yes |
+| *X has nothing to work with* | `BuildingsView` State (`Waiting for input`) | yes |
+| *X has no one working it* | `BuildingsView` State (`Unstaffed`) + Workers | yes |
+| *X site needs …* | `BuildingsView` Needs, via `suppliedLabel` | yes, once this task adds it |
+| *Bread empties in ~30t* | `DashboardView` Empties in | yes |
+| *N colonists have no bed* | `PopulationSummary` Homeless | yes |
+| *N adults are idle* | `DashboardView` headline `(N idle)` | yes |
+| *N colonists are starving* | — | **no** |
+
+Only the last is missing. `PopulationView` shows each colonist's own starvation
+clock and never the count, so a renderer failure would lose a figure the panel
+had. Add it to **`PopulationSummary`**, which is already shared by the Dashboard
+and the Population view — one edit, both screens, and it sits beside `Homeless`
+which is the same shape of number:
+
+```vue
+    <span data-test="starving" :class="store.starvingCount > 0 ? 'obsisim-negative' : ''">
+      Starving: <strong>{{ store.starvingCount }}</strong>
+    </span>
+```
+
+`starvingCount` is a store getter, so the panel row and this cell read one
+derivation rather than two — the §2.7 rule, and the reason `AttentionRow`'s
+message can be built from it too.
 
 `BuildingsView.vue` gains **a construction countdown column**, **a
 site-aware staffing gate**, and two number inputs plus a Move button per row.

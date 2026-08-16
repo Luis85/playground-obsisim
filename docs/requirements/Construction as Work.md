@@ -2,10 +2,10 @@
 type: Feature
 parent: "[[Logistics and Haulers]]"
 order: 30
-status: New
+status: Active
 tags:
   - game-design
-started: ""
+started: 2026-08-11
 finished: ""
 horizon: ""
 start: ""
@@ -79,6 +79,45 @@ The **builder role** listed under "What it would take" above is in neither
 increment. Both complete a site on materials plus a fixed time; labour as a
 constraint on building is deferred, and increment 9 §2.12 records what that
 defers.
+
+## What increment 9 shipped, and what it measured (2026-08-16)
+
+The first of the two increments above is **done**. Ordering a building creates a
+site that occupies its tile and provides nothing; its cost is carried there by the
+haulers increment 7 built; a countdown then runs and the building appears.
+Cancellation refunds what arrived, the whole thing round-trips through save v7,
+and the conservation sentinel reads zero across every balance scenario including
+ones that complete a site.
+
+**`[[Demolish-and-rebuild bypasses the priced relocation]]` (OBS-5-03) closed as
+predicted** — by construction, with no persisted demolition history, exactly as the
+section above argued it would.
+
+**One defect was found by the measurement rather than by the tests**, and it is
+the kind this note should carry: `[[A site's last unit can fall below the supply
+floor and strand the build]]` (OBS-9-01). A sawmill costs 25 wood, haulers carry 6,
+and the last unit fell below `minSupplyUnits` — so the site sat at 24 of 25
+forever and **a shipped, player-selectable building could not be built at any
+distance or hauler count.** Fixed in increment 9. It is worth remembering that
+every unit test passed while this was true; the cost sweep found it.
+
+**§4 says the countdown is the larger half of the price, and the flat rate is
+wrong.** Beside the camp a house is 7 ticks of delivery and 30 of countdown — 81%
+of the wait — and only past leg ~10 does delivery dominate. Delivery already
+scales with cost almost linearly; the countdown does not, so a mill costing three
+times a hut takes 25% longer to appear. `[[Build Time That Scales]]` records that
+finding and the two levers available. It also notes the finding a player feels
+most directly: **the countdown is the one part of the price that logistics cannot
+buy off** — four haulers cut a far-corner house's delivery from 99 ticks to 15 and
+leave the 30 untouched.
+
+**What is left is increment 10**, and §4 sharpened its case rather than confirming
+it. The order-time affordability check that bounds increment 9's queue measures as
+**a lottery on timing**: with a staffed consumer eating the same resource, three
+sites accepted against a genuine 60-wood ledger spent 98% of a 900-tick run short,
+in one unbroken stretch of over 800 ticks — while the same colony with no opening
+pile *refuses* the order outright. It prevents a queue starting impossible and
+does nothing about it becoming impossible one tick later.
 
 ## Documentation
 

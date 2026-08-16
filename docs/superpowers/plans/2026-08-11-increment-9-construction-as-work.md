@@ -843,18 +843,18 @@ it('a scenario that COMPLETES a supplied site reports conservationError === 0', 
 **Files:**
 - Modify: `tests/engine/balance.test.ts`, the spec's §4
 
-- [ ] **Step 1: The build time sweep** — at least three values of `buildTicks`, on a fixture where delivery is fast and one where it is slow. The question is whether the countdown does anything the delivery leg does not already do. If it is invisible next to the walk, say so.
-- [ ] **Step 2: Does build time want to scale with cost?** A house and a workshop take the same time at a flat constant. Build several of each and report whether flat reads as wrong.
-- [ ] **Step 2b: Does a bounded queue actually stall?** §2.3's check is order-time only, so goods it counted can leave for a producer or a meal before a hauler collects them. Run a queue alongside a hungry colony and a staffed producer competing for the same resource; report how often an accepted site is left short and for how long. If it is routine, the check buys less than this increment claims — which increment 10 needs to know before it removes the check.
-- [ ] **Step 3: How bad is the round-robin?** N sites ordered at once, at one hauler and at four, reporting the completion *curve*. **This measurement sizes increment 10; it is not a pass/fail.** §2.4 predicts a flat curve — everything finishing at once, late — and the question is how flat, and at what N it starts to hurt. A reading of "three is fine, six is miserable" is the most valuable thing this task can produce.
+- [x] **Step 1: The build time sweep** — at least three values of `buildTicks`, on a fixture where delivery is fast and one where it is slow. The question is whether the countdown does anything the delivery leg does not already do. If it is invisible next to the walk, say so.
+- [x] **Step 2: Does build time want to scale with cost?** A house and a workshop take the same time at a flat constant. Build several of each and report whether flat reads as wrong.
+- [x] **Step 2b: Does a bounded queue actually stall?** §2.3's check is order-time only, so goods it counted can leave for a producer or a meal before a hauler collects them. Run a queue alongside a hungry colony and a staffed producer competing for the same resource; report how often an accepted site is left short and for how long. If it is routine, the check buys less than this increment claims — which increment 10 needs to know before it removes the check.
+- [x] **Step 3: How bad is the round-robin?** N sites ordered at once, at one hauler and at four, reporting the completion *curve*. **This measurement sizes increment 10; it is not a pass/fail.** §2.4 predicts a flat curve — everything finishing at once, late — and the question is how flat, and at what N it starts to hurt. A reading of "three is fine, six is miserable" is the most valuable thing this task can produce.
 
   **Do not fix what this finds.** The ordering rule is specified, reviewed and waiting in increment 10's plan; reaching for it here would ship the change this split exists to separate, and unmeasured.
-- [ ] **Step 4: What a colony pays to grow.** Ticks from order to first output, near the camp and at the far corner. Increment 5 priced delivery; this prices building.
-- [ ] **Step 4b: A site is `starving`, and nobody decided that.** Task 3 found it rather than chose it: a site holds none of what it is offered, so it satisfies `SupplyCandidate.starving` and enters `compareSupplyCandidates` in the starving band — ahead of ordinary restocking. `src/shared/haul.ts` is untouched and must stay so; this is a **reading**, not a change. Report how often a site outranks a producer that is genuinely out of input, because increment 10 inherits the ordering rule and needs to know whether construction is quietly jumping the queue before it designs one. If it is, that belongs in increment 10's spec as a decision rather than an accident.
-- [ ] **Step 5: Write §4.1 from what was measured**, in §4.3-of-increment-7's manner. If a decision this spec took measures badly, record the disagreement rather than retuning toward the claim.
+- [x] **Step 4: What a colony pays to grow.** Ticks from order to first output, near the camp and at the far corner. Increment 5 priced delivery; this prices building.
+- [x] **Step 4b: A site is `starving`, and nobody decided that.** Task 3 found it rather than chose it: a site holds none of what it is offered, so it satisfies `SupplyCandidate.starving` and enters `compareSupplyCandidates` in the starving band — ahead of ordinary restocking. `src/shared/haul.ts` is untouched and must stay so; this is a **reading**, not a change. Report how often a site outranks a producer that is genuinely out of input, because increment 10 inherits the ordering rule and needs to know whether construction is quietly jumping the queue before it designs one. If it is, that belongs in increment 10's spec as a decision rather than an accident.
+- [x] **Step 5: Write §4.1 from what was measured**, in §4.3-of-increment-7's manner. If a decision this spec took measures badly, record the disagreement rather than retuning toward the claim.
 
 **OBS-8-06 is NOT measured here.** It moved to increment 10 whole, with its "connect the instrument first" warning intact — the reading needs `demandSourcesOf` taught about sites, and that is a dispatch change this increment deliberately does not make. §4.2 says so.
-- [ ] **Step 6: Verify and commit**
+- [x] **Step 6: Verify and commit**
 
 ---
 
@@ -864,9 +864,9 @@ it('a scenario that COMPLETES a supplied site reports conservationError === 0', 
 - Modify: `docs/issues/2026-08-09-demolish-and-rebuild-bypasses-the-priced-relocation.md` (OBS-5-03 → Done, closed by construction rather than by bookkeeping — the outcome its own note predicted), `docs/issues/2026-08-11-the-staging-half-of-transfer-is-correct-and-almost-never-worth-a-trip.md` (OBS-8-06 — **not** resolved and not measured; note that increment 10 now owns the reading and why), `docs/requirements/Construction as Work.md` (status), `docs/README_PRODUCT_BACKLOG.md` if statuses roll up
 - Create: a Feature note for the builder role if §4 argues for one; any issue Task 11 found
 
-- [ ] **Step 1: Close what closed, carry what did not.** An issue that is not fixed gets its note updated with what this increment learned, not left untouched.
-- [ ] **Step 2: Whole-branch review.** Read the diff for the compound-boolean shape specifically, and for the multi-hauler/multi-site over-claim shape. Confirm no skip survives, no baseline moved, no suppression added, every `src/` file at or under 500 nonblank lines. **Confirm `src/shared/haul.ts` and `nextSupplyTarget` are untouched** — if the diff reaches dispatch ordering, the split has leaked.
-- [ ] **Step 3: `npm run check:all`, commit, open the PR**
+- [x] **Step 1: Close what closed, carry what did not.** An issue that is not fixed gets its note updated with what this increment learned, not left untouched.
+- [x] **Step 2: Whole-branch review.** Read the diff for the compound-boolean shape specifically, and for the multi-hauler/multi-site over-claim shape. Confirm no skip survives, no baseline moved, no suppression added, every `src/` file at or under 500 nonblank lines. **Confirm `src/shared/haul.ts` and `nextSupplyTarget` are untouched** — if the diff reaches dispatch ordering, the split has leaked.
+- [x] **Step 3: `npm run check:all`, commit, open the PR**
 
 ---
 

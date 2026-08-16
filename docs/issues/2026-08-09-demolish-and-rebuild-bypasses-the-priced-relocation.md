@@ -1,11 +1,12 @@
 ---
 id: OBS-5-03
 title: Demolish-and-rebuild bypasses the priced relocation entirely, for an empty building
-status: Accepted
+status: Done
 severity: minor
 area: engine
 increment: 5
 created: 2026-08-09
+resolved: 2026-08-16
 source: Codex review on PR
 affects:
   - src/engine/systems/placement-handlers.ts
@@ -60,6 +61,50 @@ Pricing it needs *persisted demolition history* — a new save field — because
 What has changed since the note was written is the storehouse, above: for that one building the friction argument does not hold, and the bypass is free. That was weighed and judged not to be worth a save field either — a storehouse is cheap to rebuild by design, and a player routing around a downtime charge on an empty shed is not exploiting much.
 
 **Revisit if** construction ever becomes work (`[[Construction as Work]]`), since a construction site with delivered materials and a builder's time makes "rebuild it elsewhere" expensive on its own, and closes this without any bookkeeping.
+
+## Resolution: closed by construction, 2026-08-16 (increment 9)
+
+**The revisit condition above fired.** `[[Construction as Work]]`'s first
+increment shipped, and it closes this without the persisted demolition history
+every candidate above needed — which is the outcome this note predicted in 2026-08-09
+and the reason it was left accepted rather than fixed.
+
+**What changed.** `handleConstructBuilding` no longer spawns a finished building.
+It creates a site that occupies its tile and provides nothing, whose materials
+are carried there by haulers, and which then runs a `BALANCE.buildTicks`
+countdown before it becomes a building. Demolishing still refunds a finished
+building's full `def.cost` — `[[Demolition Keeps Its Full Refund]]` is untouched —
+so the *resource* half of the bypass is unchanged and still nets to zero. The
+*time* half is what closed.
+
+**It is not merely priced now, it is dominated**, and the arithmetic is worth
+recording because it is what makes this Done rather than Accepted again:
+
+| | cost of moving a building N tiles |
+| --- | --- |
+| `moveBuilding` | N ticks of downtime (`relocationTilesPerTick: 1`), crew and contents kept |
+| demolish + rebuild | delivery of the full cost to the new tile **+ 30 countdown ticks**, crew lost |
+
+On the default 24×16 map the longest relocation possible is `ceil(hypot(24,16))`
+= **29 ticks**. The *cheapest* demolish-and-rebuild measured — a house with its
+materials in the camp next door — is **36 ticks** (§4.1's build-time sweep, leg 1
+at `buildTicks` 30), rising to 72 at leg 13. So on the shipped map there is no
+distance at which the bypass is cheaper than the mechanic it bypasses, and it
+additionally loses the staffing that `moveBuilding` keeps.
+
+**The storehouse case closes with it.** The 2026-08-09 note singled the storehouse
+out as the one building with no friction — no crew, no batch, contents spilled to
+the camp rather than destroyed — so the "only pays off for a building with nothing
+to lose" argument did not protect it. It is now protected by the same countdown as
+everything else: a rebuilt storehouse is a site for 30 ticks plus delivery, and
+serves as a store destination for none of them.
+
+**What is NOT claimed.** `MAX_MAP` is 256×256, whose diagonal is ~362 ticks, so on
+a map far larger than the shipped one a long relocation could again cost more than
+a rebuild. That is a real reopening condition and it is written here rather than
+elsewhere, but it needs a map an order of magnitude past the default before it
+bites, and the fix if it ever does is the same save field this note declined
+twice. Nothing about it is worth acting on now.
 
 ## Suggested resolution (as originally written, for the record)
 

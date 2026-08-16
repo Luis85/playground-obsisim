@@ -36,11 +36,15 @@ ranks `movable` descending and `movable` is bounded by remaining room, so a
 nearly-complete site has small `movable` and loses to a newer empty one. Three
 sites finish late and together instead of one at a time.
 
-Under increment 9's affordability check that is **slow but sound**: a queue is
-bounded by what the colony could pay for, so every site in it eventually
-completes. Remove the check, and the same ordering stops being slow and becomes
-**broken** — twenty sites the colony cannot afford round-robin forever and none
-of them ever finishes.
+Under increment 9's affordability check that is **slow, and sound only in the
+narrow sense the check supports**: a queue cannot start out unfundable. It can
+still freeze afterwards, and §1.1.1 records that it measurably does. Remove the
+check and the same ordering stops being slow and becomes **broken by
+construction** — twenty sites the colony never could afford, round-robin, none of
+them ever finishing, from the first tick rather than as a contention outcome.
+
+That is the difference this increment has to preserve: it is starting-impossible
+versus becoming-impossible, and only the first one is the check's to prevent.
 
 So:
 
@@ -53,6 +57,47 @@ So:
 They ship together or not at all. Increment 9's §4.1 measurement — the completion
 curve at N sites — is the sizing input for this one, and should be read before
 starting.
+
+### 1.1.1 What increment 9 measured, and how it changes this increment's case
+
+Three readings came back addressed to this spec. None of them changes what to
+build; two change what to *claim*, and one is a warning.
+
+**The check being removed is a lottery, not a guarantee — so this increment gives
+up less than §1.1 implies.** Increment 9 §4.1's third question ran three farm
+sites (20 wood each) accepted against a genuine 60-wood ledger, with a staffed
+sawmill eating the same wood. At crew parity **none of the three completed in 900
+ticks, and the queue was short for 98% of the run in one unbroken stretch of over
+800 ticks.** The same colony with no opening pile *refuses* the order outright.
+So the order-time check prevents a queue *starting* impossible and does nothing
+about it *becoming* impossible one tick later: whether a player meets a refusal or
+an accepted-and-frozen site depends on whether a pile happened to exist when they
+clicked. Removing it costs less than "the thing that bounds the queue" suggests —
+but the failure it fails to prevent is the same one this increment must not make
+worse, and §4.1's first question here is where that is checked.
+
+**The measured cost of a queue lands on the FIRST building, not the last** —
+which is precisely what §2.2 buys back, and it is worth knowing before the work
+starts. At four haulers, N sites ordered together complete on the *same tick* as
+each other, and the last one arrives at about the time it would have anyway; what
+a queue costs is that nothing useful arrives before nearly everything does. The
+first completion goes from 35 ticks at N=1 to 65 at N=4 (1.9×) and 95 at N=8
+(2.7×). **Three sites is fine and six is where it turns** at four haulers; at one
+hauler even two sites push the first building out by half again. Age-first
+dispatch is worth exactly the front of that table.
+
+**A site already enters the starving band, and nobody decided that — but it is
+not where a queue's cost to a producer goes.** §2.2 below rules sites out of the
+band, and increment 9 measured what that is worth: a site outranked a genuinely
+blocked producer **three times in 600 ticks**, and only where it was also the
+nearer of the two, because the band is a floor rather than a priority and the tie
+falls to `movable` and route. At three haulers the producer never enters the band
+at all. **The real cost is trip occupancy and it is an order of magnitude
+larger:** a camp-adjacent sawmill loses **38% of its output** to four far-corner
+sites at one hauler, and none of those trips was won in the band. So §2.2's rule
+is right for the reason it gives and costs almost nothing measurable — and it will
+not buy back that throughput, because that is not where the throughput goes. Do
+not expect the convergence measurement to show a producer recovering.
 
 ### 1.2 Product decisions taken for this increment
 

@@ -210,9 +210,11 @@ export const useGameStore = defineStore('game', {
      * first — the colony's whole queue, summed once — and then each def is
      * checked against ONLY ITS OWN cost resources, never the whole catalog:
      * outstanding demand already counts material in transit twice (picked up,
-     * not yet delivered) as a safety margin; spreading that margin across
-     * resources a def does not even want would call unaffordable orders the
-     * colony can plainly cover.
+     * not yet delivered), which is deliberate PESSIMISM rather than a safety
+     * margin — over-counting was the safe direction while this gated a refusal,
+     * and for advice there is no safe direction, only accurate or gloomy — and
+     * spreading that pessimism across resources a def does not even want would
+     * call orders the colony can plainly cover unaffordable.
      */
     affordableDefs(state): Record<BuildingDefId, boolean> {
       const snapshot = state.snapshot;

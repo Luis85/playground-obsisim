@@ -404,8 +404,8 @@ function supplyRouteDistance(candidate: SupplyCandidate, from: TileRef): number 
  * the cheapest whole route (hauler to source to building — not the building's
  * distance alone, or two candidates for the same building from different sites
  * could not be told apart), then lowest building id, then lowest site id. The
- * final tie-break is what makes selection independent of candidate order, the
- * same guarantee `compareHaulCandidates` gives collect.
+ * final tie-break makes THIS comparator a total order, as `compareHaulCandidates`
+ * is for collect; `nextSupplyTarget`'s two phases extend it across the site boundary.
  *
  * `starving` is a FLOOR, not a rival priority, and the distinction is the whole
  * reason it is safe to put at the front (OBS-7-01). The condition it ranks on

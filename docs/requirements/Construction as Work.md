@@ -164,7 +164,17 @@ per-site countdown alone, so it sits outside every difference measured, and
 increment 9's decision to keep the value while withdrawing its stated rationale
 stands.
 
-**Two issues, one new and one carried.**
+**Re-taking the measurement is priced in minutes, and the two timings taken
+disagree.** `npm run test:balance` ran **757 s** on the review machine — read
+there as roughly triple the "already four minutes" the plan cited as its reason
+for skipping the two- and three-hauler columns — and **239 s** on the fix pass's,
+where it is 239 of a 268-second `check:all`. No before/after exists on one box,
+so the threefold growth is the review's reading rather than a reproduced fact;
+what stands either way is that a sweep costs minutes. Nothing was trimmed to buy
+that back.
+
+**Four issues: one from the measurement, two from the final review, and one
+carried.**
 
 - `[[A queue of sites takes the wood its own planks are made of]]` (OBS-10-01),
   filed with its number: the producer protection is one load deep, and at the
@@ -174,8 +184,24 @@ stands.
   producer — nothing completes at any queue length *including one* — which is
   producer contention rather than a queue effect and which rules out one of the
   three remedies §2.3 recorded.
+- `[[Nothing reddens if the pending construction ledger stops being cleared]]`
+  (OBS-10-02): deleting the order-time affordability check took the only reader
+  of `PendingChanges.constructed` **and** the only test that reddened when
+  `clear()` stopped emptying it. The field is dead but inert, and removal reaches
+  comments in four other systems and hand-built context fixtures, so the
+  situation is recorded rather than patched.
+- `[[haul.ts has four nonblank lines left, and that is a gate rather than headroom]]`
+  (OBS-10-03): `src/shared/haul.ts` is at **496 of a hard 500**. Splitting the
+  supply-selection functions out was deliberately NOT done here — a pure move
+  would have churned the two functions the review had just verified — and it
+  should be the **first commit on the next branch that touches supply**.
 - `[[The staging half of transfer is correct, and almost never worth a trip]]`
-  (OBS-8-06) is **measured and still open.** The remote consumer it said this
+  (OBS-8-06) is **measured and still open**, and now carries a named follow-up
+  (F1) rather than a paragraph: site staging costs 22–44 extra hauler-ticks a
+  run, parks 12–24 units nothing draws back, and moves **zero** completion ticks.
+  Shipping the `demandSourcesOf` instrument on regardless was the repo owner's
+  decision, taken because §2.5/§4.2 scope this increment to measuring OBS-8-06
+  rather than acting on it. The remote consumer it said this
   repository lacked is a construction site, and that fixture now exists: staging
   fires (2–4 dispatches) and does not pay — identical completion ticks with and
   without the depot, 22 to 44 extra non-idle hauler-ticks, and 12 or 24 units

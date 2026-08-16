@@ -578,7 +578,20 @@ completion-tick cost: the batch that follows is a constant both arms pay.
 
 - **Two- and three-hauler columns were not taken**, for increment 9's reason:
   the one- and four-hauler rows bracket the behaviour and the balance project is
-  already four minutes long.
+  already four minutes long. **That reason is worth carrying forward with a
+  number on it, and the two readings taken disagree by 3×**: increment 10's
+  whole-branch review timed `npm run test:balance` at **757 s** on its machine
+  and read that as roughly a threefold growth against the plan's four minutes;
+  the fix pass that followed timed the same command at **239 s** on another
+  machine, which is the four minutes the plan already cited. No before/after was
+  taken on ONE box, so **the threefold reading is the review's and is not
+  reproduced here** — what both agree on is the shape of the cost: this project
+  is 239 s of a 268 s `check:all` on the faster machine, the three sweeps added
+  here (the stall sweep, the queue-cost sweep, the OBS-8-06 pairs) are the
+  largest single-commit addition to it, and **an added sweep is priced in
+  minutes, not seconds.** Nothing above was deleted or trimmed to buy time back:
+  the readings are what this increment was for, and a shorter suite bought by
+  dropping one would be the worse trade.
 - **The stall sweep ran at three haulers only**, and at two crew arrangements
   and two sawmill tiles. The 1.65× above is one point in a space with at least
   four dimensions in it, and it should be quoted as "measured at this fixture"

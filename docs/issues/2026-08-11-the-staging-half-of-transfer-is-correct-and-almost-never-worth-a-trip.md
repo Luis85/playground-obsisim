@@ -177,17 +177,55 @@ is what was built.
 
 ### The site-demand change ships ON, and that was a decision rather than an oversight
 
-The `demandSourcesOf` change prices as **pure cost** on every fixture above: it
-is what makes staging fire at a site, and staging at a site buys nothing and
-spends 22 to 44 hauler-ticks. The repo owner was asked whether to ship it on and
-**chose to ship it on**, because increment 10 spec §2.5 and §4.2 scope that
-increment to *measure* OBS-8-06 and not to act on it, and turning the instrument
-off after reading it would be acting on it — quietly, and in the one direction
-that also destroys the ability to re-take the reading.
+**Decision, 2026-08-16, taken by the repo owner: ship the `demandSourcesOf`
+change ON.** The reason, recorded here rather than left in a conversation:
+increment 10 spec §2.5 and §4.2 scope that increment to *measure* OBS-8-06 and
+not to act on it, and turning the instrument off after reading it would be acting
+on it — quietly, and in the one direction that also destroys the ability to
+re-take the reading.
+
+What that decision buys and what it costs, stated together: the change is what
+makes staging fire at a site at all, so it is the only reason the table above
+exists; and on every fixture in that table it prices as **pure cost** — it buys
+nothing and spends 22 to 44 hauler-ticks a run.
 
 **So this note stays `Open`, and it now owns a decision rather than a question.**
-Acting on the reading — deleting the mechanic, re-siting it, or gating it on
-whether the hauler is already near the depot — is still OBS-8-06's business.
+Acting on the reading is still OBS-8-06's business, and the follow-up below is
+the specific thing that has to be decided.
+
+## FOLLOW-UP F1 — should staging fire at a construction site at all? (open)
+
+**The decision a successor must take**, named here rather than left inside the
+paragraphs above, because a measured net-negative behaviour is currently shipping
+and a cost that lives only in narrative gets lost.
+
+**The number, from increment 10 spec §4.2 and re-takeable from
+`tests/engine/balance.test.ts`:**
+
+- **+22 to +44 non-idle hauler-ticks per run**, in **all six** with/without pairs
+  — which is **20% to 41% more walking** at the one-site fixture.
+- **12 or 24 units parked at a depot that nothing ever drew back from.** The
+  depot's closing level equals its peak in every run.
+- **Zero completion ticks moved.** Every completion tick is digit-for-digit
+  identical with the depot and without it, in all six pairs.
+
+So the ledger is one-sided: cost on one side, nothing at all on the other. The
+code is correct, the fixture is committed, and the mechanic is doing exactly what
+§2.4 specifies — this is not a bug report, it is a **behaviour that is measured
+to lose and is switched on.**
+
+**What could still change the answer, and what could not.** The triangle
+inequality is arithmetic: for a hauler standing at the source, a route through an
+intermediate depot can at best tie, so no value of `siteStagingTarget` and no
+re-siting of this depot reaches it. The one arrangement that is untested is a
+colony whose haulers idle **near** the depot — a producer standing beside it —
+and that fixture has still not been built. Anything decided on the numbers above
+alone should say so.
+
+**F1 is narrower than option 3 below** and does not wait on it: gating site
+demand is a question about `demandSourcesOf` and one class of consumer, where
+option 3 removes `stageInto`, `siteDemandOf`, `inboundAt` and half of §2.4 for
+every consumer. Declining option 3 does not settle F1.
 
 ## Suggested resolution
 

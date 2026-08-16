@@ -92,8 +92,17 @@ Everything that was a tab becomes a **panel in a dock**, held in UI state rather
 than in the route. This is not only tidier. Today `App.vue` wraps the router
 view in `<keep-alive include="WorldView">` and `WorldView` carries an
 `onActivated`/`onDeactivated` pair, because navigating away would tear down the
-Excalibur engine and its WebGL context. With panels as state the canvas never
-unmounts and that entire lifecycle hazard stops existing rather than moving.
+Excalibur engine and its WebGL context — and today four of the five tabs are a
+navigation away, so that teardown is on the ordinary path through the app.
+
+After this increment it is on one path only. Four of the five reasons to leave
+the world become dock state and stop unmounting anything; the Ledger is still a
+route, so **the keep-alive and the activate/deactivate pair are retained, not
+deleted**, and they cover exactly one round trip instead of four. The claim
+worth making is the narrow one: the dock never remounts the canvas, and the
+Ledger round trip remains the single WebGL teardown path, handled the way it is
+handled today. Criterion 5 tests both halves, because a panel-only tour cannot
+tell the difference.
 
 The screen has four regions:
 
@@ -121,10 +130,32 @@ Ledger as on the world screen.
 
 **Dock behaviour.** One panel at a time. Selecting a building on the canvas
 auto-opens the Inspector. Opening another panel does *not* clear the canvas
-selection. Escape becomes a ladder: close the dock, then clear the selection,
-then cancel an armed place/move mode — in that order, and inert while the view
-is not the active leaf, which is the guard `WorldView` already implements and
-which must survive the split.
+selection.
+
+Escape is a ladder, **most transient state first**: cancel an armed place/move
+mode, else clear the selection, else close the dock. It stays inert while the
+view is not the active leaf, which is the guard `WorldView` already implements
+and which must survive the split.
+
+The ordering is load-bearing and the reverse of it is a live hazard, which
+`WorldView.closeSelection()` already documents: *"an armed move belongs to the
+selection it came from: closing the panel must disarm it, or an invisible move
+keeps previewing and a canvas click still dispatches moveBuilding for the
+deselected building."* A ladder that unwound the dock and the selection before
+the mode would open exactly that window — move armed, nothing selected, the
+next canvas click relocating a building the player can no longer see is chosen.
+
+So the ordering above is the second line of defence, not the first. The
+invariant is:
+
+> **Clearing the selection cancels an armed move, by whatever route the
+> selection is cleared** — Escape, clicking empty ground, closing the
+> Inspector, switching to another panel that displaces it, or the building
+> being demolished under it.
+
+That is today's behaviour, stated as a rule so the split cannot lose it: it
+lives in the UI store's selection setter (§2.6), where every one of those
+routes passes through, rather than in any one component's close handler.
 
 **No camera work.** The map is a fixed 24×16 and `fitCamera` already fits all of
 it on screen, so "focus this building" is a highlight pulse rather than a pan.
@@ -164,11 +195,42 @@ The new case is staffing with no idle adults.
 
 ### 2.3 The five panels, and the rule that unifies them
 
-**Every row in every panel selects the thing it names on the canvas.** Click a
-colonist in Population and they light up on the map; click a starved bakery in
-Attention and the bakery is selected with the Inspector one click away. This is
-what stops the panels being a parallel game and makes them an index into this
-one.
+**Every row that names something on the map reaches it on the canvas.** Click a
+colonist in Population and they light up; click a starved bakery in Attention
+and the bakery is selected with the Inspector one click away. This is what stops
+the panels being a parallel game and makes them an index into this one.
+
+Stated that loosely it is not implementable, because the rows do not all name
+the same kind of thing and one of them names nothing on the map at all. So the
+model is discriminated, and which rows do what is fixed here rather than left to
+each panel:
+
+```ts
+type Selection =
+  | { kind: 'building'; id: number }
+  | { kind: 'colonist'; id: number }
+  | { kind: 'none' };
+```
+
+| Row | Click does |
+| --- | --- |
+| Attention row naming one building; Economy stage row | selects that building |
+| Population colonist row; Inspector occupant row | selects that colonist |
+| Attention row naming several colonists (*"3 colonists have no bed"*) | highlights that set; selects nothing |
+| Colony resource row | **nothing** — a resource has no subject on the map |
+
+Two consequences for the renderer seam, both inside `src/app/world/` and so
+inside this increment's scope:
+
+- `setSelection(buildingId)` becomes `setSelection(Selection)`. Colonists are
+  hover-only today and gain a selection ring; they are already pickable, so the
+  hit-testing exists and only the drawing is new.
+- A new `setHighlight(ids)` carries the plural case — a transient pulse over a
+  set, with no selection and no Inspector.
+
+The Colony panel's inertness is deliberate and worth stating rather than
+discovering: highlighting every building that holds or makes a resource is a
+reasonable feature and it is not this one.
 
 **Inspector** — what `SelectionPanel` becomes. Header (name, tile, state), then
 staffing as `− 2/3 +`, then the detail that building kind actually has:
@@ -255,13 +317,16 @@ The split, which is worth having on its own terms:
 | `src/app/views/WorldStage.vue` | the canvas host — renderer creation, the snapshot sync watch, `onFatal`, hover and tooltip |
 | `src/app/world/interaction.ts` | the mode machine, ghost and tile validation, as a composable |
 | `src/app/components/dock/*.vue` | Inspector, Colony, Population, Economy, Attention |
-| `src/app/stores/ui-store.ts` | dock panel, selected building id, narrow-layout flag |
+| `src/app/stores/ui-store.ts` | dock panel, the `Selection` and the highlight set, narrow-layout flag |
 | `src/app/views/LedgerView.vue` | composes the table views; owns no figures of its own |
 
 Two of these are load-bearing beyond line count. `interaction.ts` makes the
 mode machine testable with no canvas and no DOM, which none of it is today.
 And **selection has to move into the store**: `WorldView` owns it now, and
-after §2.3 both the canvas and every panel row write it.
+after §2.3 both the canvas and every panel row write it. That is also where
+§2.1's cancel-on-clear invariant lives — in the setter every one of those
+writers goes through, rather than in the close handler of any one component,
+which is how it survives being split across six files.
 
 `LedgerView` composes the four existing table views rather than restating them,
 which is also what keeps it under the cap: `BuildingsView`, `DashboardView`,
@@ -356,13 +421,21 @@ assumption.
 3. **A renderer boot failure lands the player on the Ledger with a banner, and
    the colony stays playable.** Driven through the injected-factory seam by
    making the factory throw; no WebGL involved.
-4. **A row click in every panel selects its subject on the canvas.** Asserted
-   against the UI store, not against pixels.
-5. **The canvas does not remount when the dock panel changes** — the renderer
-   factory is called exactly once across a full tour of the panels. This is the
-   criterion that proves the keep-alive hazard is gone rather than relocated.
-6. **The Escape ladder resolves in order** — dock, then selection, then armed
-   mode — and stays inert while the view is not the active leaf.
+4. **Every row click resolves to what §2.3's table says it resolves to** — a
+   building selection, a colonist selection, a highlight set, or nothing —
+   asserted against the UI store rather than against pixels. The inert case
+   (Colony's resource rows) is tested too, so "not selectable" stays a decision
+   rather than becoming an omission nobody notices.
+5. **The canvas does not remount when the dock panel changes**, and **survives
+   a Ledger round trip**: the renderer factory is called exactly once across a
+   full tour of the panels *and* once more across `/` → `/ledger` → `/`. The
+   second half is the one that catches a deleted keep-alive, and a panel-only
+   tour passes without it.
+6. **The Escape ladder resolves most-transient-first** — armed mode, then
+   selection, then dock — and stays inert while the view is not the active
+   leaf. Separately: **clearing the selection by any route cancels an armed
+   move**, tested through at least Escape, an empty-ground click, and the
+   selected building being demolished.
 7. **Below the width threshold the dock overlays and the rail collapses**,
    driven by the `ResizeObserver` flag so it is assertable in jsdom.
 8. **`npm run check:all` green**, no baseline loosened, no suppression added,
@@ -371,9 +444,13 @@ assumption.
    place at 80/70/80/80 and met.**
 10. **`check:css`'s `!important` baseline is still empty.**
 11. **`npm run smoke:world` passes** against the restructured DOM.
-12. **`git diff --stat src/engine src/shared` is empty.** If this increment
-    finds itself editing the engine, something in this design was wrong and is
-    worth re-examining rather than waving through.
+12. **`git diff --stat <increment-10 merge base>...HEAD -- src/engine src/shared`
+    is empty.** Against the base and the branch head, not the working tree: the
+    bare `git diff --stat src/engine src/shared` reports nothing once an engine
+    edit has been staged or committed, which is precisely the state this
+    criterion is checked in. If this increment finds itself editing the engine,
+    something in this design was wrong and is worth re-examining rather than
+    waving through.
 
 ---
 

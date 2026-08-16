@@ -323,7 +323,7 @@ export const useUiStore = defineStore('ui', {
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run --project unit tests/app/ui-store.test.ts`
-Expected: PASS, 12 tests.
+Expected: PASS, 14 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -652,25 +652,41 @@ every fake-renderer unit test stayed green. Unit tests cannot cover this:
 `renderer.ts` is never imported by them.
 
 Follow the harness's own convention, stated in its comments — **one change per
-phase, so each check is discriminating** — and append four phases before the
-`dispose()` phase (everything after it draws nothing):
+phase, so each check is discriminating** — and append these before the
+`dispose()` phase (everything after it draws nothing).
+
+Two traps, both of which make a phase prove nothing:
+
+- **Phase 35's scene has no colonists.** `constructionScene` is a mill and
+  nothing else, so selecting colonist 12 there draws nothing *even in a correct
+  renderer* and the first comparison fails for the wrong reason. Sync a scene
+  that contains the colonist first — `haulScene` already carries worker 12 and
+  building 1.
+- **Clearing a selection and adding a highlight in one phase is two changes.**
+  The frame differs from its predecessor because the ring vanished, so the
+  comparison passes with `setHighlight`'s building branch missing entirely. The
+  cleared state needs its own baseline frame.
 
 ```ts
-  // A colonist ring, alone: the building-ring phase above bundles its
-  // selection with a ghost, so only an isolated frame can prove the colonist
-  // branch draws anything at all.
+  // 36: a scene with worker 12 and building 1 in it. A whole scene swap is a
+  // many-pixel change, so this frame carries no check of its own — the same
+  // role phases 20, 24, 27 and 29 already play.
+  () => renderer.sync(haulScene(10, {})),
+  // 37: ONE change — a colonist ring appears. The building-ring phase earlier
+  // bundles its selection with a ghost, so only an isolated frame can prove
+  // the colonist branch draws anything at all.
   () => renderer.setSelection({ kind: 'colonist', id: 12 }),
-  // ONE change: the same ring moves from the colonist to a building.
+  // 38: ONE change — the ring moves from the colonist to a building.
   () => renderer.setSelection({ kind: 'building', id: 1 }),
-  // ONE change: selection cleared, a building pulse appears in its place.
-  () => {
-    renderer.setSelection({ kind: 'none' });
-    renderer.setHighlight([{ kind: 'building', id: 1 }]);
-  },
-  // ONE change: the pulse moves from a building to a colonist — the second
-  // setHighlight branch, which the previous frame cannot reach.
+  // 39: ONE change — the ring clears. This is also the BASELINE the two
+  // highlight frames are measured against, which is why it is its own phase.
+  () => renderer.setSelection({ kind: 'none' }),
+  // 40: ONE change — a building pulse appears against that cleared baseline.
+  () => renderer.setHighlight([{ kind: 'building', id: 1 }]),
+  // 41: ONE change — the pulse moves to a colonist, the second setHighlight
+  // branch, which phase 40 cannot reach.
   () => renderer.setHighlight([{ kind: 'colonist', id: 12 }]),
-  // ONE change: the pulse clears.
+  // 42: ONE change — the pulse clears.
   () => renderer.setHighlight([]),
 ```
 
@@ -684,32 +700,39 @@ phase-difference loop. Two consequences, both of which break silently:
   invoked and the runner's teardown assertions never run.
 - A phase nothing compares is a phase that proves nothing.
 
-So the same pass edits the runner: renumber the disposal step to `step(41)`,
+So the same pass edits the runner: renumber the disposal step to `step(43)`,
 and add a comparison per new frame, in the house style — one change, one
 assertion, each named for what it would catch:
 
 ```js
-await step(36); // a colonist ring, alone — the building-ring phase bundles a ghost
-const colonistRing = await shot();
-assertDiffers(millSite, colonistRing, 'a colonist selection draws no ring');
+await step(36); // a scene carrying worker 12 and building 1 — settle before measuring
+const sceneBaseline = await shot();
 
-await step(37); // ONLY change: the ring moves from the colonist to a building
+await step(37); // ONE change: a colonist ring appears
+const colonistRing = await shot();
+assertDiffers(sceneBaseline, colonistRing, 'a colonist selection draws no ring');
+
+await step(38); // ONE change: the ring moves from the colonist to a building
 const buildingRing = await shot();
 assertDiffers(colonistRing, buildingRing, 'the ring did not move to the building');
 
-await step(38); // ONLY change: selection cleared, a building pulse in its place
-const buildingPulse = await shot();
-assertDiffers(buildingRing, buildingPulse, 'setHighlight draws nothing on a building');
+await step(39); // ONE change: the ring clears — and this is the highlight baseline
+const noRing = await shot();
+assertDiffers(buildingRing, noRing, 'a selection ring never clears');
 
-await step(39); // ONLY change: the pulse moves to a colonist
+await step(40); // ONE change: a building pulse against that cleared baseline
+const buildingPulse = await shot();
+assertDiffers(noRing, buildingPulse, 'setHighlight draws nothing on a building');
+
+await step(41); // ONE change: the pulse moves to a colonist
 const colonistPulse = await shot();
 assertDiffers(buildingPulse, colonistPulse, 'setHighlight has no colonist branch');
 
-await step(40); // ONLY change: the pulse clears
-const cleared = await shot();
-assertDiffers(colonistPulse, cleared, 'a highlight never clears');
+await step(42); // ONE change: the pulse clears
+const noPulse = await shot();
+assertDiffers(colonistPulse, noPulse, 'a highlight never clears');
 
-await step(41); // dispose()
+await step(43); // dispose()
 ```
 
 Use whatever the file's existing comparison helper is called — read it first;
@@ -1702,6 +1725,29 @@ describe('InspectorPanel', () => {
     expect(wrapper.get('[data-test="inspector-staffing-reason"]').text()).toContain('No idle adults');
   });
 
+  it('shows a producer\'s recipe, batch, buffers, work power and tools', async () => {
+    const producing = makeSnapshot({
+      buildings: [makeBuilding(1, { defId: 'bakery', workers: 2, workerSlots: 3, state: 'producing', progressPct: 40, buffered: 3, inputBuffered: 5, workPower: 1.75, tooledWorkers: 1 })],
+    });
+    const { wrapper, ui } = mountPanel(InspectorPanel, producing);
+    ui.selectBuilding(1);
+    await wrapper.vm.$nextTick();
+    const text = wrapper.get('[data-test="inspector"]').text();
+    for (const fragment of ['40%', '1.75', 'Flour']) expect(text).toContain(fragment);
+    expect(wrapper.get('[data-test="inspector-tools"]').text()).toContain('1');
+  });
+
+  it('shows a house\'s beds', async () => {
+    const house = makeSnapshot({
+      buildings: [makeBuilding(1, { defId: 'house', beds: 4, occupants: 2, workerSlots: 0, state: 'housing' })],
+      colonists: [makeWorker(9, { homeId: 1 }), makeWorker(10, { homeId: 1 })],
+    });
+    const { wrapper, ui } = mountPanel(InspectorPanel, house);
+    ui.selectBuilding(1);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('[data-test="inspector"]').text()).toContain('2 / 4');
+  });
+
   it('shows a site\'s materials as have over need, not as a bare shortfall', async () => {
     // A sawmill costs 25 wood; 14 outstanding means 11 have arrived. The
     // shortfall alone reads identically at 0/25 and at 24/25.
@@ -1838,7 +1884,22 @@ export function suppliedLabel(defId: BuildingDefId, needs: CostMap): string {
 }
 ```
 
-Then create `src/app/components/dock/InspectorPanel.vue`. Carry `SelectionPanel.vue`'s per-kind detail across (buffers, storage, relocation countdown, construction countdown), use **`suppliedLabel`** for a site's materials rather than `needsLabel`, branch first on `ui.selection.kind`, and add:
+Then create `src/app/components/dock/InspectorPanel.vue`, branching first on
+`ui.selection.kind`.
+
+**`SelectionPanel` is a starting point, not the contract.** It carries buffers,
+storage, the relocation countdown and the construction countdown — and §2.3
+promises more than that, none of which exists to be carried across:
+
+| Kind | Fields §2.3 requires | Where they come from |
+| --- | --- | --- |
+| producer | recipe, batch progress, in-tray, out-tray, work power, tooled workers | `recipeLabel(BUILDINGS[defId])`, `batchLabel`, `inputBuffered`, `buffered`, `workPower.toFixed(2)`, `tooledWorkers` — every one already rendered by `BuildingsView`, so this is relocation, not invention |
+| house | beds, and occupants as clickable rows | `batchLabel(beds, occupants, …)`; occupants are `colonists.filter(c => c.homeId === id)` |
+| storehouse | `held / capacity` | `waitingLabel(storage, stored, buffered)` |
+| site | countdown, and materials as `have / need` | `constructionTicks`, **`suppliedLabel`** — not `needsLabel`, which shows the shortfall alone |
+
+Every label comes from `labels.ts`; nothing here is a second derivation. Then
+add:
 
 ```vue
     <!-- Stated in the panel rather than in a `title`: spec §2.2 makes explicit
@@ -2344,11 +2405,13 @@ Add to `tests/app/buildings-view.test.ts`:
     expect(engine.dispatch).not.toHaveBeenCalled();
   });
 
-  it('shows the construction countdown the Inspector shows', async () => {
+  it('shows the construction countdown and the have/need the Inspector shows', async () => {
     const { wrapper } = mountView(makeSnapshot({
-      buildings: [makeBuilding(1, { state: 'underConstruction', constructionTicks: 20, constructionNeeds: { wood: 5 } })],
+      buildings: [makeBuilding(1, { defId: 'sawmill', state: 'underConstruction', constructionTicks: 20, constructionNeeds: { wood: 14 } })],
     }));
     expect(wrapper.get('[data-test="building-ticks-1"]').text()).toBe('20t');
+    // §2.5: a renderer failure costs looks, never a number.
+    expect(wrapper.get('[data-test="needs-1"]').text()).toContain('11 / 25 Wood');
   });
 
   it('records the coordinates as submitted, not as later edited', async () => {
@@ -2421,6 +2484,18 @@ dash convention for a settled building:
 
 ```vue
           <td :data-test="`building-ticks-${b.id}`">{{ downtimeLabel(b.constructionTicks) }}</td>
+```
+
+**And the Needs cell shows the same `have / need` the Inspector does.** Today it
+renders `needsLabel` — the outstanding shortfall alone — while Task 7 gives the
+panel `suppliedLabel`'s `11 / 25 Wood`. Under §2.5 a renderer failure may cost
+the player looks, never a figure, so the supplied and total have to survive into
+the table. Same call, same arguments:
+
+```vue
+          <td :data-test="`needs-${b.id}`">
+            {{ b.constructionTicks > 0 ? suppliedLabel(b.defId, b.constructionNeeds) : '—' }}
+          </td>
 ```
 
 The handler **copies** the coordinates rather than handing over the reactive

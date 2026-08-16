@@ -118,14 +118,30 @@ export const BALANCE = {
   /**
    * Ticks a freshly ordered building spends as a construction site — occupying
    * its tile, providing nothing — before `isUnderConstruction` reads it as
-   * finished. One constant for every def (spec §2.5). An order of magnitude
-   * above a recipe batch and well below a relocation of any distance, so
-   * delivery rather than this countdown is what the player experiences as the
-   * cost of building.
+   * finished. One constant for every def (spec §2.5).
    *
-   * UNMEASURED, spec §4.1's question: is 30 doing anything the delivery leg is
-   * not already doing on its own, and should build time scale with a
-   * building's cost? Not a tuned value — a starting point for that sweep.
+   * MEASURED (spec §4.1), KEPT, AND ITS ORIGINAL RATIONALE WITHDRAWN. That
+   * rationale said 30 was low enough that "delivery rather than this countdown
+   * is what the player experiences as the cost of building". It is not: swept
+   * at 10 / 30 / 60 / 120 on one house site, delivery costs 7 ticks at leg 1,
+   * 28 at leg 8 and 43 at leg 13 and does not move with this constant, so at 30
+   * the countdown is 81% of the wait beside the camp and only falls to 41% at
+   * the far corner. It is also the one half of the price a player cannot buy
+   * off with haulers — the same far-corner house completes in 128 / 72 / 72 / 44
+   * ticks at one / two / three / four haulers while this term sits at 30
+   * throughout.
+   *
+   * Kept anyway, and deliberately not retuned toward the withdrawn claim: a
+   * fixed, unbuyable-off price for a building is defensible even though it is
+   * not what the spec said it was buying, and the fixture that would justify a
+   * new value is a build QUEUE, which increment 10 changes. §4.3.
+   *
+   * STILL FLAT, AND MEASURED WRONG NEAR THE CAMP. A gatherer's hut (10 units)
+   * finishes at 32 ticks and a mill (30 units) at 40 beside the camp — three
+   * times the cost for 25% more wait — against 44 and 100 at the far corner,
+   * because delivery already prices cost and this constant dilutes it. Scaling
+   * with `unitsOf(cost)` is spec §2.12's deferral, and §4.1's second reading is
+   * what a successor should size it against.
    */
   buildTicks: 30,
   yearTicks: YEAR_TICKS,

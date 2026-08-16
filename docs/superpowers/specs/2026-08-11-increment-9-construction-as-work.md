@@ -741,37 +741,230 @@ modes increment 8 added. Three bind unusually hard:
 
 ## 4. Balance values
 
-One new constant: `BALANCE.buildTicks`, starting at 30 — an order of magnitude
-above a recipe batch and well below a relocation of any distance, so that
-delivery rather than the countdown is what the player experiences as the cost.
-Unmeasured, and §4.1 says so.
+One new constant: `BALANCE.buildTicks`, **30, unchanged by the measurement and
+NOT for the reason the shipped comment gives.** That comment says 30 is "well
+below a relocation of any distance, so that delivery rather than the countdown
+is what the player experiences as the cost of building". The first half is true;
+**the second half is false everywhere except the far corner of the map**, and
+§4.1 records the disagreement rather than editing the claim to fit or retuning
+the constant to rescue it.
 
-### 4.1 What must be measured
+| constant | value | outcome | the measurement behind it |
+| --- | ---: | --- | --- |
+| `buildTicks` | 30 | **Kept, with its stated rationale contradicted.** The number is defensible; the sentence justifying it is not. | Beside the camp a house is delivered in **7** ticks and then stands still for **30**: the countdown is **81%** of the wait. At leg 8 it is 52%, and only at leg 13 does the walk overtake it (43 against 30, 41%). The delivery half does not move when the constant moves and the countdown half does not move when haulers are hired, so the two are separable and both were measured. §4.1's first reading. |
+| `buildTicks`, as a FLAT rate | 30 for every def | **Reads wrong near the camp and right far from it.** Not retuned here; scaling with cost is §2.12's deferral and §4.1 says what a successor would be buying. | At leg 1 and two haulers a gatherer's hut (10 units) is finished at 32 ticks and a mill (30 units) at 40 — **three times the cost for 25% more wait**. At leg 13 the same pair reads 44 and 100, a factor of 2.3. Delivery already prices cost; the flat constant is what dilutes it, and it dilutes it most exactly where most building happens. |
+| `minSupplyUnits` | 2 | **Measured to make one shipped def unbuildable.** Not touched — this increment does not change dispatch (§2.4) — and filed as **OBS-9-01**. | A `sawmill` site (25 wood) fills to **24/25** and stops forever, at every distance and hauler count measured, with the missing unit standing at the camp. `cost mod haulerCapacity` is 1, `worthMoving`'s exemption is keyed on the SOURCE's holding rather than the target's remaining need, and a site's room only ever shrinks. With homeless haulers (capacity 3) a **gatherer's hut** (10 wood) strands the same way at 9/10. |
+| `inputBufferCap` / `haulCarryCapacity` / `haulTilesPerTick` | 12 / 6 / 2 | **Untouched, and untouched by construction.** | Every reading below is taken on a fixture whose stage is inert (`crew: 0`), so increment 5's gradient and increment 8's transfer readings are not re-derived here and are unchanged at HEAD. |
 
-- **A build time sweep** across at least three values, on a fixture where
-  delivery is fast and one where it is slow. The question is whether `buildTicks`
-  is doing anything the delivery leg is not already doing — if the countdown is
-  invisible next to the walk, it should be said plainly rather than defended.
-- **Whether build time should scale with cost.** A house (15 wood, 5 planks) and
-  a workshop (20 planks) take the same time at a flat constant. Measure a chain
-  that builds several of each and report whether the flat rate reads as wrong.
-- **Whether a bounded queue actually stalls.** §2.3 accepts that goods counted at
-  order time can leave for another consumer before a hauler collects them. Run a
-  queue alongside a hungry colony and a staffed producer competing for the same
-  resource, and report how often an accepted site is left short, and for how
-  long. If the answer is "routinely", the order-time check is buying less than
-  this increment claims and increment 10 should know that before removing it.
-- **How bad the round-robin actually is.** N sites ordered simultaneously, at one
-  hauler and at four, reporting the completion *curve*. This is the measurement
-  that sizes increment 10 rather than a pass/fail: §2.4 predicts a flat curve —
-  everything finishing at once, late — and the question is how flat, and at what
-  N it starts to hurt. **Do not fix it here.** A number that says "three sites are
-  fine and six are miserable" is exactly what the successor needs and is worth
-  more than a rushed ordering rule.
-- **What a colony pays to grow.** The first real measurement of expansion cost:
-  ticks from order to first output, for a producer built near the camp and one
-  built at the far corner. Increment 5's distance gradient priced *delivery*;
-  this prices *building*, and the two together are what a player weighs.
+### 4.1 What the harness measured
+
+Every figure below is taken with `buildTicks` at 30 unless the row names another
+value. Two instruments produced them, and which one is stated on each reading
+because they are not equally reproducible: the **balance harness**
+(`completions`, committed in `tests/engine/balance.test.ts` and printed by
+`npm run balance:report`), and a **scratch rig** deleted with the measurement
+commit, which built its own world because the harness cannot express what §4.1's
+third and fifth questions need — see §4.3.
+
+**1. The build-time sweep: the countdown is not invisible beside the walk. Near
+the camp it IS the walk's whole rival, and it wins.** One house site (15 wood, 5
+planks), two haulers, sweeping the constant by editing it between runs. Delivery
+ticks first, total second:
+
+| `buildTicks` | leg 1 | leg 8 | leg 13 |
+| ---: | --- | --- | --- |
+| 10 | 7 / 16 | 28 / 37 | 43 / 52 |
+| 30 | 7 / **36** | 28 / **57** | 43 / **72** |
+| 60 | 7 / 66 | 28 / 87 | 43 / 102 |
+| 120 | 7 / 126 | 28 / 147 | 43 / 162 |
+
+The delivery column is constant down each leg, which is what makes the halves
+separable at all. At the shipped 30 the countdown is **81% / 52% / 41%** of the
+total wait at legs 1 / 8 / 13.
+
+**And the two halves answer to different things, which is the strongest form of
+the finding.** The same far-corner house at `buildTicks` 30 completes at 128 /
+72 / 72 / 44 ticks with one / two / three / four haulers — delivery falls from 99
+to 15 while the countdown sits at 30 throughout. So `buildTicks` is doing
+something the delivery leg is not: it is the one part of the price a player
+cannot buy off with logistics. Whether that is what the spec wanted is the
+disagreement in §4's table — the spec said delivery would dominate, and
+delivery dominates only past leg ~10.
+
+**2. Build time wants to scale with cost, and the flat rate is most wrong where
+it matters most.** One site, two haulers, delivery ticks:
+
+| def | units | materials | leg 1 | leg 13 | total at leg 1 | total at leg 13 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| gatherer's hut | 10 | 1 | 3 | 15 | 32 | 44 |
+| house | 20 | 2 | 7 | 43 | 36 | 72 |
+| workshop | 20 | 1 | 7 | 43 | 36 | 72 |
+| mill | 30 | 2 | 11 | 71 | 40 | 100 |
+| sawmill | 25 | 1 | **never** | **never** | — | — |
+
+Delivery already scales with cost, almost exactly linearly in loads, and the
+number of distinct materials does not enter it — a workshop (20 planks) and a
+house (15 wood + 5 planks) are identical at every distance and hauler count
+measured, which is the multi-input path behaving. **The flat countdown is
+therefore a constant added to a term that is already right**, and near the camp
+it is the larger of the two: a mill costs three times a hut and takes 25% longer
+to appear. Scaling `buildTicks` with `unitsOf(cost)` would make a mill feel like
+a mill at every distance rather than only at leg 13. It is **not done here**
+(§2.12 defers it), and this is the number a successor should size it against.
+
+**The sweep also found that a sawmill cannot be built at all** — 24 of its 25
+wood, forever, at every distance and hauler count. That is **OBS-9-01**, it is a
+`minSupplyUnits` threshold rather than anything construction introduced, and it
+is recorded rather than fixed for the reason §2.4 gives about dispatch.
+
+**3. A bounded queue stalls, routinely, and for as long as the contention
+lasts.** §2.3 accepts that goods counted at order time can leave for another
+consumer before a hauler collects them, and says §4.1 would report whether it
+happens in practice. It happens in practice.
+
+The fixture is the one §4.1 asked for: a forester feeding a staffed sawmill that
+eats the same wood, a gatherer's hut feeding nine colonists who really do eat,
+three haulers, an opening pile of 60 wood, and three `farm` sites (20 wood each)
+ordered together at tick 0 — a queue the cumulative check accepts in full,
+because 60 wood covers 60 wood of orders. 900 ticks. "Short" below means the
+site's materials are incomplete and **nothing is walking toward it**:
+
+| the sawmill's crew | wood consumed vs produced | sites completed | ticks short | longest unbroken |
+| --- | --- | --- | ---: | ---: |
+| 2 (parity) | ~0.67/tick vs ~0.67/tick | **0 of 3** | 884 / 884 / 889 of 900 | 875 / 854 / 817 |
+| 1 (half) | ~0.33/tick vs ~0.67/tick | 3 of 3, at 98 / 98 / 114 | 43 / 48 / 64 | 29 / 29 / 27 |
+| unstaffed (control) | 0 vs ~0.67/tick | 3 of 3, at 65 / 65 / 65 | 20 / 15 / 20 | 15 / 5 / 15 |
+
+The control's 15–20 ticks are the instrument's floor — the gap between one
+hauler wave and the next — not a stall.
+
+**So the order-time check buys what §2.3 claims it buys and no more, and the
+claim is thinner than it sounds.** At parity the queue was accepted against a
+ledger that was genuinely there, and then never moved again: **98% of the run
+short, in one unbroken stretch of over 800 ticks.** Bounded is not the same as
+recoverable-by-waiting; the only recovery is §2.6's cancellation, and the player
+has to work out that it is needed.
+
+**The other face of the same fact, and it is the one that decides how much
+increment 10 is really removing:** run the same colony with no opening pile —
+the wood produced by the forester and eaten by the sawmill as fast as it appears
+— and the check **refuses** a 10-wood hut order at tick 150 and again at tick
+250. Whether the player meets a refusal or an accepted-and-frozen site depends
+on nothing but whether a pile happened to exist on the tick they clicked. The
+check is a snapshot of a ledger a staffed consumer drains within tens of ticks,
+so **it is a lottery on timing rather than a guarantee about outcomes.**
+Increment 10 removes a check that, measured, prevents a queue *starting*
+impossible and does not prevent it *becoming* impossible one tick later.
+
+**4. The round-robin: the curve is flat, and what a queue costs is the FIRST
+building, not the last.** N house sites ordered on the same tick, at tiles that
+are all leg 4 from the camp so nothing in the curve is distance. Completion
+ticks:
+
+| N | 1 hauler | 4 haulers |
+| ---: | --- | --- |
+| 1 | 65 | 35 |
+| 2 | 95, 105 | 45, 45 |
+| 3 | 125, 135, 145 | 55, 55, 55 |
+| 4 | 155, 165, 175, 185 | 65, 65, 65, 65 |
+| 6 | 215 … 265 | 75, 75, 85, 85, 85, 85 |
+| 8 | 275 … 345 | 95 ×4, 105 ×4 |
+
+**§2.4's prediction holds exactly.** At four haulers every site in a queue of
+four crosses zero on the *same tick* — not close together, identical — and at
+eight they land in two waves of four. At one hauler the curve is a staircase of
+one round trip (10 ticks) rather than a single step, so the spread is 30 ticks
+against a 185-tick wait at N=4 and 70 against 345 at N=8: 16% and 20%. Flat
+enough that nothing useful arrives before nearly everything does.
+
+**Nothing is lost and nothing is slower overall.** Every ordered site completed
+in every run. Deriving a serial ordering's schedule from the measured single-site
+delivery time (35 ticks at one hauler, ~10 per wave at four) puts the eighth
+house at ~310 and ~110 against the measured 345 and 105 — so the *last* house
+arrives at about the time it would have anyway. **The entire cost lands on the
+front of the queue:**
+
+| N | first completion, 1 hauler | vs N=1 | first completion, 4 haulers | vs N=1 |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 65 | — | 35 | — |
+| 2 | 95 | 1.5× | 45 | 1.3× |
+| 3 | 125 | 1.9× | 55 | 1.6× |
+| 4 | 155 | 2.4× | 65 | 1.9× |
+| 6 | 215 | 3.3× | 75 | 2.1× |
+| 8 | 275 | 4.2× | 95 | 2.7× |
+
+**Where it starts to hurt:** at four haulers, **three sites is fine** — the first
+house is 20 ticks later than it would have been alone, and a player is unlikely
+to notice — while **six is where it turns**, at 2.1× and with the first four
+arriving in one lump. At one hauler there is no comfortable N: even two sites
+push the first house out by half again. That is the sizing input increment 10
+asked for, and it says something sharper than "the queue is slow": the queue is
+not slow, it is *all deferred*, and age-first dispatch is worth exactly the
+front of that table.
+
+**5. What a colony pays to grow.** Ticks from the order to the first unit in the
+new building's output buffer — the site delivered, the countdown run, a worker
+assigned on the completion tick, and one batch made:
+
+| def | haulers | beside the camp | far corner | far premium |
+| --- | ---: | ---: | ---: | ---: |
+| gatherer's hut (10 wood) | 1 | 41 | 74 | +33 |
+| gatherer's hut | 2 | 35 | 46 | +11 |
+| gatherer's hut | 4 | 35 | 46 | +11 |
+| farm (20 wood) | 1 | 53 | 130 | +77 |
+| farm | 2 | 41 | 74 | +33 |
+| farm | 4 | 35 | 46 | +11 |
+
+**The floor is 35 ticks and 30 of it is the countdown** — a colony that hauls
+perfectly still waits a third of a year for a hut. Increment 5 priced delivery
+as a gradient in throughput; this prices building as a *latency*, and the two
+compose the way a player would expect: the far corner costs +11 ticks with
+haulers to spare and +77 without them, which is the same "hire another hauler or
+build closer" decision increment 5 found, now payable in advance as well as
+forever after.
+
+**6. A site is `starving` in dispatch ordering, nobody decided that, and it
+matters less than it looks — for a reason that is itself worth inheriting.**
+Task 3 found rather than chose this: a site holding none of what it is offered
+satisfies all four clauses of `SupplyCandidate.starving`, so it enters
+`compareSupplyCandidates` in the starving band ahead of ordinary restocking.
+Measured on a sawmill (crew 2) and four `farm` sites, wood inexhaustible at the
+camp, 600 ticks, with the two arrangements swapped so neither answer can be an
+artefact of who is nearer:
+
+| haulers | arrangement | producer in band | sites in band | both | dispatches on a both-tick |
+| ---: | --- | ---: | ---: | ---: | --- |
+| 1 | sawmill leg 8, sites leg 4 | 40 | 47 | 30 | 3 — **all 3 to a site** |
+| 1 | sawmill leg 2, sites leg 13 | 192 | 101 | 60 | 0 |
+| 3 | sawmill leg 8, sites leg 4 | 0 | 17 | 0 | 0 |
+| 3 | sawmill leg 2, sites leg 13 | 0 | 26 | 0 | 0 |
+
+**A site outranked a genuinely blocked producer three times in 600 ticks, and
+only where it was also the nearer of the two.** The band is a floor rather than
+a priority, so two starving candidates tie there and the tie falls to `movable`
+(6 against 6) and then to route — the site did not win *because* it was a site.
+And at three haulers the producer never enters the band at all: it is either
+mid-batch or already has a claim walking toward it, so the contention this
+reading was taken to find does not arise in a colony that is hauling adequately.
+
+**The queue's real cost to a producer is trip occupancy, not the band**, and it
+is an order of magnitude larger:
+
+| haulers | arrangement | planks with 4 sites queued | planks with none | cost |
+| ---: | --- | ---: | ---: | ---: |
+| 1 | sawmill leg 8, sites leg 4 | 180 | 192 | −6% |
+| 1 | sawmill leg 2, sites leg 13 | 244 | 396 | **−38%** |
+| 3 | sawmill leg 8, sites leg 4 | 367 | 386 | −5% |
+| 3 | sawmill leg 2, sites leg 13 | 368 | 395 | −7% |
+
+A camp-adjacent sawmill loses **38% of its output** to four sites at the far
+corner with one hauler, because every site trip is a 27-tick round trip during
+which the sawmill next door starves — and none of those trips was won in the
+starving band. So increment 10 inherits this as a decision rather than an
+accident, with the numbers to decide it on: **keeping sites out of the band
+(§2.2 of that spec) costs almost nothing measurable and is right for the reason
+it gives, but it will not buy back the throughput a queue takes from a producer,
+because the band is not where that throughput goes.**
 
 ### 4.2 OBS-8-06 moves to increment 10, unmeasured
 
@@ -792,3 +985,41 @@ So it moves whole, with its own warning intact: **connect the instrument before
 taking the reading.** Measuring first would produce a confident zero from an
 instrument that was never wired up, which is the increment-7 harness failure
 repeating.
+
+### 4.3 What was left alone, and what could not be measured
+
+- **`buildTicks` was not retuned**, though §4's table records its stated
+  rationale as contradicted. Two reasons, and neither is "the number looks
+  fine": a fixed, unbuyable-off price for a building is defensible product
+  design even though it is not what the spec claimed it was buying; and the
+  fixture that would justify a new value is a *queue*, which increment 10 is
+  about to change out from under any number chosen now. **The measurement is the
+  deliverable and the retune is not.**
+- **Build time scaling with cost was measured and not implemented** (§2.12).
+- **The hungry half of §4.1's third question was measured only weakly.** Meals
+  and construction never compete for the same *resource* — nothing in the
+  catalog is built out of berries — so a hungry colony can only compete for
+  hauler attention. The fixture ran nine colonists eating from one gatherer's
+  hut, and hunger never became the binding term; the producer did. Anyone
+  reading the stall numbers should read them as producer contention, which is
+  what they measure.
+- **OBS-9-01 was found and not fixed** — it is a dispatch threshold, and §2.4 is
+  explicit that dispatch is what this increment does not touch.
+- **No mid-run drain of a running colony was staged**, for the reason increment
+  7 §4.4 gives: no instrument in this repository can stage one. §4.1's third
+  reading drains the ledger through a *consumer*, which is the nearest thing
+  available and is not the same experiment.
+- **Two readings were deliberately not run.** A `buildTicks` sweep at every
+  distance × hauler count would have been sixteen more runs to re-measure a
+  column already shown to be independent of the constant; and the round-robin
+  curve was not taken at two or three haulers, because the one- and four-hauler
+  rows bracket the behaviour and the balance project is already minutes long.
+- **The scratch rig is gone, and three readings depend on it.** §4.1's third and
+  fifth readings and §4.1's sixth reading of dispatch attribution were taken with a
+  purpose-built world, because `runScenario` seeds every recipe input at
+  1,000,000 or withholds it entirely (`seededResourcesFor`) with nothing in
+  between, cannot report whether an order was *accepted*, and publishes no
+  per-tick view of a site's in-tray. Reproducing them means rebuilding that rig
+  from this section's fixture descriptions. What IS committed is the first,
+  second and fourth readings, as two assertions and a report block in
+  `tests/engine/balance.test.ts`.

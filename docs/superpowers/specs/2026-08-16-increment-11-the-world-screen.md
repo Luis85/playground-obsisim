@@ -154,9 +154,18 @@ invariant is:
 It has two mechanisms because those are two different events, and the dock rule
 above means they cannot be collapsed into one:
 
-- **Clearing the selection cancels the move** — Escape, clicking empty ground,
-  or the building being demolished under it. This lives in the UI store's
-  selection setter (§2.6), which every one of those routes passes through.
+- **Any selection change away from the move's building cancels the move** —
+  Escape, clicking empty ground, the building being demolished under it, *and
+  the selection being replaced by a different subject*. This lives in the UI
+  store's selection setter (§2.6), which every one of those routes passes
+  through.
+
+  "Changed away from", not "cleared to `none`". Once §2.3 lets a colonist be
+  selected, the Inspector's own occupant rows are a route from a building
+  selection to a non-`none` colonist one, with the dock never changing panel:
+  arm Move on a house, click an occupant, and a rule that only fires on `none`
+  leaves the house armed with nothing visibly selected. The condition is
+  therefore on the outgoing value, not the incoming one.
 - **Dismissing the Inspector cancels the move and leaves the selection alone** —
   closing the dock, or switching to another panel. Selection deliberately
   survives a panel switch, so this case cannot ride on the setter above; it
@@ -177,19 +186,35 @@ unreadability — acceptable when the canvas was one tab of five, not acceptable
 when it is the primary control surface.
 
 So `fitCamera` gains a floor: fit until a tile would fall below a minimum
-readable size, then stop zooming out and let the host element **scroll**. That
-is a CSS overflow container and one clamp, not a camera rig — no pan handles, no
-zoom controls, no new interaction mode, and on a default-map colony in a normal
-pane nothing changes at all, because the floor is never reached.
+readable size, then stop zooming out. Past that point the map is larger than the
+viewport, and the camera **pans** — which is the mechanism, and it is a camera
+one rather than a DOM one. The renderer builds its Excalibur engine with
+`DisplayMode.FillContainer`, so the canvas element is always exactly the host's
+size and `fitCamera` moves nothing but `camera.zoom`; clamping that zoom crops
+the world rather than making the host taller, and an `overflow: auto` host would
+have nothing to scroll.
 
-What makes that sufficient rather than merely cheap is §2.3: **the panels are
-the navigation.** Once a map can exceed the viewport, "focus this building"
-stops being a highlight pulse and becomes *scroll into view, then pulse* — so a
-Buildings row, an Attention row or an Economy stage is how you reach the far
-corner of a 64×48 colony, and the dock earns its keep twice.
+Panning is cheap here for one specific reason: **`pick` and `tileAt` already go
+through `engine.screen.pageToWorldCoordinates`**, i.e. through the live camera,
+and `COLONIST_PICK_RADIUS` already divides by the live zoom. Hit-testing is
+therefore correct under a moved camera without being touched. What the increment
+adds is a clamp, a `focusOn(selection)` on the renderer seam that centres a
+subject (bounded so the camera cannot leave the map), and drag-to-pan on the
+canvas — with a movement threshold between pointerdown and pointerup, so a drag
+pans and a click still selects or places.
 
-Pan and zoom as player-driven controls stay out of scope (§5); the floor and the
-scroll are what replaces them.
+On a default-map colony in a normal pane none of this engages: the floor is
+never reached, the camera is fitted exactly as today, and a drag does nothing.
+
+What makes it good rather than merely correct is §2.3: **the panels are the
+navigation.** Once a map can exceed the viewport, "focus this building" stops
+being a highlight pulse and becomes *centre, then pulse* — so a Buildings row,
+an Attention row or an Economy stage is how you reach the far corner of a 64×48
+colony without hunting for it, and the dock earns its keep twice.
+
+Player-driven **zoom** stays out of scope (§5). Pan does not, any more: it was
+excluded on the strength of "the map always fits", and that turned out not to be
+a fact about this codebase.
 
 **The narrow pane is the layout constraint that matters.** ObsiSim is an
 Obsidian `ItemView` and can be dragged into a sidebar. Below a width threshold
@@ -258,6 +283,9 @@ inside this increment's scope:
   hit-testing exists and only the drawing is new.
 - A new `setHighlight(ids)` carries the plural case — a transient pulse over a
   set, with no selection and no Inspector.
+- A new `focusOn(...)` centres a subject when the map exceeds the viewport
+  (§2.1), and is a no-op when the whole map is on screen — which is why a
+  default-map colony sees a pulse and nothing else.
 
 **An Economy stage row is a def, not a building**, which is why it highlights
 rather than selects. `EconomyView` emits one row per step in `CHAINS` and
@@ -490,19 +518,24 @@ assumption.
 6. **The Escape ladder resolves most-transient-first** — armed mode, then
    selection, then dock — and stays inert while the view is not the active
    leaf. Separately, **an armed move outlives neither its selection nor its
-   Inspector**, tested through all four routes: Escape, an empty-ground click,
-   the selected building being demolished, and — the one that does not go
-   through the selection setter — switching the dock to another panel, which
-   must cancel the move while leaving the selection standing.
+   Inspector**, tested through all five routes: Escape, an empty-ground click,
+   the selected building being demolished, **selecting a different subject** —
+   an Inspector occupant row, which replaces a building selection with a
+   colonist one and never touches the dock — and switching the dock to another
+   panel, which must cancel the move while leaving the selection standing. The
+   last two are the ones that fail against a rule written as "cleared to
+   `none`" or as "the dock changed".
 7. **Below the width threshold the dock overlays and the rail collapses**,
    driven by the `ResizeObserver` flag so it is assertable in jsdom.
-8. **A map larger than `DEFAULT_MAP` stays usable.** Loaded at a size the
-   viewport cannot fit at the tile floor, the canvas scrolls rather than
-   shrinking below it, and selecting a building from a panel row scrolls it
-   into view. Tested at a grown size — the fixture is a save carrying its own
-   `map`, which `save.ts` already validates from `MIN_MAP` to `MAX_MAP` — and
-   at `DEFAULT_MAP`, where the floor must never engage and the canvas must
-   still fit exactly as it does today.
+8. **A map larger than `DEFAULT_MAP` stays usable.** At a size the viewport
+   cannot fit at the tile floor: the zoom clamps at the floor rather than going
+   below it, `focusOn` centres a building selected from a panel row, the camera
+   cannot be panned off the map, and a drag pans while a click still selects.
+   At `DEFAULT_MAP` in a normal pane: the floor never engages, the camera is
+   fitted exactly as today, `focusOn` is a no-op, and a drag does nothing. Both
+   halves are required — the second is what stops this becoming a regression for
+   every colony that will never have a grown map. The fixture is a save carrying
+   its own `map`, which `save.ts` already validates from `MIN_MAP` to `MAX_MAP`.
 9. **`npm run check:all` green**, no baseline loosened, no suppression added,
    every `src/` file at or under 500 nonblank lines.
 10. **Coverage floors for `src/app/components/**` and `src/app/views/**` are in
@@ -535,11 +568,10 @@ for it.
 - **Any new mechanic**, build-queue reordering included — increment 10 named it
   a good successor, and it stays one, but a player-set priority is a persisted
   engine field and this increment touches no engine.
-- **Player-driven pan and zoom controls.** §2.1's zoom floor plus a scrolling
-  host, with the panels as the way to reach a distant building, is what this
-  increment ships instead. If a colony that has actually grown its map proves
-  that insufficient in play, a camera is a fair successor — but it is a
-  different piece of work from making the canvas primary.
+- **Player-driven zoom.** No zoom controls, no scroll-wheel zoom, no minimap.
+  §2.1's floor sets the zoom and the player never overrides it. Pan *is* in
+  scope, because the map does not always fit and §2.1 explains why the cheap
+  alternative does not work.
 - **The open engine debt** — OBS-10-01, OBS-10-02, OBS-10-03. A pure UI branch
   neither fixes nor is blocked by any of them.
 - **Sound.**

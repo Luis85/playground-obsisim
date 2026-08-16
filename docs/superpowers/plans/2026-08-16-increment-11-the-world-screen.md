@@ -469,17 +469,21 @@ Add to `getters`:
     attention(state): AttentionRow[] {
       const snapshot = state.snapshot;
       if (!snapshot) return [];
+      // A row is EITHER a subject or a highlight set, never both: §2.3's table
+      // gives single-building rows a selection and reserves the pulse for the
+      // plural rows. Carrying both would make one click do two things and blur
+      // the distinction the table exists to draw.
       const rows: AttentionRow[] = [];
       const name = (defId: BuildingDefId) => BUILDINGS[defId].name;
 
       for (const b of snapshot.buildings) {
         const subject: Selection = { kind: 'building', id: b.id };
         if (b.state === 'outputFull') {
-          rows.push({ id: `full-${b.id}`, severity: 'warn', subject, highlight: [subject],
+          rows.push({ id: `full-${b.id}`, severity: 'warn', subject, highlight: [],
             message: `${name(b.defId)} is full — nothing is collecting from it` });
         }
         if (b.state === 'waitingForInput') {
-          rows.push({ id: `starved-${b.id}`, severity: 'warn', subject, highlight: [subject],
+          rows.push({ id: `starved-${b.id}`, severity: 'warn', subject, highlight: [],
             message: `${name(b.defId)} has nothing to work with` });
         }
         // The engine's own verdict, not a re-derivation of it. `workers === 0
@@ -489,11 +493,11 @@ Add to `getters`:
         // `unstaffed` state already excludes sites, which read
         // `underConstruction`.
         if (b.state === 'unstaffed') {
-          rows.push({ id: `unstaffed-${b.id}`, severity: 'warn', subject, highlight: [subject],
+          rows.push({ id: `unstaffed-${b.id}`, severity: 'warn', subject, highlight: [],
             message: `${name(b.defId)} has no one working it` });
         }
         if (Object.keys(b.constructionNeeds).length > 0) {
-          rows.push({ id: `site-${b.id}`, severity: 'warn', subject, highlight: [subject],
+          rows.push({ id: `site-${b.id}`, severity: 'warn', subject, highlight: [],
             message: `${name(b.defId)} site needs ${needsLabel(b.constructionNeeds)}` });
         }
       }
@@ -926,6 +930,37 @@ describe('WorldStage', () => {
     expect(wrapper.emitted('fatal')![0]).toEqual(['context lost']);
   });
 
+  it('forwards the computed ghost to the renderer', async () => {
+    const { renderer, factory } = makeFake();
+    const { wrapper } = mountStage(factory);
+    useGameStore().ingest(makeSnapshot({ buildings: [] }), { paused: true, speed: 1, error: null });
+    (renderer.tileAt as ReturnType<typeof vi.fn>).mockReturnValue({ col: 2, row: 2 });
+    useUiStore().armPlace('farm');
+    await nextTick();
+    // A pointer move is what supplies the tile; the ghost follows from it.
+    await wrapper.get('[data-test="world-host"]').trigger('pointermove', { pageX: 40, pageY: 40 });
+    expect(renderer.setGhost).toHaveBeenCalledWith({ defId: 'farm', col: 2, row: 2, valid: true });
+  });
+
+  it('drops a colonist selection when that colonist dies, not when a building vanishes', async () => {
+    const { factory } = makeFake();
+    mountStage(factory);
+    const store = useGameStore();
+    const ui = useUiStore();
+    store.ingest(makeSnapshot({ tick: 1, colonists: [makeWorker(3)], buildings: [] }), { paused: true, speed: 1, error: null });
+    ui.selectColonist(3);
+    await nextTick();
+    // Still alive, and no building shares the id — a buildings-only check would
+    // have cleared this.
+    store.ingest(makeSnapshot({ tick: 2, colonists: [makeWorker(3)], buildings: [] }), { paused: true, speed: 1, error: null });
+    await nextTick();
+    expect(ui.selection).toEqual({ kind: 'colonist', id: 3 });
+
+    store.ingest(makeSnapshot({ tick: 3, colonists: [], buildings: [makeBuilding(3)] }), { paused: true, speed: 1, error: null });
+    await nextTick();
+    expect(ui.selection).toEqual({ kind: 'none' }); // dead, despite a building with id 3
+  });
+
   it('stops the render clock on deactivate and restarts it on activate', async () => {
     const { renderer, factory } = makeFake();
     const active = ref(true);
@@ -965,7 +1000,27 @@ Expected: FAIL — cannot resolve `WorldStage.vue`.
 
 - [ ] **Step 3: Write the component**
 
-Create `src/app/views/WorldStage.vue`. Carry over from `WorldView.vue` verbatim: the `onMounted` factory call and try/catch, the `watch` on `store.snapshot` with `{ immediate: true }`, the reset detection (`snapshot.tick <= previousSnapshot.tick`), the id-based selection lifecycle, `revalidateHover`, `armHoverRecheck` and the 2000ms tail, `onBeforeUnmount` disposal, **and the `onActivated`/`onDeactivated` pair that starts and stops the render clock**:
+Create `src/app/views/WorldStage.vue`. Carry over from `WorldView.vue` verbatim: the `onMounted` factory call and try/catch, the `watch` on `store.snapshot` with `{ immediate: true }`, the reset detection (`snapshot.tick <= previousSnapshot.tick`), `revalidateHover`, `armHoverRecheck` and the 2000ms tail, `onBeforeUnmount` disposal, **and the `onActivated`/`onDeactivated` pair that starts and stops the render clock**.
+
+The id-based selection lifecycle is the one thing that must **not** come across
+verbatim. `WorldView` checks a numeric `selectedId` against `snapshot.buildings`
+alone, which was right when only a building could be selected. Building and
+colonist ids are independent counters, so applied to a `Selection` that check
+would clear a living colonist whose id happens to match no building, and keep a
+dead one whose id happens to match a building. Branch on the kind:
+
+```ts
+// A selection dies with its subject — and which list decides that depends on
+// what the subject IS. The move mode's own lifecycle stays building-only,
+// because only a building can be moved.
+function pruneSelection(snapshot: Snapshot | null) {
+  const selection = ui.selection;
+  if (selection.kind === 'building' && !snapshot?.buildings.some((b) => b.id === selection.id)) ui.clearSelection();
+  if (selection.kind === 'colonist' && !snapshot?.colonists.some((c) => c.id === selection.id)) ui.clearSelection();
+  const mode = ui.mode;
+  if (mode.kind === 'move' && !snapshot?.buildings.some((b) => b.id === mode.buildingId)) ui.cancelMode();
+}
+```
 
 ```ts
 // Not optional, and not obsolete after the dock: WorldScreen is still under
@@ -976,12 +1031,19 @@ onActivated(() => renderer?.start());
 onDeactivated(() => renderer?.stop());
 ``` Replace its mode/selection state with `useUiStore()` and `useWorldInteraction()`.
 
-New in this component — the two watchers that forward store state through the
-seam, replacing the selection state `WorldView` used to own:
+New in this component — the **three** watchers that forward state through the
+seam, replacing what `WorldView` used to own directly:
 
 ```ts
 watch(() => ui.selection, (selection) => renderer?.setSelection(selection), { deep: true });
 watch(() => ui.highlight, (subjects) => renderer?.setHighlight(subjects), { deep: true });
+// The ghost is the third and it is easy to forget: WorldView called setGhost
+// from its own refreshGhost(), and that function leaves with WorldView. Task 4
+// moved the COMPUTATION into useWorldInteraction().ghost, which nothing draws
+// until this line — without it an armed place or move dispatches correctly on
+// click and previews nothing at all, and a validity change under a stationary
+// pointer never reaches the canvas.
+watch(interaction.ghost, (ghost) => renderer?.setGhost(ghost), { deep: true });
 ```
 
 `onPointerMove`, `onPointerLeave`, `onClick` and `onContextMenu` come across
@@ -993,7 +1055,7 @@ canvas has.
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run --project unit tests/app/world-stage.test.ts`
-Expected: PASS, 6 tests.
+Expected: PASS, 8 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -1651,11 +1713,12 @@ git commit -m "Welcoming a nomad, and a colonist row that reaches the map"
 import EconomyPanel from '../../src/app/components/dock/EconomyPanel.vue';
 
 describe('EconomyPanel', () => {
-  it('highlights every building of a stage rather than selecting one', async () => {
+  it('highlights every building of a stage rather than selecting one, clearing any standing selection', async () => {
     const two = makeSnapshot({
       buildings: [makeBuilding(1, { defId: 'farm' }), makeBuilding(2, { defId: 'farm' })],
     });
     const { wrapper, ui } = mountPanel(EconomyPanel, two);
+    ui.selectBuilding(2);
     await wrapper.get('[data-test="stage-row-farm"]').trigger('click');
     expect(ui.highlight).toEqual([{ kind: 'building', id: 1 }, { kind: 'building', id: 2 }]);
     expect(ui.selection).toEqual({ kind: 'none' });
@@ -1693,6 +1756,10 @@ Expected: FAIL — cannot resolve `EconomyPanel.vue`.
 // from behaving differently depending on a count the player is not looking at
 // (spec §2.3).
 function highlightStage(defId: BuildingDefId) {
+  // Clears for the same reason AttentionPanel's plural rows do: a stage row's
+  // result is "highlights every building of that def; selects nothing", and a
+  // selection survives the panel switch that got the player here.
+  ui.clearSelection();
   ui.setHighlight((store.snapshot?.buildings ?? [])
     .filter((b) => b.defId === defId)
     .map((b) => ({ kind: 'building' as const, id: b.id })));
@@ -1732,13 +1799,23 @@ describe('AttentionPanel', () => {
     expect(ui.selection).toEqual({ kind: 'building', id: 4 });
   });
 
-  it('leaves a runway row inert', async () => {
+  it('clears a standing selection when a plural row is clicked', async () => {
+    const homeless = makeSnapshot({ homeless: 1, buildings: [makeBuilding(4)], colonists: [makeWorker(2)] });
+    const { wrapper, ui } = mountPanel(AttentionPanel, homeless);
+    ui.selectBuilding(4); // the dock keeps this across a panel switch — hence the risk
+    await wrapper.get('[data-test="attention-homeless"]').trigger('click');
+    expect(ui.selection).toEqual({ kind: 'none' });
+    expect(ui.highlight).toEqual([{ kind: 'colonist', id: 2 }]);
+  });
+
+  it('leaves a runway row inert — it does not even deselect', async () => {
     const draining = makeSnapshot({
       stockpile: { ...stockedWith({ bread: 20 }), bread: { stock: 20, deliveredRate: 0, madeRate: 0, consumptionRate: 2, netFlow: -2, stockValue: 0 } },
     });
     const { wrapper, ui } = mountPanel(AttentionPanel, draining);
+    ui.selectBuilding(4);
     await wrapper.get('[data-test="attention-runway-bread"]').trigger('click');
-    expect(ui.selection).toEqual({ kind: 'none' });
+    expect(ui.selection).toEqual({ kind: 'building', id: 4 }); // untouched
     expect(ui.highlight).toEqual([]);
   });
 
@@ -1766,12 +1843,28 @@ import type { AttentionRow } from '../../stores/game-store';
 const store = useGameStore();
 const ui = useUiStore();
 
-// A row with neither a subject nor a highlight does nothing on click, and
-// that is the whole implementation of §2.3's inert case — no branch, no
-// special-casing, just an empty payload the store already decided on.
+/*
+ * The three outcomes of §2.3's table, in the order the table gives them.
+ *
+ * A plural row CLEARS the selection: the table calls its result "highlights
+ * that set; selects nothing", and the dock deliberately keeps a selection
+ * alive across a panel switch — so without this, selecting a building and then
+ * clicking "3 colonists have no bed" would leave the building selected and the
+ * Inspector pointed at it while the pulse says otherwise.
+ *
+ * An inert row does nothing AT ALL, which is not the same as clearing: a
+ * runway warning naming bread has no business deselecting the sawmill the
+ * player is looking at.
+ */
 function activate(row: AttentionRow) {
+  if (row.subject !== null) {
+    ui.setHighlight([]);
+    ui.select(row.subject);
+    return;
+  }
+  if (row.highlight.length === 0) return;
+  ui.clearSelection();
   ui.setHighlight([...row.highlight]);
-  if (row.subject !== null) ui.select(row.subject);
 }
 </script>
 

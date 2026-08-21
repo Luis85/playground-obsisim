@@ -62,6 +62,9 @@ describe('ui-store', () => {
     ui.armMove(7);
     ui.closeDock();
     expect(ui.mode).toEqual({ kind: 'idle' });
+    // Deleting `this.panel = null` from closeDock would fail neither
+    // assertion in this test file without this line.
+    expect(ui.panel).toBe(null);
   });
 
   it('re-selecting the SAME building does not cancel its own armed move', () => {
@@ -69,6 +72,17 @@ describe('ui-store', () => {
     ui.selectBuilding(7);
     ui.armMove(7);
     ui.selectBuilding(7);
+    expect(ui.mode).toEqual({ kind: 'move', buildingId: 7 });
+  });
+
+  // openPanel only idles an armed move when `panel !== this.panel`. Reopening
+  // the panel that is already open (e.g. the Inspector the selection itself
+  // opened) has not dismissed anything, so the move must survive.
+  it('re-opening the SAME panel does not cancel an armed move', () => {
+    const ui = useUiStore();
+    ui.selectBuilding(7);
+    ui.armMove(7);
+    ui.openPanel('inspector'); // already the open panel
     expect(ui.mode).toEqual({ kind: 'move', buildingId: 7 });
   });
 
@@ -88,6 +102,18 @@ describe('ui-store', () => {
     ui.armPlace('farm');
     ui.closeDock();
     expect(ui.mode).toEqual({ kind: 'place', defId: 'farm' });
+  });
+
+  // The rule is on `next.kind !== 'none'`, not `next.kind === 'building'`. A
+  // Population row selecting a colonist is a real route out of an armed
+  // palette, and an implementation gated on 'building' would pass every other
+  // test here while missing this one.
+  it('selecting a colonist cancels an armed place, and the selection stands', () => {
+    const ui = useUiStore();
+    ui.armPlace('farm');
+    ui.selectColonist(3);
+    expect(ui.mode).toEqual({ kind: 'idle' });
+    expect(ui.selection).toEqual({ kind: 'colonist', id: 3 });
   });
 
   // Escape is most-transient-first: mode, then selection, then dock.
@@ -124,6 +150,20 @@ describe('ui-store', () => {
     ui.clearSelection();
     ui.setHighlight([{ kind: 'colonist', id: 4 }]);
     expect(ui.highlight).toEqual([{ kind: 'colonist', id: 4 }]);
+  });
+
+  it('cancelMode idles an armed mode directly', () => {
+    const ui = useUiStore();
+    ui.armPlace('farm');
+    ui.cancelMode();
+    expect(ui.mode).toEqual({ kind: 'idle' });
+  });
+
+  it('setNarrow records the overlay layout flag from WorldScreen\'s ResizeObserver', () => {
+    const ui = useUiStore();
+    expect(ui.narrow).toBe(false);
+    ui.setNarrow(true);
+    expect(ui.narrow).toBe(true);
   });
 
   it('records a renderer failure for the app shell to act on', () => {

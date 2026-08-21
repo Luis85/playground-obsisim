@@ -1,5 +1,6 @@
 import { Actor, Color, DisplayMode, Engine, TileMap, vec, type Vector } from 'excalibur';
 import type { Snapshot } from '../../shared/snapshot';
+import type { Selection } from '../stores/ui-store';
 import type { GhostPreview, WorldRendererFactory } from './renderer-key';
 import {
   layoutWorld, pickBuildingAt, TILE,
@@ -7,7 +8,7 @@ import {
 } from './layout';
 import { COLONIST_RADIUS, GraphicCache, MARK_RADIUS } from './graphics-cache';
 import {
-  campTent, groundTints, progressGauge, satelliteDot, selectionRing, storeGauge, type Gauge,
+  campTent, groundTints, highlightPulse, progressGauge, satelliteDot, selectionRing, storeGauge, type Gauge,
 } from './glyphs';
 import { efficiencyBucket, resolveWorldTheme, type WorldTheme } from './theme';
 
@@ -36,8 +37,12 @@ const MIN_TICK_MS = 50;
 const MAX_TICK_MS = 1000;
 
 // Draw order, back to front: ground tilemap (default z 0), building tiles and
-// the camp tent (z 1), the two gauges and the selection ring (z 2), colonists
-// (z 3), the placement ghost on top of everything (z 4).
+// the camp tent (z 1), the two gauges, the selection ring and the highlight
+// pulse (z 2), colonists (z 3), the placement ghost on top of everything
+// (z 4). A colonist's ring or pulse sits behind its dot at that shared z —
+// harmless for the ring (a thin stroke around the tile, well clear of the dot
+// at its centre) and exactly the point for the pulse (a glow the dot reads
+// against, the same relationship it has to a highlighted building's tile).
 interface BuildingBundle { root: Actor; batch: Gauge; store: Gauge; }
 // The three satellite marks hang off three sides of the dot — see
 // spawnColonist for the geometry that keeps them apart.
@@ -60,7 +65,9 @@ class WorldScene {
   private lastLayout: WorldLayout | null = null;
   private ghost: Actor | null = null;
   private selectionRing: Actor | null = null;
-  private selectedId: number | null = null;
+  private selection: Selection = { kind: 'none' };
+  private highlightPulses: Actor[] = [];
+  private highlightSubjects: readonly Selection[] = [];
 
   constructor(private engine: Engine, private theme: WorldTheme) {
     this.cache = new GraphicCache(theme);
@@ -84,6 +91,7 @@ class WorldScene {
     this.prune(this.colonists, layout.colonists, (bundle) => bundle.actor.kill());
     this.fitCamera(layout);
     this.applySelection();
+    this.applyHighlight();
   }
 
   /** Forget every entity actor — a colony reset reuses entity ids, so the
@@ -96,6 +104,8 @@ class WorldScene {
     this.setGhost(null);
     this.selectionRing?.kill();
     this.selectionRing = null;
+    for (const pulse of this.highlightPulses) pulse.kill();
+    this.highlightPulses = [];
   }
 
   /** Re-frame after a pane resize — no snapshot arrives for that, and while
@@ -145,16 +155,36 @@ class WorldScene {
     this.ghost.graphics.use(this.cache.ghost(ghost));
   }
 
-  setSelection(buildingId: number | null): void {
-    this.selectedId = buildingId;
+  setSelection(selection: Selection): void {
+    this.selection = selection;
     this.applySelection();
   }
 
-  /** The currently selected building's cell, or undefined when nothing is
-   * selected or the selected id no longer exists in the layout. */
-  private selectedCell(): PlacedBuilding | undefined {
-    if (this.selectedId === null) return undefined;
-    return this.lastLayout?.buildings.find((b) => b.id === this.selectedId);
+  setHighlight(subjects: readonly Selection[]): void {
+    this.highlightSubjects = subjects;
+    this.applyHighlight();
+  }
+
+  /**
+   * The world-space point a selection or highlight subject occupies, or
+   * undefined when it names nothing on the current layout — a demolished
+   * building, a colonist who left, or `{ kind: 'none' }`. Shared by
+   * `applySelection` and `applyHighlight` because both need the same answer
+   * to the same question: where does this subject live right now.
+   *
+   * A colonist is read off its LIVE actor position, not the layout's tile-
+   * space target — the same "picked where it is drawn, not where the layout
+   * says it should be" rule `colonistAt` already follows. A building has no
+   * such distinction to make: its bundle only ever snaps to a new tile at
+   * sync time (see `upsertBuilding`), so the layout cell IS where it is drawn.
+   */
+  private subjectPos(subject: Selection): Vector | undefined {
+    if (subject.kind === 'building') {
+      const cell = this.lastLayout?.buildings.find((b) => b.id === subject.id);
+      return cell ? vec((cell.col + 0.5) * TILE, (cell.row + 0.5) * TILE) : undefined;
+    }
+    if (subject.kind === 'colonist') return this.colonists.get(subject.id)?.actor.pos;
+    return undefined;
   }
 
   /** Lazily (re)creates the ring actor, mirroring the ghost/building caches. */
@@ -166,17 +196,39 @@ class WorldScene {
     return this.selectionRing;
   }
 
-  /** Re-applied on every sync: the ring follows a moved building and dies
-   * with a demolished one (the view also clears its own selection state). */
+  /** Re-applied on every sync: the ring follows a moved building or a walking
+   * colonist, and dies with a demolished building or a colonist who left (the
+   * view also clears its own selection state). */
   private applySelection(): void {
-    const cell = this.selectedCell();
-    if (!cell) {
+    const pos = this.subjectPos(this.selection);
+    if (pos === undefined) {
       this.selectionRing?.kill();
       this.selectionRing = null;
       return;
     }
     const ring = this.ensureSelectionRing();
-    ring.pos = vec((cell.col + 0.5) * TILE, (cell.row + 0.5) * TILE);
+    ring.pos = pos;
+  }
+
+  /**
+   * Re-applied on every sync, the same as `applySelection` — a pulsing
+   * subject that moves or leaves the layout must not leave a stray glow
+   * behind. The whole set is thrown away and rebuilt rather than diffed by
+   * id: a highlight is a transient reaction to one panel click, not a tracked
+   * entity, so there is no identity here worth preserving across a change the
+   * way there is for buildings and colonists.
+   */
+  private applyHighlight(): void {
+    for (const pulse of this.highlightPulses) pulse.kill();
+    this.highlightPulses = [];
+    for (const subject of this.highlightSubjects) {
+      const pos = this.subjectPos(subject);
+      if (pos === undefined) continue;
+      const pulse = highlightPulse(this.theme);
+      pulse.pos = pos;
+      this.engine.currentScene.add(pulse);
+      this.highlightPulses.push(pulse);
+    }
   }
 
   /** Kill and forget every actor whose entity left the snapshot. */
@@ -431,8 +483,11 @@ export const createExcaliburWorldRenderer: WorldRendererFactory = (host) => {
     setGhost(ghost) {
       if (!disposed) scene.setGhost(ghost);
     },
-    setSelection(buildingId) {
-      if (!disposed) scene.setSelection(buildingId);
+    setSelection(selection) {
+      if (!disposed) scene.setSelection(selection);
+    },
+    setHighlight(subjects) {
+      if (!disposed) scene.setHighlight(subjects);
     },
     onFatal(listener) {
       fatalListener = listener;

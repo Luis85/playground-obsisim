@@ -18,7 +18,7 @@ import { makeBuilding, makeSnapshot, makeWorker, stockedWith } from './fixtures'
 function makeFake() {
   const renderer: WorldRenderer = {
     sync: vi.fn(), pick: vi.fn(() => null),
-    tileAt: vi.fn(() => null), setGhost: vi.fn(), setSelection: vi.fn(),
+    tileAt: vi.fn(() => null), setGhost: vi.fn(), setSelection: vi.fn(), setHighlight: vi.fn(),
     onFatal: vi.fn(), start: vi.fn(), stop: vi.fn(), dispose: vi.fn(),
   };
   const factory = vi.fn((host: HTMLElement) => {
@@ -414,7 +414,7 @@ describe('WorldView interaction', () => {
     (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'building', id: 7 });
     await nextTick();
     await wrapper.find('[data-test="world-host"]').trigger('click', { pageX: 40, pageY: 40 });
-    expect(renderer.setSelection).toHaveBeenLastCalledWith(7);
+    expect(renderer.setSelection).toHaveBeenLastCalledWith({ kind: 'building', id: 7 });
     const demolish = wrapper.find('[data-test="selection-demolish"]');
     await demolish.trigger('click');
     await demolish.trigger('click');
@@ -463,7 +463,7 @@ describe('WorldView interaction', () => {
     expect(wrapper.find('[data-test="selection-panel"]').exists()).toBe(true);
     useGameStore().ingest(makeSnapshot({ buildings: [], stockpile: stockedWith({ wood: 100 }) }), { paused: false, speed: 1, error: null });
     await nextTick();
-    expect(renderer.setSelection).toHaveBeenLastCalledWith(null);
+    expect(renderer.setSelection).toHaveBeenLastCalledWith({ kind: 'none' });
     expect(wrapper.find('[data-test="selection-panel"]').exists()).toBe(false);
   });
 
@@ -484,7 +484,7 @@ describe('WorldView interaction', () => {
       stockpile: stockedWith({ wood: 100 }),
     }), { paused: false, speed: 1, error: null });
     await nextTick();
-    expect(renderer.setSelection).toHaveBeenLastCalledWith(null);
+    expect(renderer.setSelection).toHaveBeenLastCalledWith({ kind: 'none' });
     expect(wrapper.find('[data-test="selection-panel"]').exists()).toBe(false);
   });
 

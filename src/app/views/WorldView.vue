@@ -91,7 +91,10 @@ function cancelMode() {
 
 function select(buildingId: number | null) {
   selectedId.value = buildingId;
-  renderer?.setSelection(buildingId);
+  // WorldView is deleted whole in Task 6 (it still speaks in bare building
+  // ids); this is the narrowest possible translation to the widened seam,
+  // not a rewrite of this view's own selection model.
+  renderer?.setSelection(buildingId === null ? { kind: 'none' } : { kind: 'building', id: buildingId });
 }
 
 function closeSelection() {

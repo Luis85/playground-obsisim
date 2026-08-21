@@ -1,6 +1,7 @@
 import type { InjectionKey } from 'vue';
 import type { BuildingDefId } from '../../shared/content-types';
 import type { Snapshot } from '../../shared/snapshot';
+import type { Selection } from '../stores/ui-store';
 import type { WorldPick } from './layout';
 
 /** The translucent placement preview: a def's visual on a tile, tinted by
@@ -21,9 +22,14 @@ export interface WorldRenderer {
   /** Show (or clear, with null) the placement preview. Drawing only — the
    * caller owns validity and mode logic. */
   setGhost(ghost: GhostPreview | null): void;
-  /** Highlight a building (or clear, with null). The ring follows moves and
-   * disappears with its building; the caller still owns selection state. */
-  setSelection(buildingId: number | null): void;
+  /** Highlight the selected subject (or clear, with `{ kind: 'none' }`). The
+   * ring follows moves and disappears with its subject; the caller still owns
+   * selection state. Colonists gained a ring in increment 11 — they were
+   * hover-only before, though `pick` has always returned them. */
+  setSelection(selection: Selection): void;
+  /** Pulse a set of buildings without selecting any of them — what a plural
+   * panel row does (spec §2.3). Passing an empty array clears the pulse. */
+  setHighlight(subjects: readonly Selection[]): void;
   /** Report an asynchronous fatal failure (e.g. the engine boot rejecting
    * after construction succeeded); the renderer is already torn down. */
   onFatal(listener: (message: string) => void): void;

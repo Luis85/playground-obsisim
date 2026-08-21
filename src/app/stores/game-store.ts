@@ -82,6 +82,15 @@ function stockAmounts(snapshot: Snapshot | null): Record<string, number> {
 }
 
 /**
+ * Colonists whose starvation clock is running. One predicate, read by the
+ * Attention row's `highlight` set below and by `starvingCount`, so the
+ * people the row names and the number it reports can never disagree.
+ */
+function starvingColonistsIn(snapshot: Snapshot | null) {
+  return snapshot?.colonists.filter((c) => c.starvingTicks > 0) ?? [];
+}
+
+/**
  * What every construction site the colony already has going still needs, per
  * resource — summed straight off `BuildingSnapshot.constructionNeeds`, the
  * SAME per-material shortfall the Buildings table reads, not a second
@@ -319,9 +328,10 @@ export const useGameStore = defineStore('game', {
       return (state.snapshot?.buildings ?? []).reduce((sum, b) => sum + unitsOf(b.constructionNeeds), 0);
     },
     /** Colonists whose starvation clock is running — the figure the Attention
-     * panel names and PopulationSummary's cell shows, derived once. */
+     * panel names and PopulationSummary's cell shows, derived once via
+     * `starvingColonistsIn` above. */
     starvingCount(state): number {
-      return state.snapshot?.colonists.filter((c) => c.starvingTicks > 0).length ?? 0;
+      return starvingColonistsIn(state.snapshot).length;
     },
     /**
      * The problem list, newest concern first by severity then by kind. Pure
@@ -380,7 +390,7 @@ export const useGameStore = defineStore('game', {
           highlight: snapshot.colonists.filter((c) => c.homeId === null).map((c) => ({ kind: 'colonist' as const, id: c.id })),
           message: `${snapshot.homeless} colonist${snapshot.homeless === 1 ? ' has' : 's have'} no bed` });
       }
-      const starving = snapshot.colonists.filter((c) => c.starvingTicks > 0);
+      const starving = starvingColonistsIn(snapshot);
       if (starving.length > 0) {
         rows.push({ id: 'starving', severity: 'danger', subject: null,
           highlight: starving.map((c) => ({ kind: 'colonist' as const, id: c.id })),

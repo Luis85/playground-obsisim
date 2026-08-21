@@ -21,12 +21,16 @@ describe('game-store attention', () => {
 
   it('names a building with nothing to work with', () => {
     const store = ingest({ buildings: [makeBuilding(5, { defId: 'bakery', state: 'waitingForInput' })] });
-    expect(store.attention.some((r) => r.message.includes('nothing to work with'))).toBe(true);
+    const row = store.attention.find((r) => r.message.includes('nothing to work with'));
+    expect(row).toBeDefined();
+    expect(row!.subject).toEqual({ kind: 'building', id: 5 });
   });
 
   it('names a staffable building with nobody on it', () => {
     const store = ingest({ buildings: [makeBuilding(6, { workers: 0, workerSlots: 3, state: 'unstaffed' })] });
-    expect(store.attention.some((r) => r.message.includes('no one working it'))).toBe(true);
+    const row = store.attention.find((r) => r.message.includes('no one working it'));
+    expect(row).toBeDefined();
+    expect(row!.subject).toEqual({ kind: 'building', id: 6 });
   });
 
   // A site keeps its def's workerSlots and has zero workers, but
@@ -44,7 +48,9 @@ describe('game-store attention', () => {
     const store = ingest({
       buildings: [makeBuilding(7, { state: 'underConstruction', constructionTicks: 20, constructionNeeds: { wood: 14 } })],
     });
-    expect(store.attention.some((r) => r.message.includes('needs 14 Wood'))).toBe(true);
+    const row = store.attention.find((r) => r.message.includes('needs 14 Wood'));
+    expect(row).toBeDefined();
+    expect(row!.subject).toEqual({ kind: 'building', id: 7 });
   });
 
   it('names a runway at or under 30 ticks, and carries no subject', () => {
@@ -55,6 +61,10 @@ describe('game-store attention', () => {
     expect(row).toBeDefined();
     expect(row!.subject).toBe(null);   // a resource has no subject on the map
     expect(row!.highlight).toEqual([]);
+    // Pinned directly: this is the only 'danger' row beside starving, and the
+    // sort-order test below only proves ordering when at least one row of
+    // each severity actually exists — this is what supplies the danger one.
+    expect(row!.severity).toBe('danger');
   });
 
   it('groups homeless colonists into one row that pulses them and selects nothing', () => {
@@ -159,8 +169,11 @@ describe('game-store attention', () => {
       stockpile: { ...stockedWith({ bread: 60 }), bread: { stock: 60, deliveredRate: 0, madeRate: 0, consumptionRate: 2, netFlow: -2, stockValue: 0 } },
     });
     const severities = store.attention.map((r) => r.severity);
-    const firstWarn = severities.indexOf('warn');
-    const firstDanger = severities.indexOf('danger');
-    expect(firstDanger).toBeLessThan(firstWarn);
+    // Asserted as the whole array, not as indexOf('danger') < indexOf('warn'):
+    // indexOf returns -1 for an absent value, and -1 is less than every real
+    // index, so that comparison would keep passing even if 'danger' vanished
+    // from the fixture entirely (e.g. a regression that reclassified the
+    // runway row as 'warn'). toEqual pins both the membership and the order.
+    expect(severities).toEqual(['danger', 'warn']);
   });
 });

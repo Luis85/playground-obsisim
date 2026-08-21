@@ -1185,7 +1185,7 @@ Read `src/app/views/WorldView.vue` in full before starting: this task moves its 
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `tests/app/world-stage.test.ts`. Reuse `makeFake` and the injection pattern from `tests/app/world-view.test.ts`, widened for the new seam:
+Create `tests/app/world-stage.test.ts`. Reuse `makeFake` and the injection pattern from `tests/app/world-view.test.ts`, widened for the new seam. **Corrected from the draft below** (see the shipped file for the exact text): `setHighlight` takes `Selection[]`, not bare numbers, so the highlight test passes `[{ kind: 'building', id: 2 }, { kind: 'building', id: 3 }]`; the colonist-death test needs `makeWorker` added to the `fixtures` import; the placing-click and ghost tests use `{ col: 8, row: 2 }` rather than `{ col: 2, row: 2 }`, because `CAMP_COLS = 3` makes every tile with `col < 3` permanently unbuildable regardless of occupancy (the same fixture bug Task 4's report already found and fixed — this brief repeats it); the throw/no-factory tests await a `nextTick()` before asserting the host div is gone, since `failure` is set synchronously but Vue's removal of the `v-if` branch is not. Three cases the block below omits entirely, and which the shipped file adds: **A2** (an already-present snapshot must sync immediately on mount — every case below ingests AFTER mount, so a watcher missing `{ immediate: true }` would pass all of them), **A5** (no factory provided is a distinct path from a throwing one), and **A19** (arming must clear a parked tooltip with no pointer event — see Step 3's note on the mode-kind watcher).
 
 ```ts
 // @vitest-environment happy-dom
@@ -1198,7 +1198,7 @@ import { WORLD_RENDERER_KEY, type WorldRenderer } from '../../src/app/world/rend
 import { ENGINE_KEY } from '../../src/app/engine-key';
 import { useGameStore } from '../../src/app/stores/game-store';
 import { useUiStore } from '../../src/app/stores/ui-store';
-import { makeBuilding, makeSnapshot } from './fixtures';
+import { makeBuilding, makeSnapshot, makeWorker } from './fixtures';
 
 function makeFake() {
   const renderer: WorldRenderer = {
@@ -1231,6 +1231,19 @@ describe('WorldStage', () => {
     expect(renderer.sync).toHaveBeenCalledWith(snapshot);
   });
 
+  it('syncs an already-present snapshot immediately on mount', () => {
+    const { renderer, factory } = makeFake();
+    const pinia = createTestingPinia({ createSpy: vi.fn, stubActions: false });
+    useGameStore(pinia).ingest(makeSnapshot({ tick: 9 }), { paused: true, speed: 1, error: null });
+    mount(WorldStage, {
+      global: {
+        plugins: [pinia],
+        provide: { [WORLD_RENDERER_KEY as symbol]: factory, [ENGINE_KEY as symbol]: { dispatch: vi.fn() } },
+      },
+    });
+    expect(renderer.sync).toHaveBeenCalledWith(expect.objectContaining({ tick: 9 }));
+  });
+
   it('forwards the store selection to the renderer', async () => {
     const { renderer, factory } = makeFake();
     mountStage(factory);
@@ -1242,15 +1255,24 @@ describe('WorldStage', () => {
   it('forwards a highlight set to the renderer', async () => {
     const { renderer, factory } = makeFake();
     mountStage(factory);
-    useUiStore().setHighlight([2, 3]);
+    useUiStore().setHighlight([{ kind: 'building', id: 2 }, { kind: 'building', id: 3 }]);
     await nextTick();
-    expect(renderer.setHighlight).toHaveBeenCalledWith([2, 3]);
+    expect(renderer.setHighlight).toHaveBeenCalledWith([{ kind: 'building', id: 2 }, { kind: 'building', id: 3 }]);
   });
 
-  it('emits fatal when the factory throws, and renders no host', () => {
+  it('emits fatal when the factory throws, and renders no host', async () => {
     const factory = vi.fn(() => { throw new Error('no webgl'); });
     const { wrapper } = mountStage(factory);
     expect(wrapper.emitted('fatal')![0]).toEqual(['no webgl']);
+    await nextTick();
+    expect(wrapper.find('[data-test="world-host"]').exists()).toBe(false);
+  });
+
+  it('emits fatal and renders no host when no factory is provided', async () => {
+    const { wrapper } = mountStage(undefined);
+    expect(wrapper.emitted('fatal')![0]).toEqual(['no renderer is registered']);
+    await nextTick();
+    expect(wrapper.find('[data-test="world-host"]').exists()).toBe(false);
   });
 
   it('emits fatal when the renderer reports one after a successful boot', () => {
@@ -1265,10 +1287,10 @@ describe('WorldStage', () => {
     const { renderer, factory } = makeFake();
     const { wrapper, engine } = mountStage(factory);
     useGameStore().ingest(makeSnapshot({ buildings: [] }), { paused: true, speed: 1, error: null });
-    (renderer.tileAt as ReturnType<typeof vi.fn>).mockReturnValue({ col: 2, row: 2 });
+    (renderer.tileAt as ReturnType<typeof vi.fn>).mockReturnValue({ col: 8, row: 2 });
     useUiStore().armPlace('farm');
     await wrapper.get('[data-test="world-host"]').trigger('click', { pageX: 40, pageY: 40 });
-    expect(engine.dispatch).toHaveBeenCalledWith({ type: 'constructBuilding', buildingDefId: 'farm', at: { col: 2, row: 2 } });
+    expect(engine.dispatch).toHaveBeenCalledWith({ type: 'constructBuilding', buildingDefId: 'farm', at: { col: 8, row: 2 } });
   });
 
   it('dispatches the move command a moving click produces', async () => {
@@ -1287,12 +1309,12 @@ describe('WorldStage', () => {
     const { renderer, factory } = makeFake();
     const { wrapper } = mountStage(factory);
     useGameStore().ingest(makeSnapshot({ buildings: [] }), { paused: true, speed: 1, error: null });
-    (renderer.tileAt as ReturnType<typeof vi.fn>).mockReturnValue({ col: 2, row: 2 });
+    (renderer.tileAt as ReturnType<typeof vi.fn>).mockReturnValue({ col: 8, row: 2 });
     useUiStore().armPlace('farm');
     await nextTick();
     // A pointer move is what supplies the tile; the ghost follows from it.
     await wrapper.get('[data-test="world-host"]').trigger('pointermove', { pageX: 40, pageY: 40 });
-    expect(renderer.setGhost).toHaveBeenCalledWith({ defId: 'farm', col: 2, row: 2, valid: true });
+    expect(renderer.setGhost).toHaveBeenCalledWith({ defId: 'farm', col: 8, row: 2, valid: true });
   });
 
   it('drops a colonist selection when that colonist dies, not when a building vanishes', async () => {
@@ -1356,6 +1378,32 @@ describe('WorldStage', () => {
     await wrapper.get('[data-test="world-host"]').trigger('click', { pageX: 101, pageY: 100 });
     expect(useUiStore().selection).toEqual({ kind: 'building', id: 1 });
   });
+
+  // Deletion-inventory A19: keyboard arming (a focused palette button, or
+  // the Inspector's Move control) fires no pointer event, so nothing else
+  // clears a tooltip parked over the canvas from an earlier hover.
+  it('hides a parked tooltip the moment the palette arms — no pointer event needed', async () => {
+    const { renderer, factory } = makeFake();
+    (renderer.pick as ReturnType<typeof vi.fn>).mockReturnValue({ kind: 'building', id: 7 });
+    const { wrapper } = mountStage(factory);
+    useGameStore().ingest(makeSnapshot({ buildings: [makeBuilding(7)] }), { paused: true, speed: 1, error: null });
+    await wrapper.get('[data-test="world-host"]').trigger('pointermove', { pageX: 40, pageY: 40 });
+    expect(wrapper.find('[data-test="world-tooltip"]').exists()).toBe(true);
+    useUiStore().armPlace('farm');
+    await nextTick();
+    expect(wrapper.find('[data-test="world-tooltip"]').exists()).toBe(false);
+  });
+
+  // The remaining hover/tooltip cases carried over from world-view.test.ts
+  // unchanged in substance (only the mount helper differs): "shows a
+  // tooltip for the picked building and hides it on leave", "keeps a
+  // stationary tooltip live as snapshots tick underneath it", "shows a
+  // worker tooltip with efficiency and tool state", "hides a stationary
+  // tooltip once the hovered worker is no longer under the pointer",
+  // "clears a stale hover after the animation tail even with no further
+  // snapshots", "suppresses hover tooltips while armed", and "a timeline
+  // reset (tick regression) clears the selection even though the id
+  // survives". See the shipped test file for their exact text.
 });
 ```
 
@@ -1417,7 +1465,17 @@ watch(interaction.ghost, (ghost) => renderer?.setGhost(ghost), { deep: true });
 to `useWorldInteraction()` and `useUiStore()`. There is no drag-to-pan: §2.1
 cuts camera work, so a pointer drag is not a gesture this canvas has.
 
-`onClick` is the one that changes, and it is the whole point of the screen:
+`onClick` is the one that changes, and it is the whole point of the screen.
+**Corrected from the draft below**: `WorldView.onClick` opened with `if
+(!renderer) return` (inventory E17), and that guard is kept, not dropped. The
+draft's `renderer?.tileAt(...) ?? null` / `renderer?.pick(...) ?? null` would
+let a click with no renderer fall through to `interaction.clickPick(null)`,
+which CLEARS the selection. In steady state the guard is unreachable — the
+host div only renders while `renderer` is non-null — but `created.onFatal`'s
+callback nulls `renderer` and sets `failure` in the same synchronous tick,
+one microtask ahead of the re-render that actually removes the host. A click
+landing in that narrow window would otherwise cause a spurious deselection
+caused by a race that is about to hide the canvas anyway:
 
 ```ts
 const engine = inject(ENGINE_KEY)!;
@@ -1428,19 +1486,25 @@ const engine = inject(ENGINE_KEY)!;
 // drop it and every construct and move click updates the UI, arms, disarms and
 // previews correctly while the colony never changes.
 function onClick(event: MouseEvent) {
+  if (!renderer) return; // kept from WorldView (E17) — see the note above
   if (ui.mode.kind !== 'idle') {
-    const command = interaction.clickTile(renderer?.tileAt(event.pageX, event.pageY) ?? null);
+    const command = interaction.clickTile(renderer.tileAt(event.pageX, event.pageY));
     if (command !== null) engine.dispatch(command);
     return;
   }
-  interaction.clickPick(renderer?.pick(event.pageX, event.pageY) ?? null);
+  interaction.clickPick(renderer.pick(event.pageX, event.pageY));
 }
 ```
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run --project unit tests/app/world-stage.test.ts`
-Expected: PASS, 8 tests.
+Expected: PASS, 22 tests — not the 8 this step originally claimed. The
+original draft's own code block contained 12 `it(...)` blocks (not 8), and
+this task's shipped file adds 10 more beyond that to close deletion-inventory
+gaps A2, A5 and A19, and to carry over the remaining hover/tooltip and
+tick-regression cases named in Step 1's note. See `task-5-report.md` for the
+full accounting.
 
 - [ ] **Step 5: Commit**
 

@@ -8,6 +8,28 @@ import {
   BALANCE, batchInputUnits, BUILDINGS, BUILDING_IDS, MEAL_WEIGHTS, RESOURCE_IDS, RESOURCES, unitsOf,
   type BuildingDefId, type ResourceId,
 } from '../../engine/content';
+import type { Selection } from './ui-store';
+import { needsLabel } from '../labels';
+
+/**
+ * One line of the Attention panel. Every field is derived from a Snapshot
+ * field that already exists — this increment adds no engine data (spec §2.4).
+ *
+ * `subject` is what a click selects and `highlight` what it pulses; a row may
+ * have neither, which is how a resource row stays inert (§2.3's table) rather
+ * than quietly doing nothing by accident.
+ */
+export interface AttentionRow {
+  id: string;
+  severity: 'warn' | 'danger';
+  message: string;
+  subject: Selection | null;
+  highlight: Selection[];
+}
+
+/** Ticks of runway at or below which a resource is worth naming. The same 30
+ * DashboardView already colours a runway cell at — one number, not two. */
+const RUNWAY_WARN_TICKS = 30;
 
 interface DefStaffing {
   total: number;
@@ -295,6 +317,87 @@ export const useGameStore = defineStore('game', {
      */
     unitsNeededForConstruction(state): number {
       return (state.snapshot?.buildings ?? []).reduce((sum, b) => sum + unitsOf(b.constructionNeeds), 0);
+    },
+    /** Colonists whose starvation clock is running — the figure the Attention
+     * panel names and PopulationSummary's cell shows, derived once. */
+    starvingCount(state): number {
+      return state.snapshot?.colonists.filter((c) => c.starvingTicks > 0).length ?? 0;
+    },
+    /**
+     * The problem list, newest concern first by severity then by kind. Pure
+     * derivation over the current snapshot: nothing here is remembered
+     * between ticks, so a fixed problem leaves the list by itself.
+     */
+    attention(state): AttentionRow[] {
+      const snapshot = state.snapshot;
+      if (!snapshot) return [];
+      // A row is EITHER a subject or a highlight set, never both: §2.3's table
+      // gives single-building rows a selection and reserves the pulse for the
+      // plural rows. Carrying both would make one click do two things and blur
+      // the distinction the table exists to draw.
+      const rows: AttentionRow[] = [];
+      const name = (defId: BuildingDefId) => BUILDINGS[defId].name;
+
+      for (const b of snapshot.buildings) {
+        const subject: Selection = { kind: 'building', id: b.id };
+        if (b.state === 'outputFull') {
+          rows.push({ id: `full-${b.id}`, severity: 'warn', subject, highlight: [],
+            message: `${name(b.defId)} is full — nothing is collecting from it` });
+        }
+        if (b.state === 'waitingForInput') {
+          rows.push({ id: `starved-${b.id}`, severity: 'warn', subject, highlight: [],
+            message: `${name(b.defId)} has nothing to work with` });
+        }
+        // The engine's own verdict, not a re-derivation of it. `workers === 0
+        // && workerSlots > 0` also fires for every unfinished producer — a site
+        // keeps its def's slots — and `handleAssignWorker` refuses a site, so
+        // that predicate reports a problem the player cannot fix. The
+        // `unstaffed` state already excludes sites, which read
+        // `underConstruction`.
+        if (b.state === 'unstaffed') {
+          rows.push({ id: `unstaffed-${b.id}`, severity: 'warn', subject, highlight: [],
+            message: `${name(b.defId)} has no one working it` });
+        }
+        if (Object.keys(b.constructionNeeds).length > 0) {
+          rows.push({ id: `site-${b.id}`, severity: 'warn', subject, highlight: [],
+            message: `${name(b.defId)} site needs ${needsLabel(b.constructionNeeds)}` });
+        }
+      }
+
+      // Resource rows carry neither a subject nor a highlight: a resource is
+      // not a thing on the map, and §2.3 keeps that inert in both panels.
+      for (const [id, ticks] of Object.entries(this.runways as Partial<Record<ResourceId, number>>)) {
+        if (ticks !== undefined && ticks <= RUNWAY_WARN_TICKS) {
+          rows.push({ id: `runway-${id}`, severity: 'danger', subject: null, highlight: [],
+            message: `${RESOURCES[id as ResourceId].name} empties in ~${ticks}t` });
+        }
+      }
+
+      if (snapshot.homeless > 0) {
+        // Plural rows pulse the people they name (§2.3). `homeId === null` is
+        // the same predicate `commuteLabel` calls homeless, not a second one.
+        rows.push({ id: 'homeless', severity: 'warn', subject: null,
+          highlight: snapshot.colonists.filter((c) => c.homeId === null).map((c) => ({ kind: 'colonist' as const, id: c.id })),
+          message: `${snapshot.homeless} colonist${snapshot.homeless === 1 ? ' has' : 's have'} no bed` });
+      }
+      const starving = snapshot.colonists.filter((c) => c.starvingTicks > 0);
+      if (starving.length > 0) {
+        rows.push({ id: 'starving', severity: 'danger', subject: null,
+          highlight: starving.map((c) => ({ kind: 'colonist' as const, id: c.id })),
+          message: `${this.starvingCount} colonist${this.starvingCount === 1 ? ' is' : 's are'} starving` });
+      }
+      if (snapshot.idleAdults > 0) {
+        // The same three conditions `idleAdults` is counted from: an adult
+        // with no building and no haul duty. Derived here rather than
+        // published, because this increment adds no snapshot field.
+        rows.push({ id: 'idle', severity: 'warn', subject: null,
+          highlight: snapshot.colonists
+            .filter((c) => c.stage === 'adult' && c.buildingId === null && !c.hauling)
+            .map((c) => ({ kind: 'colonist' as const, id: c.id })),
+          message: `${snapshot.idleAdults} adult${snapshot.idleAdults === 1 ? ' is' : 's are'} idle` });
+      }
+
+      return rows.sort((a, b) => (a.severity === b.severity ? 0 : a.severity === 'danger' ? -1 : 1));
     },
   },
   actions: {

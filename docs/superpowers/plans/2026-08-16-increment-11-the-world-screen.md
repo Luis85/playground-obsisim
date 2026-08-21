@@ -442,7 +442,10 @@ Spec §2.4: these live in the store, not in the panel, because `src/app/stores/*
 **Interfaces:**
 - Consumes: `Selection` from Task 1 (for `subject`).
 - Produces: getter `attention: AttentionRow[]` where
-  `interface AttentionRow { id: string; severity: 'warn' | 'danger'; message: string; subject: Selection | null; highlight: Selection[] }`
+  `interface AttentionRow { id: string; severity: 'warn' | 'danger'; message: string; subject: Selection | null; highlight: Selection[] }`,
+  and getter `starvingCount: number` (the colonists whose starvation clock is
+  running — Task 12's `PopulationSummary` cell reads this same getter rather
+  than deriving its own count, per §2.7).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -657,7 +660,9 @@ Widen the existing content import at the top of the file to include `BuildingDef
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run --project unit tests/app/attention.test.ts`
-Expected: PASS, 14 tests.
+Expected: PASS, 9 tests. (The block above has 9 `it`s, not 14 — the singular
+message branches, the sort order, and `starvingCount` still need their own
+cases, added during implementation.)
 
 - [ ] **Step 5: Check the line count**
 
@@ -2670,7 +2675,9 @@ which is the same shape of number:
 
 `starvingCount` is a store getter, so the panel row and this cell read one
 derivation rather than two — the §2.7 rule, and the reason `AttentionRow`'s
-message can be built from it too.
+message can be built from it too. **Task 2 provides `starvingCount`** on
+`game-store.ts` (the `attention` getter's own starving row reads it); this
+task only consumes it — do not add a second definition here.
 
 `BuildingsView.vue` gains **a construction countdown column**, **a
 site-aware staffing gate**, and two number inputs plus a Move button per row.

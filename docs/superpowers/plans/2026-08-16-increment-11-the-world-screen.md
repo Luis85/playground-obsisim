@@ -881,7 +881,7 @@ import { createPinia, setActivePinia } from 'pinia';
 import { useGameStore } from '../../src/app/stores/game-store';
 import { useUiStore } from '../../src/app/stores/ui-store';
 import { useWorldInteraction } from '../../src/app/world/interaction';
-import { makeBuilding, makeSnapshot } from './fixtures';
+import { makeBuilding, makeSnapshot, stockedWith } from './fixtures';
 
 function setup(buildings = [makeBuilding(1, { col: 5, row: 5 })]) {
   setActivePinia(createPinia());
@@ -901,8 +901,10 @@ describe('useWorldInteraction', () => {
   it('previews a valid ghost on an empty tile while placing', () => {
     const { ui, interaction } = setup();
     ui.armPlace('farm');
-    interaction.setHoverTile({ col: 2, row: 2 });
-    expect(interaction.ghost.value).toEqual({ defId: 'farm', col: 2, row: 2, valid: true });
+    // col 2 sits inside the CAMP_COLS=3 idle-camp band, always unbuildable
+    // regardless of occupancy — col 8 is a genuinely free buildable tile.
+    interaction.setHoverTile({ col: 8, row: 4 });
+    expect(interaction.ghost.value).toEqual({ defId: 'farm', col: 8, row: 4, valid: true });
   });
 
   it('previews an invalid ghost on an occupied tile', () => {
@@ -915,8 +917,8 @@ describe('useWorldInteraction', () => {
   it('dispatches a construct command on a valid placing click, and stays armed', () => {
     const { ui, interaction } = setup();
     ui.armPlace('farm');
-    expect(interaction.clickTile({ col: 2, row: 2 }))
-      .toEqual({ type: 'constructBuilding', buildingDefId: 'farm', at: { col: 2, row: 2 } });
+    expect(interaction.clickTile({ col: 8, row: 4 }))
+      .toEqual({ type: 'constructBuilding', buildingDefId: 'farm', at: { col: 8, row: 4 } });
     expect(ui.mode).toEqual({ kind: 'place', defId: 'farm' }); // repeat placement
   });
 
@@ -924,6 +926,56 @@ describe('useWorldInteraction', () => {
     const { ui, interaction } = setup();
     ui.armPlace('farm');
     expect(interaction.clickTile({ col: 5, row: 5 })).toBe(null);
+  });
+
+  // Increment 10 made ordering a request rather than a claim: a queued
+  // site's outstanding demand must NOT invalidate the placement ghost on an
+  // otherwise-empty tile. The fixture is a house already queued against
+  // exactly its own cost, with the stockpile showing that exact amount
+  // already owed (`constructionNeeds`) — the strongest case for the OLD
+  // affordability-gated rule, and therefore the sharpest regression check
+  // for its removal: if `tileValid` still consulted affordability anywhere,
+  // this is the fixture that would catch it.
+  it("a queued site's outstanding demand no longer invalidates the placement ghost", () => {
+    setActivePinia(createPinia());
+    useGameStore().ingest(makeSnapshot({
+      buildings: [
+        makeBuilding(7, { defId: 'bakery', col: 6, row: 3 }),
+        makeBuilding(8, {
+          defId: 'house', state: 'underConstruction', constructionTicks: 20,
+          constructionNeeds: { wood: 15, planks: 5 }, // the site's whole cost, undelivered
+        }),
+      ],
+      stockpile: stockedWith({ wood: 15, planks: 5 }), // exactly one house's worth, all already owed
+    }), { paused: true, speed: 1, error: null });
+    const ui = useUiStore();
+    const interaction = useWorldInteraction();
+    ui.armPlace('house');
+    interaction.setHoverTile({ col: 8, row: 4 });
+    expect(interaction.ghost.value).toEqual({ defId: 'house', col: 8, row: 4, valid: true });
+  });
+
+  // `tileValid`'s own gate: occupancy is the only thing checked, for both
+  // modes alike. The fixture is a genuinely EMPTY ledger (every RESOURCE_IDS
+  // entry at 0 via `stockedWith()`), not a rich snapshot that happens to
+  // cover the def's cost — a rich snapshot would pass this assertion whether
+  // or not the affordability gate still existed, which is exactly the
+  // false-positive an incomplete regression check would miss.
+  it('accepts the tile for an unaffordable def', () => {
+    setActivePinia(createPinia());
+    useGameStore().ingest(makeSnapshot({
+      buildings: [makeBuilding(7, { defId: 'bakery', col: 6, row: 3 })],
+      stockpile: stockedWith(), // every resource at 0
+    }), { paused: true, speed: 1, error: null });
+    const ui = useUiStore();
+    const interaction = useWorldInteraction();
+    ui.armPlace('forester');
+    interaction.setHoverTile({ col: 8, row: 4 });
+    expect(interaction.ghost.value).toEqual({ defId: 'forester', col: 8, row: 4, valid: true });
+    // The predicate alone proves nothing if the click handler still refused
+    // separately — pin the returned command too.
+    expect(interaction.clickTile({ col: 8, row: 4 }))
+      .toEqual({ type: 'constructBuilding', buildingDefId: 'forester', at: { col: 8, row: 4 } });
   });
 
   it('dispatches a move command and returns to idle', () => {
@@ -934,6 +986,13 @@ describe('useWorldInteraction', () => {
       .toEqual({ type: 'moveBuilding', buildingId: 1, to: { col: 8, row: 8 } });
     expect(ui.mode).toEqual({ kind: 'idle' });
     expect(ui.selection).toEqual({ kind: 'building', id: 1 }); // selection survives
+  });
+
+  it("a move's own tile counts as occupied, matching the engine's refusal", () => {
+    const { ui, interaction } = setup();
+    ui.selectBuilding(1);
+    ui.armMove(1);
+    expect(interaction.clickTile({ col: 5, row: 5 })).toBe(null);
   });
 
   it('forgets the hovered tile when the mode returns to idle, however it got there', () => {
@@ -949,6 +1008,17 @@ describe('useWorldInteraction', () => {
     // tile here would draw a ghost where the pointer no longer is.
     ui.armPlace('farm');
     expect(interaction.ghost.value).toBe(null);
+  });
+
+  it('swaps the ghost in place when the armed definition changes over a parked pointer', () => {
+    const { ui, interaction } = setup();
+    ui.armPlace('forester');
+    interaction.setHoverTile({ col: 8, row: 4 });
+    expect(interaction.ghost.value).toEqual({ defId: 'forester', col: 8, row: 4, valid: true });
+    // No pointer event happens between the two arms (a focused palette button
+    // re-arming by keyboard) — the ghost must follow from the mode change alone.
+    ui.armPlace('farm');
+    expect(interaction.ghost.value).toEqual({ defId: 'farm', col: 8, row: 4, valid: true });
   });
 
   it('selects a building from an idle canvas click and clears on empty ground', () => {
@@ -981,7 +1051,7 @@ import { computed, ref, watch, type ComputedRef, type Ref } from 'vue';
 import { isTileBuildable } from '../../shared/placement';
 import type { Command } from '../../shared/commands';
 import { useGameStore } from '../stores/game-store';
-import { useUiStore } from '../stores/ui-store';
+import { useUiStore, type Mode } from '../stores/ui-store';
 import type { GhostPreview } from './renderer-key';
 import type { WorldPick } from './layout';
 
@@ -1018,7 +1088,7 @@ export function useWorldInteraction(): {
 
   /** The def a ghost previews: the armed def, or the moved building's own. */
   const ghostDefId = computed(() => {
-    const mode = ui.mode;
+    const mode: Mode = ui.mode;
     if (mode.kind === 'place') return mode.defId;
     if (mode.kind === 'move') {
       return store.snapshot?.buildings.find((b) => b.id === mode.buildingId)?.defId ?? null;
@@ -1048,13 +1118,24 @@ export function useWorldInteraction(): {
    * Watched rather than fixed at each cancel site, for the same reason the
    * cancel invariant lives in the selection setter: there are five ways in and
    * only one of them is this composable's own.
+   *
+   * `flush: 'sync'` is required, not merely convenient. `hoverTile` and the
+   * mode were one fact that WorldView's `cancelMode()` used to update in one
+   * function — `mode.value = idle; lastTile.value = null; setGhost(null)` in
+   * three consecutive lines — precisely so the two could never be observed
+   * apart. `ghost` above is a computed over `hoverTile`, so with the default
+   * `pre` flush there is a window, between the store going idle and the
+   * scheduler running this watcher, in which the mode already reads idle but
+   * `hoverTile` (and therefore `ghost`, for a `move`'s own building only —
+   * `ghostDefId` already reads null for `place` once idle) still holds the
+   * stale tile. `sync` closes that window instead of merely narrating it.
    */
   watch(() => ui.mode.kind, (kind) => {
     if (kind === 'idle') hoverTile.value = null;
-  });
+  }, { flush: 'sync' });
 
   function clickTile(tile: Tile | null): Command | null {
-    const mode = ui.mode;
+    const mode: Mode = ui.mode;
     if (mode.kind === 'idle' || tile === null) return null;
     if (!tileValid(tile.col, tile.row)) return null;
     if (mode.kind === 'place') {
@@ -1078,7 +1159,7 @@ export function useWorldInteraction(): {
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run --project unit tests/app/interaction.test.ts`
-Expected: PASS, 11 tests.
+Expected: PASS, 13 tests.
 
 - [ ] **Step 5: Commit**
 

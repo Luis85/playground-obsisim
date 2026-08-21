@@ -165,6 +165,24 @@ describe('ui-store', () => {
     expect(ui.mode).toEqual({ kind: 'move', buildingId: 7 });
   });
 
+  // Correction A: an armed move is the ONLY mode the dock's dismissal rule
+  // touches. `place` is armed from the rail, which is not part of the dock
+  // and stays on screen regardless of which panel is open, so opening a panel
+  // or closing the dock must leave it alone.
+  it('an armed place survives opening a panel', () => {
+    const ui = useUiStore();
+    ui.armPlace('farm');
+    ui.openPanel('colony');
+    expect(ui.mode).toEqual({ kind: 'place', defId: 'farm' });
+  });
+
+  it('an armed place survives closing the dock', () => {
+    const ui = useUiStore();
+    ui.armPlace('farm');
+    ui.closeDock();
+    expect(ui.mode).toEqual({ kind: 'place', defId: 'farm' });
+  });
+
   // Escape is most-transient-first: mode, then selection, then dock.
   it('unwinds Escape mode-first, then selection, then dock', () => {
     const ui = useUiStore();
@@ -215,6 +233,19 @@ describe('ui-store', () => {
     expect(ui.selection).toEqual({ kind: 'none' });
     expect(ui.mode).toEqual({ kind: 'place', defId: 'farm' });
   });
+
+  // Correction B: a non-none selection cancels an armed place. Once panel
+  // rows can select things (a later task), arming the rail's palette and then
+  // clicking an Attention row would otherwise leave the palette armed behind
+  // a live selection and Inspector — the same double-claim hazard armPlace
+  // itself guards against, reached from the other direction.
+  it('selecting a building cancels an armed place, and the selection stands', () => {
+    const ui = useUiStore();
+    ui.armPlace('farm');
+    ui.selectBuilding(7);
+    expect(ui.mode).toEqual({ kind: 'idle' });
+    expect(ui.selection).toEqual({ kind: 'building', id: 7 });
+  });
 });
 ```
 
@@ -224,6 +255,25 @@ Run: `npx vitest run --project unit tests/app/ui-store.test.ts`
 Expected: FAIL — `Failed to resolve import "../../src/app/stores/ui-store"`.
 
 - [ ] **Step 3: Write the store**
+
+Two corrections apply to the store below, both about what an outgoing
+`select()` or dock action is allowed to cancel:
+
+- **`openPanel` and `closeDock` cancel a `move`, never a `place`.** Spec §2.1's
+  dismissal rule is written about the Inspector specifically ("dismissing the
+  Inspector cancels the move"). A `place` mode is armed from the rail, which
+  is not part of the dock and stays on screen regardless of which panel is
+  open, so opening the Colony panel to check stock — or closing the dock —
+  must not disarm a build the player can still see armed. Both actions gate
+  on `this.mode.kind === 'move'` rather than idling unconditionally.
+- **A non-`none` selection cancels an armed `place`.** Once later tasks let
+  panel rows select things (an Attention row selecting a building, a
+  Population row selecting a colonist), arming the rail's palette and then
+  clicking such a row would select a subject and open the Inspector while the
+  palette stayed armed — the double-claim hazard `armPlace`'s own comment
+  names, reached from the other direction. `select()` therefore also idles a
+  `place` mode whenever `next.kind !== 'none'`. `armPlace` still calls
+  `select({ kind: 'none' })` before arming, so it does not cancel itself.
 
 Create `src/app/stores/ui-store.ts`:
 
@@ -283,11 +333,27 @@ export const useUiStore = defineStore('ui', {
      * Inspector occupant row replaces a building selection with a colonist
      * selection, which is not `none`, and a rule phrased as "cleared" would
      * leave the old building armed with nothing visibly selected.
+     *
+     * Two outgoing modes are gated here, for two different reasons. An armed
+     * `move` belongs to the selection it came from, so ANY change away from
+     * that building — Escape, empty ground, a different subject — cancels it;
+     * that is spec §2.1's invariant proper. An armed `place`, by contrast,
+     * belongs to the rail and does not care what panel is open or what used
+     * to be selected — but it still cannot survive a selection landing on
+     * top of it. `armPlace` clears the selection before arming precisely
+     * because a selection under an armed palette would double-claim canvas
+     * clicks (see its own comment below); once later tasks let panel rows
+     * select things, clicking an Attention or Population row while the rail
+     * is armed would open exactly that route from the other direction — a
+     * selection appearing WHILE `place` is still armed, rather than the
+     * other way around. So a `place` mode is cancelled the moment `next` is
+     * anything but `none`, not conditioned on which subject it names.
      */
     select(next: Selection) {
-      const armed = movedBuilding(this.mode);
-      const stillArmed = armed !== null && next.kind === 'building' && next.id === armed;
-      if (armed !== null && !stillArmed) this.mode = { kind: 'idle' };
+      const armedMove = movedBuilding(this.mode);
+      const stillArmed = armedMove !== null && next.kind === 'building' && next.id === armedMove;
+      if (armedMove !== null && !stillArmed) this.mode = { kind: 'idle' };
+      if (this.mode.kind === 'place' && next.kind !== 'none') this.mode = { kind: 'idle' };
       this.selection = next;
       // A selection and a highlight are alternatives, never both (§2.3's
       // table gives every row one result). Enforced HERE rather than in each
@@ -308,14 +374,20 @@ export const useUiStore = defineStore('ui', {
     /**
      * Switching panel keeps the selection (§2.1's dock rule) and therefore
      * cannot ride on `select` above — but it does dismiss the Inspector, and
-     * an armed move must not outlive the Inspector that armed it.
+     * an armed MOVE must not outlive the Inspector that armed it.
+     *
+     * A `place` mode is armed from the rail, not the dock: the rail stays on
+     * screen no matter which panel is open, so a player checking their stock
+     * on the Colony panel mid-placement has not dismissed anything the
+     * palette depends on. Gating on `mode.kind === 'move'` rather than
+     * idling unconditionally is what tells those two cases apart.
      */
     openPanel(panel: DockPanel) {
-      if (panel !== this.panel) this.mode = { kind: 'idle' };
+      if (panel !== this.panel && this.mode.kind === 'move') this.mode = { kind: 'idle' };
       this.panel = panel;
     },
     closeDock() {
-      this.mode = { kind: 'idle' };
+      if (this.mode.kind === 'move') this.mode = { kind: 'idle' };
       this.panel = null;
     },
 
@@ -348,13 +420,13 @@ export const useUiStore = defineStore('ui', {
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run --project unit tests/app/ui-store.test.ts`
-Expected: PASS, 14 tests.
+Expected: PASS, 16 tests.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/app/stores/ui-store.ts tests/app/ui-store.test.ts
-git commit -m "The UI store, and the one place an armed move can be cancelled"
+git commit -m "The UI store, and the two places an armed mode can be cancelled"
 ```
 
 ---

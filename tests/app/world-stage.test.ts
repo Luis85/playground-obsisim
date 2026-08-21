@@ -144,6 +144,23 @@ describe('WorldStage', () => {
     expect(engine.dispatch).toHaveBeenCalledWith({ type: 'moveBuilding', buildingId: 1, to: { col: 8, row: 8 } });
   });
 
+  // Guards `if (command !== null) engine.dispatch(command)` from the top:
+  // inverting that condition, or dropping the `!== null` check so a `null`
+  // command reaches `engine.dispatch`, would still leave both dispatch tests
+  // above green (they only ever see a non-null command). Clicking an occupied
+  // tile is the real path a player hits that makes `clickTile` return null —
+  // an off-map tile would too, but only this one exercises the same
+  // isTileBuildable branch a player's misclick actually takes.
+  it('does not dispatch when clicking an occupied tile produces no command', async () => {
+    const { renderer, factory } = makeFake();
+    const { wrapper, engine } = mountStage(factory);
+    useGameStore().ingest(makeSnapshot({ buildings: [makeBuilding(1, { col: 8, row: 4 })] }), { paused: true, speed: 1, error: null });
+    (renderer.tileAt as ReturnType<typeof vi.fn>).mockReturnValue({ col: 8, row: 4 });
+    useUiStore().armPlace('farm');
+    await wrapper.get('[data-test="world-host"]').trigger('click', { pageX: 40, pageY: 40 });
+    expect(engine.dispatch).not.toHaveBeenCalled();
+  });
+
   it('forwards the computed ghost to the renderer', async () => {
     const { renderer, factory } = makeFake();
     const { wrapper } = mountStage(factory);

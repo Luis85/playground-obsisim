@@ -1499,12 +1499,14 @@ function onClick(event: MouseEvent) {
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run --project unit tests/app/world-stage.test.ts`
-Expected: PASS, 22 tests — not the 8 this step originally claimed. The
+Expected: PASS, 26 tests — not the 8 this step originally claimed. The
 original draft's own code block contained 12 `it(...)` blocks (not 8), and
-this task's shipped file adds 10 more beyond that to close deletion-inventory
-gaps A2, A5 and A19, and to carry over the remaining hover/tooltip and
-tick-regression cases named in Step 1's note. See `task-5-report.md` for the
-full accounting.
+this task's shipped file adds 14 more beyond that to close deletion-inventory
+gaps A2, A5 and A19, to carry over the remaining hover/tooltip and
+tick-regression cases named in Step 1's note, and (review round 1) to assert
+the negative of the dispatch guard — that `engine.dispatch` is NOT called
+when `clickTile` returns null. See `task-5-report.md` for the full
+accounting.
 
 - [ ] **Step 5: Commit**
 

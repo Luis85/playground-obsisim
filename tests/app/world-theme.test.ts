@@ -48,9 +48,62 @@ describe('resolveWorldTheme', () => {
 
   it('falls back to a built-in hex when the variable is missing or not hex', () => {
     const missing = resolveWorldTheme(none);
-    const garbage = resolveWorldTheme(() => 'hsl(120, 50%, 50%)');
+    const garbage = resolveWorldTheme(() => 'not-a-colour');
     expect(missing.stateRing.producing).toMatch(HEX);
     expect(garbage.stateRing.producing).toBe(missing.stateRing.producing);
+  });
+
+  // hsl()/hsla() are a documented, deliberate gap (see theme.ts's own comment
+  // on normalizeColor): this pins that the fallback still fires for them,
+  // the same as any other unparseable value, rather than silently changing
+  // behaviour in a way this suite would not catch.
+  it('still falls back for hsl()/hsla(), the one documented gap in the normalizer', () => {
+    const hsl = resolveWorldTheme(() => 'hsl(120, 50%, 50%)');
+    const hsla = resolveWorldTheme(() => 'hsla(120, 50%, 50%, 0.5)');
+    const missing = resolveWorldTheme(none);
+    expect(hsl.stateRing.producing).toBe(missing.stateRing.producing);
+    expect(hsla.stateRing.producing).toBe(missing.stateRing.producing);
+  });
+
+  // The defect this fix closes (spec §2.9, "one palette, two renderers"): a
+  // theme whose --color-orange resolves through getComputedStyle() as
+  // something other than 6-digit hex used to make the canvas silently fall
+  // back to the hardcoded literal while the HTML chrome rendered the theme's
+  // actual colour — the exact divergence between the Attention row and the
+  // ring on that building that §2.9 says is impossible by construction. This
+  // is the assertion that would have failed before the fix: the resolved
+  // value must be the theme's colour, not '#e5a63a'.
+  it('resolves a non-hex-but-valid waiting colour to the theme colour, not the hardcoded fallback', () => {
+    const themed = resolveWorldTheme((name) => (name === '--obsisim-state-waiting' ? 'rgb(229, 165, 75)' : ''));
+    expect(themed.stateRing.waitingForInput).toBe('#e5a54b');
+    expect(themed.stateRing.waitingForInput).not.toBe('#e5a63a');
+  });
+
+  it('normalizes "#rgb" shorthand to full 6-digit hex', () => {
+    const themed = resolveWorldTheme((name) => (name === '--obsisim-state-waiting' ? '#e5a' : ''));
+    expect(themed.stateRing.waitingForInput).toBe('#ee55aa');
+  });
+
+  it('normalizes rgb()/rgba() in both comma- and space-separated forms', () => {
+    const cases: Array<[string, string]> = [
+      ['rgb(229, 165, 75)', '#e5a54b'],
+      ['rgba(229, 165, 75, 0.8)', '#e5a54b'],
+      ['rgb(229 165 75)', '#e5a54b'],
+      ['rgb(229 165 75 / 0.8)', '#e5a54b'],
+      ['RGB(229,165,75)', '#e5a54b'],
+    ];
+    for (const [input, expected] of cases) {
+      const themed = resolveWorldTheme((name) => (name === '--obsisim-state-waiting' ? input : ''));
+      expect(themed.stateRing.waitingForInput).toBe(expected);
+    }
+  });
+
+  it('still falls back for genuinely unparseable values and the empty string', () => {
+    const missing = resolveWorldTheme(none);
+    for (const bad of ['', 'not-a-colour', 'rgb(1, 2)', 'rgb(1, 2, 3, 4, 5)', '#12', '#1234']) {
+      const themed = resolveWorldTheme((name) => (name === '--obsisim-state-waiting' ? bad : ''));
+      expect(themed.stateRing.waitingForInput).toBe(missing.stateRing.waitingForInput);
+    }
   });
 
   it.each(BUILDING_IDS)('defines a fill and a glyph for %s', (id) => {

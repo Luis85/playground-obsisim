@@ -61,18 +61,80 @@ export interface WorldTheme {
   homelessMark: string;
 }
 
-const HEX = /^#[0-9a-f]{6}$/i;
+// Excalibur's ex.Color.fromHex accepts "#rrggbb" and "#rrggbbaa" — pairs of
+// hex digits, with an optional leading '#' — and NOTHING else: no "#rgb"
+// shorthand, no rgb()/rgba() function syntax at all. Checked directly against
+// Excalibur's own source (node_modules/excalibur/build/esm/excalibur.development.js,
+// Color.fromHex's regex `^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})?$`),
+// not assumed — so "a value fromHex can parse" is narrower than "a valid CSS
+// colour", and this file still needs to normalize before handing colours off.
+const HEX6 = /^#[0-9a-f]{6}$/i;
+const HEX3 = /^#([0-9a-f])([0-9a-f])([0-9a-f])$/i;
+// getComputedStyle() on an unregistered custom property returns the token
+// stream verbatim, in whatever syntax the theme author (or the browser)
+// wrote it in — including rgb()/rgba() with either the legacy comma-separated
+// channels or the modern space-separated form, and either a fourth
+// comma-separated alpha or a trailing "/ alpha". A single pattern matches all
+// of those: '[,\s]' between channels accepts comma OR whitespace, and the
+// optional tail after the third channel accepts either alpha spelling. The
+// alpha group itself is consumed, never asserted on further — this file has
+// no use for a colour's transparency, so the pattern only needs to recognise
+// "this text names an rgb()/rgba() call with three numeric channels", not
+// validate it as strict CSS grammar.
+const RGB_FN = /^rgba?\(\s*(\d{1,3})\s*[,\s]\s*(\d{1,3})\s*[,\s]\s*(\d{1,3})\s*(?:[,/]\s*[\d.]+%?\s*)?\)$/i;
+
+function clampByte(channel: number): number {
+  return Math.min(255, Math.max(0, Math.round(channel)));
+}
+
+function toHexByte(channel: string): string {
+  return clampByte(Number(channel)).toString(16).padStart(2, '0');
+}
+
+/** Turns a matched rgb()/rgba() call's three channel captures into "#rrggbb". */
+function rgbToHex(r: string, g: string, b: string): string {
+  return `#${toHexByte(r)}${toHexByte(g)}${toHexByte(b)}`;
+}
+
+/**
+ * Normalizes whatever getComputedStyle() handed back into the "#rrggbb" form
+ * ex.Color.fromHex actually parses (see HEX6's own comment above for what
+ * fromHex accepts), or returns null when the value is not one of the
+ * syntaxes this file knows how to normalize — the caller (`pick`, below)
+ * falls back to a hardcoded literal in that case.
+ *
+ * hsl()/hsla() are deliberately NOT handled here. Converting them is real
+ * arithmetic — hue/saturation/lightness to RGB — not a regex reshuffle like
+ * the two cases below, and it would add an untested-in-practice branch to a
+ * function that sits under this repo's complexFunctions=0 gate for the sake
+ * of a syntax Obsidian's own default themes do not emit. A theme authored
+ * with hsl() custom properties still falls back to the hardcoded literal, the
+ * same as before this fix — a real but narrow, and now documented, gap in
+ * "one palette, two renderers" for that one theme, rather than a silent one.
+ */
+function normalizeColor(value: string): string | null {
+  if (HEX6.test(value)) return value;
+  const short = value.match(HEX3);
+  if (short) return `#${short[1]}${short[1]}${short[2]}${short[2]}${short[3]}${short[3]}`;
+  const rgb = value.match(RGB_FN);
+  if (rgb) return rgbToHex(rgb[1], rgb[2], rgb[3]);
+  return null;
+}
 
 /** A depot's sacks and crates. Named once because two things wear it on
  * purpose — see `carriedInput` and `stateRing.storing`. */
 const STORE_BROWN = '#a9835a';
 
-// Obsidian themes expose their palette as CSS variables; anything that is not
-// a plain 6-digit hex (hsl(), rgb(), empty) falls back so ex.Color.fromHex
-// always gets input it can parse.
+// Obsidian themes expose their palette as CSS variables; whatever syntax a
+// theme writes a colour in (6-digit hex, "#rgb" shorthand, or an rgb()/rgba()
+// call — see normalizeColor above), the resolved value is normalized to the
+// "#rrggbb" form ex.Color.fromHex parses. hsl()/hsla(), anything genuinely
+// unparseable, and the empty string a missing property reads back as, all
+// still fall back to the hardcoded literal — that is what keeps this file's
+// own guarantee, "a missing property degrades rather than breaks", true.
 function pick(read: VarReader, name: string, fallback: string): string {
   const value = read(name).trim();
-  return HEX.test(value) ? value : fallback;
+  return normalizeColor(value) ?? fallback;
 }
 
 const BUILDING_FILL: Record<BuildingDefId, string> = {

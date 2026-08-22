@@ -47,6 +47,18 @@ describe('DashboardView', () => {
     expect((wrapper.find('[data-test="unassign-hauler"]').element as HTMLButtonElement).disabled).toBe(true);
   });
 
+  // §2.2's rule applied to both hauler directions, on this surface too — the
+  // confirmed miss (a bare `title`) plus the ResourceStrip-side gap the
+  // sweep also found (no reason at all for the unassign direction), both
+  // fixed via the shared `HaulerControls.vue` this file now mounts.
+  it('states both hauler refusals in the panel, not a title', async () => {
+    const { wrapper } = mountDashboard();
+    useGameStore().ingest(makeSnapshot({ idleAdults: 0, colonists: [] }), { paused: false, speed: 1, error: null });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('[data-test="hauler-reason"]').text()).toContain('No idle adults');
+    expect(wrapper.get('[data-test="unassign-hauler-reason"]').text()).toContain('No haulers');
+  });
+
   // Distinct counts throughout (1 child, 3 adults, 2 elders; beds 5 of 9), so
   // a cell wired to the wrong field renders a different number rather than
   // coincidentally the right one.
@@ -103,5 +115,22 @@ describe('DashboardView', () => {
     useGameStore().ingest(colony({ mealsPerHead }), { paused: false, speed: 1, error: null });
     await wrapper.vm.$nextTick();
     expect(wrapper.get('[data-test="meals"]').classes()).toContain(expected);
+  });
+
+  // Task 12's addition: the Attention panel's "N colonists are starving" row
+  // had no table home anywhere until this task (spec §2.5) — PopulationSummary
+  // is where it lands, shared by the Dashboard and the Population view alike,
+  // reading the same `starvingCount` getter Attention's own row does (§2.7:
+  // one derivation, both surfaces — the message and this cell cannot
+  // disagree about how many).
+  it('shows the starving count PopulationSummary shares with Attention', async () => {
+    const { wrapper } = mountDashboard();
+    useGameStore().ingest(makeSnapshot({
+      colonists: [makeWorker(1, { starvingTicks: 40 }), makeWorker(2, { starvingTicks: 12 }), makeWorker(3, {})],
+    }), { paused: false, speed: 1, error: null });
+    await wrapper.vm.$nextTick();
+    const starving = wrapper.get('[data-test="starving"]');
+    expect(starving.text()).toContain('2');
+    expect(starving.classes()).toContain('obsisim-negative');
   });
 });

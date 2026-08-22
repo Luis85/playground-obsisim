@@ -33,22 +33,10 @@
   color: var(--text-on-accent);
 }
 
-.obsisim-nav {
-  display: flex;
-  gap: var(--size-4-1);
+/* Task 12: the five-tab `<nav>` (`.obsisim-nav`/`.obsisim-tab`) is gone with
+   the four routes it pointed at — one Ledger toggle replaces it. */
+.obsisim-route-toggle {
   margin: var(--size-4-2) 0;
-}
-
-.obsisim-tab {
-  padding: var(--size-2-2) var(--size-4-2);
-  border-radius: var(--radius-s);
-  text-decoration: none;
-  color: var(--text-muted);
-}
-
-.obsisim-tab.is-active {
-  background-color: var(--background-modifier-hover);
-  color: var(--text-normal);
 }
 
 .obsisim-world {

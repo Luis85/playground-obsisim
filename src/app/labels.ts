@@ -5,6 +5,28 @@ import type { BuildingSnapshot, BuildingState, ResourceStats } from '../shared/s
 import type { Chain } from '../shared/content-types';
 import type { DockPanel } from './stores/ui-store';
 
+/**
+ * "No idle adults — unassign someone first." Read by both staffing verbs
+ * (assignWorker, on both surfaces, via `staffing.ts`) and both hauler verbs
+ * (assignHauler, on both surfaces) — every one of them refuses on the exact
+ * same colony-wide fact, so this is the one sentence, not four independently
+ * worded copies that could drift the day one of them is reworded.
+ */
+export const NO_IDLE_ADULTS_REASON = 'No idle adults — unassign someone first.';
+
+/** "No haulers to send back." — `unassignHauler`'s own refusal at zero, the
+ * unassign-direction twin of `NO_IDLE_ADULTS_REASON` above. Missing on both
+ * the strip and the Ledger before Task 12's sweep: `:disabled` fired, and
+ * nothing said why. */
+export const NO_HAULERS_REASON = 'No haulers to send back.';
+
+/** "A building under construction cannot be moved." — `handleMoveBuilding`'s
+ * one refusal that applies before a target tile is even chosen, read by the
+ * Inspector's Move button (a single check, made before arming) and by the
+ * Ledger's Move button (the first of three checks, since the Ledger already
+ * has a target typed in). */
+export const MOVE_SITE_REASON = 'A building under construction cannot be moved.';
+
 export const BUILDING_STATE_LABELS: Record<BuildingState, string> = {
   producing: 'Producing',
   waitingForInput: 'Waiting for input',

@@ -1,15 +1,16 @@
 <script setup lang="ts">
-import { inject } from 'vue';
-import { ENGINE_KEY } from '../engine-key';
 import { RUNWAY_WARN_TICKS, useGameStore } from '../stores/game-store';
 import { RESOURCES, RESOURCE_IDS } from '../../engine/content';
+import HaulerControls from './HaulerControls.vue';
 
 // The always-on strip beneath the canvas: one chip per resource (spec §2.1),
-// plus the two hauler verbs that used to live in DashboardView's headline.
-// Built here rather than in Task 8 because WorldScreen renders it and Step
-// 1's test asserts `data-test="resource-strip"` exists — the shell could not
-// reach a passing test with this component still unwritten.
-const engine = inject(ENGINE_KEY)!;
+// plus the two hauler verbs that used to live in DashboardView's headline —
+// `HaulerControls` now, shared with DashboardView's own copy of the same
+// pair (see that component's own comment for why a shared component rather
+// than each view's own markup). Built here rather than in Task 8 because
+// WorldScreen renders it and Step 1's test asserts `data-test="resource-
+// strip"` exists — the shell could not reach a passing test with this
+// component still unwritten.
 const store = useGameStore();
 </script>
 
@@ -27,26 +28,6 @@ const store = useGameStore();
       {{ RESOURCES[id].name }}: {{ store.snapshot.stockpile[id].stock }}
       <template v-if="store.runways[id] !== undefined">(~{{ store.runways[id] }}t)</template>
     </span>
-    <!-- Not lifted verbatim from DashboardView's own hauler pair (§2.2): that
-         version explains a disabled `+` with a `title` alone, and a refused
-         control has to state its reason where the player is looking — the
-         same rule the Inspector's staffing and Move controls follow. This is
-         a distinct, shorter markup rather than a reworded copy, on purpose:
-         the two views are allowed to agree on WHAT a hauler count means
-         without check:quality reading them as one control duplicated twice. -->
-    <span class="obsisim-haulers" data-test="hauler-count-wrap">
-      <strong data-test="hauler-count">{{ store.haulerCount }}</strong> hauling
-      <button
-        data-test="unassign-hauler" :disabled="store.haulerCount === 0"
-        @click="engine.dispatch({ type: 'unassignHauler' })"
-      >−</button>
-      <button
-        data-test="assign-hauler" :disabled="store.snapshot.idleAdults === 0"
-        @click="engine.dispatch({ type: 'assignHauler' })"
-      >+</button>
-      <small v-if="store.snapshot.idleAdults === 0" class="obsisim-reason" data-test="hauler-reason">
-        No idle adults — unassign someone first.
-      </small>
-    </span>
+    <HaulerControls />
   </div>
 </template>

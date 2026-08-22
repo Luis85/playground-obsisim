@@ -38,6 +38,16 @@ describe('ResourceStrip', () => {
     expect(wrapper.get('[data-test="hauler-reason"]').text()).toContain('No idle adults');
   });
 
+  // The unassign direction's own refusal — a pre-existing gap this sweep
+  // found on the WORLD surface too, not only the Ledger's: `:disabled` fired
+  // at zero haulers with nothing said about why, until `HaulerControls.vue`
+  // gained a second `<small>` for it.
+  it('disables unassign with no haulers AND says why', () => {
+    const { wrapper } = mountStrip(makeSnapshot({ colonists: [] }));
+    expect(wrapper.get('[data-test="unassign-hauler"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('[data-test="unassign-hauler-reason"]').text()).toContain('No haulers');
+  });
+
   it('marks a short runway', () => {
     const { wrapper } = mountStrip(makeSnapshot({
       stockpile: { ...stockedWith({ bread: 20 }), bread: { stock: 20, deliveredRate: 0, madeRate: 0, consumptionRate: 2, netFlow: -2, stockValue: 0 } },

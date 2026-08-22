@@ -3,7 +3,7 @@ import { computed, inject } from 'vue';
 import { ENGINE_KEY } from '../../engine-key';
 import { useUiStore } from '../../stores/ui-store';
 import type { BuildingSnapshot } from '../../../shared/snapshot';
-import { suppliedLabel } from '../../labels';
+import { MOVE_SITE_REASON, suppliedLabel } from '../../labels';
 import TwoStepButton from '../TwoStepButton.vue';
 
 // The part of the Inspector every building kind shares: the construction
@@ -22,7 +22,7 @@ const ui = useUiStore();
  * site, the one branch this control has (spec §2.2: the reason is stated
  * here, not left in a `title`). */
 const moveReason = computed(() => (
-  props.building.constructionTicks > 0 ? 'A building under construction cannot be moved.' : null
+  props.building.constructionTicks > 0 ? MOVE_SITE_REASON : null
 ));
 </script>
 

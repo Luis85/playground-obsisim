@@ -9,6 +9,7 @@ import { useUiStore } from '../../stores/ui-store';
 // or colonist figure the Inspector shows is never a second derivation of a
 // number one of those views also renders (spec §2.7).
 import { BUILDING_STATE_LABELS } from '../../labels';
+import { staffingRefusal, unassignRefusal } from '../../staffing';
 import InspectorColonist from './InspectorColonist.vue';
 import InspectorFooter from './InspectorFooter.vue';
 import InspectorHouse from './InspectorHouse.vue';
@@ -91,15 +92,15 @@ const kind = computed<BuildingKind | null>(() => {
  * (`handleAssignWorker`) even though it keeps its def's `workerSlots`, a full
  * building has nowhere to put another worker, and an empty labour pool is a
  * colony-wide fact rather than anything about this building.
+ *
+ * The three branches themselves live in `staffing.ts`, shared with
+ * BuildingsView's own `+` (Task 12, spec §2.2's two-surfaces rule) — this
+ * computed is only the wiring that ties that pure function to the Inspector's
+ * single selected building.
  */
-const staffingReason = computed(() => {
-  const b = building.value;
-  if (b === null) return null;
-  if (b.constructionTicks > 0) return 'A construction site cannot be staffed until it is finished.';
-  if (b.workers >= b.workerSlots) return 'Every slot is filled.';
-  if (store.snapshot!.idleAdults === 0) return 'No idle adults — unassign someone first.';
-  return null;
-});
+const staffingReason = computed(() => (
+  building.value !== null ? staffingRefusal(building.value, store.snapshot!.idleAdults) : null
+));
 
 /**
  * Why Unassign is disabled, or null — spec §2.2's rule ("a control the engine
@@ -107,10 +108,11 @@ const staffingReason = computed(() => {
  * staffing-in-one-direction only: `handleUnassignWorker` refuses the same as
  * `handleAssignWorker` does, just on the opposite condition, so it gets the
  * same treatment as `staffingReason` rather than a bare `:disabled` with
- * nothing said about why.
+ * nothing said about why. Shared with BuildingsView's `-`, same reason as
+ * `staffingReason` above.
  */
 const unassignReason = computed(() => (
-  building.value !== null && building.value.workers === 0 ? 'Nothing is staffed here to unassign.' : null
+  building.value !== null ? unassignRefusal(building.value) : null
 ));
 </script>
 

@@ -1,14 +1,14 @@
 // @vitest-environment happy-dom
 import { describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, KeepAlive, nextTick, ref } from 'vue';
-import { mount } from '@vue/test-utils';
+import { mount, flushPromises } from '@vue/test-utils';
 import { createTestingPinia } from '@pinia/testing';
 import WorldScreen from '../../src/app/views/WorldScreen.vue';
 import { WORLD_RENDERER_KEY, type WorldRenderer } from '../../src/app/world/renderer-key';
 import { ENGINE_KEY } from '../../src/app/engine-key';
 import { useGameStore } from '../../src/app/stores/game-store';
 import { useUiStore } from '../../src/app/stores/ui-store';
-import { makeBuilding, makeSnapshot } from './fixtures';
+import { makeBuilding, makeFakeFactory, makeSnapshot, mountApp } from './fixtures';
 
 function makeFake(): WorldRenderer {
   return {
@@ -226,5 +226,33 @@ describe('WorldScreen', () => {
       withSwatch += 1;
     }
     expect(withSwatch).toBe(21);
+  });
+
+  // Criterion 3 requires BOTH of §2.5's renderer failures, not just the one a
+  // throwing factory can reach. `makeFakeFactory(true)` never returns a
+  // renderer at all — the BOOT failure, caught by WorldStage's own `try`.
+  // `makeFakeFactory(false)` hands back a renderer whose `onFatal` callback
+  // this test invokes BY HAND, the POST-boot failure: that callback is only
+  // registered after `factory()` succeeds (WorldStage.vue's own comment), so
+  // a boot-only test could never reach it, and a reviewer had already flagged
+  // that nothing reads `ui.rendererFailure` at all before this task wired it
+  // to navigation. Both paths go through that one store field, and both must
+  // land on the same place: routed to `/ledger`, with App.vue's persistent
+  // banner up (not WorldScreen's own local `world-fallback`, which stops
+  // rendering the moment the route moves away from it — see App.vue's own
+  // comment on why the banner lives there instead).
+  it('routes to the ledger on a boot failure and on a post-boot fatal', async () => {
+    for (const trigger of ['boot', 'post-boot'] as const) {
+      const { renderer, factory } = makeFakeFactory(trigger === 'boot');
+      const { wrapper, router } = await mountApp(factory);
+      if (trigger === 'post-boot') {
+        const report = (renderer!.onFatal as ReturnType<typeof vi.fn>).mock.calls[0][0] as (m: string) => void;
+        report('context lost');
+      }
+      await flushPromises();
+      expect(router.currentRoute.value.path).toBe('/ledger');
+      expect(document.querySelector('[data-test="renderer-banner"]')).not.toBeNull();
+      wrapper.unmount();
+    }
   });
 });

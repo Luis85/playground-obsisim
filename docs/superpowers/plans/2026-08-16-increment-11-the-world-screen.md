@@ -3235,19 +3235,26 @@ be green while the thing it was added to protect is uncovered. Step 2's "if a
 view is short, add the missing case" is unenforceable in that mode, because
 nothing reports which view is short.
 
-Enable per-file checking. **Verify the option against the installed Vitest
-before writing it** — `node_modules/vitest`'s types are the authority, not this
-plan — and take whichever branch is true:
+Enable per-file checking. **Corrected during Task 14, against the installed
+Vitest's own types rather than assumed** — this passage originally offered two
+branches because it had not been verified which was true. It has been:
+`node_modules/vitest/dist/chunks/reporters.d.BuRON0I0.d.ts` types the per-glob
+entry as `Pick<Thresholds, 100 | 'statements' | 'functions' | 'branches' |
+'lines'>`, which does **not** include `perFile` — so `perFile` is a top-level
+`thresholds` option only, and the plan's stated fallback ("leave per-file off
+for the engine globs") is impossible to write: there is no glob-scoped form to
+turn off. The real choice was only ever (a) `perFile: true` globally or (b) no
+`perFile` at all.
 
-- If `perFile` is accepted inside a glob entry, set it on these two entries
-  alone. Preferred: it leaves the engine and shared floors exactly as they are.
-- If `perFile` is only a top-level `thresholds` option, it applies to every
-  glob including `src/engine/**` and `src/shared/**` at 90/85/90/90. Run
-  `npm run test:coverage` before committing: those are aggregates today, so a
-  single thin engine file can newly fail. If one does, that is a real gap and
-  worth a test — but it is **not** this increment's gap, and if it cannot be
-  closed cheaply, record the number and leave per-file off for the engine globs
-  rather than lowering a floor to fit.
+(a) was measured rather than assumed: probed on commit `a374947` (before Tasks
+2–13 added the rest of the view layer), every `src/engine/**` and
+`src/shared/**` file already cleared 90/85/90/90 individually, and exactly one
+file failed — `src/app/stores/ui-store.ts`, an increment-11 file whose gap was
+closed in Task 1's own fix round. Task 14 re-ran `npm run test:coverage` with
+`perFile: true` set globally against the finished branch (Tasks 2–13 added many
+more files since that probe) and recorded what it found — see the task 14
+report for the numbers. `perFile: true` is set once, at the top level of
+`thresholds`, applying to every glob.
 
 - [ ] **Step 2: Run coverage**
 

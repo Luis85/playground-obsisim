@@ -39,7 +39,10 @@ simulated production chains — in tables and, since Increment 2, a live
   increment 2 derived; they stopped being merely cosmetic in Increment 4,
   once haul distance was priced off them
 - Tables keep full economic parity: construct auto-places on the legacy
-  pattern, a Tile column and Demolish per row — no-WebGL play stays whole
+  pattern, a Tile column and Demolish per row — the Ledger is a complete read
+  surface with a control for every command the engine accepts, offered as a
+  **fallback** rather than an equal path (Increment 11 restated and completed
+  this promise; it never claimed to be pleasant)
 
 ## Increment 4 — Logistics
 
@@ -159,6 +162,131 @@ simulated production chains — in tables and, since Increment 2, a live
   the one constant that had a case for moving, and the second measurement that
   stopped it moving
 
+## Increment 8 — Storehouse Transfer
+
+- A hauler now rebalances two stores instead of only ever filling one and
+  leaving it full. **Staging** pulls camp stock outward toward the demand
+  around a depot; a **drain** pushes a bounded site's surplus back to camp once
+  it falls below its free-space floor. Before this, a load either landed in a
+  building or went home the way it came — a store site could be filled but
+  never emptied
+- A depot's advantage over no depot now **grows with the horizon** instead of
+  staying flat: +81 / +126 / +222 / +343 planks at 600 / 1,200 / 2,400 / 4,000
+  ticks, against a flat +26 / +24 / +28 before this increment. Fitted, that is
+  a one-off term of ~34 planks plus a sustained rate of 0.078 planks/tick — the
+  depot turns over (54–57 of 60 stored, at capacity 2% of ticks) instead of
+  silting up
+- Two costs are recorded rather than rescued: a depot beside a camp-fed
+  processor is now a bigger loss (17% at three haulers, up from 10%,
+  `OBS-8-03`), and `OBS-7-02`'s in-tray cap stays unrelieved because staging
+  fires too rarely to test against it
+- A transfer never inflates `Delivered/t`, conservation stays exact with
+  transfers in flight, and dispatch keeps four bounds: supply is never
+  displaced by a transfer, staging never outranks a stalled producer's
+  collect, a drain outranks collect only below the free floor, and a drain is
+  capped at what it is restoring
+- The save is untouched — `LATEST_SAVE_VERSION` stays 6
+
+## Increment 9 — Construction as Work
+
+- The last place goods teleported and work happened for free is gone: ordering
+  a building no longer completes it on the spot. A **construction site** is a
+  phase an ordinary `Building` passes through — the same precedent
+  `Relocation` already set — with an input buffer haulers deliver to exactly as
+  they deliver to any producer, and a countdown (`buildTicks`, 30) that starts
+  once materials arrive
+- A site under construction provides nothing: a house shelters nobody, a
+  storehouse is not a store destination, a producer makes nothing — including
+  on its own construction tick
+- The affordability rule is unchanged in what it promises (you still cannot
+  order what you cannot pay for) but is now cumulative over the existing
+  queue, so two houses ordered back to back against just enough wood for one
+  correctly refuse the second
+- Cancelling a site refunds every material actually delivered to it. No
+  builder role — a site completes on materials plus a fixed time, with the
+  labour question deferred
+- **OBS-5-03 closes for free**: demolish-and-rebuild elsewhere now costs the
+  full materials and the full build time, so the relocation-pricing bypass
+  closes without any demolition history being persisted
+- Several sites ordered together fill **round-robin** and finish late and
+  together rather than one at a time — a real, measured, and deliberately
+  bounded cost that Increment 10 buys back
+- Save v7 carries a site's countdown and delivered materials; a v6 save loads
+  with every building finished
+
+## Increment 10 — A Build Queue That Converges
+
+- A build order becomes a **request**: the affordability check comes out of
+  the engine and all four UI surfaces, so you can order more than the colony
+  can currently afford and let production catch up. Not a reservation — a
+  site competes for goods through the same dispatch ranking as everything
+  else
+- Dispatch now serves the **oldest servable site first**, which is the change
+  that makes a request model converge instead of crawl. A blocked producer
+  still outranks every site, and site selection is provably independent of
+  candidate order across both a mixed-kind fixture and a multi-source fixture
+- Measured: the first completion in a queue of N sites is now **constant in
+  N** (65 ticks at one hauler, 35 at four, for every N from 1 to 8) instead of
+  growing up to **4.2×** under Increment 9's round-robin — and the last
+  completion in the queue did not move by a single tick, so this is a pure
+  redistribution, not new throughput
+- `OBS-8-06` is measured here, not resolved: a genuinely under-resourced
+  colony still stalls a queue exactly as it did before, and no queue length
+  changes whether the *first* building finishes when the underlying materials
+  cannot keep up
+- No new save version and no balance constant retuned — `buildTicks` ships
+  unchanged, because reordering completion order left the per-site countdown
+  untouched
+
+## Increment 11 — The World Screen
+
+- The colony gets **one screen** instead of five tabs. The router drops to two
+  routes — `/` is the world, `/ledger` is the tables — and everything that was
+  a tab becomes a panel in a **dock**: Inspector, Colony, Population, Economy,
+  Attention (new). Zero or one panel is open at a time, held in UI state
+  rather than in the route, so the canvas and its WebGL context are torn down
+  on exactly one round trip (the Ledger) instead of four
+- All eight engine commands now dispatch from the world screen. Before this
+  increment, staffing a building, assigning a hauler and welcoming a nomad
+  were each reachable from one table and nowhere else — the screen that showed
+  you the colony was not the screen that ran it
+- **Every row that names something on the map reaches it there.** Click a
+  colonist in Population and they light up on the canvas; click a starved
+  building in Attention and it is selected with the Inspector one click away.
+  A discriminated `Selection` type (`building` / `colonist` / `none`) and a
+  new `setHighlight` fill in the plural case — "3 colonists have no bed" pulses
+  all three without selecting any one of them
+- The Attention panel is genuinely new: every row is a sentence over a field
+  the snapshot already publishes (stalled buildings, construction shortfalls,
+  runway under 30 ticks, colonists with no bed, starvation, idle adults) — the
+  first surface built to answer "what is wrong" rather than "what is true"
+- The Ledger fallback is completed, not just kept: `moveBuilding` gets a table
+  control for the first time, closing the one gap in "table parity" that
+  existed even before this increment, and a renderer failure — at boot or
+  later, mid-session — now lands the player on the Ledger with a persistent
+  banner naming why, rather than a dead canvas
+- **No camera work.** Panning, zooming and a zoom floor are explicitly out of
+  scope; a grown map still fits by shrinking tiles toward unreadability on a
+  narrow pane, and that limitation is filed rather than fixed
+  (`OBS-11-01`). "Focus this building" is a highlight pulse, not a camera
+  move
+- Below a pane-width threshold — measured by a `ResizeObserver`, not a media
+  query, so it is testable without a real layout — the dock overlays the
+  canvas instead of shrinking it and the rail collapses to a single Build
+  popover, because ObsiSim is an Obsidian `ItemView` and can be dragged into a
+  sidebar
+- One palette now drives both renderers: the canvas's colour language
+  (`theme.ts`) and the HTML chrome read the same CSS custom properties, so a
+  `waitingForInput` row in Attention is the exact orange of the ring on that
+  building, by construction. Ticking numbers use `tabular-nums` so digits stop
+  jittering, and every icon outside the canvas legend is an inline SVG rather
+  than an emoji, so it can take the palette's colour
+- Coverage floors land for the view layer for the first time —
+  `src/app/components/**` and `src/app/views/**` at 80/70/80/80, checked
+  **per file** — closing `Per-View Coverage Floors`. No engine or shared file
+  changed; criterion 12 of the increment 11 spec is the check that holds that
+  line
+
 ## Development
 
 - `npm install`
@@ -193,6 +321,16 @@ simulated production chains — in tables and, since Increment 2, a live
   — §4 records what the harness measured, including the constant that was
   retuned on a branch and measured back out again
 - Increment 7 plan: `docs/superpowers/plans/2026-08-09-increment-7-two-way-haul-and-storage.md`
+- Increment 8 spec: `docs/superpowers/specs/2026-08-10-increment-8-storehouse-transfer.md`
+- Increment 8 plan: `docs/superpowers/plans/2026-08-10-increment-8-storehouse-transfer.md`
+- Increment 9 spec: `docs/superpowers/specs/2026-08-11-increment-9-construction-as-work.md`
+- Increment 9 plan: `docs/superpowers/plans/2026-08-11-increment-9-construction-as-work.md`
+- Increment 10 spec: `docs/superpowers/specs/2026-08-15-increment-10-a-build-queue-that-converges.md`
+- Increment 10 plan: `docs/superpowers/plans/2026-08-15-increment-10-a-build-queue-that-converges.md`
+- Increment 11 spec: `docs/superpowers/specs/2026-08-16-increment-11-the-world-screen.md`
+  — §2.8 sets the view-layer coverage floors, §3 checks every acceptance
+  criterion against what shipped
+- Increment 11 plan: `docs/superpowers/plans/2026-08-16-increment-11-the-world-screen.md`
 - Issues: `docs/issues/` — findings judged real and not fixed in the
   increment that found them; each is parented into the product backlog below
 - Process: `docs/process/agent-workflow.md` — working agreements for

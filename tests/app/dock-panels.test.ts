@@ -264,6 +264,20 @@ describe('InspectorPanel', () => {
     expect(wrapper.get('[data-test="inspector-colonist"]').text()).toContain('#9');
   });
 
+  // The `v-if="colonist.starvingTicks > 0"` branch the test above never
+  // takes — every other colonist fixture in this describe block defaults to
+  // `starvingTicks: 0`, same as `makeWorker`'s own default, so the starving
+  // line has never rendered. Closes InspectorColonist's per-file branch
+  // floor rather than leaving it to the aggregate (Task 14).
+  it('shows the starvation clock on a starving colonist', async () => {
+    const starving = makeSnapshot({ colonists: [makeWorker(9, { starvingTicks: 40 })] });
+    const { wrapper, ui } = mountPanel(InspectorPanel, starving);
+    ui.selectColonist(9);
+    await wrapper.vm.$nextTick();
+    // starvingLabel: BALANCE.starvationDeathTicks (100) - starvingTicks (40) = 60t
+    expect(wrapper.get('[data-test="inspector-colonist"]').text()).toContain('60t');
+  });
+
   // The POSITIVE case, carried over from the deleted selection-panel.test.ts.
   // Without it, an Inspector that renders TwoStepButton and never wires its
   // confirm to a dispatch passes the cross-building test below — which only
@@ -472,6 +486,19 @@ describe('PopulationPanel', () => {
     const { wrapper, ui } = mountPanel(PopulationPanel, peopled);
     await wrapper.get('[data-test="colonist-row-2"]').trigger('click');
     expect(ui.selection).toEqual({ kind: 'colonist', id: 2 });
+  });
+
+  // The other side of the `v-if="store.snapshot"` guard the panel's own
+  // comment names as belt-and-braces: every other test in this describe
+  // block ingests a snapshot before mounting (via `mountPanel`'s default
+  // argument), so the branch where nothing has arrived yet was never taken.
+  // Mirrors InspectorPanel's own "nothing selected" case above and
+  // ColonyPanel's identical guard, closing Task 14's per-file coverage floor
+  // rather than leaving this one branch to the aggregate.
+  it('renders nothing before the first snapshot arrives', () => {
+    const pinia = createTestingPinia({ createSpy: vi.fn, stubActions: false });
+    const wrapper = mount(PopulationPanel, { global: { plugins: [pinia] } });
+    expect(wrapper.find('[data-test="population-panel"]').exists()).toBe(false);
   });
 });
 

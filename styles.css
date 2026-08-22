@@ -207,3 +207,44 @@
 .obsisim-haul-pressure {
   margin: 0 0 0.75em;
 }
+
+.obsisim-dock-tabs {
+  display: flex;
+  gap: var(--size-4-1);
+}
+
+.obsisim-dock-tabs button.is-active {
+  background-color: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+/* Attention's rows share one click handler that branches on the row (a
+ * heterogeneous, data-driven list, unlike ColonyPanel/EconomyPanel's inert
+ * rows, which carry no handler at all) — so the cursor has to be set by
+ * hand instead of following naturally from handler absence. `.is-inert`
+ * marks exactly the rows `AttentionPanel.vue`'s own `isInert` leaves the
+ * click a no-op for, so the affordance and the behaviour cannot drift apart:
+ * a runway row neither looks clickable nor is. */
+.obsisim-attention {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.obsisim-attention li {
+  padding: var(--size-2-2) var(--size-4-2);
+  border-bottom: 1px solid var(--background-modifier-border);
+  cursor: pointer;
+}
+
+.obsisim-attention li:hover {
+  background-color: var(--background-modifier-hover);
+}
+
+.obsisim-attention li.is-inert {
+  cursor: default;
+}
+
+.obsisim-attention li.is-inert:hover {
+  background-color: transparent;
+}

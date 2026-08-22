@@ -57,6 +57,26 @@ describe('WorldScreen', () => {
     expect(wrapper.find('[data-test="dock"]').exists()).toBe(true);
   });
 
+  // The tab strip is the only route to Colony/Population/Economy/Attention
+  // that does not require selecting a map subject first (WorldScreen.vue's
+  // own comment on the `<nav>`), so it has to be reachable with the dock
+  // closed — and it stays mounted, not merely rendered once, after the dock
+  // closes again.
+  it('offers every panel from a closed dock', async () => {
+    const wrapper = mountScreen();
+    const ui = useUiStore();
+    expect(ui.panel).toBe(null);
+    expect(wrapper.find('[data-test="dock"]').exists()).toBe(false);
+    for (const panel of ['colony', 'population', 'economy', 'attention'] as const) {
+      await wrapper.get(`[data-test="dock-tab-${panel}"]`).trigger('click');
+      expect(ui.panel).toBe(panel);
+    }
+    await wrapper.get('[data-test="dock-close"]').trigger('click');
+    expect(ui.panel).toBe(null);
+    expect(wrapper.get('[data-test="dock-tab-attention"]').isVisible()).toBe(true);
+    wrapper.unmount();
+  });
+
   it('unwinds the Escape ladder mode-first', async () => {
     const wrapper = mountScreen();
     const ui = useUiStore();

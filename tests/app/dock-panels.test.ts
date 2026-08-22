@@ -7,6 +7,7 @@ import InspectorPanel from '../../src/app/components/dock/InspectorPanel.vue';
 import ColonyPanel from '../../src/app/components/dock/ColonyPanel.vue';
 import PopulationPanel from '../../src/app/components/dock/PopulationPanel.vue';
 import EconomyPanel from '../../src/app/components/dock/EconomyPanel.vue';
+import AttentionPanel from '../../src/app/components/dock/AttentionPanel.vue';
 import { NOMAD_REJECTIONS } from '../../src/shared/population';
 import { ENGINE_KEY } from '../../src/app/engine-key';
 import { useGameStore } from '../../src/app/stores/game-store';
@@ -493,5 +494,79 @@ describe('EconomyPanel', () => {
     const { wrapper, ui } = mountPanel(EconomyPanel, makeSnapshot({ buildings: [] }));
     await wrapper.get('[data-test="stage-row-farm"]').trigger('click');
     expect(ui.highlight).toEqual([]);
+  });
+});
+
+describe('AttentionPanel', () => {
+  // Spec §2.3's single-building row selects its subject — but the tension
+  // this task exists to resolve is WHICH panel is open afterwards. §2.1
+  // scopes the auto-open rule to the canvas ("Selecting a building ON THE
+  // CANVAS auto-opens the Inspector"); §2.3 states the Attention case in
+  // different words on purpose — "the bakery is selected WITH THE INSPECTOR
+  // ONE CLICK AWAY", not "and the Inspector opens". A plain `ui.select()`
+  // would fail this test: it forces `panel = 'inspector'` unconditionally
+  // (ui-store.ts), which would swap this worklist out from under the player
+  // on every single row instead of leaving them free to work through it.
+  // `ui.panel` is set to `'attention'` before the click (mounting the panel
+  // in isolation does not imply the dock is showing it) precisely so a
+  // regression to plain `ui.select()` has something to disagree with.
+  it('selects the building a row names, without switching the dock away from Attention', async () => {
+    const stalled = makeSnapshot({ buildings: [makeBuilding(4, { defId: 'sawmill', state: 'outputFull' })] });
+    const { wrapper, ui } = mountPanel(AttentionPanel, stalled);
+    ui.openPanel('attention');
+    await wrapper.get('[data-test="attention-full-4"]').trigger('click');
+    expect(ui.selection).toEqual({ kind: 'building', id: 4 });
+    expect(ui.panel).toBe('attention'); // the tension this task resolves — see comment above
+  });
+
+  // Spec §2.3's plural row: "highlights that set; selects nothing". The
+  // dock keeps a selection alive across a panel switch (§2.1), so a
+  // standing selection from an earlier Inspector visit would otherwise
+  // survive this click untouched — the building stays selected while the
+  // pulse names colonists instead, a state the player never asked for.
+  it('clears a standing selection when a plural row is clicked', async () => {
+    const homeless = makeSnapshot({ homeless: 1, buildings: [makeBuilding(4)], colonists: [makeWorker(2)] });
+    const { wrapper, ui } = mountPanel(AttentionPanel, homeless);
+    ui.selectBuilding(4); // the dock keeps this across a panel switch — hence the risk
+    await wrapper.get('[data-test="attention-homeless"]').trigger('click');
+    expect(ui.selection).toEqual({ kind: 'none' });
+    expect(ui.highlight).toEqual([{ kind: 'colonist', id: 2 }]);
+  });
+
+  // Spec §2.3's inert row, and the case that tells "inert" apart from
+  // "clears": a runway warning names no building, so it must not deselect
+  // the sawmill the player is looking at — a bare `ui.clearSelection()` with
+  // no highlight guard would pass the plural test above while failing this
+  // one.
+  it('leaves a runway row inert — it does not even deselect', async () => {
+    const draining = makeSnapshot({
+      stockpile: { ...stockedWith({ bread: 20 }), bread: { stock: 20, deliveredRate: 0, madeRate: 0, consumptionRate: 2, netFlow: -2, stockValue: 0 } },
+    });
+    const { wrapper, ui } = mountPanel(AttentionPanel, draining);
+    ui.selectBuilding(4);
+    await wrapper.get('[data-test="attention-runway-bread"]').trigger('click');
+    expect(ui.selection).toEqual({ kind: 'building', id: 4 }); // untouched
+    expect(ui.highlight).toEqual([]);
+  });
+
+  // The inert row's affordance, not just its behaviour: this panel's rows
+  // share one click handler that branches on the row (unlike ColonyPanel/
+  // EconomyPanel's inert rows, which carry no handler at all — see
+  // AttentionPanel.vue's own comment for why that pattern does not fit a
+  // heterogeneous, data-driven list), so nothing here would otherwise stop
+  // the runway row from looking exactly as clickable as the sawmill row
+  // beside it.
+  it('marks the inert runway row so it does not look clickable either', () => {
+    const draining = makeSnapshot({
+      stockpile: { ...stockedWith({ bread: 20 }), bread: { stock: 20, deliveredRate: 0, madeRate: 0, consumptionRate: 2, netFlow: -2, stockValue: 0 } },
+    });
+    const { wrapper } = mountPanel(AttentionPanel, draining);
+    expect(wrapper.get('[data-test="attention-runway-bread"]').classes()).toContain('is-inert');
+  });
+
+  it('says so when nothing needs attention', () => {
+    const fine = makeSnapshot({ buildings: [makeBuilding(1, { workers: 2, workerSlots: 2, state: 'producing' })] });
+    const { wrapper } = mountPanel(AttentionPanel, fine);
+    expect(wrapper.get('[data-test="attention-empty"]').text()).toContain('Nothing needs attention');
   });
 });

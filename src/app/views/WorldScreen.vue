@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref } from 'vue';
 import type { BuildingDefId } from '../../shared/content-types';
-import { useUiStore, type DockPanel } from '../stores/ui-store';
+import { useUiStore } from '../stores/ui-store';
 import WorldStage from './WorldStage.vue';
 import BuildPalette from '../components/BuildPalette.vue';
 import ResourceStrip from '../components/ResourceStrip.vue';
 import WorldLegend from '../components/WorldLegend.vue';
-import InspectorPanel from '../components/dock/InspectorPanel.vue';
+import DockTabs from '../components/DockTabs.vue';
+import DockBody from '../components/DockBody.vue';
 
 // The shell that composes what WorldView used to own in one 339-line file
 // (spec §2.1 / the increment-11 split): the rail (BuildPalette), the canvas
@@ -48,19 +49,6 @@ const NARROW_PX = 720;
  */
 const railOpen = ref(false);
 const paletteVisible = computed(() => !ui.narrow || railOpen.value);
-
-/**
- * A placeholder label for the panel Tasks 7-11 have not built yet. Reading
- * `DockPanel` here rather than leaving the dock a bare box does two things at
- * once: it gives the player SOME feedback that their click landed (rather
- * than an empty grey rectangle that looks broken), and it is a genuine call
- * site for the `DockPanel` type — which otherwise has no consumer outside the
- * file that declares it until Task 7 lands, and would be flagged as dead
- * code by `check:quality` in the meantime.
- */
-const DOCK_PANEL_LABELS: Record<DockPanel, string> = {
-  inspector: 'Inspector', colony: 'Colony', population: 'Population', economy: 'Economy', attention: 'Attention',
-};
 
 /**
  * The Inspector's remount key — LOAD BEARING, not decorative (see
@@ -142,17 +130,14 @@ onBeforeUnmount(() => {
       @arm="(id: BuildingDefId) => { ui.armPlace(id); railOpen = false; }" @disarm="ui.cancelMode"
     />
     <WorldStage class="obsisim-stage" @fatal="onFatal" />
-    <!-- `is-overlay` is state, not a media query, so criterion 7's other half
-         is assertable in jsdom: the CSS keys off this class rather than off a
-         container query alone, and a test can prove the dock stops taking a
-         grid column instead of only proving the rail collapsed. -->
-    <aside v-if="ui.panel" class="obsisim-dock" :class="{ 'is-overlay': ui.narrow }" data-test="dock">
-      <!-- Tasks 8-11 replace the placeholder branch with the four remaining
-           panels. The Inspector's `:key` is `inspectorKey` above, not a bare
-           `ui.selection.id` — see that computed's own comment. -->
-      <InspectorPanel v-if="ui.panel === 'inspector'" :key="inspectorKey" />
-      <template v-else>{{ DOCK_PANEL_LABELS[ui.panel] }}</template>
-    </aside>
+    <!-- Always mounted, outside the dock's own `v-if` — see DockTabs.vue's
+         own comment for why it is a separate component and why it has to
+         live here regardless of whether a panel is open. -->
+    <DockTabs />
+    <!-- The dock's body — see DockBody.vue's own comment for why the panel
+         switch lives there rather than inline here, and for why
+         `inspectorKey` is passed down rather than recomputed. -->
+    <DockBody :inspector-key="inspectorKey" />
     <ResourceStrip class="obsisim-strip" />
     <WorldLegend />
   </div>

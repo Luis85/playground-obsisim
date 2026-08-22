@@ -2559,7 +2559,20 @@ const store = useGameStore();
 const ui = useUiStore();
 
 /*
- * The three outcomes of §2.3's table, in the order the table gives them.
+ * The three outcomes of §2.3's table, in the order the table gives them —
+ * corrected after implementation (see task-11-report.md): a single-building
+ * row must NOT go through a plain `ui.select()`. That action forces
+ * `panel = 'inspector'` unconditionally (ui-store.ts), which is exactly
+ * right for a canvas click (§2.1's own wording scopes the auto-open rule to
+ * "on the canvas") and exactly wrong for a row in a worklist — §2.3's prose
+ * for this exact case is "the bakery is selected WITH THE INSPECTOR ONE
+ * CLICK AWAY", not "and the Inspector opens". A plain `ui.select()` here
+ * would swap Attention's own list out from under the player on every row.
+ * The fix is `ui.selectKeepingPanel()`, a second UI-store action that shares
+ * `select`'s state transition (a `commitSelection` helper both reduce to)
+ * without the panel-opening line — see ui-store.ts for why this is a second
+ * action rather than an options flag on `select` (the flag pushed `select`'s
+ * own cyclomatic complexity past fallow's CRAP gate).
  *
  * A plural row CLEARS the selection: the table calls its result "highlights
  * that set; selects nothing", and the dock deliberately keeps a selection
@@ -2569,13 +2582,16 @@ const ui = useUiStore();
  *
  * An inert row does nothing AT ALL, which is not the same as clearing: a
  * runway warning naming bread has no business deselecting the sawmill the
- * player is looking at.
+ * player is looking at. It also must not LOOK clickable — an `is-inert`
+ * class (driven by the same `isInert` predicate the click handler's early
+ * return uses, so the two cannot disagree) drops the pointer cursor and
+ * hover highlight the rest of this list's rows get.
  */
 function activate(row: AttentionRow) {
-  // No setHighlight([]) here: `select` drops a standing highlight itself, for
-  // every caller rather than for this one.
+  // No setHighlight([]) here: `select`/`selectKeepingPanel` drop a standing
+  // highlight themselves, for every caller rather than for this one.
   if (row.subject !== null) {
-    ui.select(row.subject);
+    ui.selectKeepingPanel(row.subject);
     return;
   }
   if (row.highlight.length === 0) return;
@@ -2587,10 +2603,11 @@ function activate(row: AttentionRow) {
 <template>
   <ul class="obsisim-attention" data-test="attention">
     <li v-for="row in store.attention" :key="row.id" :data-test="`attention-${row.id}`"
-      :class="row.severity === 'danger' ? 'obsisim-negative' : 'obsisim-warning'" @click="activate(row)">
+      :class="[row.severity === 'danger' ? 'obsisim-negative' : 'obsisim-warning', { 'is-inert': isInert(row) }]"
+      @click="activate(row)">
       {{ row.message }}
     </li>
-    <li v-if="store.attention.length === 0" data-test="attention-empty">Nothing needs attention.</li>
+    <li v-if="store.attention.length === 0" class="is-inert" data-test="attention-empty">Nothing needs attention.</li>
   </ul>
 </template>
 ```
@@ -2626,14 +2643,32 @@ In `WorldScreen.vue`, render each panel behind its `ui.panel` value inside the
            Demolish armed from the old one — and a touch client never blurs the
            button, so the first tap on B dispatches against B. The remount is
            what guarantees a fresh, disarmed confirm. -->
-      <InspectorPanel v-if="ui.panel === 'inspector'" :key="`${ui.selection.kind}-${'id' in ui.selection ? ui.selection.id : 0}`" />
+      <InspectorPanel v-if="ui.panel === 'inspector'" :key="inspectorKey" />
       <ColonyPanel v-else-if="ui.panel === 'colony'" />
       <PopulationPanel v-else-if="ui.panel === 'population'" />
       <EconomyPanel v-else-if="ui.panel === 'economy'" />
-      <AttentionPanel v-else />
+      <AttentionPanel v-else-if="ui.panel === 'attention'" />
       <button data-test="dock-close" aria-label="Close panel" @click="ui.closeDock()">✕</button>
     </aside>
 ```
+
+Corrected after implementation (see task-11-report.md): use `WorldScreen.vue`'s
+own `inspectorKey` computed (Task 7) at the render site rather than restating
+its expression inline — that computed exists precisely so the render site and
+`dock-panels.test.ts`'s `mountKeyedInspector` helper cannot drift apart, and
+pasting the expression back here defeats that. `<AttentionPanel v-else-if=...>`
+rather than a bare `v-else`, so an unexpected `ui.panel` value renders nothing
+instead of silently falling through to Attention.
+
+The shipped version also splits the `<nav>` tab strip and the `<aside>` panel
+switch above into their own components (`DockTabs.vue`, `DockBody.vue`)
+rather than leaving them inline in `WorldScreen.vue`'s own template: with all
+five panels wired in, that template's cognitive complexity crossed fallow's
+gate, and check-quality.mjs's own header says why a branchy helper is
+refactored rather than suppressed. The behaviour above — tab strip outside
+the panel `v-if`, `is-overlay` preserved on the `<aside>`, `inspectorKey`
+passed through rather than recomputed — is unchanged; only the file
+boundary moved.
 
 `DOCK_PANELS` and `DOCK_LABELS` go in `src/app/labels.ts`, keyed by the
 `DockPanel` union so a sixth panel is a compile error rather than an unlabelled
@@ -2661,9 +2696,20 @@ Add to `tests/app/world-screen.test.ts`:
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/app/components/dock src/app/views/WorldScreen.vue tests/app/dock-panels.test.ts
+git add src/app/components/dock src/app/components/DockTabs.vue src/app/components/DockBody.vue \
+  src/app/views/WorldScreen.vue src/app/stores/ui-store.ts src/app/labels.ts styles.css \
+  tests/app/dock-panels.test.ts tests/app/world-screen.test.ts
 git commit -m "The problem list, and the dock gets its five panels"
 ```
+
+Corrected after implementation (see task-11-report.md): Step 5 also edits
+`src/app/labels.ts` (`DOCK_PANELS`/`DOCK_LABELS`) and
+`tests/app/world-screen.test.ts` (the new tab-strip test), neither of which
+the original list named — the third time in this plan the commit step's
+`git add` has dropped a file a step above it actually touches. Committing
+everything the task's own steps touch, not just the list here, is the rule
+to follow; this list is now an example of doing that, not a substitute for
+checking.
 
 ---
 

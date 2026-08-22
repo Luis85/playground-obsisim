@@ -23,6 +23,42 @@ function movedBuilding(mode: Mode): number | null {
   return mode.kind === 'move' ? mode.buildingId : null;
 }
 
+/** The slice of UI-store state `commitSelection` below reads and writes.
+ * Typed structurally, as a plain function parameter, rather than against the
+ * store instance `defineStore` returns — that type does not exist yet at
+ * this point in the file, and referencing it here would make the function
+ * depend on the very store it is a helper for. */
+interface SelectionState {
+  mode: Mode;
+  selection: Selection;
+  highlight: Selection[];
+}
+
+/**
+ * The state transition `select` and `selectKeepingPanel` share: cancel an
+ * armed move the new subject does not belong to (spec §2.1's invariant),
+ * cancel an armed place, commit the selection, and — on a non-`none`
+ * outgoing value — drop a standing highlight (§2.3: a selection and a
+ * highlight are alternatives, never both; see `select`'s own comment for why
+ * that clearing is enforced here rather than by each caller).
+ *
+ * A free function, not a third store action, and returning a bare boolean
+ * rather than being folded into `select` as an options parameter: see
+ * `selectKeepingPanel`'s own comment for why splitting it out this way,
+ * rather than branching on a flag inside one bigger method, is what keeps
+ * both callers under fallow's complexity gate.
+ */
+function commitSelection(state: SelectionState, next: Selection): boolean {
+  const armedMove = movedBuilding(state.mode);
+  const stillArmed = armedMove !== null && next.kind === 'building' && next.id === armedMove;
+  if (armedMove !== null && !stillArmed) state.mode = { kind: 'idle' };
+  if (state.mode.kind === 'place' && next.kind !== 'none') state.mode = { kind: 'idle' };
+  state.selection = next;
+  if (next.kind === 'none') return false;
+  state.highlight = [];
+  return true;
+}
+
 export const useUiStore = defineStore('ui', {
   state: () => ({
     selection: { kind: 'none' } as Selection,
@@ -70,26 +106,42 @@ export const useUiStore = defineStore('ui', {
      * anything but `none`, not conditioned on which subject it names.
      */
     select(next: Selection) {
-      const armedMove = movedBuilding(this.mode);
-      const stillArmed = armedMove !== null && next.kind === 'building' && next.id === armedMove;
-      if (armedMove !== null && !stillArmed) this.mode = { kind: 'idle' };
-      if (this.mode.kind === 'place' && next.kind !== 'none') this.mode = { kind: 'idle' };
-      this.selection = next;
-      // A selection and a highlight are alternatives, never both (§2.3's
-      // table gives every row one result). Enforced HERE rather than in each
-      // caller: AttentionPanel's single-subject path already cleared the pulse
-      // by hand, and Population rows, Inspector occupant rows and the canvas
-      // did not — so a stage highlight survived alongside a new selection.
-      // Only the non-none branch clears, which is what lets the plural flow
-      // (clearSelection, then setHighlight) still work.
-      if (next.kind !== 'none') {
-        this.panel = 'inspector';
-        this.highlight = [];
-      }
+      if (commitSelection(this, next)) this.panel = 'inspector';
     },
     selectBuilding(id: number) { this.select({ kind: 'building', id }); },
     selectColonist(id: number) { this.select({ kind: 'colonist', id }); },
     clearSelection() { this.select({ kind: 'none' }); },
+    /**
+     * `select` above, minus the one line that opens the Inspector.
+     *
+     * §2.1 states the auto-open rule scoped to a single route — "Selecting a
+     * building **on the canvas** auto-opens the Inspector" — and §2.3
+     * deliberately does not repeat that promise for a panel row: its own
+     * wording is "the bakery is selected **with the Inspector one click
+     * away**", not "and the Inspector opens". Attention is a list of
+     * problems to work through; a click that swapped the list for the
+     * Inspector on every row would force a trip back to Attention after
+     * each one. So this is a second action, not a flag on `select`: folding
+     * it into `select` as an options object pushed that method's own
+     * cyclomatic complexity past fallow's CRAP gate (an estimated-coverage
+     * function is penalised quadratically in branch count — see
+     * check-quality.mjs's own header), and `commitSelection` below is the
+     * fix, not a suppression — the shared state transition lives in one
+     * function both callers reduce to, so neither one's complexity has to
+     * absorb the other's decision.
+     *
+     * `AttentionPanel`'s single-subject row is the one caller: every other
+     * selection in the app — the canvas (`selectBuilding`/`selectColonist`,
+     * via `useWorldInteraction.clickPick`) and Population's colonist row —
+     * goes through `select` above and keeps opening the Inspector exactly as
+     * it does today. See `ui-store.test.ts`'s "auto-opens the inspector..."
+     * case (still `select`) and `dock-panels.test.ts`'s Attention tests
+     * (this method), which pin both halves so neither regresses into the
+     * other.
+     */
+    selectKeepingPanel(next: Selection) {
+      commitSelection(this, next);
+    },
 
     /**
      * Switching panel keeps the selection (§2.1's dock rule) and therefore

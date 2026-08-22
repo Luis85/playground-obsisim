@@ -3,6 +3,7 @@ import type { HaulKind } from '../shared/haul';
 import type { LifeStage } from '../shared/population';
 import type { BuildingSnapshot, BuildingState, ResourceStats } from '../shared/snapshot';
 import type { Chain } from '../shared/content-types';
+import type { DockPanel } from './stores/ui-store';
 
 export const BUILDING_STATE_LABELS: Record<BuildingState, string> = {
   producing: 'Producing',
@@ -349,3 +350,30 @@ export function buildPressureLabel(buildingsUnderConstruction: number, unitsNeed
   const sites = `${buildingsUnderConstruction} site${buildingsUnderConstruction === 1 ? '' : 's'}`;
   return `${unitsNeededForConstruction} units needed — ${sites} under construction.`;
 }
+
+/**
+ * Keyed by the `DockPanel` union for the same reason `BUILDING_STATE_LABELS`
+ * above is: a sixth panel added to that union with no entry here is a
+ * compile error in this file, not a live tab button that silently renders an
+ * unlabelled blank (WorldScreen.vue's tab strip reads `DOCK_LABELS[p]`
+ * directly, with nothing between the union and the label).
+ */
+export const DOCK_LABELS: Record<DockPanel, string> = {
+  inspector: 'Inspector',
+  colony: 'Colony',
+  population: 'Population',
+  economy: 'Economy',
+  attention: 'Attention',
+};
+
+/**
+ * The dock's tab strip, in display order. Deliberately every `DockPanel`
+ * EXCEPT `inspector`: the Inspector has no tab of its own because it is
+ * never a destination a player picks directly — it opens only as a
+ * consequence of a selection, from the canvas (§2.1) or a panel row (§2.3).
+ * A tab that opened it with no selection behind it would show an empty
+ * panel with nothing to point at. Typed over `Exclude<DockPanel,
+ * 'inspector'>` rather than a bare `DockPanel[]` so that omission is
+ * enforced here too, not merely asserted in this comment.
+ */
+export const DOCK_PANELS: readonly Exclude<DockPanel, 'inspector'>[] = ['colony', 'population', 'economy', 'attention'];

@@ -119,7 +119,7 @@ onBeforeUnmount(() => {
   </div>
   <div v-else ref="root" class="obsisim-world-screen" :class="{ 'is-narrow': ui.narrow }">
     <button
-      v-if="ui.narrow" data-test="rail-toggle" :class="{ 'is-armed': railOpen }"
+      v-if="ui.narrow" class="obsisim-rail-toggle" data-test="rail-toggle" :class="{ 'is-armed': railOpen }"
       @click="railOpen = !railOpen"
     >
       Build

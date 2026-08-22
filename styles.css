@@ -1,6 +1,78 @@
+/*
+ * Task 13 — the visual language (spec §2.9). Three things live in this file
+ * that did not before:
+ *
+ *   1. The token block on `.obsisim` below: every colour `theme.ts` resolves,
+ *      named once as a custom property. `theme.ts` reads these through its
+ *      existing `VarReader` (getComputedStyle on an element nested under
+ *      `.obsisim`), so CSS is the single source and the canvas follows it —
+ *      "one palette, two renderers", not two lists that agree by hand.
+ *   2. The world screen's shell layout: a grid for `.obsisim-world-screen`
+ *      (rail / stage / dock / strip), and real overlay positioning for
+ *      `.obsisim-dock.is-overlay` — see that rule's own comment for why the
+ *      dock keys off the JS-driven class rather than a container query alone.
+ *   3. The type scale, tabular figures, an icon's base size, and three named
+ *      transitions bounded by `prefers-reduced-motion`.
+ */
+
 .obsisim {
+  /*
+   * One palette, two renderers (spec §2.9). Every property below is either
+   * `var(--obsidian-var, #fallback)` — nesting a lookup against Obsidian's
+   * own vault variable, with ITS OWN hex fallback for a theme that doesn't
+   * define it — or a plain literal, for a hue nothing in Obsidian's palette
+   * speaks for (the construction amber, the storehouse brown, the two
+   * creams, the unstaffed grey, the elder silver, the ground checker).
+   * Either way `theme.ts`'s own `pick()` fallback (the hex literal at each
+   * call site there) is UNCHANGED by this task and still applies whenever a
+   * property fails to resolve at all — a stylesheet that hasn't loaded, or a
+   * `resolveWorldTheme()` call made before this class is mounted around it —
+   * so a missing property degrades to the same colours this file names,
+   * rather than breaking (tests/app/world-theme.test.ts pins this).
+   */
+  --obsisim-color-background: var(--background-primary, #20242b);
+  --obsisim-color-accent: var(--interactive-accent, #7c8cf0);
+  --obsisim-color-danger: var(--color-red, #e0533d);
+  --obsisim-color-ground-a: #55714a;
+  --obsisim-color-ground-b: #4d6743;
+  --obsisim-color-tool-ring: #f2ecdd;
+  --obsisim-color-progress-fill: #f5efdc;
+
+  /* Building-state ring language. graphics-cache.ts indexes stateRing[b.state]
+     unconditionally, so every BuildingState member needs an entry here —
+     see theme.ts's own per-state comments for why each hue was chosen. */
+  --obsisim-state-producing: var(--color-green, #3cb46e);
+  --obsisim-state-waiting: var(--color-orange, #e5a63a);
+  --obsisim-state-unstaffed: #8f8f8f;
+  --obsisim-state-output-full: var(--color-purple, #8f6fbf);
+  --obsisim-state-under-construction: #cf8b2f;
+  --obsisim-state-relocating: var(--color-cyan, #4bbfd4);
+  --obsisim-state-housing: var(--color-blue, #4c8bf5);
+  --obsisim-state-storing: #a9835a;
+
+  /* Demographic marks — a colonist's life stage and homelessness. */
+  --obsisim-mark-child: var(--color-yellow, #e6c84a);
+  --obsisim-mark-elder: #b9c2d0;
+  --obsisim-mark-homeless: var(--color-pink, #e0619e);
+
+  /*
+   * Three-step type scale (spec §2.9), replacing the one uniform
+   * `--font-ui-small` this file used everywhere before. Sourced from
+   * Obsidian's own three smallest UI sizes rather than a pinned px value, so
+   * the scale still follows whatever font size the player's theme sets.
+   *   vitals  — the always-on HUD numbers: top bar tick/population/wealth,
+   *             the resource strip's stock figures.
+   *   body    — everything else: table cells, panel text, dock rows. This
+   *             is `.obsisim`'s own font-size, so it is the default.
+   *   caption — secondary text: the hover tooltip, the canvas legend, a
+   *             disabled control's stated reason, a palette's cost line.
+   */
+  --obsisim-font-vitals: var(--font-ui-medium, 1rem);
+  --obsisim-font-body: var(--font-ui-small, 0.875rem);
+  --obsisim-font-caption: var(--font-ui-smaller, 0.75rem);
+
   padding: var(--size-4-3);
-  font-size: var(--font-ui-small);
+  font-size: var(--obsisim-font-body);
 }
 
 .obsisim-topbar {
@@ -21,7 +93,11 @@
   flex-wrap: wrap;
 }
 
-.obsisim-summary { margin-left: auto; }
+.obsisim-summary {
+  margin-left: auto;
+  font-size: var(--obsisim-font-vitals);
+  font-variant-numeric: tabular-nums; /* live counters: no horizontal jitter as digits change width */
+}
 
 .obsisim-haulers button {
   margin-left: 0.25em;
@@ -39,8 +115,101 @@
   margin: var(--size-4-2) 0;
 }
 
-.obsisim-world {
+/*
+ * The world screen's shell (spec §2.1's four regions): rail, canvas, dock,
+ * resource strip, arranged on a grid rather than left to block flow —
+ * `WorldScreen.vue`'s template renders all four as siblings, and it is this
+ * file, not that one, that turns them into the mockup's layout.
+ *
+ * `container-type: inline-size` makes this element a query container for
+ * its OWN descendants: spec §2.1 is explicit that CSS here has to respond
+ * to the PANE's width, never the window's, because this view is an Obsidian
+ * `ItemView` and can be dragged into a sidebar next to a full-width note. A
+ * `@media` query reads the window; `@container` reads this element. See the
+ * `@container` block near the bottom of this file for the rule that actually
+ * uses it.
+ *
+ * The narrow/overlay switch itself (rail collapse, dock overlay) does NOT
+ * live behind that `@container` query, on purpose — it is driven by the
+ * `.is-narrow`/`.is-overlay` classes `WorldScreen.vue`'s `ResizeObserver`
+ * writes into the UI store instead (see `DockBody.vue`'s own comment on
+ * `is-overlay`). That duplication of "narrow" as both a store flag and a
+ * container query is deliberate, not an oversight: jsdom has no container-
+ * query support at all, so the ONE thing criterion 7 needs to assert in a
+ * test — that the dock actually stops taking a grid column — has to be
+ * reachable by a plain class selector. The `@container` query below is for
+ * a SEPARATE, purely cosmetic refinement that no test needs to see.
+ */
+.obsisim-world-screen {
+  container-type: inline-size;
+  container-name: obsisim-world;
+  position: relative; /* the containing block .obsisim-dock.is-overlay positions against */
+  display: grid;
+  grid-template-columns: minmax(140px, 200px) minmax(0, 1fr) minmax(220px, 320px);
+  grid-template-rows: auto 1fr auto auto;
+  grid-template-areas:
+    "rail   stage  docktabs"
+    "rail   stage  dock"
+    "strip  strip  strip"
+    "legend legend legend";
+  gap: var(--size-4-2);
+  align-items: start;
+}
+
+.obsisim-world-fallback {
+  padding: var(--size-4-4);
+  color: var(--text-muted);
+}
+
+/*
+ * The rail, and its narrow-pane popover. `grid-area: rail` places it
+ * normally at width; `.is-narrow` — the same store-driven class the dock's
+ * overlay keys off — lifts it out of flow instead of shrinking the column
+ * `WorldScreen.vue`'s own comment describes: below the width threshold the
+ * rail collapses to the `rail-toggle` button (styled just below) and the
+ * palette itself becomes a popover anchored where that button already sits,
+ * which is exactly what `top`/`left: 0` resolve against here — this rule
+ * does NOT override `grid-area`, so the popover's containing block stays the
+ * rail column's own box rather than the whole screen (contrast
+ * `.obsisim-dock.is-overlay`, which needs the opposite: see that rule).
+ */
+.obsisim-rail {
+  grid-area: rail;
+  min-width: 0;
+}
+
+.obsisim-world-screen.is-narrow .obsisim-rail {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 20;
+  width: min(85cqi, 320px);
+  max-height: 70vh;
+  overflow: auto;
+  padding: var(--size-4-2);
+  background-color: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-s);
+}
+
+.obsisim-rail-toggle {
+  grid-area: rail;
+  justify-self: start;
+}
+
+.obsisim-stage {
+  grid-area: stage;
+  /* Replaces the deleted `.obsisim-world` wrapper's one rule: the hover
+     tooltip below is `position: absolute`, and needs a positioned ancestor
+     to anchor against. `.obsisim-world` used to be that ancestor, wrapping
+     WorldView's canvas and tooltip together before the increment-11 split;
+     now that WorldStage.vue owns both as its own single-rooted component
+     (see this task's report for the fragment-root fix that made a single
+     root possible at all), THIS class is the natural place for the same
+     rule to live, not a second wrapper reintroducing the class it replaced. */
   position: relative;
+  min-width: 0;
 }
 
 .obsisim-world-host {
@@ -48,11 +217,6 @@
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-m);
   overflow: hidden;
-}
-
-.obsisim-world-fallback {
-  padding: var(--size-4-4);
-  color: var(--text-muted);
 }
 
 .obsisim-world-tooltip {
@@ -64,17 +228,18 @@
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-s);
   box-shadow: var(--shadow-s);
-  font-size: var(--font-ui-smaller);
+  font-size: var(--obsisim-font-caption);
   white-space: nowrap;
 }
 
 .obsisim-world-legend {
+  grid-area: legend;
   display: flex;
   flex-wrap: wrap;
   gap: var(--size-4-3);
   margin-top: var(--size-4-2);
   color: var(--text-muted);
-  font-size: var(--font-ui-smaller);
+  font-size: var(--obsisim-font-caption);
 }
 
 .obsisim-world-legend span {
@@ -131,6 +296,13 @@
   background-color: var(--background-secondary);
 }
 
+/* Every table cell is a candidate for a figure (stock, rate, runway, tile
+   coordinate) — tabular-nums here rather than per-column keeps a column of
+   digits from re-flowing sideways as a tick changes which ones are widest. */
+.obsisim-table td {
+  font-variant-numeric: tabular-nums;
+}
+
 .obsisim-positive { color: var(--color-green); }
 .obsisim-negative { color: var(--color-red); }
 .obsisim-warning { color: var(--color-orange); font-weight: var(--font-semibold); }
@@ -169,7 +341,7 @@
 
 .obsisim-palette-cost {
   color: var(--text-muted);
-  font-size: var(--font-ui-smaller);
+  font-size: var(--obsisim-font-caption);
 }
 
 .obsisim-build-palette .is-armed,
@@ -192,18 +364,94 @@
   margin-top: 6px;
 }
 
+.obsisim-reason {
+  color: var(--text-muted);
+  font-size: var(--obsisim-font-caption);
+}
+
 .obsisim-haul-pressure {
   margin: 0 0 0.75em;
 }
 
 .obsisim-dock-tabs {
+  grid-area: docktabs;
   display: flex;
   gap: var(--size-4-1);
+  flex-wrap: wrap;
 }
 
 .obsisim-dock-tabs button.is-active {
   background-color: var(--interactive-accent);
   color: var(--text-on-accent);
+}
+
+/*
+ * The dock. `grid-area: dock` is its width-mode placement, sharing the
+ * right-hand column with `.obsisim-dock-tabs` (tabs above, body below —
+ * both named areas sit in the same grid column, stacked by row, so no
+ * manual `grid-row` span is needed on either).
+ *
+ * `.is-overlay` is written by `DockBody.vue` off `ui.narrow` (that
+ * component's own comment explains why it keys off THIS class rather than a
+ * container query alone: a jsdom test can assert a class, never a resolved
+ * `@container` condition). It overrides BOTH grid axes to span the full
+ * grid (`1 / -1`) before positioning absolutely — without that override an
+ * absolutely-positioned grid item with a named `grid-area` still takes that
+ * area's own box as its containing block (CSS Grid §8.5), which for the
+ * "dock" column would just re-draw the dock exactly where it already sat,
+ * not lift it over the canvas at all. Spanning the whole grid first, THEN
+ * anchoring to the container's own right edge, is what actually makes it an
+ * overlay rather than a same-looking no-op.
+ */
+.obsisim-dock {
+  grid-area: dock;
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-2);
+  min-height: 0;
+  padding: var(--size-4-2);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background-color: var(--obsisim-color-background);
+  overflow-y: auto;
+}
+
+.obsisim-dock.is-overlay {
+  grid-column: 1 / -1;
+  grid-row: 1 / -1;
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(360px, 92cqi);
+  z-index: 15;
+  border-radius: var(--radius-m) 0 0 var(--radius-m);
+  box-shadow: var(--shadow-s);
+}
+
+.obsisim-strip {
+  grid-area: strip;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--size-4-3);
+  padding-top: var(--size-4-2);
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.obsisim-strip-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--size-2-2);
+  font-size: var(--obsisim-font-vitals);
+  font-variant-numeric: tabular-nums; /* spec §2.9: stock figures tick without jitter */
+}
+
+.obsisim-icon {
+  width: 1em;
+  height: 1em;
+  flex-shrink: 0;
+  vertical-align: -0.125em;
 }
 
 /* Attention's rows share one click handler that branches on the row (a
@@ -235,4 +483,87 @@
 
 .obsisim-attention li.is-inert:hover {
   background-color: transparent;
+}
+
+/*
+ * Pane-width refinement (spec §2.1: container queries, never the window).
+ * This is deliberately separate from the `.is-narrow`/`.is-overlay` classes
+ * above — see `.obsisim-world-screen`'s own comment for why the load-bearing
+ * switch stays class-driven. This query is for a cosmetic follow that no
+ * test needs to observe: gaps tighten a step earlier than the JS threshold
+ * bites, so the strip and the dock tabs are not still visually cramped for
+ * the last few pixels before `WorldScreen`'s `ResizeObserver` flips the
+ * layout outright.
+ */
+@container obsisim-world (max-width: 720px) {
+  .obsisim-strip {
+    gap: var(--size-2-2);
+  }
+
+  .obsisim-dock-tabs {
+    gap: 2px;
+  }
+}
+
+/*
+ * Motion, bounded (spec §2.9): exactly three named transitions, every one
+ * gated on `prefers-reduced-motion: no-preference` so a player who has asked
+ * their OS for less motion gets none of it — not a slower version, none.
+ * This is deliberately not extended to anything else; see the file's own
+ * header comment.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  /* 1. Dock panel enter/leave — DockBody.vue wraps its `<aside>` in
+     `<Transition name="obsisim-dock">`. */
+  .obsisim-dock-enter-active,
+  .obsisim-dock-leave-active {
+    transition: opacity 160ms ease, transform 160ms ease;
+  }
+
+  .obsisim-dock-enter-from,
+  .obsisim-dock-leave-to {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+
+  /* 2. Attention row appear — AttentionPanel.vue wraps its rows in
+     `<TransitionGroup name="obsisim-attention-row">`, keyed on `row.id`, so
+     only a row that is newly ON the list plays this; an existing row whose
+     message text changed underneath the same id does not replay it. */
+  .obsisim-attention-row-enter-active {
+    transition: opacity 200ms ease, transform 200ms ease;
+  }
+
+  .obsisim-attention-row-enter-from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+
+  /* 3. Vitals value-change flash — TopBar.vue keys its population/wealth
+     spans on the value itself (`:key`), so Vue replaces the DOM node (rather
+     than patching its text) exactly when the number changes, and never on a
+     re-render where it didn't. A freshly-inserted node always starts this
+     animation from its `from` frame, which is what lets a CSS `animation`
+     self-play once with no JS timer standing behind it — a `transition`
+     alone cannot do this, because nothing here changes state on an EXISTING
+     element for it to transition between. */
+  .obsisim-vital-flash {
+    animation: obsisim-flash 700ms ease-out;
+  }
+
+  @keyframes obsisim-flash {
+    /* A flat accent background rather than `color-mix()`: the resolved
+       accent is an arbitrary theme hex by the time this runs, and blending
+       it against transparent needs a colour space function that is not
+       guaranteed on every Electron build Obsidian ships on. Starting fully
+       tinted and fading to transparent over 700ms reads the same at a
+       glance and costs nothing to support. */
+    from {
+      background-color: var(--obsisim-color-accent);
+      border-radius: var(--radius-s);
+    }
+    to {
+      background-color: transparent;
+    }
+  }
 }

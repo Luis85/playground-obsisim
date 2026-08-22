@@ -64,7 +64,17 @@ function activate(row: AttentionRow) {
 </script>
 
 <template>
-  <ul class="obsisim-attention" data-test="attention">
+  <!-- Spec §2.9's second named transition: `row.id` is already this list's
+       key, so `<TransitionGroup>` in place of the plain `<ul>` costs nothing
+       beyond the swap — a row is a fresh id exactly when the condition
+       behind it just started being true (see game-store.ts's derivation),
+       so "the row just appeared" and "the id just entered this list" are
+       the same event, and CSS's `.obsisim-attention-row-enter-*` (styles.css,
+       behind `prefers-reduced-motion: no-preference`) plays on it once. A
+       row whose MESSAGE changed under an id already present (e.g. a runway
+       countdown's remaining ticks) keeps its id and does not replay this —
+       intentionally: that is an update, not an appearance. -->
+  <TransitionGroup tag="ul" name="obsisim-attention-row" class="obsisim-attention" data-test="attention">
     <li
       v-for="row in store.attention" :key="row.id" :data-test="`attention-${row.id}`"
       :class="[row.severity === 'danger' ? 'obsisim-negative' : 'obsisim-warning', { 'is-inert': isInert(row) }]"
@@ -75,7 +85,11 @@ function activate(row: AttentionRow) {
     <!-- `is-inert` here too: this row has no click handler at all (no
          `@click`), and without the class it would still pick up
          `.obsisim-attention li`'s pointer cursor and hover highlight from a
-         handler it does not carry. -->
-    <li v-if="store.attention.length === 0" class="is-inert" data-test="attention-empty">Nothing needs attention.</li>
-  </ul>
+         handler it does not carry. A stable string key, not `row.id` (there
+         is no row): the empty state is its own permanent slot, not a list
+         member the TransitionGroup should ever treat as appearing/leaving. -->
+    <li v-if="store.attention.length === 0" key="empty" class="is-inert" data-test="attention-empty">
+      Nothing needs attention.
+    </li>
+  </TransitionGroup>
 </template>

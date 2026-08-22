@@ -105,21 +105,40 @@ export function efficiencyBucket(efficiency: number): number {
   return index === -1 ? COLONIST_BUCKETS - 1 : index;
 }
 
+/*
+ * Task 13 (spec §2.9, "one palette, two renderers"): every name passed to
+ * `pick()` below used to be an Obsidian vault variable read directly
+ * (`--color-red`, `--color-green`, ...). It is now an `--obsisim-*` custom
+ * property that `styles.css` defines once on `.obsisim` — for a var-sourced
+ * one, CSS nests the SAME Obsidian lookup with the SAME hex fallback this
+ * file used to carry inline (`--obsisim-color-danger: var(--color-red,
+ * #e0533d);`); for one with no vault counterpart (the construction amber,
+ * the storehouse brown, the two creams, the unstaffed grey, the elder
+ * silver), it is a plain literal. Either way the browser hands this
+ * function ONE already-resolved value per name — it no longer needs to know
+ * which Obsidian variable, if any, stands behind it — and the hex literal
+ * still passed as `pick()`'s third argument is UNCHANGED: it is what this
+ * function falls back to if the property fails to resolve at all (no
+ * stylesheet loaded, or called before `.obsisim` is mounted around the
+ * queried element), which is what keeps this file's own guarantee — a
+ * missing property degrades rather than breaks — true after this task
+ * exactly as it was before it.
+ */
 export function resolveWorldTheme(read: VarReader): WorldTheme {
-  const red = pick(read, '--color-red', '#e0533d');
-  const green = pick(read, '--color-green', '#3cb46e');
+  const red = pick(read, '--obsisim-color-danger', '#e0533d');
+  const green = pick(read, '--obsisim-state-producing', '#3cb46e');
   return {
-    background: pick(read, '--background-primary', '#20242b'),
-    ground: ['#55714a', '#4d6743'],
+    background: pick(read, '--obsisim-color-background', '#20242b'),
+    ground: [pick(read, '--obsisim-color-ground-a', '#55714a'), pick(read, '--obsisim-color-ground-b', '#4d6743')],
     buildingFill: BUILDING_FILL,
     buildingGlyph: BUILDING_GLYPHS,
     stateRing: {
       producing: green,
-      waitingForInput: pick(read, '--color-orange', '#e5a63a'),
-      unstaffed: '#8f8f8f',
+      waitingForInput: pick(read, '--obsisim-state-waiting', '#e5a63a'),
+      unstaffed: pick(read, '--obsisim-state-unstaffed', '#8f8f8f'),
       // Purple, deliberately outside the green/orange production language: this
       // building is not short of anything, it has nowhere to put what it made.
-      outputFull: pick(read, '--color-purple', '#8f6fbf'),
+      outputFull: pick(read, '--obsisim-state-output-full', '#8f6fbf'),
       // A site is not a stall, not a home, not a store — its own hue, checked
       // FIRST in the precedence chain (snapshot-buildings.ts's buildingState),
       // so it gets its own ring rather than borrowing the relocating cyan it
@@ -134,7 +153,7 @@ export function resolveWorldTheme(read: VarReader): WorldTheme {
       // 'underConstruction' to BuildingState without a ring color here would
       // fail that pre-existing test AND leave a real site with an undefined
       // ring at runtime.
-      underConstruction: '#cf8b2f',
+      underConstruction: pick(read, '--obsisim-state-under-construction', '#cf8b2f'),
       // Cyan-adjacent, matching the carried-load hue: both say "in transit".
       // Required now (not deferred to the UI task that otherwise owns this
       // file): tests/app/world-theme.test.ts already pins every stateRing
@@ -142,27 +161,34 @@ export function resolveWorldTheme(read: VarReader): WorldTheme {
       // unconditionally, so adding 'relocating' to BuildingState without a
       // ring color here would fail that pre-existing test AND leave a real
       // building genuinely in that state with an undefined ring at runtime.
-      relocating: pick(read, '--color-cyan', '#4bbfd4'),
+      relocating: pick(read, '--obsisim-state-relocating', '#4bbfd4'),
       // A house never produces or stalls, it shelters — its own hue, not
       // borrowed from the production language above (green/orange/purple) or
       // the in-transit cyan. Same requirement as relocating just above: the
       // BuildingState union gained 'housing' this task, so a ring color is
       // needed now, not deferred to the task that draws the house on canvas.
-      housing: pick(read, '--color-blue', '#4c8bf5'),
+      housing: pick(read, '--obsisim-state-housing', '#4c8bf5'),
       // A storehouse is neither a stall nor a home, so it gets its own hue
       // too — but every named vault colour is already spoken for above
       // (green/orange/purple/cyan/blue for the other states, and yellow/pink
       // are claimed below by the child mark and homelessMark), so this is
       // hardcoded like unstaffed's grey and elder's silver: a warm brown, the
       // register a depot's sacks and crates actually read as.
-      storing: STORE_BROWN,
+      storing: pick(read, '--obsisim-state-storing', STORE_BROWN),
     },
     colonistColors: Array.from({ length: COLONIST_BUCKETS }, (_, i) => mixHex(red, green, i / (COLONIST_BUCKETS - 1))),
-    workerToolRing: '#f2ecdd',
-    progressFill: '#f5efdc',
-    carriedLoad: pick(read, '--color-cyan', '#4bbfd4'),
-    carriedInput: STORE_BROWN,
-    accent: pick(read, '--interactive-accent', '#7c8cf0'),
+    workerToolRing: pick(read, '--obsisim-color-tool-ring', '#f2ecdd'),
+    progressFill: pick(read, '--obsisim-color-progress-fill', '#f5efdc'),
+    // Deliberately the SAME token as stateRing.relocating, read a second
+    // time rather than a second CSS custom property declared — see this
+    // field's own doc comment above (WorldTheme.carriedLoad) for why a
+    // carried load and a relocating building share a colour on purpose.
+    carriedLoad: pick(read, '--obsisim-state-relocating', '#4bbfd4'),
+    // Same move as carriedLoad just above: the SAME token as
+    // stateRing.storing, not a second declaration — see carriedInput's own
+    // doc comment for why that match is deliberate.
+    carriedInput: pick(read, '--obsisim-state-storing', STORE_BROWN),
+    accent: pick(read, '--obsisim-color-accent', '#7c8cf0'),
     danger: red,
     stageMark: {
       // The last bright vault hue nothing else claims. Red, orange and green
@@ -170,7 +196,7 @@ export function resolveWorldTheme(read: VarReader): WorldTheme {
       // in-transit pair, blue the housing ring, cream the tools and the
       // progress bar, blue-violet the accent — yellow and pink are what is
       // left, and yellow is the one that reads as "new".
-      child: pick(read, '--color-yellow', '#e6c84a'),
+      child: pick(read, '--obsisim-mark-child', '#e6c84a'),
       // NOT a vault hue, deliberately. Pink is the only one still free and it
       // goes to homelessMark below, which is a problem the player can act on;
       // an elder is not a warning, they are simply out of the workforce, so a
@@ -178,11 +204,11 @@ export function resolveWorldTheme(read: VarReader): WorldTheme {
       // colour. Hardcoded the way unstaffed, the ground tints and the two
       // creams are — well clear of the unstaffed grey (#8f8f8f), which sits
       // on buildings rather than colonists in any case.
-      elder: '#b9c2d0',
+      elder: pick(read, '--obsisim-mark-elder', '#b9c2d0'),
     },
     // The last vault hue, and the right register for it: homelessness is a
     // live problem, but it is not the ghost's blocked-red, so it gets its own
     // alarm rather than a second meaning for one already on screen.
-    homelessMark: pick(read, '--color-pink', '#e0619e'),
+    homelessMark: pick(read, '--obsisim-mark-homeless', '#e0619e'),
   };
 }

@@ -29,24 +29,34 @@ const ui = useUiStore();
 </script>
 
 <template>
-  <!-- `is-overlay` is state, not a media query, so criterion 7's other half
-       is assertable in jsdom: the CSS keys off this class rather than off a
-       container query alone, and a test can prove the dock stops taking a
-       grid column instead of only proving the rail collapsed. -->
-  <aside v-if="ui.panel" class="obsisim-dock" :class="{ 'is-overlay': ui.narrow }" data-test="dock">
-    <!-- Keyed by the subject, exactly as WorldView keyed SelectionPanel by
-         `selectedId` — see the `inspectorKey` prop's own comment above for
-         why a bare id is not enough once colonists are selectable too. -->
-    <InspectorPanel v-if="ui.panel === 'inspector'" :key="inspectorKey" />
-    <ColonyPanel v-else-if="ui.panel === 'colony'" />
-    <PopulationPanel v-else-if="ui.panel === 'population'" />
-    <EconomyPanel v-else-if="ui.panel === 'economy'" />
-    <!-- `v-else-if`, not a bare `v-else`: `ui.panel` is a `DockPanel` and
-         every member is handled above by name, so an `else-if` chain that
-         falls through with nothing rendered is a stronger signal of an
-         unreachable state than an `AttentionPanel` that would otherwise
-         render for any value it does not recognise. -->
-    <AttentionPanel v-else-if="ui.panel === 'attention'" />
-    <button data-test="dock-close" aria-label="Close panel" @click="ui.closeDock()">✕</button>
-  </aside>
+  <!-- Spec §2.9's first named transition: `<Transition name="obsisim-dock">`
+       wraps the `v-if` below (not the fixed chrome around it — DockTabs stays
+       outside, always mounted, per its own comment), so opening or closing
+       the dock — or swapping which building/colonist/panel it shows, since
+       the `v-if`'s KEY changes via `ui.panel`/`inspectorKey` and Vue treats
+       that as a leave-then-enter — plays the CSS transition styles.css
+       defines for `.obsisim-dock-enter-*`/`.obsisim-dock-leave-*`, gated
+       behind `prefers-reduced-motion: no-preference` there. -->
+  <Transition name="obsisim-dock">
+    <!-- `is-overlay` is state, not a media query, so criterion 7's other half
+         is assertable in jsdom: the CSS keys off this class rather than off a
+         container query alone, and a test can prove the dock stops taking a
+         grid column instead of only proving the rail collapsed. -->
+    <aside v-if="ui.panel" class="obsisim-dock" :class="{ 'is-overlay': ui.narrow }" data-test="dock">
+      <!-- Keyed by the subject, exactly as WorldView keyed SelectionPanel by
+           `selectedId` — see the `inspectorKey` prop's own comment above for
+           why a bare id is not enough once colonists are selectable too. -->
+      <InspectorPanel v-if="ui.panel === 'inspector'" :key="inspectorKey" />
+      <ColonyPanel v-else-if="ui.panel === 'colony'" />
+      <PopulationPanel v-else-if="ui.panel === 'population'" />
+      <EconomyPanel v-else-if="ui.panel === 'economy'" />
+      <!-- `v-else-if`, not a bare `v-else`: `ui.panel` is a `DockPanel` and
+           every member is handled above by name, so an `else-if` chain that
+           falls through with nothing rendered is a stronger signal of an
+           unreachable state than an `AttentionPanel` that would otherwise
+           render for any value it does not recognise. -->
+      <AttentionPanel v-else-if="ui.panel === 'attention'" />
+      <button data-test="dock-close" aria-label="Close panel" @click="ui.closeDock()">✕</button>
+    </aside>
+  </Transition>
 </template>

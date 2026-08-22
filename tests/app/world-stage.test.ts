@@ -36,6 +36,31 @@ function mountStage(factory: unknown) {
 }
 
 describe('WorldStage', () => {
+  // Task 13's fragment-root fix. Before it, this component's template had
+  // TWO sibling root elements (the host div, the tooltip div), and a
+  // multi-root component gets no automatic target for a fallthrough
+  // attribute at all — `WorldScreen.vue`'s `class="obsisim-stage"` landed
+  // nowhere, silently in production (the grid placement and the
+  // `position: relative` .obsisim-stage's own CSS comment describes both
+  // never applied) and as a logged dev-mode warning under
+  // `@vue/test-utils`. Both halves need a test: the class actually reaching
+  // a real DOM node, and the warning not firing.
+  it('forwards class="obsisim-stage" onto a single root, with no fallthrough warning', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { factory } = makeFake();
+    const wrapper = mount(WorldStage, {
+      attrs: { class: 'obsisim-stage' },
+      global: {
+        plugins: [createTestingPinia({ createSpy: vi.fn, stubActions: false })],
+        provide: { [WORLD_RENDERER_KEY as symbol]: factory, [ENGINE_KEY as symbol]: { dispatch: vi.fn() } },
+      },
+    });
+    expect(wrapper.classes()).toContain('obsisim-stage');
+    const fallthroughWarnings = warn.mock.calls.filter((call) => String(call[0]).includes('Extraneous non-props'));
+    expect(fallthroughWarnings).toEqual([]);
+    warn.mockRestore();
+  });
+
   it('creates the renderer on its host and syncs snapshots', async () => {
     const { renderer, factory } = makeFake();
     mountStage(factory);

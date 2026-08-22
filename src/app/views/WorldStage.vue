@@ -251,22 +251,51 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div
-    v-if="!failure"
-    ref="host"
-    class="obsisim-world-host"
-    data-test="world-host"
-    @pointermove="onPointerMove"
-    @pointerleave="onPointerLeave"
-    @click="onClick"
-    @contextmenu="onContextMenu"
-  />
-  <div
-    v-if="!failure && hover && hoverLines.length > 0"
-    class="obsisim-world-tooltip"
-    data-test="world-tooltip"
-    :style="{ left: `${hover.x}px`, top: `${hover.y}px` }"
-  >
-    <div v-for="line in hoverLines" :key="line">{{ line }}</div>
+  <div>
+    <!--
+      A SINGLE root, not the two sibling divs (host, tooltip) this template
+      used to render directly (Task 13 fix). `WorldScreen.vue` passes
+      `class="obsisim-stage"` to this component, and Vue only forwards a
+      fallthrough attribute onto a component's root element automatically
+      when that component HAS exactly one root — a multi-root ("fragment")
+      template gets no automatic target for it at all. In production that
+      failure is silent: the class simply never lands anywhere,
+      `.obsisim-stage`'s CSS (the grid-area placement, the `position:
+      relative` the hover tooltip below anchors against) never applies, and
+      nothing throws. Under `@vue/test-utils` it is not silent — Vue's dev
+      build logs an "extraneous non-props attributes... could not be
+      automatically inherited" warning on every mount. This wrapper is that
+      single root: `class="obsisim-stage"` now lands on it via ordinary
+      fallthrough (no `inheritAttrs: false` or manual `v-bind="$attrs"`
+      needed, since a single-root component inherits by default), and the
+      host/tooltip divs below keep their own `data-test` attributes
+      unchanged, so no existing pointer-event or hover test needs to change
+      what it queries. (The comment lives INSIDE the root div, not before
+      it: a comment as a template-level SIBLING of the root element still
+      leaves Vue's own attr fallthrough working, but it also becomes a
+      leading child of `$el`'s parent, which is what made an earlier
+      version of this comment — placed exactly there — read by
+      `@vue/test-utils` as the component's root node instead of the div,
+      failing `wrapper.classes()` for a reason that had nothing to do with
+      the fix itself.)
+    -->
+    <div
+      v-if="!failure"
+      ref="host"
+      class="obsisim-world-host"
+      data-test="world-host"
+      @pointermove="onPointerMove"
+      @pointerleave="onPointerLeave"
+      @click="onClick"
+      @contextmenu="onContextMenu"
+    />
+    <div
+      v-if="!failure && hover && hoverLines.length > 0"
+      class="obsisim-world-tooltip"
+      data-test="world-tooltip"
+      :style="{ left: `${hover.x}px`, top: `${hover.y}px` }"
+    >
+      <div v-for="line in hoverLines" :key="line">{{ line }}</div>
+    </div>
   </div>
 </template>

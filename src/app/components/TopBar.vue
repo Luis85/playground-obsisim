@@ -2,6 +2,7 @@
 import { inject, ref } from 'vue';
 import { ENGINE_KEY } from '../engine-key';
 import { useGameStore } from '../stores/game-store';
+import Icon from './Icon.vue';
 
 const engine = inject(ENGINE_KEY)!;
 const store = useGameStore();
@@ -53,9 +54,24 @@ function confirmReset(event: MouseEvent) {
     </div>
     <div v-if="store.snapshot" class="obsisim-summary">
       <span data-test="tick">Tick {{ store.snapshot.tick }}</span>
-      <span>👥 {{ store.snapshot.population }}</span>
-      <span>💰 {{ store.snapshot.colonyWealth.toFixed(0) }}</span>
-      <span v-if="store.lowFood" class="obsisim-warning" data-test="low-food">⚠ Low food</span>
+      <!--
+        Spec §2.9's third named transition, live: `:key` binds each span to
+        the VALUE it shows, not to a stable identity, so Vue tears down and
+        re-creates the DOM node exactly when the number changes underneath
+        it (an unrelated re-render — the store ticking, a sibling changing —
+        leaves the key, and so the node, untouched). `.obsisim-vital-flash`
+        (styles.css, behind `prefers-reduced-motion: no-preference`) plays a
+        one-shot CSS animation on every freshly-inserted node, which is what
+        turns "the DOM node is new" into "the number just flashed" with no
+        JS timer standing behind it.
+      -->
+      <span :key="`pop-${store.snapshot.population}`" class="obsisim-vital-flash">
+        <Icon name="population" /> {{ store.snapshot.population }}
+      </span>
+      <span :key="`wealth-${store.snapshot.colonyWealth.toFixed(0)}`" class="obsisim-vital-flash">
+        <Icon name="wealth" /> {{ store.snapshot.colonyWealth.toFixed(0) }}
+      </span>
+      <span v-if="store.lowFood" class="obsisim-warning" data-test="low-food"><Icon name="warning" /> Low food</span>
     </div>
     <button v-if="!resetArmed" class="obsisim-reset" data-test="reset" @click="setResetArmed(true)">Reset colony</button>
     <template v-else>

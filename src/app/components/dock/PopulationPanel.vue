@@ -7,6 +7,11 @@
 // colonist row selects that colonist), and that behaviour, like every other
 // cell in the table, lives in the one component both surfaces mount.
 //
+// `:selectable="true"` is what turns that behaviour on HERE and not on the
+// Ledger: PopulationRoster's own `selectable` prop defaults to `false`
+// precisely so this is the surface that has to ask for it, rather than the
+// Ledger having to remember to switch it off.
+//
 // Guarded on `store.snapshot`, the house convention every other view/panel in
 // this codebase follows (DashboardView, ResourceStrip, InspectorPanel,
 // ColonyPanel) — PopulationRoster guards itself too, so this is belt-and-
@@ -21,6 +26,6 @@ const store = useGameStore();
 
 <template>
   <div v-if="store.snapshot" class="obsisim-population" data-test="population-panel">
-    <PopulationRoster />
+    <PopulationRoster :selectable="true" />
   </div>
 </template>

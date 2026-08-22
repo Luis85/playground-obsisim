@@ -5,6 +5,7 @@ import { createTestingPinia } from '@pinia/testing';
 import PopulationView from '../../src/app/views/PopulationView.vue';
 import { ENGINE_KEY } from '../../src/app/engine-key';
 import { useGameStore } from '../../src/app/stores/game-store';
+import { useUiStore } from '../../src/app/stores/ui-store';
 import { BALANCE } from '../../src/engine/content/balance';
 import { GameEngine } from '../../src/engine/game-engine';
 import { initialSave } from '../../src/engine/world';
@@ -24,15 +25,20 @@ function worker(overrides: Partial<ColonistSnapshot> = {}): ColonistSnapshot {
 // the simulation actually produced, unedited.
 function mountWithSnapshot(snapshot: Snapshot) {
   const engine = { dispatch: vi.fn() };
+  const pinia = createTestingPinia({ createSpy: vi.fn, stubActions: false });
   const wrapper = mount(PopulationView, {
     global: {
-      plugins: [createTestingPinia({ createSpy: vi.fn, stubActions: false })],
+      plugins: [pinia],
       provide: { [ENGINE_KEY as symbol]: engine },
     },
   });
   const store = useGameStore();
   store.ingest(snapshot, { paused: true, speed: 1, error: null });
-  return { engine, wrapper, store };
+  // Following dock-panels.test.ts's `mountPanel` pattern: the same `pinia`
+  // instance the component mounted with, so `ui` here and the store the
+  // component reads are the same store, not two Pinia instances that happen
+  // to share a name.
+  return { engine, wrapper, store, ui: useUiStore(pinia) };
 }
 
 // The fixture-built variant: the headline reads demographics, beds and
@@ -81,6 +87,32 @@ describe('PopulationView', () => {
     await wrapper.vm.$nextTick();
     const cell = wrapper.get('[data-test="hunger-1"]');
     expect(cell.classes()).toEqual(expected === '' ? [] : [expected]);
+  });
+
+  // Fix round 1 (Important): PopulationRoster.vue's colonist rows leaked a
+  // dock-only click into the Ledger. Asserted on `ui.panel` as well as
+  // `ui.selection` — `ui.panel` is the half that made this more than
+  // cosmetic: `ui.select()` unconditionally sets `panel = 'inspector'`
+  // (ui-store.ts), and the dock is not even rendered on `/ledger`, so a click
+  // that reached it would produce no visible effect on this page while
+  // silently arming the Inspector to open next time the player is back on
+  // `/`. A standing selection is set first, and `panel` is moved to a value
+  // `select()` would NOT produce ('economy', not 'inspector') — selecting a
+  // building already sets `panel` to 'inspector' as a side effect, so
+  // asserting against whatever `select` left behind would prove nothing;
+  // `openPanel` moves it again so a click that wrongly re-ran `select` is
+  // the only way `panel` could end up back at 'inspector'. Both are then
+  // asserted unchanged after the click — not even a deselect — the same
+  // shape ColonyPanel's own inert-row test (`dock-panels.test.ts`) uses for
+  // a resource row.
+  it('does not select anything when a colonist row is clicked on the Ledger', async () => {
+    const { wrapper, ui } = mountPopulationView(ROSTER);
+    await wrapper.vm.$nextTick();
+    ui.selectBuilding(4);
+    ui.openPanel('economy');
+    await wrapper.get('[data-test="colonist-row-2"]').trigger('click');
+    expect(ui.selection).toEqual({ kind: 'building', id: 4 }); // inert: not even a deselect
+    expect(ui.panel).toBe('economy'); // the concrete harm: no silent dock rearm to 'inspector'
   });
 
   // A hauler's own buildingId is null, same as a truly idle worker's — jobLabel

@@ -35,18 +35,33 @@ import PopulationSummary from './PopulationSummary.vue';
  * site (InspectorColonist.vue, PopulationSummary.vue itself) — one
  * component, mounted from both places, rather than a second paste of it.
  *
- * Every row selects its colonist on click (spec §2.3's "Population colonist
- * row -> selects that colonist"). PopulationView.vue picks this behaviour up
- * too, rather than the Panel forking off a second, click-added copy: nothing
- * in this codebase's convention distinguishes "the same row, rendered on the
- * routed Ledger page" from "the same row, rendered in the dock" as two
- * different behaviours, and a mismatched pair here would be the one place a
- * player could tell the two surfaces apart by clicking rather than by
- * reading.
+ * Fix round 1 (Important): the paragraph above stops at "the markup is
+ * identical", and that is as far as sharing should go. A row selecting its
+ * colonist (spec §2.3) is premised on a canvas beside the panel to select
+ * INTO — true of the dock's PopulationPanel, not true of PopulationView on
+ * the routed `/ledger` page. Spec §2.5's Ledger contract is numbers and
+ * commands; a selection is neither. So the click is a `selectable` prop,
+ * defaulting to `false`, and only PopulationPanel passes `true` — see the
+ * prop's own comment below for the concrete harm (`ui.select()` moving the
+ * dock's panel) a click on the Ledger would otherwise cause silently.
  */
 const engine = inject(ENGINE_KEY)!;
 const store = useGameStore();
 const ui = useUiStore();
+
+// Fix round 1 (Important): the click this component's own comment above
+// describes ("every row selects its colonist") is a DOCK behaviour, not a
+// property of the table itself — PopulationView.vue mounts this same
+// component on the routed `/ledger` page, which has no canvas for a
+// selection to reach (spec §2.3's click table is premised on a panel sitting
+// beside one), and `ui.select()` unconditionally sets `panel = 'inspector'`
+// (ui-store.ts), so a click there would silently arm the DOCK's Inspector to
+// open the next time the player is back on `/` — an effect with no visible
+// cause on the page where the click happened. `selectable` defaults to
+// `false` so a new caller has to ask for the canvas-linked behaviour rather
+// than remember to switch it off; only PopulationPanel.vue (the dock) passes
+// `true`.
+const props = withDefaults(defineProps<{ selectable?: boolean }>(), { selectable: false });
 
 // A worker's own JobAssignment only carries a buildingId, not the building's
 // name, so this table needs a defId -> name lookup to render the Job column.
@@ -131,14 +146,22 @@ function starvingClass(starvingTicks: number): string {
         <tr><th>Colonist</th><th>Age</th><th>Stage</th><th>Home</th><th>Job</th><th>Hunger</th><th>Starving</th><th>Efficiency</th><th>Delivered</th><th>Tool</th></tr>
       </thead>
       <tbody>
-        <!-- Spec §2.3: a Population colonist row selects that colonist. The
-             row itself carries the click, not a cell inside it, so anywhere
-             on the row (not just one column) reaches the map. -->
+        <!-- Spec §2.3: a Population colonist row selects that colonist —
+             but only where a canvas is on screen to receive it (the dock's
+             PopulationPanel, `selectable="true"`). On the Ledger
+             (`selectable` false, the default) the row must be genuinely
+             INERT: `v-on` bound to an empty object attaches no listener at
+             all, the same "absence, not a no-op" shape ColonyPanel.vue's
+             resource rows use, rather than a handler that reads `selectable`
+             and early-returns — a no-op still leaves a live code path and a
+             clickable-looking row behind. When selectable, the row itself
+             carries the click, not a cell inside it, so anywhere on the row
+             (not just one column) reaches the map. -->
         <tr
           v-for="w in store.snapshot.colonists"
           :key="w.id"
           :data-test="`colonist-row-${w.id}`"
-          @click="ui.selectColonist(w.id)"
+          v-on="props.selectable ? { click: () => ui.selectColonist(w.id) } : {}"
         >
           <td>#{{ w.id }}</td>
           <td :data-test="`age-${w.id}`">{{ ageLabel(w.ageTicks) }}</td>

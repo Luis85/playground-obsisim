@@ -1,7 +1,7 @@
 import { BALANCE, BUILDINGS, RESOURCES, type BuildingDef, type BuildingDefId, type CostMap, type ResourceId } from '../engine/content';
 import type { HaulKind } from '../shared/haul';
 import type { LifeStage } from '../shared/population';
-import type { BuildingState } from '../shared/snapshot';
+import type { BuildingSnapshot, BuildingState } from '../shared/snapshot';
 
 export const BUILDING_STATE_LABELS: Record<BuildingState, string> = {
   producing: 'Producing',
@@ -76,11 +76,56 @@ export const LIFE_STAGE_LABELS: Record<LifeStage, string> = {
  * cell is therefore the ONLY surface that can identify WHICH hauler is
  * transferring; the legend can only name the encoding.
  */
-export const HAUL_KIND_LABELS: Record<HaulKind, string> = {
+const HAUL_KIND_LABELS: Record<HaulKind, string> = {
   collect: 'Hauling',
   supply: 'Hauling',
   transfer: 'Transferring',
 };
+
+/**
+ * defId -> display name for every building currently in the snapshot — the
+ * lookup `jobLabel` below needs to turn a colonist's bare `buildingId` into
+ * the name its Job cell shows. Shared between PopulationView and
+ * PopulationPanel (spec §2.7 — one derivation, two surfaces): both need this
+ * exact map to feed `jobLabel`, and two components each walking
+ * `snapshot.buildings` themselves would be two chances for the lookup to
+ * disagree the day a def's naming rule changes.
+ */
+export function buildingNamesById(buildings: readonly BuildingSnapshot[]): Map<number, string> {
+  const names = new Map<number, string>();
+  for (const b of buildings) names.set(b.id, BUILDINGS[b.defId].name);
+  return names;
+}
+
+/**
+ * What the Job column shows for one colonist — the Population view's and, as
+ * of the Population panel, the dock's Population panel's, both reading this
+ * one function rather than each keeping its own copy that could drift the
+ * first time either was reworded (the same reasoning as
+ * `BUILDING_STATE_LABELS` and `LIFE_STAGE_LABELS` above, extended to a
+ * function rather than a Record because this cell also depends on the
+ * colonist's own hauling state, not just a lookup key).
+ *
+ * `jobNames` is passed in rather than derived here: `src/app/labels.ts` has
+ * no store to read `snapshot.buildings` from, and a caller recomputing it
+ * once (via `buildingNamesById` above) and handing it to every row is cheaper
+ * than this function re-walking the buildings array per colonist.
+ *
+ * '?' rather than throwing: `jobNames` only tracks buildings still in the
+ * snapshot, so a stale `buildingId` (a building removed mid-tick) degrades to
+ * an unknown label instead of crashing the whole table.
+ *
+ * `haulKind` rather than `haulTargetId`: a transfer names no building for its
+ * whole life, so the id this column otherwise resolves to a name is null on
+ * exactly the rows that need distinguishing. Null kind means a hauler between
+ * trips, which is still hauling — `HAUL_KIND_LABELS` above covers the three
+ * kinds a running trip can be.
+ */
+export function jobLabel(buildingId: number | null, hauling: boolean, haulKind: HaulKind | null, jobNames: Map<number, string>): string {
+  if (hauling) return haulKind === null ? 'Hauling' : HAUL_KIND_LABELS[haulKind];
+  if (buildingId === null) return 'Idle';
+  return jobNames.get(buildingId) ?? '?';
+}
 
 /** "25y". The sim counts only ticks and nothing downstream of BALANCE sees a
  * year (spec 2.8), so the conversion happens here, against the one constant

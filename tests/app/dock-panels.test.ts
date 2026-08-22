@@ -5,6 +5,8 @@ import { mount } from '@vue/test-utils';
 import { createTestingPinia } from '@pinia/testing';
 import InspectorPanel from '../../src/app/components/dock/InspectorPanel.vue';
 import ColonyPanel from '../../src/app/components/dock/ColonyPanel.vue';
+import PopulationPanel from '../../src/app/components/dock/PopulationPanel.vue';
+import { NOMAD_REJECTIONS } from '../../src/shared/population';
 import { ENGINE_KEY } from '../../src/app/engine-key';
 import { useGameStore } from '../../src/app/stores/game-store';
 import { useUiStore } from '../../src/app/stores/ui-store';
@@ -380,5 +382,71 @@ describe('ColonyPanel', () => {
     await wrapper.get('[data-test="colony-row-wood"]').trigger('click');
     expect(ui.selection).toEqual({ kind: 'building', id: 4 }); // inert: not even a deselect
     expect(ui.highlight).toEqual([]);
+  });
+});
+
+describe('PopulationPanel', () => {
+  const peopled = makeSnapshot({
+    population: 2, beds: { total: 4, occupied: 2 }, mealsPerHead: 30,
+    demographics: { children: 0, adults: 2, elders: 0 },
+    colonists: [makeWorker(1), makeWorker(2)],
+    stockpile: stockedWith({ bread: 400 }),
+  });
+
+  it('welcomes a nomad', async () => {
+    const { wrapper, engine } = mountPanel(PopulationPanel, peopled);
+    await wrapper.get('[data-test="recruit"]').trigger('click');
+    expect(engine.dispatch).toHaveBeenCalledWith({ type: 'recruitWorker' });
+  });
+
+  // Fix round 1 (this task's own brief, reviewed before it was ever run): the
+  // brief's own draft test only checked `Object.values(NOMAD_REJECTIONS)).
+  // toContain(...)` — membership in the Record's five sentences, which a
+  // panel wired to the WRONG branch (noBed's sentence shown over a hungry-
+  // but-bedded colony, say) would still have passed. Pinned to the specific
+  // sentence instead, the way Task 7 pinned InspectorPanel's three staffing
+  // branches after finding the identical gap there.
+  //
+  // 2 free beds (`beds.total: 4` minus `population: 2`) rules out `noBed`;
+  // the default zeroed stockpile (no `stockpile` override) is what reaches
+  // `notEnoughFood` — `nomadBlocker` checks beds before food, so a fixture
+  // with both gates shut would prove nothing about which sentence this is.
+  it('names the food gate when there is a bed but no food', () => {
+    const hungry = makeSnapshot({ population: 2, beds: { total: 4, occupied: 2 }, colonists: [makeWorker(1)] });
+    const { wrapper } = mountPanel(PopulationPanel, hungry);
+    expect(wrapper.get('[data-test="recruit"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('[data-test="recruit-reason"]').text()).toBe(NOMAD_REJECTIONS.notEnoughFood);
+  });
+
+  // The other branch a different fixture reaches: every bed already claimed
+  // (`beds.total === population`, so `spareBedsIn` is 0) even though the
+  // store is stocked with far more than `nomadFoodPerHead` needs.
+  // `nomadBlocker` checks `freeBeds <= 0` FIRST, ahead of food, so this is the
+  // only fixture shape that can tell noBed's sentence apart from
+  // notEnoughFood's — a colony well fed AND full of beds would never reach
+  // this branch at all.
+  it('names the bed gate when every bed is claimed, even with food to spare', () => {
+    const noBeds = makeSnapshot({
+      population: 2, beds: { total: 2, occupied: 2 },
+      colonists: [makeWorker(1), makeWorker(2)],
+      stockpile: stockedWith({ bread: 400 }),
+    });
+    const { wrapper } = mountPanel(PopulationPanel, noBeds);
+    expect(wrapper.get('[data-test="recruit"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('[data-test="recruit-reason"]').text()).toBe(NOMAD_REJECTIONS.noBed);
+  });
+
+  // Spec §2.3: a Population colonist row selects that colonist. Asserted on
+  // `ui.selection` only — the store half of the chain. The OTHER half (that
+  // `ui.selectColonist` actually reaches `renderer.setSelection`) is
+  // WorldStage.vue's own watcher, already covered by
+  // `tests/app/world-stage.test.ts`'s "forwards the store selection to the
+  // renderer" — this file must never import `src/app/world/renderer.ts`, so
+  // that assertion cannot live here too. See task-9-report.md for the
+  // end-to-end check that watcher is still wired.
+  it('selects a colonist when their row is clicked', async () => {
+    const { wrapper, ui } = mountPanel(PopulationPanel, peopled);
+    await wrapper.get('[data-test="colonist-row-2"]').trigger('click');
+    expect(ui.selection).toEqual({ kind: 'colonist', id: 2 });
   });
 });

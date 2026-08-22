@@ -6,6 +6,7 @@ import WorldStage from './WorldStage.vue';
 import BuildPalette from '../components/BuildPalette.vue';
 import ResourceStrip from '../components/ResourceStrip.vue';
 import WorldLegend from '../components/WorldLegend.vue';
+import InspectorPanel from '../components/dock/InspectorPanel.vue';
 
 // The shell that composes what WorldView used to own in one 339-line file
 // (spec §2.1 / the increment-11 split): the rail (BuildPalette), the canvas
@@ -60,6 +61,28 @@ const paletteVisible = computed(() => !ui.narrow || railOpen.value);
 const DOCK_PANEL_LABELS: Record<DockPanel, string> = {
   inspector: 'Inspector', colony: 'Colony', population: 'Population', economy: 'Economy', attention: 'Attention',
 };
+
+/**
+ * The Inspector's remount key — LOAD BEARING, not decorative (see
+ * `.superpowers/sdd/task-7-key-defect.md`). `TwoStepButton` holds its `armed`
+ * ref internally, and Vue only tears a component down and rebuilds it when
+ * its `:key` changes; without one, arming Demolish on building A and then
+ * selecting building B would hand B a button one tap from confirming, because
+ * nothing ever asked TwoStepButton to forget A. Keying on the selection is
+ * what forces that remount on every subject change.
+ *
+ * `${kind}-${id}`, not a bare numeric id: spec §2.3 makes colonists selectable
+ * alongside buildings, and building 3 / colonist 3 would otherwise share a key
+ * and NOT remount between them — the exact bug this key exists to prevent,
+ * just moved to a different pair of subjects.
+ *
+ * Extracted to a named computed, rather than restated inline in the template,
+ * so `tests/app/dock-panels.test.ts`'s `mountKeyedInspector` helper — which
+ * mounts the Inspector "the way WorldScreen does" — has one real expression to
+ * point back at instead of a second copy of this string that could drift from
+ * it unnoticed.
+ */
+const inspectorKey = computed(() => `${ui.selection.kind}-${'id' in ui.selection ? ui.selection.id : 0}`);
 
 function onKeydown(event: KeyboardEvent) {
   if (event.key !== 'Escape') return;
@@ -124,8 +147,11 @@ onBeforeUnmount(() => {
          container query alone, and a test can prove the dock stops taking a
          grid column instead of only proving the rail collapsed. -->
     <aside v-if="ui.panel" class="obsisim-dock" :class="{ 'is-overlay': ui.narrow }" data-test="dock">
-      <!-- Tasks 7-11 replace this with the five panels. -->
-      {{ DOCK_PANEL_LABELS[ui.panel] }}
+      <!-- Tasks 8-11 replace the placeholder branch with the four remaining
+           panels. The Inspector's `:key` is `inspectorKey` above, not a bare
+           `ui.selection.id` — see that computed's own comment. -->
+      <InspectorPanel v-if="ui.panel === 'inspector'" :key="inspectorKey" />
+      <template v-else>{{ DOCK_PANEL_LABELS[ui.panel] }}</template>
     </aside>
     <ResourceStrip class="obsisim-strip" />
     <WorldLegend />

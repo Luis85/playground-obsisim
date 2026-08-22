@@ -185,7 +185,7 @@
 }
 
 .obsisim-build-palette .is-armed,
-.obsisim-selection-panel .is-armed,
+.obsisim-inspector .is-armed,
 .obsisim-table .is-armed {
   background: var(--interactive-accent);
   color: var(--text-on-accent);
@@ -196,7 +196,7 @@
   color: var(--text-on-accent);
 }
 
-.obsisim-selection-panel {
+.obsisim-inspector {
   display: flex;
   align-items: center;
   flex-wrap: wrap;

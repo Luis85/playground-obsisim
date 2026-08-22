@@ -2245,11 +2245,41 @@ Move emits into the store rather than dispatching: `@click="ui.armMove(building.
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run --project unit tests/app/dock-panels.test.ts`
-Expected: PASS, 8 tests.
+Expected: PASS. (The count above was wrong when this step was written — the
+Step 1 listing has 14 cases, not 8, and Step 5 below adds more still, to
+discharge every case in `deletion-inventory.md` Section B. Read the actual
+file rather than trusting a stale number here.)
 
-- [ ] **Step 5: Wire it into the dock and delete `SelectionPanel`**
+- [ ] **Step 5: Wire it into the dock and delete `SelectionPanel` — WITH THE KEY**
 
-In `WorldScreen.vue`'s `<aside>`, render `<InspectorPanel v-if="ui.panel === 'inspector'" />`. Then:
+**CORRECTION (see `.superpowers/sdd/task-7-key-defect.md`):** this step
+originally read "render `<InspectorPanel v-if="ui.panel === 'inspector'" />`"
+— no key. That is the exact defect the key-defect doc describes: the Step 1
+test helper's comment claims the Inspector is mounted "the way WorldScreen
+does — through the key", and a keyless render site would make that claim
+false while leaving the cross-building-demolish test green and vacuous.
+
+In `WorldScreen.vue`'s `<aside>`, render the Inspector keyed on the
+selection, not on a bare id — `${kind}-${id}` — because colonists are
+selectable too (§2.3) and building 3 / colonist 3 would otherwise share a
+numeric key and not remount between them:
+
+```vue
+<InspectorPanel v-if="ui.panel === 'inspector'" :key="inspectorKey" />
+```
+
+where `inspectorKey` is a named computed in `WorldScreen.vue`'s script,
+`` `${ui.selection.kind}-${'id' in ui.selection ? ui.selection.id : 0}` `` —
+extracted rather than inlined so `dock-panels.test.ts`'s `mountKeyedInspector`
+helper has a real expression to answer to, not a second copy of the string
+that could quietly drift from the render site.
+
+Also account for every case in `.superpowers/sdd/deletion-inventory.md`
+Section B (13 cases) before deleting `selection-panel.test.ts` — Step 1's
+test listing above does not cover all of them (notably case 1's header, case
+3's double-click-bypass negative half, case 4's reactive-removal case, and
+the case 7/8/9/11 positive/negative pairs), so extend `dock-panels.test.ts`
+with whatever it is missing first. Then:
 
 ```bash
 git rm src/app/components/SelectionPanel.vue tests/app/selection-panel.test.ts

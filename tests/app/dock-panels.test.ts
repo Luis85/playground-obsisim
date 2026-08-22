@@ -1,0 +1,293 @@
+// @vitest-environment happy-dom
+import { describe, expect, it, vi } from 'vitest';
+import { defineComponent, h } from 'vue';
+import { mount } from '@vue/test-utils';
+import { createTestingPinia } from '@pinia/testing';
+import InspectorPanel from '../../src/app/components/dock/InspectorPanel.vue';
+import { ENGINE_KEY } from '../../src/app/engine-key';
+import { useGameStore } from '../../src/app/stores/game-store';
+import { useUiStore } from '../../src/app/stores/ui-store';
+import { makeBuilding, makeSnapshot, makeWorker } from './fixtures';
+
+/** Mounts the Inspector the way WorldScreen does — through the key — so the
+ * remount behaviour under test is the one that actually ships. Restates
+ * `WorldScreen.vue`'s own `inspectorKey` computed rather than importing it,
+ * because importing the view here would drag in BuildPalette/WorldStage/
+ * WorldLegend for a test that only wants the key expression; see that
+ * computed's own comment, which names this file back. */
+function mountKeyedInspector(snapshot = makeSnapshot()) {
+  const engine = { dispatch: vi.fn() };
+  const pinia = createTestingPinia({ createSpy: vi.fn, stubActions: false });
+  useGameStore(pinia).ingest(snapshot, { paused: true, speed: 1, error: null });
+  const ui = useUiStore(pinia);
+  const Harness = defineComponent({
+    setup: () => () => h(InspectorPanel, {
+      key: `${ui.selection.kind}-${'id' in ui.selection ? ui.selection.id : 0}`,
+    }),
+  });
+  const wrapper = mount(Harness, {
+    global: { plugins: [pinia], provide: { [ENGINE_KEY as symbol]: engine } },
+  });
+  return { wrapper, engine, ui };
+}
+
+function mountPanel(component: typeof InspectorPanel, snapshot = makeSnapshot()) {
+  const engine = { dispatch: vi.fn() };
+  const pinia = createTestingPinia({ createSpy: vi.fn, stubActions: false });
+  useGameStore(pinia).ingest(snapshot, { paused: true, speed: 1, error: null });
+  const wrapper = mount(component, {
+    global: { plugins: [pinia], provide: { [ENGINE_KEY as symbol]: engine } },
+  });
+  return { wrapper, engine, ui: useUiStore(pinia) };
+}
+
+describe('InspectorPanel', () => {
+  const staffable = makeSnapshot({
+    idleAdults: 2,
+    buildings: [makeBuilding(1, { defId: 'farm', workers: 1, workerSlots: 3, state: 'producing' })],
+  });
+
+  // deletion-inventory.md Section B, case 1: name, tile, staffing and state
+  // label all in the header, none of it invented — the same fields
+  // SelectionPanel showed, read off the same snapshot fixture.
+  it('shows the selected building: name, tile, staffing, state label', async () => {
+    const { wrapper, ui } = mountPanel(InspectorPanel, staffable);
+    ui.selectBuilding(1);
+    await wrapper.vm.$nextTick();
+    const text = wrapper.get('[data-test="inspector"]').text();
+    expect(text).toContain('Farm');
+    expect(text).toContain('(4, 1)'); // makeBuilding(1)'s default tile
+    expect(text).toContain('1 / 3'); // workers / workerSlots
+    expect(text).toContain('Producing');
+  });
+
+  it('assigns a worker to the selected building', async () => {
+    const { wrapper, engine, ui } = mountPanel(InspectorPanel, staffable);
+    ui.selectBuilding(1);
+    await wrapper.vm.$nextTick();
+    await wrapper.get('[data-test="inspector-assign"]').trigger('click');
+    expect(engine.dispatch).toHaveBeenCalledWith({ type: 'assignWorker', buildingId: 1 });
+  });
+
+  it('unassigns a worker from the selected building', async () => {
+    const { wrapper, engine, ui } = mountPanel(InspectorPanel, staffable);
+    ui.selectBuilding(1);
+    await wrapper.vm.$nextTick();
+    await wrapper.get('[data-test="inspector-unassign"]').trigger('click');
+    expect(engine.dispatch).toHaveBeenCalledWith({ type: 'unassignWorker', buildingId: 1 });
+  });
+
+  it('disables assign with no idle adults and says why', async () => {
+    const none = makeSnapshot({ idleAdults: 0, buildings: [makeBuilding(1, { workers: 1, workerSlots: 3 })] });
+    const { wrapper, ui } = mountPanel(InspectorPanel, none);
+    ui.selectBuilding(1);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('[data-test="inspector-assign"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('[data-test="inspector-staffing-reason"]').text()).toContain('No idle adults');
+  });
+
+  it('shows a producer\'s recipe, batch, buffers, work power and tools', async () => {
+    const producing = makeSnapshot({
+      buildings: [makeBuilding(1, { defId: 'bakery', workers: 2, workerSlots: 3, state: 'producing', progressPct: 40, buffered: 3, inputBuffered: 5, workPower: 1.75, tooledWorkers: 1 })],
+    });
+    const { wrapper, ui } = mountPanel(InspectorPanel, producing);
+    ui.selectBuilding(1);
+    await wrapper.vm.$nextTick();
+    const text = wrapper.get('[data-test="inspector"]').text();
+    for (const fragment of ['40%', '1.75', 'Flour']) expect(text).toContain(fragment);
+    expect(wrapper.get('[data-test="inspector-tools"]').text()).toContain('1');
+  });
+
+  it('shows a house\'s beds', async () => {
+    const house = makeSnapshot({
+      buildings: [makeBuilding(1, { defId: 'house', beds: 4, occupants: 2, workerSlots: 0, state: 'housing' })],
+      colonists: [makeWorker(9, { homeId: 1 }), makeWorker(10, { homeId: 1 })],
+    });
+    const { wrapper, ui } = mountPanel(InspectorPanel, house);
+    ui.selectBuilding(1);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('[data-test="inspector"]').text()).toContain('2 / 4');
+  });
+
+  // deletion-inventory.md Section B, case 7: a storehouse's `held / capacity`
+  // is the storage > 0 gate's positive half; the producer fixture below is
+  // its negative half — nothing here to show, so nothing renders.
+  it('shows a storehouse\'s contents against capacity, and hides it for a producer', async () => {
+    const storehouse = makeSnapshot({
+      buildings: [makeBuilding(1, { defId: 'storehouse', workerSlots: 0, state: 'storing', stored: 41, storage: 60 })],
+    });
+    const { wrapper: storeWrapper, ui: storeUi } = mountPanel(InspectorPanel, storehouse);
+    storeUi.selectBuilding(1);
+    await storeWrapper.vm.$nextTick();
+    expect(storeWrapper.get('[data-test="inspector-storage"]').text()).toContain('41 / 60');
+
+    const { wrapper: producerWrapper, ui: producerUi } = mountPanel(InspectorPanel, staffable);
+    producerUi.selectBuilding(1);
+    await producerWrapper.vm.$nextTick();
+    expect(producerWrapper.find('[data-test="inspector-storage"]').exists()).toBe(false);
+  });
+
+  it('shows a site\'s materials as have over need, not as a bare shortfall', async () => {
+    // A sawmill costs 25 wood; 14 outstanding means 11 have arrived. The
+    // shortfall alone reads identically at 0/25 and at 24/25.
+    const site = makeSnapshot({
+      buildings: [makeBuilding(1, { defId: 'sawmill', state: 'underConstruction', constructionTicks: 20, constructionNeeds: { wood: 14 } })],
+    });
+    const { wrapper, ui } = mountPanel(InspectorPanel, site);
+    ui.selectBuilding(1);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('[data-test="selection-needs"]').text()).toContain('11 / 25 Wood');
+  });
+
+  // deletion-inventory.md Section B, case 11: the negative half of case 10 —
+  // a settled building shows no construction lines at all, or "disabled for
+  // a site" would be indistinguishable from "always present".
+  it('shows no construction lines for a settled building', async () => {
+    const { wrapper, ui } = mountPanel(InspectorPanel, staffable);
+    ui.selectBuilding(1);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-test="selection-construction"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="selection-needs"]').exists()).toBe(false);
+  });
+
+  // deletion-inventory.md Section B, cases 8/9: a relocating building's
+  // countdown, and its negative half — nothing shown once it has settled.
+  it('shows the remaining downtime for a relocating building, and hides it once settled', async () => {
+    const relocating = makeSnapshot({
+      buildings: [makeBuilding(1, { state: 'relocating', relocatingTicks: 9 })],
+    });
+    const { wrapper, ui } = mountPanel(InspectorPanel, relocating);
+    ui.selectBuilding(1);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('[data-test="selection-relocating"]').text()).toContain('9t');
+
+    const { wrapper: settledWrapper, ui: settledUi } = mountPanel(InspectorPanel, staffable);
+    settledUi.selectBuilding(1);
+    await settledWrapper.vm.$nextTick();
+    expect(settledWrapper.find('[data-test="selection-relocating"]').exists()).toBe(false);
+  });
+
+  it('refuses staffing on a construction site and states the reason', async () => {
+    const site = makeSnapshot({
+      idleAdults: 3,
+      buildings: [makeBuilding(1, { workers: 0, workerSlots: 3, state: 'underConstruction', constructionTicks: 20, constructionNeeds: { wood: 5 } })],
+    });
+    const { wrapper, ui } = mountPanel(InspectorPanel, site);
+    ui.selectBuilding(1);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('[data-test="inspector-assign"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('[data-test="inspector-staffing-reason"]').text()).toContain('cannot be staffed');
+  });
+
+  it('refuses Move on a construction site and states the reason in the panel', async () => {
+    const site = makeSnapshot({
+      buildings: [makeBuilding(1, { state: 'underConstruction', constructionTicks: 20, constructionNeeds: { wood: 5 } })],
+    });
+    const { wrapper, ui } = mountPanel(InspectorPanel, site);
+    ui.selectBuilding(1);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('[data-test="inspector-move"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('[data-test="inspector-move-reason"]').text()).toContain('under construction');
+  });
+
+  // deletion-inventory.md Section B, case 13: the positive half of 12 — a
+  // settled building's Move is NOT disabled, or the site-only refusal above
+  // would be indistinguishable from a control disabled unconditionally. Also
+  // exercises the "arms move mode rather than dispatching" behaviour on the
+  // same click.
+  it('arms move mode rather than dispatching immediately', async () => {
+    const { wrapper, engine, ui } = mountPanel(InspectorPanel, staffable);
+    ui.selectBuilding(1);
+    await wrapper.vm.$nextTick();
+    const move = wrapper.get('[data-test="inspector-move"]');
+    expect(move.attributes('disabled')).toBeUndefined();
+    await move.trigger('click');
+    expect(engine.dispatch).not.toHaveBeenCalled();
+    expect(ui.mode).toEqual({ kind: 'move', buildingId: 1 });
+  });
+
+  it('lists a house occupant and selects the colonist on click', async () => {
+    const house = makeSnapshot({
+      buildings: [makeBuilding(1, { defId: 'house', beds: 4, occupants: 1, workerSlots: 0, state: 'housing' })],
+      colonists: [makeWorker(9, { homeId: 1 })],
+    });
+    const { wrapper, ui } = mountPanel(InspectorPanel, house);
+    ui.selectBuilding(1);
+    await wrapper.vm.$nextTick();
+    await wrapper.get('[data-test="occupant-9"]').trigger('click');
+    expect(ui.selection).toEqual({ kind: 'colonist', id: 9 });
+  });
+
+  it('describes a selected colonist instead of a building', async () => {
+    const peopled = makeSnapshot({ colonists: [makeWorker(9, { ageTicks: 2500 })] });
+    const { wrapper, ui } = mountPanel(InspectorPanel, peopled);
+    ui.selectColonist(9);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('[data-test="inspector-colonist"]').text()).toContain('#9');
+  });
+
+  // The POSITIVE case, carried over from the deleted selection-panel.test.ts.
+  // Without it, an Inspector that renders TwoStepButton and never wires its
+  // confirm to a dispatch passes the cross-building test below — which only
+  // proves the FIRST tap does nothing — while failing criterion 1 outright.
+  it('demolishes the selected building after the two-step confirm', async () => {
+    const { wrapper, engine, ui } = mountPanel(InspectorPanel, staffable);
+    ui.selectBuilding(1);
+    await wrapper.vm.$nextTick();
+    await wrapper.get('[data-test="selection-demolish"]').trigger('click'); // arms
+    expect(engine.dispatch).not.toHaveBeenCalled();
+    await wrapper.get('[data-test="selection-demolish"]').trigger('click'); // confirms
+    expect(engine.dispatch).toHaveBeenCalledWith({ type: 'demolishBuilding', buildingId: 1 });
+  });
+
+  // deletion-inventory.md Section B, case 3's negative half: a double-click's
+  // second event carries MouseEvent.detail > 1, which TwoStepButton refuses to
+  // treat as a confirm — a wandering double-click must not skip the arm step.
+  it('does not demolish on a double-click', async () => {
+    const { wrapper, engine, ui } = mountPanel(InspectorPanel, staffable);
+    ui.selectBuilding(1);
+    await wrapper.vm.$nextTick();
+    const demolish = wrapper.get('[data-test="selection-demolish"]');
+    await demolish.trigger('click', { detail: 2 });
+    expect(engine.dispatch).not.toHaveBeenCalled();
+    expect(demolish.text()).not.toContain('Confirm');
+  });
+
+  // deletion-inventory.md Section B, case 4: the building can leave the
+  // snapshot out from under an unchanged selection (e.g. another surface
+  // demolished it) — the Inspector must stop rendering it reactively, not
+  // merely fail to have shown it in the first place.
+  it('renders nothing once the selected building has left the snapshot', async () => {
+    const { wrapper, ui } = mountPanel(InspectorPanel, staffable);
+    ui.selectBuilding(1);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-test="inspector"]').exists()).toBe(true);
+    useGameStore().ingest(makeSnapshot({ buildings: [] }), { paused: true, speed: 1, error: null });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-test="inspector"]').exists()).toBe(false);
+  });
+
+  // Carried over from tests/app/world-view.test.ts, which Task 6 deletes. The
+  // behaviour it guards is a real one and predates this increment: arm
+  // Demolish on A, select B, and B must get a disarmed button. Without the
+  // key above, TwoStepButton's internal `armed` ref survives the subject
+  // change and B is one tap from demolition. This is deletion-inventory.md's
+  // A22, and WorldScreen.vue's `inspectorKey` computed is the render site the
+  // `mountKeyedInspector` helper above restates.
+  it('resets an armed demolish when the subject changes — no cross-building confirm', async () => {
+    const two = makeSnapshot({ buildings: [makeBuilding(1), makeBuilding(2)] });
+    const { wrapper, engine, ui } = mountKeyedInspector(two);
+    ui.selectBuilding(1);
+    await wrapper.vm.$nextTick();
+    await wrapper.get('[data-test="selection-demolish"]').trigger('click'); // arms
+    ui.selectBuilding(2);
+    await wrapper.vm.$nextTick();
+    await wrapper.get('[data-test="selection-demolish"]').trigger('click'); // must only ARM, not fire
+    expect(engine.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('renders nothing when nothing is selected', () => {
+    const { wrapper } = mountPanel(InspectorPanel, staffable);
+    expect(wrapper.find('[data-test="inspector"]').exists()).toBe(false);
+  });
+});

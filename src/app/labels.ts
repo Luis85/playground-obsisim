@@ -1,4 +1,4 @@
-import { BALANCE, RESOURCES, type BuildingDef, type CostMap, type ResourceId } from '../engine/content';
+import { BALANCE, BUILDINGS, RESOURCES, type BuildingDef, type BuildingDefId, type CostMap, type ResourceId } from '../engine/content';
 import type { HaulKind } from '../shared/haul';
 import type { LifeStage } from '../shared/population';
 import type { BuildingState } from '../shared/snapshot';
@@ -26,7 +26,7 @@ export function costLabel(cost: CostMap): string {
  * inline ternary) so the table's `<template>` doesn't carry the branch:
  * presentation lives in labels.ts, per BuildingsView's own comment. Its one
  * caller today is that table; the natural second call site,
- * SelectionPanel.vue's relocation countdown, already carries its own inline
+ * InspectorPanel.vue's relocation countdown, already carries its own inline
  * branch with different wording ("Relocating: 9t left", not "6t") — that,
  * not a lack of reuse, is why this has a single caller. */
 export function downtimeLabel(relocatingTicks: number): string {
@@ -135,6 +135,29 @@ export function waitingLabel(storage: number, stored: number, buffered: number):
  */
 export function needsLabel(needs: CostMap): string {
   return Object.keys(needs).length > 0 ? costLabel(needs) : '—';
+}
+
+/**
+ * "11 / 25 Wood, 5 / 5 Planks" — what a construction site holds against what it
+ * takes, which is the progress `needsLabel`'s shortfall cannot show: "14 Wood"
+ * reads the same on a site that has just been ordered as on one load from
+ * finishing. The Inspector's Needs line (spec §2.3's "have / need") reads
+ * this, not `needsLabel` — Task 12 will read it too, for the Ledger's own
+ * Needs cell, so its signature is a cross-task interface rather than a
+ * private helper of either caller.
+ *
+ * `have` is derived, not published: `BuildingSnapshot.constructionNeeds` is the
+ * REMAINING need, so cost minus need is what has arrived. Reads the def's cost
+ * from BUILDINGS rather than taking it as an argument, the same way
+ * `recipeLabel` does, so a cost change cannot desync the two halves.
+ */
+export function suppliedLabel(defId: BuildingDefId, needs: CostMap): string {
+  const cost = BUILDINGS[defId].cost;
+  const parts = Object.entries(cost).map(([id, total]) => {
+    const outstanding = needs[id as ResourceId] ?? 0;
+    return `${total - outstanding} / ${total} ${RESOURCES[id as ResourceId].name}`;
+  });
+  return parts.length > 0 ? parts.join(', ') : '—';
 }
 
 /**

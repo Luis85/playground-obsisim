@@ -1,7 +1,8 @@
 import { BALANCE, BUILDINGS, RESOURCES, type BuildingDef, type BuildingDefId, type CostMap, type ResourceId } from '../engine/content';
 import type { HaulKind } from '../shared/haul';
 import type { LifeStage } from '../shared/population';
-import type { BuildingSnapshot, BuildingState } from '../shared/snapshot';
+import type { BuildingSnapshot, BuildingState, ResourceStats } from '../shared/snapshot';
+import type { Chain } from '../shared/content-types';
 
 export const BUILDING_STATE_LABELS: Record<BuildingState, string> = {
   producing: 'Producing',
@@ -243,4 +244,108 @@ export function mealsClass(perHead: number): string {
  * downtimeLabel above, for the same reason: a blank cell reads as a bug. */
 export function starvingLabel(starvingTicks: number): string {
   return starvingTicks > 0 ? `${BALANCE.starvationDeathTicks - starvingTicks}t` : '—';
+}
+
+/**
+ * One rendered stage of an Economy chain — a formatted row over one CHAINS
+ * step, not a def's raw numbers. Shared between EconomyView (the Ledger's
+ * wide table) and EconomyPanel (the dock's narrower one) per spec §2.7's
+ * "one figure, one derivation, two surfaces": both surfaces show the exact
+ * same Made/t, Delivered/t and Status a stage carries, so this is the one
+ * place that walks CHAINS and reads staffingByDef/stageStatuses/runways —
+ * neither view derives its own copy that could drift from the other's.
+ */
+export interface ChainStageRow {
+  building: BuildingDefId;
+  stage: string;
+  crew: string;
+  status: string;
+  starved: boolean;
+  output: string;
+  made: string;
+  delivered: string;
+  cons: string;
+  stock: number;
+  outputId: ResourceId;
+  runway: string;
+}
+
+export interface ChainTableRow {
+  name: string;
+  steps: ChainStageRow[];
+}
+
+/**
+ * Every CHAINS step, formatted for a table row. Takes the store's own
+ * getters as plain data (never the store itself — `labels.ts` has no store
+ * to read, the same boundary `buildingNamesById`/`jobLabel` already keep)
+ * so a def with no buildings still renders — `staffingByDef`/`stageStatuses`
+ * default to "0 (0)"/"not built" for exactly that def, which is what lets an
+ * Economy stage row exist (and be clickable) before the first building of
+ * that kind is ever placed.
+ */
+export function chainTableRows(
+  chains: readonly Chain[],
+  staffingByDef: Partial<Record<BuildingDefId, { total: number; staffed: number; starved: number }>>,
+  stageStatuses: Partial<Record<BuildingDefId, { label: string; starved: boolean }>>,
+  runways: Partial<Record<ResourceId, number>>,
+  stockpile: Record<ResourceId, ResourceStats>,
+): ChainTableRow[] {
+  return chains.map((chain) => ({
+    name: chain.name,
+    steps: chain.steps.map((step) => {
+      const staffing = staffingByDef[step.building] ?? { total: 0, staffed: 0, starved: 0 };
+      const status = stageStatuses[step.building] ?? { label: 'not built', starved: false };
+      const runway = runways[step.output];
+      const stats = stockpile[step.output];
+      return {
+        building: step.building,
+        stage: BUILDINGS[step.building].name,
+        crew: `${staffing.total} (${staffing.staffed})`,
+        status: status.label,
+        starved: status.starved,
+        output: RESOURCES[step.output].name,
+        made: stats.madeRate.toFixed(2),
+        // Store inflow, not gross output (OBS-4-06): since increment 4 goods
+        // reach the stockpile when a hauler delivers them, not when they are
+        // made, so this is the per-stage haul backlog EconomyView's own
+        // "Delivered/t" heading names.
+        delivered: stats.deliveredRate.toFixed(2),
+        cons: stats.consumptionRate.toFixed(2),
+        stock: stats.stock,
+        outputId: step.output,
+        runway: runway !== undefined ? `~${runway}t` : '—',
+      };
+    }),
+  }));
+}
+
+/** The haul backlog sentence — the answer to "my production fell and I did
+ * not change anything" (PRD §5). Shared between EconomyView and EconomyPanel
+ * (spec §2.7): both read the exact same three store getters, so the two
+ * surfaces cannot report different numbers for the same stall. */
+export function haulPressureLabel(unitsWaiting: number, haulerCount: number, stalledBuildings: number): string {
+  if (unitsWaiting === 0) return 'Hauling is keeping up: nothing is waiting at a building.';
+  const haulers = `${haulerCount} hauler${haulerCount === 1 ? '' : 's'}`;
+  const stalled = `${stalledBuildings} stalled`;
+  return `${unitsWaiting} units waiting for collection — ${stalled} — ${haulers} on duty.`;
+}
+
+/** The input-side twin of haulPressureLabel above — the answer to "why is my
+ * bakery stopped?" (§2.10). */
+export function inputPressureLabel(buildingsWaitingForInput: number, unitsShort: number): string {
+  if (buildingsWaitingForInput === 0) return 'Input delivery is keeping up: no building is waiting.';
+  const buildings = `${buildingsWaitingForInput} building${buildingsWaitingForInput === 1 ? '' : 's'}`;
+  return `${unitsShort} units short — ${buildings} waiting for input.`;
+}
+
+/** The build-side third of the same shape (§2.10, beside haulPressureLabel
+ * and inputPressureLabel above): what the colony's construction queue still
+ * owes. No "obsisim-negative" class decision here, deliberately: unlike the
+ * two backlogs above, a site under construction is not a stall — that
+ * judgement stays with the caller, which is why this returns only text. */
+export function buildPressureLabel(buildingsUnderConstruction: number, unitsNeededForConstruction: number): string {
+  if (buildingsUnderConstruction === 0) return 'Nothing is under construction.';
+  const sites = `${buildingsUnderConstruction} site${buildingsUnderConstruction === 1 ? '' : 's'}`;
+  return `${unitsNeededForConstruction} units needed — ${sites} under construction.`;
 }

@@ -6,6 +6,7 @@ import { createTestingPinia } from '@pinia/testing';
 import InspectorPanel from '../../src/app/components/dock/InspectorPanel.vue';
 import ColonyPanel from '../../src/app/components/dock/ColonyPanel.vue';
 import PopulationPanel from '../../src/app/components/dock/PopulationPanel.vue';
+import EconomyPanel from '../../src/app/components/dock/EconomyPanel.vue';
 import { NOMAD_REJECTIONS } from '../../src/shared/population';
 import { ENGINE_KEY } from '../../src/app/engine-key';
 import { useGameStore } from '../../src/app/stores/game-store';
@@ -448,5 +449,49 @@ describe('PopulationPanel', () => {
     const { wrapper, ui } = mountPanel(PopulationPanel, peopled);
     await wrapper.get('[data-test="colonist-row-2"]').trigger('click');
     expect(ui.selection).toEqual({ kind: 'colonist', id: 2 });
+  });
+});
+
+describe('EconomyPanel', () => {
+  // Spec §2.3: "Economy stage row -> highlights every building of that def;
+  // selects nothing". A stage is a def (CHAINS' `farm` step), not a
+  // building, so its click result names however many buildings exist for
+  // that def — the plural case, exercised here with two farms. `ui.select`
+  // only clears `highlight` on a NON-none outgoing selection (see
+  // ui-store.ts's own comment), which is what lets `clearSelection()` then
+  // `setHighlight(...)` land both halves rather than the second one erasing
+  // the first.
+  it('highlights every building of a stage rather than selecting one, clearing any standing selection', async () => {
+    const two = makeSnapshot({
+      buildings: [makeBuilding(1, { defId: 'farm' }), makeBuilding(2, { defId: 'farm' })],
+    });
+    const { wrapper, ui } = mountPanel(EconomyPanel, two);
+    ui.selectBuilding(2);
+    await wrapper.get('[data-test="stage-row-farm"]').trigger('click');
+    expect(ui.highlight).toEqual([{ kind: 'building', id: 1 }, { kind: 'building', id: 2 }]);
+    expect(ui.selection).toEqual({ kind: 'none' });
+  });
+
+  // The one-member case, which spec §2.3 calls out by name: a rule that
+  // selected a single-instance stage and highlighted a multi-instance one
+  // would behave differently on the same click depending on a count the
+  // player is not looking at. This asserts the click still highlights (a
+  // one-element array), never `ui.select({ kind: 'building', id: 1 })`.
+  it('highlights a single-instance stage too, rather than selecting it', async () => {
+    const one = makeSnapshot({ buildings: [makeBuilding(1, { defId: 'farm' })] });
+    const { wrapper, ui } = mountPanel(EconomyPanel, one);
+    await wrapper.get('[data-test="stage-row-farm"]').trigger('click');
+    expect(ui.highlight).toEqual([{ kind: 'building', id: 1 }]);
+    expect(ui.selection).toEqual({ kind: 'none' });
+  });
+
+  // The empty case: a def with no buildings still renders a "not built" row
+  // (chainTableRows renders one row per CHAINS step regardless of whether
+  // any building exists), and clicking it highlights the empty set rather
+  // than erroring or highlighting some other def's buildings.
+  it('highlights nothing for a stage with no buildings', async () => {
+    const { wrapper, ui } = mountPanel(EconomyPanel, makeSnapshot({ buildings: [] }));
+    await wrapper.get('[data-test="stage-row-farm"]').trigger('click');
+    expect(ui.highlight).toEqual([]);
   });
 });

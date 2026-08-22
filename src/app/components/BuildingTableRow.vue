@@ -5,7 +5,10 @@ import { BUILDINGS } from '../../engine/content';
 import { isTileBuildable } from '../../shared/placement';
 import type { WorldMapSize } from '../../shared/placement';
 import type { BuildingSnapshot } from '../../shared/snapshot';
-import { batchLabel, BUILDING_STATE_LABELS, downtimeLabel, MOVE_SITE_REASON, suppliedLabel, waitingLabel } from '../labels';
+import {
+  batchLabel, BUILDING_STATE_LABELS, downtimeLabel, MOVE_SITE_REASON, suppliedLabel, TILE_UNAVAILABLE_REASON,
+  waitingLabel, WHOLE_TILES_ONLY_REASON,
+} from '../labels';
 import { staffingRefusal, unassignRefusal } from '../staffing';
 import TwoStepButton from './TwoStepButton.vue';
 
@@ -72,9 +75,9 @@ function moveRefusal(): string | null {
   if (props.building.constructionTicks > 0) return MOVE_SITE_REASON;
   const col = moveCol.value;
   const row = moveRow.value;
-  if (!Number.isInteger(col) || !Number.isInteger(row)) return 'Whole tiles only.';
+  if (!Number.isInteger(col) || !Number.isInteger(row)) return WHOLE_TILES_ONLY_REASON;
   if (!isTileBuildable(props.map, props.buildings, col, row)) {
-    return 'That tile is off the map, in the camp band, or already taken.';
+    return TILE_UNAVAILABLE_REASON;
   }
   return null;
 }

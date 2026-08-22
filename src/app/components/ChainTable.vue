@@ -14,12 +14,20 @@ import type { ChainStageRow, ChainTableRow } from '../labels';
  *
  * What differs between the two callers — the REST of the columns, and
  * whether a row does anything on click — stays with each caller through the
- * `headers`/`cells` slots and the `rowClick` emit. A caller that does not
- * listen for `rowClick` (`EconomyView`) gets a row that does nothing on
- * click, exactly the inert behaviour it had before this table shell was
- * extracted — the emit exists, but nothing here decides what it MEANS.
+ * `headers`/`cells` slots and the `clickable` prop below. `clickable`
+ * defaults false (`EconomyView`'s twin), and the row's `v-on` binds to an
+ * EMPTY object rather than a handler that reads the prop and no-ops —
+ * exactly the pattern `ResourceTable` and `PopulationRoster` already use for
+ * the same "genuinely inert, not merely unwired" reason (see
+ * `PopulationRoster.vue`'s own comment on its `selectable` prop): a live
+ * click listener sitting on a row that is meant to do nothing is a surface a
+ * future caller could start relying on by accident, where `v-on="{}"`
+ * physically cannot be (M6, whole-branch review — an earlier version of this
+ * component always attached the listener and relied on `EconomyView` simply
+ * not listening for the `rowClick` emit it triggered, which every other
+ * shared row in this codebase treats as the wrong shape for "inert").
  */
-defineProps<{ chains: ChainTableRow[] }>();
+const props = withDefaults(defineProps<{ chains: ChainTableRow[]; clickable?: boolean }>(), { clickable: false });
 const emit = defineEmits<{ rowClick: [row: ChainStageRow] }>();
 </script>
 
@@ -39,7 +47,7 @@ const emit = defineEmits<{ rowClick: [row: ChainStageRow] }>();
           :key="row.building"
           :data-test="`stage-row-${row.building}`"
           :class="{ 'obsisim-starved': row.starved }"
-          @click="emit('rowClick', row)"
+          v-on="props.clickable ? { click: () => emit('rowClick', row) } : {}"
         >
           <td>{{ row.stage }}</td>
           <slot name="cells" :row="row" />

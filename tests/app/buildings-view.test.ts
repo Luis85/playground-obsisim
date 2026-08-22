@@ -129,12 +129,12 @@ describe('BuildingsView', () => {
     const poor = mountView(stockedSnapshot({ wood: 0 }));
     await poor.wrapper.vm.$nextTick();
     const button = poor.wrapper.find('[data-test="construct-forester"]').element as HTMLButtonElement;
-    expect(button.title).toBe('Short on resources — placed now, fills in as goods arrive; pick the tile yourself in the World tab');
+    expect(button.title).toBe('Short on resources — placed now, fills in as goods arrive; pick the tile yourself afterward, with Move or in World view');
 
     const rich = mountView(stockedSnapshot({ wood: 100 }));
     await rich.wrapper.vm.$nextTick();
     const richButton = rich.wrapper.find('[data-test="construct-forester"]').element as HTMLButtonElement;
-    expect(richButton.title).toBe('Placed automatically — pick the tile yourself in the World tab');
+    expect(richButton.title).toBe('Placed automatically — pick the tile yourself afterward, with Move or in World view');
   });
 
   // Task 4 added the storehouse def and left recipeLabel treating every

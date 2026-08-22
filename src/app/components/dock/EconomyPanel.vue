@@ -62,9 +62,9 @@ function onRowClick(row: ChainStageRow) {
        InspectorPanel, ColonyPanel). -->
   <div v-if="store.snapshot" class="obsisim-economy" data-test="economy-panel">
     <EconomyPressureLines />
-    <ChainTable :chains="chains" @row-click="onRowClick">
+    <ChainTable :chains="chains" clickable @row-click="onRowClick">
       <template #headers>
-        <th>Crew (staffed)</th><th>Status</th><th data-test="made-heading">Made/t</th><th data-test="inflow-heading">Delivered/t</th><th>Empties in</th>
+        <th>Crew (staffed)</th><th>Status</th><th data-test="made-heading">Made/t</th><th data-test="economy-panel-inflow-heading">Delivered/t</th><th>Empties in</th>
       </template>
       <template #cells="{ row }">
         <td>{{ row.crew }}</td>

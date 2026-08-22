@@ -124,7 +124,7 @@ watch(
                  both branches carry it. -->
             <button
               :data-test="`construct-${id}`"
-              :title="store.affordableDefs[id] ? 'Placed automatically — pick the tile yourself in the World tab' : 'Short on resources — placed now, fills in as goods arrive; pick the tile yourself in the World tab'"
+              :title="store.affordableDefs[id] ? 'Placed automatically — pick the tile yourself afterward, with Move or in World view' : 'Short on resources — placed now, fills in as goods arrive; pick the tile yourself afterward, with Move or in World view'"
               @click="engine.dispatch({ type: 'constructBuilding', buildingDefId: id })"
             >
               Build

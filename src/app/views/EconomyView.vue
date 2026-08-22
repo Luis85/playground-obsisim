@@ -27,7 +27,7 @@ const { chains } = useEconomyChains();
     <EconomyPressureLines />
     <ChainTable :chains="chains">
       <template #headers>
-        <th>Buildings (staffed)</th><th>Status</th><th>Output</th><th data-test="made-heading">Made/t</th><th data-test="inflow-heading">Delivered/t</th><th>Cons/t</th><th>Stock</th><th>Empties in</th>
+        <th>Buildings (staffed)</th><th>Status</th><th>Output</th><th data-test="made-heading">Made/t</th><th data-test="economy-inflow-heading">Delivered/t</th><th>Cons/t</th><th>Stock</th><th>Empties in</th>
       </template>
       <template #cells="{ row }">
         <td>{{ row.crew }}</td>

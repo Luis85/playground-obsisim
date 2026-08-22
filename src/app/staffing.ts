@@ -1,5 +1,5 @@
 import type { BuildingSnapshot } from '../shared/snapshot';
-import { NO_IDLE_ADULTS_REASON } from './labels';
+import { NO_IDLE_ADULTS_REASON, NOTHING_STAFFED_REASON, STAFFING_FULL_REASON, STAFFING_SITE_REASON } from './labels';
 
 /*
  * Why a staffing verb is refused, or null when it isn't — the ONE derivation
@@ -23,8 +23,8 @@ import { NO_IDLE_ADULTS_REASON } from './labels';
  * `Map`, which is more machinery than a three-branch pure function needs.
  */
 export function staffingRefusal(b: BuildingSnapshot, idleAdults: number): string | null {
-  if (b.constructionTicks > 0) return 'A construction site cannot be staffed until it is finished.';
-  if (b.workers >= b.workerSlots) return 'Every slot is filled.';
+  if (b.constructionTicks > 0) return STAFFING_SITE_REASON;
+  if (b.workers >= b.workerSlots) return STAFFING_FULL_REASON;
   if (idleAdults === 0) return NO_IDLE_ADULTS_REASON;
   return null;
 }
@@ -33,5 +33,5 @@ export function staffingRefusal(b: BuildingSnapshot, idleAdults: number): string
  * unassign-direction twin of `staffingRefusal` above, same reasoning for why
  * it is a shared function rather than two copies. */
 export function unassignRefusal(b: BuildingSnapshot): string | null {
-  return b.workers === 0 ? 'Nothing is staffed here to unassign.' : null;
+  return b.workers === 0 ? NOTHING_STAFFED_REASON : null;
 }

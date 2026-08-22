@@ -27,6 +27,32 @@ export const NO_HAULERS_REASON = 'No haulers to send back.';
  * has a target typed in). */
 export const MOVE_SITE_REASON = 'A building under construction cannot be moved.';
 
+/** "A construction site cannot be staffed until it is finished." — the first
+ * of `staffing.ts`'s `staffingRefusal` branches. Named here, not inlined,
+ * for the same reason every other refusal in this file is (M4, whole-branch
+ * review): presentation strings live in `labels.ts`, so a caller that reads
+ * `staffingRefusal`'s RETURN value never has to also import a literal it
+ * could reword independently of the sentence the function actually returns. */
+export const STAFFING_SITE_REASON = 'A construction site cannot be staffed until it is finished.';
+
+/** "Every slot is filled." — `staffing.ts`'s `staffingRefusal` at capacity. */
+export const STAFFING_FULL_REASON = 'Every slot is filled.';
+
+/** "Nothing is staffed here to unassign." — `staffing.ts`'s `unassignRefusal`
+ * at zero, the unassign-direction twin of the two constants above. */
+export const NOTHING_STAFFED_REASON = 'Nothing is staffed here to unassign.';
+
+/** "Whole tiles only." — `BuildingTableRow.vue`'s `moveRefusal`, guarding the
+ * two typed coordinate inputs against a non-integer before `isTileBuildable`
+ * (which assumes whole tiles) ever sees them. */
+export const WHOLE_TILES_ONLY_REASON = 'Whole tiles only.';
+
+/** "That tile is off the map, in the camp band, or already taken." —
+ * `BuildingTableRow.vue`'s `moveRefusal`, the Ledger's own restatement of
+ * `isTileBuildable`'s three failure modes in one sentence (the canvas shows
+ * the same refusal as a red ghost tile instead of words). */
+export const TILE_UNAVAILABLE_REASON = 'That tile is off the map, in the camp band, or already taken.';
+
 export const BUILDING_STATE_LABELS: Record<BuildingState, string> = {
   producing: 'Producing',
   waitingForInput: 'Waiting for input',
@@ -389,13 +415,20 @@ export const DOCK_LABELS: Record<DockPanel, string> = {
 };
 
 /**
- * The dock's tab strip, in display order. Deliberately every `DockPanel`
- * EXCEPT `inspector`: the Inspector has no tab of its own because it is
- * never a destination a player picks directly — it opens only as a
- * consequence of a selection, from the canvas (§2.1) or a panel row (§2.3).
- * A tab that opened it with no selection behind it would show an empty
- * panel with nothing to point at. Typed over `Exclude<DockPanel,
- * 'inspector'>` rather than a bare `DockPanel[]` so that omission is
- * enforced here too, not merely asserted in this comment.
+ * The dock's four UNCONDITIONAL tabs, in display order — every `DockPanel`
+ * EXCEPT `inspector`. Typed over `Exclude<DockPanel, 'inspector'>` rather
+ * than a bare `DockPanel[]` so that omission is enforced here too, not
+ * merely asserted in this comment.
+ *
+ * Inspector is deliberately absent from this array, but it is NOT
+ * unreachable from the dock: `DockTabs.vue` renders it as a fifth tab of its
+ * own, gated on `ui.selection.kind !== 'none'` rather than always-on like
+ * these four. A tab that opened it with no selection behind it would show an
+ * empty panel with nothing to point at — that is why it is not simply added
+ * here — but excluding it from the dock entirely, the way an earlier version
+ * of this file did, broke spec §2.3's "the Inspector one click away" for
+ * every selection made from a panel row rather than the canvas (I3,
+ * whole-branch review): see `DockTabs.vue`'s own template comment for the
+ * gating logic this array does not carry.
  */
 export const DOCK_PANELS: readonly Exclude<DockPanel, 'inspector'>[] = ['colony', 'population', 'economy', 'attention'];

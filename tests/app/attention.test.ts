@@ -76,6 +76,11 @@ describe('game-store attention', () => {
     expect(row).toBeDefined();
     expect(row!.subject).toBe(null);
     expect(row!.highlight).toEqual([{ kind: 'colonist', id: 2 }, { kind: 'colonist', id: 3 }]);
+    // M7 (whole-branch review): explicit against the PUBLISHED `homeless`
+    // figure, not just the array literal above — `highlight` re-derives
+    // `homeId === null` independently of that count (game-store.ts's own
+    // comment on why), and this is what pins the two agreeing.
+    expect(row!.highlight).toHaveLength(2);
   });
 
   it('names a single homeless colonist in the singular', () => {
@@ -108,6 +113,12 @@ describe('game-store attention', () => {
     const row = store.attention.find((r) => r.message.includes('starving'));
     expect(row).toBeDefined();
     expect(row!.message).toBe('1 colonist is starving');
+    // M7 (whole-branch review): the row's message and its highlight set are
+    // two independent derivations off the snapshot (see game-store.ts's own
+    // comment on why) — nothing before this pinned that the singular case
+    // agrees with the plural one above rather than, say, always highlighting
+    // every starving colonist regardless of what the message claims.
+    expect(row!.highlight).toHaveLength(1);
   });
 
   it('names several idle adults in the plural', () => {
@@ -123,6 +134,10 @@ describe('game-store attention', () => {
     expect(row!.subject).toBe(null);
     expect(row!.message).toBe('2 adults are idle');
     expect(row!.highlight).toEqual([{ kind: 'colonist', id: 1 }, { kind: 'colonist', id: 2 }]);
+    // M7: explicit against the PUBLISHED `idleAdults` figure — see the
+    // homeless test above for why this is not merely restating the line
+    // just above it.
+    expect(row!.highlight).toHaveLength(2);
   });
 
   it('names a single idle adult in the singular', () => {
@@ -133,6 +148,12 @@ describe('game-store attention', () => {
     const row = store.attention.find((r) => r.message.includes('idle'));
     expect(row).toBeDefined();
     expect(row!.message).toBe('1 adult is idle');
+    // M7 (whole-branch review): `idleAdults` in the message is the PUBLISHED
+    // snapshot count; `highlight` re-derives the same "adult, unassigned,
+    // not hauling" predicate independently (game-store.ts's own comment on
+    // why, forced by criterion 12 keeping this file out of `src/engine`).
+    // Nothing pinned the two figures agree until this line.
+    expect(row!.highlight).toHaveLength(1);
   });
 
   it('is empty for a colony with nothing wrong', () => {

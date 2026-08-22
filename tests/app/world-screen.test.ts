@@ -4,19 +4,11 @@ import { defineComponent, h, KeepAlive, nextTick, ref } from 'vue';
 import { mount, flushPromises } from '@vue/test-utils';
 import { createTestingPinia } from '@pinia/testing';
 import WorldScreen from '../../src/app/views/WorldScreen.vue';
-import { WORLD_RENDERER_KEY, type WorldRenderer } from '../../src/app/world/renderer-key';
+import { WORLD_RENDERER_KEY } from '../../src/app/world/renderer-key';
 import { ENGINE_KEY } from '../../src/app/engine-key';
 import { useGameStore } from '../../src/app/stores/game-store';
 import { useUiStore } from '../../src/app/stores/ui-store';
-import { makeBuilding, makeFakeFactory, makeSnapshot, mountApp } from './fixtures';
-
-function makeFake(): WorldRenderer {
-  return {
-    sync: vi.fn(), pick: vi.fn(() => null), tileAt: vi.fn(() => null),
-    setGhost: vi.fn(), setSelection: vi.fn(), setHighlight: vi.fn(),
-    onFatal: vi.fn(), start: vi.fn(), stop: vi.fn(), dispose: vi.fn(),
-  };
-}
+import { makeBuilding, makeFake, makeFakeFactory, makeSnapshot, mountApp } from './fixtures';
 
 function mountScreen() {
   const pinia = createTestingPinia({ createSpy: vi.fn, stubActions: false });
@@ -34,7 +26,7 @@ function mountScreen() {
     global: {
       plugins: [pinia],
       provide: {
-        [WORLD_RENDERER_KEY as symbol]: vi.fn(() => makeFake()),
+        [WORLD_RENDERER_KEY as symbol]: makeFake().factory,
         [ENGINE_KEY as symbol]: { dispatch: vi.fn() },
       },
     },
@@ -77,6 +69,36 @@ describe('WorldScreen', () => {
     wrapper.unmount();
   });
 
+  // I3 (whole-branch review): before this, nothing in the dock ever opened
+  // the Inspector — `DOCK_PANELS` excluded it outright and no tab rendered
+  // it under any condition, so spec §2.3's "the Inspector one click away"
+  // was only true for a canvas selection (which auto-opens it), never for
+  // one made from a panel row via `selectKeepingPanel` on purpose to stay
+  // put (AttentionPanel.vue). The fifth tab this test pins is gated on
+  // `ui.selection.kind !== 'none'` — absent with nothing selected, present
+  // and functional the moment something is, gone again once the selection
+  // clears.
+  it('offers an Inspector tab once something is selected, and only then', async () => {
+    const wrapper = mountScreen();
+    const ui = useUiStore();
+    expect(wrapper.find('[data-test="dock-tab-inspector"]').exists()).toBe(false);
+
+    ui.selectBuilding(1);
+    await nextTick();
+    expect(wrapper.find('[data-test="dock-tab-inspector"]').exists()).toBe(true);
+
+    ui.openPanel('colony'); // navigate away — the tab must still open Inspector from anywhere
+    await nextTick();
+    expect(ui.panel).toBe('colony');
+    await wrapper.get('[data-test="dock-tab-inspector"]').trigger('click');
+    expect(ui.panel).toBe('inspector');
+
+    ui.clearSelection();
+    await nextTick();
+    expect(wrapper.find('[data-test="dock-tab-inspector"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
   it('unwinds the Escape ladder mode-first', async () => {
     const wrapper = mountScreen();
     const ui = useUiStore();
@@ -109,6 +131,47 @@ describe('WorldScreen', () => {
     wrapper.unmount();
   });
 
+  // M8 (whole-branch review): every other narrow-pane test above drives
+  // `ui.setNarrow` directly, which proves the CONSUMING side of the flag but
+  // never once runs the `ResizeObserver` callback that is supposed to
+  // PRODUCE it — `([entry]) => ui.setNarrow(entry.contentRect.width <
+  // NARROW_PX)`. Both the 720px threshold and the `<` direction could ship
+  // inverted or off-by-one and every existing test would stay green. happy-
+  // dom ships a real `ResizeObserver` constructor, but nothing in a headless
+  // test environment ever triggers a real resize, so this test replaces the
+  // global with a stub that captures the callback WorldScreen.vue's
+  // `onMounted` registers, then invokes it by hand on both sides of the
+  // threshold — the same technique `renderer.ts`'s own ResizeObserver would
+  // need if it were reachable from `tests/app/` at all (it is not; see that
+  // file's header comment).
+  it('derives ui.narrow from its own ResizeObserver callback, on both sides of the threshold', async () => {
+    let observed: ResizeObserverCallback | null = null;
+    const RealResizeObserver = globalThis.ResizeObserver;
+    class StubResizeObserver {
+      constructor(callback: ResizeObserverCallback) { observed = callback; }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    globalThis.ResizeObserver = StubResizeObserver as unknown as typeof ResizeObserver;
+    try {
+      const wrapper = mountScreen();
+      const ui = useUiStore();
+      expect(observed).not.toBeNull();
+      const entry = (width: number) => [{ contentRect: { width } }] as unknown as ResizeObserverEntry[];
+
+      observed!(entry(500), undefined as unknown as ResizeObserver); // below 720: narrow
+      expect(ui.narrow).toBe(true);
+
+      observed!(entry(900), undefined as unknown as ResizeObserver); // above 720: not narrow
+      expect(ui.narrow).toBe(false);
+
+      wrapper.unmount();
+    } finally {
+      globalThis.ResizeObserver = RealResizeObserver;
+    }
+  });
+
   it('overlays the dock rather than shrinking the canvas in a narrow pane', async () => {
     const wrapper = mountScreen();
     const ui = useUiStore();
@@ -136,7 +199,7 @@ describe('WorldScreen', () => {
       global: {
         plugins: [pinia],
         provide: {
-          [WORLD_RENDERER_KEY as symbol]: vi.fn(() => makeFake()),
+          [WORLD_RENDERER_KEY as symbol]: makeFake().factory,
           [ENGINE_KEY as symbol]: { dispatch: vi.fn() },
         },
       },

@@ -303,17 +303,30 @@ describe('WorldStage', () => {
   // building leaves the snapshot on an ADVANCING tick (no timeline reset
   // involved) — pruneSelection's `kind === 'building'` branch, exercised on
   // its own rather than only alongside the colonist branch.
-  it('drops a building selection when that building vanishes on an advancing tick', async () => {
+  //
+  // Also arms a move on that same building first, and asserts `ui.mode`
+  // returns to idle (spec criterion 6's fourth route: an armed move must die
+  // when the building it targets is demolished out from under it). Every
+  // other pruneSelection test up to this point only ever asserted
+  // `ui.selection`, so this route had no assertion anywhere in the suite —
+  // `ui.clearSelection()` two lines above `cancelMode()` in `pruneSelection`
+  // already cancels an armed move as a side effect of `commitSelection`, so
+  // this is what actually proves the fourth route dies rather than merely
+  // asserting on a line that happens to be redundant with it.
+  it('drops a building selection when that building vanishes on an advancing tick, and cancels an armed move on it', async () => {
     const { factory } = makeFake();
     mountStage(factory);
     const store = useGameStore();
     const ui = useUiStore();
     store.ingest(makeSnapshot({ tick: 1, buildings: [makeBuilding(5)] }), { paused: true, speed: 1, error: null });
     ui.selectBuilding(5);
+    ui.armMove(5);
     await nextTick();
+    expect(ui.mode).toEqual({ kind: 'move', buildingId: 5 });
     store.ingest(makeSnapshot({ tick: 2, buildings: [] }), { paused: true, speed: 1, error: null });
     await nextTick();
     expect(ui.selection).toEqual({ kind: 'none' });
+    expect(ui.mode).toEqual({ kind: 'idle' });
   });
 
   // Deletion-inventory A19, the plan's known gap: keyboard arming (a focused

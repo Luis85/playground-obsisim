@@ -27,13 +27,15 @@ export interface AttentionRow {
   highlight: Selection[];
 }
 
-/** Ticks of runway at or below which a resource is worth naming. Exported so
- * DashboardView, ResourceStrip and ColonyPanel all colour a runway cell at
- * exactly this figure — one number in the codebase, not three: DashboardView
- * and ResourceStrip used to each carry their own literal `30`, and ColonyPanel
- * (Task 8) would have been a third if it had picked its own instead of
- * importing this. */
-export const RUNWAY_WARN_TICKS = 30;
+/** Ticks of runway at or below which a resource is worth naming. Not
+ * exported (M5, whole-branch review): DashboardView, ResourceStrip and
+ * ColonyPanel used to each import this literal directly and compare against
+ * it themselves — one number, but three copies of the comparison — until
+ * the `runwayLow` getter below became the one derivation all three read
+ * instead. This constant is now that getter's own implementation detail,
+ * along with `runwayAttentionRows`', which takes `runwayLow` as a parameter
+ * rather than reading this directly (see that function's own comment). */
+const RUNWAY_WARN_TICKS = 30;
 
 interface DefStaffing {
   total: number;
@@ -137,11 +139,20 @@ function buildingAttentionRows(snapshot: Snapshot): AttentionRow[] {
  * highlight: a resource is not a thing on the map, and §2.3 keeps that inert
  * in both panels. Split out of `attention` for the same reason as
  * `buildingAttentionRows` above.
+ *
+ * `low` is the store's own `runwayLow` getter, passed in rather than
+ * re-derived here: this is a free function outside the store (so it has no
+ * `this` to read a getter off), but the threshold it gates on is the exact
+ * one `runwayLow` exists to hold in one place (M5, whole-branch review) —
+ * taking it as a parameter is what lets this loop share that one derivation
+ * instead of quietly growing a fourth copy of `<= RUNWAY_WARN_TICKS`.
  */
-function runwayAttentionRows(runways: Partial<Record<ResourceId, number>>): AttentionRow[] {
+function runwayAttentionRows(
+  runways: Partial<Record<ResourceId, number>>, low: (id: ResourceId) => boolean,
+): AttentionRow[] {
   const rows: AttentionRow[] = [];
   for (const [id, ticks] of Object.entries(runways)) {
-    if (ticks !== undefined && ticks <= RUNWAY_WARN_TICKS) {
+    if (ticks !== undefined && low(id as ResourceId)) {
       rows.push({ id: `runway-${id}`, severity: 'danger', subject: null, highlight: [],
         message: `${RESOURCES[id as ResourceId].name} empties in ~${ticks}t` });
     }
@@ -288,6 +299,22 @@ export const useGameStore = defineStore('game', {
       }
       return runways;
     },
+    /**
+     * Whether `id`'s runway is at or below `RUNWAY_WARN_TICKS` — the one
+     * predicate behind the "low" styling on three surfaces (ResourceStrip's
+     * chip, ResourceTable's cell, and this store's own `runwayAttentionRows`
+     * threshold above), following §2.7's "one figure, one derivation, two
+     * [or more] surfaces". Before this getter existed each of the first two
+     * wrote `(store.runways[id] ?? Infinity) <= RUNWAY_WARN_TICKS` itself —
+     * identical, three times, the exact drift risk Task 8 already fixed for
+     * the constant but left the comparison free to repeat (M5, whole-branch
+     * review). A getter returning a function, not a plain getter, because the
+     * two callers need it per resource id, the same shape `staffingRefusal`
+     * (`staffing.ts`) takes a building for.
+     */
+    runwayLow(): (id: ResourceId) => boolean {
+      return (id) => (this.runways[id] ?? Infinity) <= RUNWAY_WARN_TICKS;
+    },
     /** Per building def: how many exist, are staffed, and starve for input. */
     staffingByDef(state): Partial<Record<BuildingDefId, DefStaffing>> {
       const byDef: Partial<Record<BuildingDefId, DefStaffing>> = {};
@@ -321,7 +348,7 @@ export const useGameStore = defineStore('game', {
      * construct table AND the build palette bound their `:disabled` to this,
      * so the check existed exactly once; increment 10 §2.1 makes ordering a
      * request instead of a claim, and drops the check everywhere it gated —
-     * BuildPalette, WorldView's `tileValid`, and this getter's own reader in
+     * BuildPalette, `interaction.ts`'s `tileValid`, and this getter's own reader in
      * BuildingsView's `:disabled`. What survives is the tooltip: the getter
      * is unchanged, and BuildingsView's Construct button still reads it to
      * TELL the player what a def is still short of, even though clicking it
@@ -446,7 +473,7 @@ export const useGameStore = defineStore('game', {
       // complexity gate.
       const rows = [
         ...buildingAttentionRows(snapshot),
-        ...runwayAttentionRows(this.runways as Partial<Record<ResourceId, number>>),
+        ...runwayAttentionRows(this.runways as Partial<Record<ResourceId, number>>, this.runwayLow),
         ...peopleAttentionRows(snapshot),
       ];
 

@@ -91,9 +91,26 @@ describe('styles.css — the world screen shell (spec §2.1 / §2.9)', () => {
     expect(body).toMatch(/grid-template-columns:\s*minmax\(0,\s*1fr\)/);
   });
 
+  // M9 (whole-branch review): before this, the test's own name promised more
+  // than its body checked. `container-type: inline-size` alone only makes
+  // `.obsisim-world-screen` ELIGIBLE to be queried by a container query — it
+  // says nothing about whether an `@container` rule actually exists anywhere
+  // in the file, so a stylesheet that set the property and then never wrote
+  // an `@container` block at all still passed. And the negative check only
+  // ruled out `@media (min-width` / `@media (max-width` — anchored on the
+  // parenthesis sitting directly after `@media`, so `@media screen and
+  // (max-width: 720px)` (a form that reads the WINDOW exactly as much as the
+  // bare form does) would have slipped through undetected.
   it('responds to the PANE width via a container query, never the window', () => {
     expect(css).toMatch(/container-type:\s*inline-size/);
-    expect(css).not.toMatch(/@media\s*\(\s*(?:min|max)-width/);
+    // An `@container` rule must actually exist, not merely be eligible to.
+    expect(css).toMatch(/@container\s+[\w-]+\s*\(\s*(?:min|max)-width/);
+    // No `@media` rule may key off a width, in ANY form — `[^{]*` covers
+    // `screen and (max-width: …)` and any other prefix between `@media` and
+    // the width condition, not just the bare `@media (max-width` shape.
+    // `prefers-reduced-motion`'s own `@media` rule (tested below) contains
+    // no `-width` substring, so it does not trip this.
+    expect(css).not.toMatch(/@media[^{]*(?:min|max)-width/);
   });
 
   // The orphan this task removed: `.obsisim-world` (the deleted WorldView

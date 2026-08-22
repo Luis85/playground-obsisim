@@ -18,11 +18,15 @@ import { describePick, type WorldPick } from '../world/layout';
 // useWorldInteraction (Task 4). The rail, the dock and the legend are
 // WorldScreen's (Task 6) — this component never renders them.
 //
-// Lifecycle contract unchanged from WorldView: kept alive across tab
-// switches by WorldScreen's <keep-alive>, renderer created once per game-view
-// open. A rendering failure (sync throw, or an async one reported later via
-// onFatal) must never take the tables down — it is reported upward via the
-// `fatal` emit, and WorldScreen decides what to show instead.
+// Lifecycle contract unchanged from WorldView: this component mounts
+// wherever its parent WorldScreen does, and WorldScreen itself is what stays
+// under App.vue's <keep-alive> across a route change (a trip to /ledger and
+// back) — there are no tabs any more, only routes — so the renderer is
+// created once per game-view open and merely stopped/started across a visit
+// to /ledger, never disposed. A rendering failure (sync throw, or an async
+// one reported later via onFatal) must never take the tables down — it is
+// reported upward via the `fatal` emit, and WorldScreen decides what to show
+// instead.
 
 defineOptions({ name: 'WorldStage' }); // keep-alive include matches on this name
 
@@ -57,15 +61,24 @@ const hoverLines = computed(() => {
  * a `Selection` that same check would clear a living colonist whose id
  * happens to match no building, and — the sharper failure — KEEP a dead
  * colonist selected whose id happens to match a building that is still
- * there. Move mode's own lifecycle stays building-only regardless, because
- * only a building can ever be moved.
+ * there.
+ *
+ * An armed move needs no check of its own here: `armMove` is only ever
+ * reached from the Inspector footer for the currently SELECTED building
+ * (`InspectorFooter.vue`), so `ui.mode.buildingId` and `ui.selection.id`
+ * name the same building for as long as the move stays armed. The building
+ * branch's `ui.clearSelection()` above already routes through
+ * `commitSelection` (`ui-store.ts`), whose own outgoing-mode guard cancels
+ * an armed move the moment the selection it belongs to changes — including
+ * to `none`. A second, building-only check here would only ever fire in
+ * lockstep with that one, which is why criterion 6's fourth route (a
+ * demolished building under an armed move) is proven by the SAME test as
+ * the selection dropping, not a check of its own.
  */
 function pruneSelection(snapshot: Snapshot | null) {
   const selection = ui.selection;
   if (selection.kind === 'building' && !snapshot?.buildings.some((b) => b.id === selection.id)) ui.clearSelection();
   if (selection.kind === 'colonist' && !snapshot?.colonists.some((c) => c.id === selection.id)) ui.clearSelection();
-  const mode = ui.mode;
-  if (mode.kind === 'move' && !snapshot?.buildings.some((b) => b.id === mode.buildingId)) ui.cancelMode();
 }
 
 // A stationary pointer must not keep describing a worker that walked away:
@@ -229,7 +242,7 @@ onMounted(() => {
       { immediate: true },
     );
   } catch (error) {
-    // A rendering failure must never take the tables down (spec §2.2).
+    // A rendering failure must never take the tables down (spec §2.5).
     const message = error instanceof Error ? error.message : String(error);
     failure.value = message;
     renderer = null;

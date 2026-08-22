@@ -39,7 +39,7 @@ Spec §2.6 assigns the mode machine to `world/interaction.ts` and selection to `
 | `src/app/views/WorldStage.vue` | Canvas host: renderer lifecycle, snapshot sync, hover tooltip, forwarding selection and highlight |
 | `src/app/views/LedgerView.vue` | Composes the four table views; owns no figures |
 | `src/app/components/dock/InspectorPanel.vue` | Selected building or colonist, with staffing / move / demolish |
-| `src/app/components/dock/ColonyPanel.vue` | The full resource table |
+| `src/app/components/dock/ColonyPanel.vue` | A narrower resource table (Resource/Stock/Net/Runway) for the dock's column; `DashboardView.vue` keeps its own full eight-column table (see the row below) — the two share `store.runways` and `store.snapshot.stockpile`, not a component, per spec §2.7 |
 | `src/app/components/dock/PopulationPanel.vue` | Stage counts, colonist rows, Welcome a nomad |
 | `src/app/components/dock/EconomyPanel.vue` | Chains, backlogs, stage rows |
 | `src/app/components/dock/AttentionPanel.vue` | The problem list |
@@ -2336,7 +2336,7 @@ Expected: FAIL — cannot resolve `ColonyPanel.vue`.
 
 - [ ] **Step 3: Write the panel**
 
-`ColonyPanel.vue` is `DashboardView.vue`'s existing `<table>` moved into a panel. Its rows carry `data-test="colony-row-<id>"` and **no click handler at all** — inertness is the absence of a handler, and the test above is what stops a later change adding one silently.
+`ColonyPanel.vue` is NOT `DashboardView.vue`'s `<table>` moved — the File Structure table above already says these views "Keep their tables, lose their routes" (spec §2.5 needs the Ledger to render every number any panel shows, which a moved-out table cannot do). Per spec §2.7, a whole identical block is shared as a component; here only the *figures* are shared (`store.runways`, `store.snapshot.stockpile`), because the presentations genuinely differ — `DashboardView`'s table is eight columns sized for the routed Ledger page, and this panel sits in the dock's narrow column beside the canvas, the same space `ResourceStrip` (Task 6) already had to fit the same data into with its own compact markup. So `ColonyPanel.vue` is a new, narrower table (Resource/Stock/Net/Runway) reading the same store getters `DashboardView` reads — never a second derivation of a figure. Its rows carry `data-test="colony-row-<id>"` and **no click handler at all** — inertness is the absence of a handler, and the test above is what stops a later change adding one silently.
 
 - [ ] **Step 4: Run the test to verify it passes**
 

@@ -27,9 +27,13 @@ export interface AttentionRow {
   highlight: Selection[];
 }
 
-/** Ticks of runway at or below which a resource is worth naming. The same 30
- * DashboardView already colours a runway cell at — one number, not two. */
-const RUNWAY_WARN_TICKS = 30;
+/** Ticks of runway at or below which a resource is worth naming. Exported so
+ * DashboardView, ResourceStrip and ColonyPanel all colour a runway cell at
+ * exactly this figure — one number in the codebase, not three: DashboardView
+ * and ResourceStrip used to each carry their own literal `30`, and ColonyPanel
+ * (Task 8) would have been a third if it had picked its own instead of
+ * importing this. */
+export const RUNWAY_WARN_TICKS = 30;
 
 interface DefStaffing {
   total: number;

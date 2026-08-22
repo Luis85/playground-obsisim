@@ -4,10 +4,11 @@ import { defineComponent, h } from 'vue';
 import { mount } from '@vue/test-utils';
 import { createTestingPinia } from '@pinia/testing';
 import InspectorPanel from '../../src/app/components/dock/InspectorPanel.vue';
+import ColonyPanel from '../../src/app/components/dock/ColonyPanel.vue';
 import { ENGINE_KEY } from '../../src/app/engine-key';
 import { useGameStore } from '../../src/app/stores/game-store';
 import { useUiStore } from '../../src/app/stores/ui-store';
-import { makeBuilding, makeSnapshot, makeWorker } from './fixtures';
+import { makeBuilding, makeSnapshot, makeWorker, stockedWith } from './fixtures';
 
 /** Mounts the Inspector the way WorldScreen does — through the key — so the
  * remount behaviour under test is the one that actually ships. Restates
@@ -360,5 +361,24 @@ describe('InspectorPanel', () => {
   it('renders nothing when nothing is selected', () => {
     const { wrapper } = mountPanel(InspectorPanel, staffable);
     expect(wrapper.find('[data-test="inspector"]').exists()).toBe(false);
+  });
+});
+
+describe('ColonyPanel', () => {
+  it('lists every resource with its runway', () => {
+    const { wrapper } = mountPanel(ColonyPanel, makeSnapshot({ stockpile: stockedWith({ wood: 42 }) }));
+    expect(wrapper.get('[data-test="colony-row-wood"]').text()).toContain('42');
+  });
+
+  // Spec §2.3's inert row (a resource has no subject on the map): the
+  // absence of a click handler IS the behaviour, so this asserts the
+  // standing selection survives the click untouched — not even a deselect,
+  // which a stray `@click="ui.select(...)"` added later would still trip.
+  it('does not select anything when a resource row is clicked', async () => {
+    const { wrapper, ui } = mountPanel(ColonyPanel, makeSnapshot({ stockpile: stockedWith({ wood: 42 }) }));
+    ui.selectBuilding(4);
+    await wrapper.get('[data-test="colony-row-wood"]').trigger('click');
+    expect(ui.selection).toEqual({ kind: 'building', id: 4 }); // inert: not even a deselect
+    expect(ui.highlight).toEqual([]);
   });
 });

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { inject } from 'vue';
 import { ENGINE_KEY } from '../engine-key';
-import { useGameStore } from '../stores/game-store';
+import { RUNWAY_WARN_TICKS, useGameStore } from '../stores/game-store';
 import { RESOURCES, RESOURCE_IDS } from '../../engine/content';
 // Shared with the Population view rather than restated here: both screens show
 // the same stage counts, beds and meals-per-head, and two copies of that block
@@ -51,7 +51,7 @@ const fmt = (n: number) => n.toFixed(2);
           <td :class="store.snapshot.stockpile[id].netFlow >= 0 ? 'obsisim-positive' : 'obsisim-negative'">
             {{ fmt(store.snapshot.stockpile[id].netFlow) }}
           </td>
-          <td :data-test="`runway-${id}`" :class="{ 'obsisim-negative': (store.runways[id] ?? Infinity) <= 30 }">
+          <td :data-test="`runway-${id}`" :class="{ 'obsisim-negative': (store.runways[id] ?? Infinity) <= RUNWAY_WARN_TICKS }">
             {{ store.runways[id] !== undefined ? `~${store.runways[id]}t` : '—' }}
           </td>
           <td>{{ store.snapshot.stockpile[id].stockValue.toFixed(0) }}</td>

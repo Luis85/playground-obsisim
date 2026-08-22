@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { inject } from 'vue';
 import { ENGINE_KEY } from '../engine-key';
-import { useGameStore } from '../stores/game-store';
+import { RUNWAY_WARN_TICKS, useGameStore } from '../stores/game-store';
 import { RESOURCES, RESOURCE_IDS } from '../../engine/content';
 
 // The always-on strip beneath the canvas: one chip per resource (spec §2.1),
@@ -22,7 +22,7 @@ const store = useGameStore();
   <div v-if="store.snapshot" class="obsisim-strip" data-test="resource-strip">
     <span
       v-for="id in RESOURCE_IDS" :key="id" :data-test="`strip-${id}`"
-      class="obsisim-strip-chip" :class="{ 'obsisim-negative': (store.runways[id] ?? Infinity) <= 30 }"
+      class="obsisim-strip-chip" :class="{ 'obsisim-negative': (store.runways[id] ?? Infinity) <= RUNWAY_WARN_TICKS }"
     >
       {{ RESOURCES[id].name }}: {{ store.snapshot.stockpile[id].stock }}
       <template v-if="store.runways[id] !== undefined">(~{{ store.runways[id] }}t)</template>

@@ -371,7 +371,29 @@ describe('InspectorPanel', () => {
 describe('ColonyPanel', () => {
   it('lists every resource with its runway', () => {
     const { wrapper } = mountPanel(ColonyPanel, makeSnapshot({ stockpile: stockedWith({ wood: 42 }) }));
-    expect(wrapper.get('[data-test="colony-row-wood"]').text()).toContain('42');
+    expect(wrapper.get('[data-test="resource-row-wood"]').text()).toContain('42');
+  });
+
+  // Spec §2.3 (lines 314-316): the Colony panel is the Dashboard's resource
+  // table "in full" — tier, stock, delivered/t, consumed/t, net, runway,
+  // value — not the four-column table Task 8 originally shipped. Pins down
+  // the four columns that were missing (tier, delivered/t, consumed/t,
+  // value); stock/net/runway already had coverage above and in the
+  // pre-existing suite. Distinct values throughout so a cell reading the
+  // wrong field renders the wrong number rather than coincidentally the
+  // right one.
+  it('renders the full seven-column table: tier, delivered, consumed and value alongside stock, net and runway', () => {
+    const { wrapper } = mountPanel(ColonyPanel, makeSnapshot({
+      stockpile: {
+        ...stockedWith(),
+        wood: { stock: 42, deliveredRate: 3.5, madeRate: 0, consumptionRate: 1.25, netFlow: 2.25, stockValue: 17 },
+      },
+    }));
+    const row = wrapper.get('[data-test="resource-row-wood"]').text();
+    expect(row).toContain('raw'); // RESOURCES.wood.tier
+    expect(row).toContain('3.50'); // deliveredRate, fmt'd to 2 places
+    expect(row).toContain('1.25'); // consumptionRate
+    expect(row).toContain('17'); // stockValue, toFixed(0)
   });
 
   // Spec §2.3's inert row (a resource has no subject on the map): the
@@ -381,7 +403,7 @@ describe('ColonyPanel', () => {
   it('does not select anything when a resource row is clicked', async () => {
     const { wrapper, ui } = mountPanel(ColonyPanel, makeSnapshot({ stockpile: stockedWith({ wood: 42 }) }));
     ui.selectBuilding(4);
-    await wrapper.get('[data-test="colony-row-wood"]').trigger('click');
+    await wrapper.get('[data-test="resource-row-wood"]').trigger('click');
     expect(ui.selection).toEqual({ kind: 'building', id: 4 }); // inert: not even a deselect
     expect(ui.highlight).toEqual([]);
   });
@@ -484,6 +506,20 @@ describe('EconomyPanel', () => {
     await wrapper.get('[data-test="stage-row-farm"]').trigger('click');
     expect(ui.highlight).toEqual([{ kind: 'building', id: 1 }]);
     expect(ui.selection).toEqual({ kind: 'none' });
+  });
+
+  // Spec §2.3 (lines 322-323): the Economy panel owes made/delivered per
+  // stage alongside status and the backlogs — the figures that identify a
+  // hauling bottleneck (made high, delivered low). `chainTableRows` already
+  // derives both onto `row.made`/`row.delivered` (labels.ts); this pins
+  // down that the panel actually renders them, distinct from each other so
+  // a cell reading the wrong field would show the wrong number.
+  it('renders made/t and delivered/t per stage', () => {
+    const snapshot = makeSnapshot({ buildings: [makeBuilding(1, { defId: 'farm' })] });
+    snapshot.stockpile.wheat = { stock: 4, deliveredRate: 0.5, madeRate: 1.75, consumptionRate: 0, netFlow: 1.75, stockValue: 0 };
+    const { wrapper } = mountPanel(EconomyPanel, snapshot);
+    expect(wrapper.get('[data-test="made-farm"]').text()).toBe('1.75');
+    expect(wrapper.get('[data-test="delivered-farm"]').text()).toBe('0.50');
   });
 
   // The empty case: a def with no buildings still renders a "not built" row

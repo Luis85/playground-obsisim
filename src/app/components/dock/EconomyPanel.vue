@@ -17,6 +17,19 @@ const store = useGameStore();
 const ui = useUiStore();
 const { chains } = useEconomyChains();
 
+// Spec §2.3 (lines 322-323) names four things this panel owes the player:
+// the chains, made/delivered PER STAGE, stage status, and the three
+// backlogs. Crew/status/runway shipped; made/delivered did not, even though
+// `useEconomyChains` (and `chainTableRows` underneath it) already computes
+// both onto every row — `row.made`/`row.delivered`, the exact figures
+// EconomyView's own Made/t and Delivered/t columns read (spec §2.7: one
+// derivation, both surfaces). Made high but delivered low on the same row
+// is precisely a hauling bottleneck at that stage — the panel's whole
+// diagnostic purpose — and that comparison cannot be read off Status or
+// Runway alone, which is why leaving these out was not a narrower-but-still-
+// useful table the way Colony's four columns arguably were, but a real gap
+// in what the panel promises.
+
 // A stage is a def, not a building: EconomyView emits one row per step in
 // CHAINS and aggregates it through staffingByDef, so a stage stands for
 // however many buildings of that def exist — none, one, or six. Highlighting
@@ -51,11 +64,13 @@ function onRowClick(row: ChainStageRow) {
     <EconomyPressureLines />
     <ChainTable :chains="chains" @row-click="onRowClick">
       <template #headers>
-        <th>Crew (staffed)</th><th>Status</th><th>Empties in</th>
+        <th>Crew (staffed)</th><th>Status</th><th data-test="made-heading">Made/t</th><th data-test="inflow-heading">Delivered/t</th><th>Empties in</th>
       </template>
       <template #cells="{ row }">
         <td>{{ row.crew }}</td>
         <td>{{ row.status }}</td>
+        <td :data-test="`made-${row.building}`">{{ row.made }}</td>
+        <td :data-test="`delivered-${row.building}`">{{ row.delivered }}</td>
         <td>{{ row.runway }}</td>
       </template>
     </ChainTable>

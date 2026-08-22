@@ -1,58 +1,32 @@
 <script setup lang="ts">
-import { RUNWAY_WARN_TICKS, useGameStore } from '../../stores/game-store';
-import { RESOURCES, RESOURCE_IDS } from '../../../engine/content';
+import { useGameStore } from '../../stores/game-store';
+import ResourceTable from '../ResourceTable.vue';
 
-// The dock's Colony panel: every resource, its stock, and how long it lasts.
-//
-// Spec §2.7 ("one figure, one derivation, two surfaces") governs the
-// relationship to DashboardView's own resource table, and the two do NOT
-// share a component here, on the evidence: DashboardView's table is eight
-// columns (Resource, Tier, Stock, Delivered/t, Cons/t, Net, Empties in,
-// Value) sized for the routed Ledger page, while this panel lives in the
-// dock's narrow column beside the canvas (WorldScreen's `.obsisim-dock`
-// aside) — the same space ResourceStrip (Task 6) already had to fit the
-// identical stockpile data into, and that component made the same call,
-// rendering its own compact chip rather than reusing this table. Squeezing
-// eight columns into that column would mean either horizontal scroll or
-// print too small to read; that is a real presentational difference, not a
-// markup reshuffle to dodge the clone detector. So this panel is a NARROWER
-// table — Resource, Stock, Net, Runway — and every number in it is read from
-// the exact getters DashboardView reads (`store.snapshot.stockpile`,
-// `store.runways`, `RUNWAY_WARN_TICKS`): nothing here is a second derivation
-// of a figure the Ledger already computes.
+// The dock's Colony panel: spec §2.3 (lines 314-316) names this table
+// twice over — "the Dashboard's resource table in full: tier, stock,
+// delivered/t, consumed/t, net, runway, value... the strip along the
+// bottom is the summary; this is the detail behind it" — meaning
+// ResourceStrip (Task 6) is the abbreviated surface this panel is measured
+// against, not DashboardView's own table. Task 8's original narrower
+// four-column table (Resource, Stock, Net, Empties in) answered a
+// share-or-separate framing this file used to argue at length in its own
+// comment; that framing was the error (see task-8 fix notes), not a
+// finding the columns should have stayed narrow. Reopened per §2.7 with
+// the columns restored: with all seven figures present this table and
+// DashboardView's are the same markup, not two similarly-shaped tables
+// (contrast EconomyPanel/EconomyView, whose column COUNTS genuinely
+// differ), so they now share one component — see ResourceTable.vue's own
+// comment for why a shared component rather than a shared composable, and
+// for what deliberately stayed OUTSIDE it (DashboardView's headline has no
+// equivalent here).
 const store = useGameStore();
-const fmt = (n: number) => n.toFixed(2);
 </script>
 
 <template>
-  <!-- Guarded on `store.snapshot`, the convention every other view and panel
-       in this codebase follows (DashboardView, ResourceStrip, InspectorPanel):
-       `store.snapshot!` is a lie anywhere the router's gate is absent, and
-       mounting this panel directly — as every test in this file does — is
-       exactly that absence. -->
+  <!-- Guarded on `store.snapshot`, the house convention every other view and
+       panel in this codebase follows (DashboardView, ResourceStrip,
+       InspectorPanel). -->
   <div v-if="store.snapshot" class="obsisim-colony" data-test="colony-panel">
-    <table class="obsisim-table">
-      <thead>
-        <tr><th>Resource</th><th>Stock</th><th>Net</th><th>Empties in</th></tr>
-      </thead>
-      <tbody>
-        <!-- Spec §2.3's inert row: "Colony resource row -> nothing" — a
-             resource has no subject on the map. Inertness here is the
-             ABSENCE of a click handler on this `<tr>`, not a handler that
-             does nothing: `tests/app/dock-panels.test.ts`'s "does not select
-             anything when a resource row is clicked" test is what would fail
-             the moment a later change added one. -->
-        <tr v-for="id in RESOURCE_IDS" :key="id" :data-test="`colony-row-${id}`">
-          <td>{{ RESOURCES[id].name }}</td>
-          <td>{{ store.snapshot.stockpile[id].stock }}</td>
-          <td :class="store.snapshot.stockpile[id].netFlow >= 0 ? 'obsisim-positive' : 'obsisim-negative'">
-            {{ fmt(store.snapshot.stockpile[id].netFlow) }}
-          </td>
-          <td :class="{ 'obsisim-negative': (store.runways[id] ?? Infinity) <= RUNWAY_WARN_TICKS }">
-            {{ store.runways[id] !== undefined ? `~${store.runways[id]}t` : '—' }}
-          </td>
-        </tr>
-      </tbody>
-    </table>
+    <ResourceTable />
   </div>
 </template>

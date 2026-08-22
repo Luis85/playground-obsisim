@@ -1,17 +1,21 @@
 <script setup lang="ts">
 import { inject } from 'vue';
 import { ENGINE_KEY } from '../engine-key';
-import { RUNWAY_WARN_TICKS, useGameStore } from '../stores/game-store';
-import { RESOURCES, RESOURCE_IDS } from '../../engine/content';
+import { useGameStore } from '../stores/game-store';
 // Shared with the Population view rather than restated here: both screens show
 // the same stage counts, beds and meals-per-head, and two copies of that block
 // are two chances for them to disagree about a number the player is comparing
 // across tabs.
 import PopulationSummary from '../components/PopulationSummary.vue';
+// The resource table itself is shared with the dock's ColonyPanel, per §2.7
+// re-opened at Task 8's fix: once ColonyPanel carries all seven columns
+// spec §2.3 asks for, the two tables are the same markup, not two similarly-
+// shaped ones — see ResourceTable.vue's own comment for the full reasoning
+// and for what deliberately stayed here instead (this headline block).
+import ResourceTable from '../components/ResourceTable.vue';
 
 const engine = inject(ENGINE_KEY)!;
 const store = useGameStore();
-const fmt = (n: number) => n.toFixed(2);
 </script>
 
 <template>
@@ -37,26 +41,6 @@ const fmt = (n: number) => n.toFixed(2);
         >+</button>
       </span>
     </div>
-    <table class="obsisim-table">
-      <thead>
-        <tr><th>Resource</th><th>Tier</th><th>Stock</th><th data-test="inflow-heading">Delivered/t</th><th>Cons/t</th><th>Net</th><th>Empties in</th><th>Value</th></tr>
-      </thead>
-      <tbody>
-        <tr v-for="id in RESOURCE_IDS" :key="id">
-          <td>{{ RESOURCES[id].name }}</td>
-          <td>{{ RESOURCES[id].tier }}</td>
-          <td>{{ store.snapshot.stockpile[id].stock }}</td>
-          <td>{{ fmt(store.snapshot.stockpile[id].deliveredRate) }}</td>
-          <td>{{ fmt(store.snapshot.stockpile[id].consumptionRate) }}</td>
-          <td :class="store.snapshot.stockpile[id].netFlow >= 0 ? 'obsisim-positive' : 'obsisim-negative'">
-            {{ fmt(store.snapshot.stockpile[id].netFlow) }}
-          </td>
-          <td :data-test="`runway-${id}`" :class="{ 'obsisim-negative': (store.runways[id] ?? Infinity) <= RUNWAY_WARN_TICKS }">
-            {{ store.runways[id] !== undefined ? `~${store.runways[id]}t` : '—' }}
-          </td>
-          <td>{{ store.snapshot.stockpile[id].stockValue.toFixed(0) }}</td>
-        </tr>
-      </tbody>
-    </table>
+    <ResourceTable />
   </div>
 </template>

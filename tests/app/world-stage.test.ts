@@ -429,4 +429,28 @@ describe('WorldStage', () => {
     await nextTick();
     expect(ui.selection).toEqual({ kind: 'none' });
   });
+
+  it('a timeline reset (tick regression) clears a standing highlight', async () => {
+    // clearSelection() deliberately leaves ui.highlight untouched — that is
+    // what lets the plural-row flow do clearSelection() then
+    // setHighlight(...) without losing the highlight it just set. Nothing
+    // else drops it, so the reset path has to clear it explicitly or a
+    // highlight naming old-timeline ids (buildings 2 and 3) keeps pulsing
+    // whatever recycled those ids in the new colony.
+    const { factory } = makeFake();
+    mountStage(factory);
+    const store = useGameStore();
+    const ui = useUiStore();
+    store.ingest(makeSnapshot({ tick: 5, buildings: [makeBuilding(2), makeBuilding(3)] }), {
+      paused: true, speed: 1, error: null,
+    });
+    ui.setHighlight([{ kind: 'building', id: 2 }, { kind: 'building', id: 3 }]);
+    await nextTick();
+    store.ingest(makeSnapshot({
+      tick: 0, // same tick as the very first snapshot: a reset timeline
+      buildings: [makeBuilding(2, { defId: 'farm' }), makeBuilding(3, { defId: 'farm' })],
+    }), { paused: true, speed: 1, error: null });
+    await nextTick();
+    expect(ui.highlight).toEqual([]);
+  });
 });

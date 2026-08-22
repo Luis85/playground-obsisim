@@ -2316,13 +2316,27 @@ import ColonyPanel from '../../src/app/components/dock/ColonyPanel.vue';
 describe('ColonyPanel', () => {
   it('lists every resource with its runway', () => {
     const { wrapper } = mountPanel(ColonyPanel, makeSnapshot({ stockpile: stockedWith({ wood: 42 }) }));
-    expect(wrapper.get('[data-test="colony-row-wood"]').text()).toContain('42');
+    expect(wrapper.get('[data-test="resource-row-wood"]').text()).toContain('42');
+  });
+
+  it('renders the full seven-column table: tier, delivered, consumed and value alongside stock, net and runway', () => {
+    const { wrapper } = mountPanel(ColonyPanel, makeSnapshot({
+      stockpile: {
+        ...stockedWith(),
+        wood: { stock: 42, deliveredRate: 3.5, madeRate: 0, consumptionRate: 1.25, netFlow: 2.25, stockValue: 17 },
+      },
+    }));
+    const row = wrapper.get('[data-test="resource-row-wood"]').text();
+    expect(row).toContain('raw');
+    expect(row).toContain('3.50');
+    expect(row).toContain('1.25');
+    expect(row).toContain('17');
   });
 
   it('does not select anything when a resource row is clicked', async () => {
     const { wrapper, ui } = mountPanel(ColonyPanel, makeSnapshot({ stockpile: stockedWith({ wood: 42 }) }));
     ui.selectBuilding(4);
-    await wrapper.get('[data-test="colony-row-wood"]').trigger('click');
+    await wrapper.get('[data-test="resource-row-wood"]').trigger('click');
     expect(ui.selection).toEqual({ kind: 'building', id: 4 }); // inert: not even a deselect
     expect(ui.highlight).toEqual([]);
   });
@@ -2336,7 +2350,9 @@ Expected: FAIL — cannot resolve `ColonyPanel.vue`.
 
 - [ ] **Step 3: Write the panel**
 
-`ColonyPanel.vue` is NOT `DashboardView.vue`'s `<table>` moved — the File Structure table above already says these views "Keep their tables, lose their routes" (spec §2.5 needs the Ledger to render every number any panel shows, which a moved-out table cannot do). Per spec §2.7, a whole identical block is shared as a component; here only the *figures* are shared (`store.runways`, `store.snapshot.stockpile`), because the presentations genuinely differ — `DashboardView`'s table is eight columns sized for the routed Ledger page, and this panel sits in the dock's narrow column beside the canvas, the same space `ResourceStrip` (Task 6) already had to fit the same data into with its own compact markup. So `ColonyPanel.vue` is a new, narrower table (Resource/Stock/Net/Runway) reading the same store getters `DashboardView` reads — never a second derivation of a figure. Its rows carry `data-test="colony-row-<id>"` and **no click handler at all** — inertness is the absence of a handler, and the test above is what stops a later change adding one silently.
+Corrected after a PR review found this step's original wording ("a new, narrower table — Resource/Stock/Net/Runway") never matched what spec §2.3 (lines 314-316) actually asks for. That line is explicit — "the Dashboard's resource table **in full**: tier, stock, delivered/t, consumed/t, net, runway, value... the strip along the bottom **is the summary; this is the detail behind it**" — naming `ResourceStrip` (Task 6), not `DashboardView`'s table, as the abbreviated surface this panel is measured against. `ColonyPanel.vue` therefore carries all seven figures, reading them from the same store getters `DashboardView` reads (`store.snapshot.stockpile`, `store.runways`, `RUNWAY_WARN_TICKS`) and the same `RESOURCES[id].tier` source — never a second derivation.
+
+With every column restored, `ColonyPanel`'s table and `DashboardView`'s are the same markup — same columns, same order, same formatting, same absence of a click handler on every row — which is the OTHER half of spec §2.7 ("where a whole block is identical in both surfaces, share the component"), the same rule Task 9's `PopulationRoster.vue` and Task 10's `ChainTable.vue` already follow for their own identical blocks. Factor the table itself into a shared component (e.g. `ResourceTable.vue`) that reads `useGameStore()` directly — `PopulationSummary.vue`'s own precedent for a shared component with no props, since both callers already hold the one store between them — and have both `ColonyPanel.vue` and `DashboardView.vue` mount it in place of their own `<table>`. What stays OUTSIDE it: `DashboardView`'s headline (wealth, population, buildings, the hauler +/- buttons) has no Colony-panel equivalent, so only the table moves. Rows carry `data-test="resource-row-<id>"` and **no click handler at all** — inertness is the absence of a handler, and the third test above is what stops a later change adding one silently.
 
 - [ ] **Step 4: Run the test to verify it passes**
 
@@ -2452,6 +2468,14 @@ describe('EconomyPanel', () => {
     await wrapper.get('[data-test="stage-row-farm"]').trigger('click');
     expect(ui.highlight).toEqual([]);
   });
+
+  it('renders made/t and delivered/t per stage', () => {
+    const snapshot = makeSnapshot({ buildings: [makeBuilding(1, { defId: 'farm' })] });
+    snapshot.stockpile.wheat = { stock: 4, deliveredRate: 0.5, madeRate: 1.75, consumptionRate: 0, netFlow: 1.75, stockValue: 0 };
+    const { wrapper } = mountPanel(EconomyPanel, snapshot);
+    expect(wrapper.get('[data-test="made-farm"]').text()).toBe('1.75');
+    expect(wrapper.get('[data-test="delivered-farm"]').text()).toBe('0.50');
+  });
 });
 ```
 
@@ -2462,7 +2486,9 @@ Expected: FAIL — cannot resolve `EconomyPanel.vue`.
 
 - [ ] **Step 3: Write the panel**
 
-`EconomyPanel.vue` is `EconomyView.vue`'s `chains` computed and its three pressure lines, unchanged, with each stage row gaining:
+Corrected after a PR review found this step's original column set incomplete against spec §2.3 (lines 322-323): "the chains, **made/delivered per stage**, stage status, and the three backlogs... the store already derives." The original wording below named only crew, status and runway — dropping made/delivered, the two figures that identify a hauling bottleneck (made high, delivered low on the same row) and the panel's whole diagnostic reason for existing. `chainTableRows` (`labels.ts`, read through `useEconomyChains`) already derives both onto every row as `row.made`/`row.delivered` — the exact figures `EconomyView`'s own Made/t and Delivered/t columns read (spec §2.7) — so the fix is rendering two `<td>`s already-computed data, not a new derivation.
+
+`EconomyPanel.vue` is `EconomyView.vue`'s `chains` computed and its three pressure lines, unchanged, rendered through the shared `ChainTable.vue` shell with headers/cells for Crew (staffed), Status, **Made/t** (`row.made`), **Delivered/t** (`row.delivered`) and Empties in — the same four-figure set `EconomyView`'s own wider table carries, minus Output/Stock, sized for the dock's narrower column. Each stage row gains:
 
 ```ts
 // A stage is a def, not a building: EconomyView emits one row per CHAINS step

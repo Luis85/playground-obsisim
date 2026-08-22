@@ -212,10 +212,17 @@ onMounted(() => {
         // keep a stale selection ring on the wrong building. A snapshot that
         // doesn't advance past the previous one's tick is exactly that
         // reset — treat it as a full interaction reset before the id-based
-        // checks run.
+        // checks run. clearSelection() deliberately leaves ui.highlight
+        // alone — that is what lets the plural-row flow do
+        // clearSelection() then setHighlight(...) without the highlight
+        // getting wiped out from under it — so a reset has to clear the
+        // highlight itself, or a highlight naming old-timeline ids (e.g.
+        // buildings 2 and 3) keeps pulsing whatever now holds those
+        // recycled ids in the new colony.
         if (previousSnapshot && snapshot && snapshot.tick <= previousSnapshot.tick) {
           ui.clearSelection();
           ui.cancelMode();
+          ui.setHighlight([]);
         }
         pruneSelection(snapshot);
       },

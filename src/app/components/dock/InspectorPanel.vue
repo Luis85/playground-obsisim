@@ -100,6 +100,18 @@ const staffingReason = computed(() => {
   if (store.snapshot!.idleAdults === 0) return 'No idle adults — unassign someone first.';
   return null;
 });
+
+/**
+ * Why Unassign is disabled, or null — spec §2.2's rule ("a control the engine
+ * would refuse is disabled with its reason stated in the panel") is not
+ * staffing-in-one-direction only: `handleUnassignWorker` refuses the same as
+ * `handleAssignWorker` does, just on the opposite condition, so it gets the
+ * same treatment as `staffingReason` rather than a bare `:disabled` with
+ * nothing said about why.
+ */
+const unassignReason = computed(() => (
+  building.value !== null && building.value.workers === 0 ? 'Nothing is staffed here to unassign.' : null
+));
 </script>
 
 <template>
@@ -115,7 +127,7 @@ const staffingReason = computed(() => {
          would refuse must say so where the player is looking. -->
     <div class="obsisim-inspector-staffing">
       <button
-        data-test="inspector-unassign" :disabled="building.workers === 0"
+        data-test="inspector-unassign" :disabled="unassignReason !== null"
         @click="engine.dispatch({ type: 'unassignWorker', buildingId: building.id })"
       >−</button>
       <span>{{ building.workers }} / {{ building.workerSlots }}</span>
@@ -124,6 +136,7 @@ const staffingReason = computed(() => {
         @click="engine.dispatch({ type: 'assignWorker', buildingId: building.id })"
       >+</button>
     </div>
+    <p v-if="unassignReason" class="obsisim-reason" data-test="inspector-unassign-reason">{{ unassignReason }}</p>
     <p v-if="staffingReason" class="obsisim-reason" data-test="inspector-staffing-reason">{{ staffingReason }}</p>
 
     <InspectorProducer v-if="kind === 'producer'" :building="building" />

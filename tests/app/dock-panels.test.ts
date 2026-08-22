@@ -86,6 +86,39 @@ describe('InspectorPanel', () => {
     expect(wrapper.get('[data-test="inspector-staffing-reason"]').text()).toContain('No idle adults');
   });
 
+  // Fix round 1, Finding 1 (Important): `staffingReason`'s middle branch
+  // (`b.workers >= b.workerSlots`, "Every slot is filled.") had a helper
+  // branch nobody exercised — only branch 1 (construction site) and branch 3
+  // (no idle adults) had tests. `constructionTicks: 0` (default) rules out
+  // branch 1, and `idleAdults: 2` (not 0) rules out branch 3 firing instead —
+  // with `idleAdults: 0` this test would pass for the wrong reason and prove
+  // nothing about branch 2, which is exactly what the review flagged.
+  it('disables assign when every slot is filled and says why', async () => {
+    const full = makeSnapshot({
+      idleAdults: 2,
+      buildings: [makeBuilding(1, { workers: 3, workerSlots: 3, state: 'producing' })],
+    });
+    const { wrapper, ui } = mountPanel(InspectorPanel, full);
+    ui.selectBuilding(1);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('[data-test="inspector-assign"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('[data-test="inspector-staffing-reason"]').text()).toContain('Every slot is filled.');
+  });
+
+  // Fix round 1, Finding 1's "while you are there" check: unlike assign,
+  // unassign's disabled-at-zero-workers case had a `:disabled` binding but no
+  // stated reason anywhere in the panel — spec §2.2's rule applies to both
+  // staffing directions, not just assign. Added `unassignReason` alongside
+  // `staffingReason` (same convention) and this test to cover it.
+  it('disables unassign with no workers staffed and says why', async () => {
+    const empty = makeSnapshot({ buildings: [makeBuilding(1, { workers: 0, workerSlots: 3 })] });
+    const { wrapper, ui } = mountPanel(InspectorPanel, empty);
+    ui.selectBuilding(1);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('[data-test="inspector-unassign"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('[data-test="inspector-unassign-reason"]').text()).toContain('unassign');
+  });
+
   it('shows a producer\'s recipe, batch, buffers, work power and tools', async () => {
     const producing = makeSnapshot({
       buildings: [makeBuilding(1, { defId: 'bakery', workers: 2, workerSlots: 3, state: 'producing', progressPct: 40, buffered: 3, inputBuffered: 5, workPower: 1.75, tooledWorkers: 1 })],
@@ -284,6 +317,44 @@ describe('InspectorPanel', () => {
     await wrapper.vm.$nextTick();
     await wrapper.get('[data-test="selection-demolish"]').trigger('click'); // must only ARM, not fire
     expect(engine.dispatch).not.toHaveBeenCalled();
+  });
+
+  // Fix round 1, Finding 2 (Important): the test above only covers building
+  // 1 -> building 2 — a regression that simplified `inspectorKey` to a bare
+  // `${id}` (dropping the `kind` prefix) would pass every test in this file,
+  // because nothing gives a building and a colonist the SAME numeric id. This
+  // fixture does: building 3 and colonist 3.
+  //
+  // A TwoStepButton-armed assertion (arm Demolish on building 3, select
+  // colonist 3, select building 3 again, expect the button disarmed) is NOT
+  // used here even though the brief suggests it as a fallback: hand-verified
+  // against the buggy bare-`${id}` key, that assertion still PASSES, because
+  // `InspectorPanel`'s own template already toggles a `v-if`/`v-else-if`
+  // between the building card and `InspectorColonist` on every selection-kind
+  // change (`building`/`colonist` are mutually exclusive computeds) — that
+  // inner branch switch tears down TwoStepButton regardless of whether the
+  // OUTER `InspectorPanel` instance was ever recreated. So it proves nothing
+  // about the key specifically; it would pass with the bug present.
+  //
+  // What the `kind` prefix actually controls is whether Vue reuses the SAME
+  // `InspectorPanel` component instance across the selection change or
+  // creates a fresh one — an outer-instance-identity fact, not anything
+  // currently rendered. `findComponent(...).vm.$.uid` (both `@vue/test-utils`
+  // and Vue's own internal instance handle) is what actually distinguishes
+  // a remount from Vue quietly reusing the instance — confirmed by the
+  // mutation check below, which this assertion does fail.
+  it('remounts across a building/colonist id collision, not just building-to-building', async () => {
+    const collision = makeSnapshot({ buildings: [makeBuilding(3)], colonists: [makeWorker(3)] });
+    const { wrapper, ui } = mountKeyedInspector(collision);
+    ui.selectBuilding(3);
+    await wrapper.vm.$nextTick();
+    const before = (wrapper.findComponent(InspectorPanel).vm as unknown as { $: { uid: number } }).$.uid;
+    ui.selectColonist(3);
+    await wrapper.vm.$nextTick();
+    ui.selectBuilding(3);
+    await wrapper.vm.$nextTick();
+    const after = (wrapper.findComponent(InspectorPanel).vm as unknown as { $: { uid: number } }).$.uid;
+    expect(after).not.toBe(before);
   });
 
   it('renders nothing when nothing is selected', () => {

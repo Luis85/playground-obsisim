@@ -17,25 +17,53 @@ const route = useRoute();
 const router = useRouter();
 
 /*
- * A renderer failure — boot or post-boot alike — lands the player on the
- * Ledger with a banner naming it (spec §2.5's third criterion). Watched here,
- * not handled as an event from WorldStage or WorldScreen: `App.vue` has no
- * template handle on whatever the router is currently showing, so an
- * `emit('fatal')` from a routed child would reach nobody. `ui.rendererFailure`
- * (ui-store.ts) is the seam WorldScreen already writes on both failure paths
- * — `onFatal(message)` covers a synchronous factory throw AND the async
- * `created.onFatal` callback registered only after a successful boot — so
- * one watcher here covers both without this file needing to know which kind
- * fired.
+ * A renderer failure — boot or post-boot alike — is a MODE, not a one-time
+ * redirect (spec §2.5's third criterion: "it becomes a mode"). Two pieces
+ * cooperate:
  *
- * Not reset on navigating back to `/`: once the renderer has failed there is
- * nothing that un-fails it (a fresh boot only happens on a full reload), so
- * the banner and the redirect both stay live until then. `void`, matching
- * the router's own fire-and-forget convention elsewhere in this file (see
- * `toggleRoute` below) — a rejected navigation here is not actionable.
+ * 1. The `watch` below still does the initial navigation, the moment
+ *    `ui.rendererFailure` flips from null to a message: it fires once, on
+ *    that transition, and pushes `/ledger`.
+ * 2. The `beforeEach` guard is what makes it a mode rather than a redirect
+ *    that only happens to fire once: it runs on every subsequent navigation
+ *    too, and while `ui.rendererFailure` is still set it turns any attempt
+ *    to reach anywhere other than `/ledger` back around. Without it, the
+ *    still-visible World/Ledger toggle (`toggleRoute` below) — or any other
+ *    future route push — lands the player back on a dead canvas: the watch
+ *    has already fired, `rendererFailure` does not change again, so nothing
+ *    would re-trigger the redirect a second time.
+ *
+ * A guard beats hiding or disabling the toggle: hiding the control only
+ * stops one path to `/`, not the route itself, so `/` stays reachable by
+ * anything else that pushes it (a future control, a programmatic push, even
+ * the browser back/forward affordance if this ever grows real history). The
+ * guard closes the route itself, which is the actual thing spec §2.5 says
+ * must stay closed.
+ *
+ * Both live in `App.vue`, not WorldStage or WorldScreen: this file has no
+ * template handle on whatever the router is currently showing, so an
+ * `emit('fatal')` from a routed child would reach nobody, and the guard has
+ * to be registered against the one `Router` instance regardless of which
+ * view is mounted. `ui.rendererFailure` (ui-store.ts) is the seam WorldScreen
+ * already writes on both failure paths — `onFatal(message)` covers a
+ * synchronous factory throw AND the async `created.onFatal` callback
+ * registered only after a successful boot — so one watcher plus one guard
+ * here cover both without this file needing to know which kind fired.
+ *
+ * Not reset on navigating back to `/ledger`: once the renderer has failed
+ * there is nothing that un-fails it (a fresh boot only happens on a full
+ * reload), so the banner, the redirect, and the guard all stay live until
+ * then. `void` on the `router.push` call, matching the router's own
+ * fire-and-forget convention elsewhere in this file (see `toggleRoute`
+ * below) — a rejected navigation here is not actionable.
  */
 watch(() => ui.rendererFailure, (failure) => {
   if (failure !== null) void router.push('/ledger');
+});
+
+router.beforeEach((to) => {
+  if (ui.rendererFailure !== null && to.path !== '/ledger') return '/ledger';
+  return true;
 });
 
 function toggleRoute() {

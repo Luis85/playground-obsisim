@@ -252,6 +252,23 @@ describe('WorldScreen', () => {
       await flushPromises();
       expect(router.currentRoute.value.path).toBe('/ledger');
       expect(document.querySelector('[data-test="renderer-banner"]')).not.toBeNull();
+
+      // Defect fix, both trigger paths: a renderer failure is a MODE (spec
+      // §2.5), not a one-shot redirect that only fires on the null -> message
+      // transition. Proving the redirect landed on `/ledger` above is not
+      // enough on its own — the bug this guards against is that the *next*
+      // navigation, after the watcher has already fired once and gone quiet,
+      // was able to walk the player straight back to a dead canvas. Driving
+      // the exact same push the World/Ledger toggle uses (`router.push('/')`)
+      // and asserting it does NOT land on `/` is what tells "mode" apart from
+      // "redirect": the router's own `beforeEach` guard (App.vue) is what
+      // turns this back around, not the watcher, which does not re-run
+      // because `ui.rendererFailure` has not changed.
+      await router.push('/');
+      await flushPromises();
+      expect(router.currentRoute.value.path).toBe('/ledger');
+      expect(document.querySelector('[data-test="renderer-banner"]')).not.toBeNull();
+
       wrapper.unmount();
     }
   });

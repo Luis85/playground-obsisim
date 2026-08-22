@@ -292,6 +292,31 @@ describe('BuildingsView', () => {
     expect((wrapper.get('[data-test="move-col-2"]').element as HTMLInputElement).value).toBe('9');
   });
 
+  // Defect fix: a colony reset (GameEngine.reset()) recycles entity ids from
+  // 1, same as WorldStage.vue already accounts for on the canvas side. A
+  // player's half-typed Move coordinates for the OLD timeline's id-1
+  // building must not survive onto the NEW timeline's id-1 building — if
+  // they did and the stale tile happened to still be valid, the Ledger
+  // would show an enabled Move aimed at the wrong destination with nothing
+  // on screen to say so. Detected the same way WorldStage detects it: a
+  // snapshot whose tick does not advance past the previous one's.
+  it('clears typed move coordinates across a colony reset instead of keeping the stale tile', async () => {
+    const { wrapper, store } = mountView(makeSnapshot({ tick: 5, buildings: [makeBuilding(1, { col: 4, row: 1 })] }));
+    await wrapper.get('[data-test="move-col-1"]').setValue('9');
+    await wrapper.get('[data-test="move-row-1"]').setValue('4');
+    expect((wrapper.get('[data-test="move-col-1"]').element as HTMLInputElement).value).toBe('9');
+
+    // The reset: tick regresses (a fresh colony starts back at tick 0), and
+    // the new starter building reuses id 1 at a tile the player never typed.
+    store.ingest(
+      makeSnapshot({ tick: 0, buildings: [makeBuilding(1, { col: 10, row: 6 })] }),
+      { paused: true, speed: 1, error: null },
+    );
+    await wrapper.vm.$nextTick();
+    expect((wrapper.get('[data-test="move-col-1"]').element as HTMLInputElement).value).toBe('10');
+    expect((wrapper.get('[data-test="move-row-1"]').element as HTMLInputElement).value).toBe('6');
+  });
+
   it('moves a building to typed coordinates', async () => {
     const { wrapper, engine } = mountView(makeSnapshot({ buildings: [makeBuilding(1)] }));
     await wrapper.get('[data-test="move-col-1"]').setValue('9');

@@ -35,16 +35,38 @@ const store = useGameStore();
  * then-recreated id would need reseeding anyway, which this watch already
  * does for free.
  *
- * Lives here, not in `BuildingTableRow.vue`: it is ONE record shared across
- * every row (a building appearing in a later snapshot has to be seeded
- * exactly once, by whichever component owns the record), not one per-row
- * local that a row's own remount would reset.
+ * That "id-reuse bug" is not hypothetical for THIS record — it is the exact
+ * shape of the defect fixed here. Demolishing a building and a colony reset
+ * both recycle ids, but only demolition is safe to handle by doing nothing:
+ * a demolished building's row is gone, so a stale entry sits inert. A reset
+ * is different — `GameEngine.reset()` publishes a fresh snapshot whose ids
+ * restart at 1, so the NEW starter building at id 1 inherits whatever
+ * coordinates a player had typed for the OLD id-1 building in the timeline
+ * that just ended. If that stale tile happens to still be a valid move
+ * target in the new colony, the Ledger renders an enabled Move button aimed
+ * at the wrong destination with no visible sign anything is wrong. Fill-
+ * only-missing (the loop below) cannot catch this on its own: the id is not
+ * missing, it is present and wrong.
+ *
+ * Detected the same way `WorldStage.vue` already detects a reset — a
+ * snapshot whose `tick` does not advance past the previous one's — and
+ * deliberately matching that file's condition character-for-character
+ * (`snapshot.tick <= previousSnapshot.tick`) rather than writing a second,
+ * differently-worded reset check: two independent definitions of "this is a
+ * reset" are two places that can silently drift apart if the engine's reset
+ * semantics ever change. On a detected reset every entry is cleared before
+ * the fill-only-missing loop runs, so every building in the new snapshot —
+ * including one reusing an old id — reseeds from ITS OWN current tile
+ * rather than surviving with the old timeline's typed value.
  */
 const moveTargets = reactive<Record<number, { col: number; row: number }>>({});
 watch(
-  () => store.snapshot?.buildings,
-  (buildings) => {
-    for (const b of buildings ?? []) {
+  () => store.snapshot,
+  (snapshot, previousSnapshot) => {
+    if (previousSnapshot && snapshot && snapshot.tick <= previousSnapshot.tick) {
+      for (const id of Object.keys(moveTargets)) delete moveTargets[Number(id)];
+    }
+    for (const b of snapshot?.buildings ?? []) {
       if (moveTargets[b.id] === undefined) moveTargets[b.id] = { col: b.col, row: b.row };
     }
   },

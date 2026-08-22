@@ -65,6 +65,32 @@ describe('styles.css — the world screen shell (spec §2.1 / §2.9)', () => {
     expect(body).toMatch(/grid-row:\s*1\s*\/\s*-1/);
   });
 
+  // Defect fix, criterion 7's other half: `.is-narrow` used to never
+  // redefine the shell grid at all, so the rail (140-200px) and dock
+  // (220-320px) columns stayed reserved even though the rail popover and
+  // the dock overlay both take themselves out of flow with
+  // `position: absolute` — which removes them from the grid's SIZING pass,
+  // but does nothing to the explicit column widths above, which stay
+  // reserved regardless of occupancy. This is a source-text assertion, the
+  // same limitation this file's own top-of-file comment already states for
+  // every other rule here: it can prove the narrow override rule EXISTS and
+  // does not reserve the wide-mode column widths, but it cannot prove a
+  // real browser actually paints the canvas at the width this rule implies
+  // — that would need a real layout engine, which jsdom is not.
+  it('gives narrow mode its own grid template that does not reserve the rail/dock column widths', () => {
+    const body = ruleBody('.obsisim-world-screen.is-narrow');
+    expect(body).toMatch(/grid-template-columns:/);
+    // Not the wide-mode reservations — narrow's columns must not still
+    // allocate the 140-200px rail or the 220-320px dock.
+    expect(body).not.toMatch(/140px/);
+    expect(body).not.toMatch(/200px/);
+    expect(body).not.toMatch(/220px/);
+    expect(body).not.toMatch(/320px/);
+    // A single flexible column is what actually hands the stage the pane's
+    // full width back.
+    expect(body).toMatch(/grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+  });
+
   it('responds to the PANE width via a container query, never the window', () => {
     expect(css).toMatch(/container-type:\s*inline-size/);
     expect(css).not.toMatch(/@media\s*\(\s*(?:min|max)-width/);

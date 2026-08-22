@@ -156,6 +156,56 @@
   align-items: start;
 }
 
+/*
+ * Defect fix — criterion 7's other half. `.is-narrow` never redefined the
+ * grid above, so below the width threshold the rail and dock COLUMNS stayed
+ * reserved (`minmax(140px, 200px)` and `minmax(220px, 320px)`, ~360-520px
+ * together) even though nothing sits in them any more at that width: the
+ * rail becomes a popover and the dock becomes an overlay, and both do that
+ * by going `position: absolute`, which pulls them out of the grid's own
+ * SIZING pass — but says nothing about the explicit column widths declared
+ * above, which stay reserved regardless of whether anything occupies them.
+ * The canvas was losing exactly the sidebar width in exactly the mode the
+ * overlay exists to protect it from — spec §2.1's "the dock overlays the
+ * canvas RATHER THAN shrinking it" was only half met: the overlay painted
+ * over the canvas, but the canvas underneath was still shrunk.
+ *
+ * Narrow mode gets its own single-column template instead of inheriting the
+ * three-column one above: `stage` is the only area that needs the pane's
+ * full width, and the two remaining always-visible narrow-mode controls —
+ * the Build toggle (`WorldScreen.vue`'s `.obsisim-rail-toggle`, `grid-area:
+ * rail`) and the dock tabs (`DockTabs.vue`'s `.obsisim-dock-tabs`,
+ * `grid-area: docktabs`) — get their own auto-height row each, stacked
+ * above the stage, rather than a reserved side column apiece.
+ *
+ * `dock` is deliberately absent from this area list. `DockBody.vue` sets
+ * `.is-overlay` on `.obsisim-dock` off the exact same `ui.narrow` flag that
+ * puts `.is-narrow` on this element, so the two classes are always present
+ * together — and `.obsisim-dock.is-overlay` below already overrides BOTH
+ * grid axes (`1 / -1`) before positioning itself absolutely (that rule's
+ * own comment explains why the axis span has to come first). So the dock
+ * never actually resolves to a named area while `.is-narrow` is present;
+ * giving it one here would be a value nothing ever reads, not a fix.
+ *
+ * What this rule does NOT prove: that the layout actually renders this way
+ * in a real pane. jsdom never loads this stylesheet (no test imports it),
+ * so `tests/app/styles.test.ts` can only read this rule's source text and
+ * confirm the columns it reserves — it cannot confirm a browser paints the
+ * canvas at the width this rule implies. That gap is named, not silently
+ * assumed away; see that test file's own top-of-file comment for the same
+ * caveat stated about the rest of this stylesheet's structural assertions.
+ */
+.obsisim-world-screen.is-narrow {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto 1fr auto auto;
+  grid-template-areas:
+    "rail"
+    "docktabs"
+    "stage"
+    "strip"
+    "legend";
+}
+
 .obsisim-world-fallback {
   padding: var(--size-4-4);
   color: var(--text-muted);

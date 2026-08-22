@@ -34,10 +34,15 @@ const tabs = [
       </router-link>
     </nav>
     <main v-if="store.snapshot">
-      <!-- WorldView stays alive across tab switches: its Excalibur engine
-           (and WebGL context) must boot once per view open, not per visit -->
+      <!-- WorldScreen stays alive across tab switches: its Excalibur engine
+           (and WebGL context) must boot once per view open, not per visit.
+           `include` matches on the component's `defineOptions({ name })` —
+           WorldView was renamed to WorldScreen in the increment-11 split
+           (Task 6), and this string has to move in the same commit or
+           keep-alive silently stops applying (no error, no failing test —
+           the WebGL context is torn down and rebuilt on every tab visit). -->
       <router-view v-slot="{ Component }">
-        <keep-alive include="WorldView">
+        <keep-alive include="WorldScreen">
           <component :is="Component" />
         </keep-alive>
       </router-view>

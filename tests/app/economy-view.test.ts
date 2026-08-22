@@ -4,8 +4,10 @@ import { mount } from '@vue/test-utils';
 import { createTestingPinia } from '@pinia/testing';
 import EconomyView from '../../src/app/views/EconomyView.vue';
 import DashboardView from '../../src/app/views/DashboardView.vue';
+import ChainTable from '../../src/app/components/ChainTable.vue';
 import { ENGINE_KEY } from '../../src/app/engine-key';
 import { useGameStore } from '../../src/app/stores/game-store';
+import { useUiStore } from '../../src/app/stores/ui-store';
 import { makeBuilding, makeSnapshot, makeWorker } from './fixtures';
 
 // The economy-reading affordances: per-stage bottleneck status in the chain
@@ -40,6 +42,31 @@ describe('EconomyView', () => {
     await wrapper.vm.$nextTick();
     expect(wrapper.find('[data-test="status-mill"]').text()).toContain('starved');
     expect(wrapper.find('[data-test="status-bakery"]').text()).toBe('not built');
+  });
+
+  // M6 (whole-branch review): ChainTable's row now attaches its click
+  // listener only when its `clickable` prop is on, the same `v-on="{}"` shape
+  // ResourceTable and PopulationRoster already use for a row meant to be
+  // genuinely inert rather than merely unwired — EconomyView (unlike
+  // EconomyPanel, which passes `clickable`) never sets it. Asserted two ways:
+  // the store effect (unchanged either way, since EconomyView never listens
+  // for `rowClick` regardless — this alone would stay green even with the
+  // OLD always-`@click` version, which is the exact gap this finding named)
+  // AND, the part that actually distinguishes "no listener" from "a listener
+  // nobody happens to be reading", that ChainTable itself never emits
+  // `rowClick` in the first place.
+  it('does not select or highlight anything when a stage row is clicked, because the row is never wired at all', async () => {
+    const snapshot = makeSnapshot({
+      buildings: [{ ...baseBuilding, id: 1, defId: 'mill', workers: 2, state: 'waitingForInput' }],
+    });
+    const wrapper = mountWith(EconomyView, snapshot);
+    const ui = useUiStore();
+    ui.selectBuilding(4);
+    await wrapper.vm.$nextTick();
+    await wrapper.get('[data-test="stage-row-mill"]').trigger('click');
+    expect(ui.selection).toEqual({ kind: 'building', id: 4 }); // inert: not even a deselect
+    expect(ui.highlight).toEqual([]);
+    expect(wrapper.findComponent(ChainTable).emitted('rowClick')).toBeUndefined();
   });
 
   it('shows the output runway for a draining stage', async () => {
@@ -184,7 +211,7 @@ describe('EconomyView', () => {
   it('heads the store-inflow column Delivered/t, not Prod/t', async () => {
     const wrapper = mountWith(EconomyView, makeSnapshot({ buildings: [makeBuilding(1, { defId: 'forester' })] }));
     await wrapper.vm.$nextTick();
-    expect(wrapper.find('[data-test="inflow-heading"]').text()).toBe('Delivered/t');
+    expect(wrapper.find('[data-test="economy-inflow-heading"]').text()).toBe('Delivered/t');
     expect(wrapper.text()).not.toContain('Prod/t');
   });
 
@@ -205,7 +232,7 @@ describe('EconomyView', () => {
     // "ok" beside 0.00 only reads as a backlog because the heading names
     // delivery; under "Prod/t" the same row claimed the stage was fine and
     // producing nothing at once.
-    expect(wrapper.find('[data-test="inflow-heading"]').text()).toBe('Delivered/t');
+    expect(wrapper.find('[data-test="economy-inflow-heading"]').text()).toBe('Delivered/t');
   });
 
   it('says the colony is keeping up when nothing waits', async () => {
@@ -248,7 +275,7 @@ describe('DashboardView', () => {
   it('heads the store-inflow column Delivered/t, not Prod/t', async () => {
     const wrapper = mountWith(DashboardView, makeSnapshot());
     await wrapper.vm.$nextTick();
-    expect(wrapper.find('[data-test="inflow-heading"]').text()).toBe('Delivered/t');
+    expect(wrapper.find('[data-test="resource-inflow-heading"]').text()).toBe('Delivered/t');
     expect(wrapper.text()).not.toContain('Prod/t');
   });
 });

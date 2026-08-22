@@ -8,6 +8,34 @@ import {
   BALANCE, batchInputUnits, BUILDINGS, BUILDING_IDS, MEAL_WEIGHTS, RESOURCE_IDS, RESOURCES, unitsOf,
   type BuildingDefId, type ResourceId,
 } from '../../engine/content';
+import type { Selection } from './ui-store';
+import { needsLabel } from '../labels';
+
+/**
+ * One line of the Attention panel. Every field is derived from a Snapshot
+ * field that already exists — this increment adds no engine data (spec §2.4).
+ *
+ * `subject` is what a click selects and `highlight` what it pulses; a row may
+ * have neither, which is how a resource row stays inert (§2.3's table) rather
+ * than quietly doing nothing by accident.
+ */
+export interface AttentionRow {
+  id: string;
+  severity: 'warn' | 'danger';
+  message: string;
+  subject: Selection | null;
+  highlight: Selection[];
+}
+
+/** Ticks of runway at or below which a resource is worth naming. Not
+ * exported (M5, whole-branch review): DashboardView, ResourceStrip and
+ * ColonyPanel used to each import this literal directly and compare against
+ * it themselves — one number, but three copies of the comparison — until
+ * the `runwayLow` getter below became the one derivation all three read
+ * instead. This constant is now that getter's own implementation detail,
+ * along with `runwayAttentionRows`', which takes `runwayLow` as a parameter
+ * rather than reading this directly (see that function's own comment). */
+const RUNWAY_WARN_TICKS = 30;
 
 interface DefStaffing {
   total: number;
@@ -57,6 +85,113 @@ function stockAmounts(snapshot: Snapshot | null): Record<string, number> {
   const stock: Record<string, number> = {};
   for (const id of RESOURCE_IDS) stock[id] = snapshot?.stockpile[id].stock ?? 0;
   return stock;
+}
+
+/**
+ * Colonists whose starvation clock is running. One predicate, read by the
+ * Attention row's `highlight` set below and by `starvingCount`, so the
+ * people the row names and the number it reports can never disagree.
+ */
+function starvingColonistsIn(snapshot: Snapshot | null) {
+  return snapshot?.colonists.filter((c) => c.starvingTicks > 0) ?? [];
+}
+
+/**
+ * Attention rows for individual buildings: outputFull, waitingForInput,
+ * unstaffed, and an outstanding construction need. Split out of `attention`
+ * below so each condition-walk is its own small function rather than one
+ * function walking three concerns (fallow's cognitive/CRAP gate flagged the
+ * combined getter; see `scripts/check-quality.mjs`'s header).
+ */
+function buildingAttentionRows(snapshot: Snapshot): AttentionRow[] {
+  const rows: AttentionRow[] = [];
+  const name = (defId: BuildingDefId) => BUILDINGS[defId].name;
+  for (const b of snapshot.buildings) {
+    const subject: Selection = { kind: 'building', id: b.id };
+    if (b.state === 'outputFull') {
+      rows.push({ id: `full-${b.id}`, severity: 'warn', subject, highlight: [],
+        message: `${name(b.defId)} is full — nothing is collecting from it` });
+    }
+    if (b.state === 'waitingForInput') {
+      rows.push({ id: `starved-${b.id}`, severity: 'warn', subject, highlight: [],
+        message: `${name(b.defId)} has nothing to work with` });
+    }
+    // The engine's own verdict, not a re-derivation of it. `workers === 0
+    // && workerSlots > 0` also fires for every unfinished producer — a site
+    // keeps its def's slots — and `handleAssignWorker` refuses a site, so
+    // that predicate reports a problem the player cannot fix. The
+    // `unstaffed` state already excludes sites, which read
+    // `underConstruction`.
+    if (b.state === 'unstaffed') {
+      rows.push({ id: `unstaffed-${b.id}`, severity: 'warn', subject, highlight: [],
+        message: `${name(b.defId)} has no one working it` });
+    }
+    if (Object.keys(b.constructionNeeds).length > 0) {
+      rows.push({ id: `site-${b.id}`, severity: 'warn', subject, highlight: [],
+        message: `${name(b.defId)} site needs ${needsLabel(b.constructionNeeds)}` });
+    }
+  }
+  return rows;
+}
+
+/**
+ * Attention rows for draining resources. Carries neither a subject nor a
+ * highlight: a resource is not a thing on the map, and §2.3 keeps that inert
+ * in both panels. Split out of `attention` for the same reason as
+ * `buildingAttentionRows` above.
+ *
+ * `low` is the store's own `runwayLow` getter, passed in rather than
+ * re-derived here: this is a free function outside the store (so it has no
+ * `this` to read a getter off), but the threshold it gates on is the exact
+ * one `runwayLow` exists to hold in one place (M5, whole-branch review) —
+ * taking it as a parameter is what lets this loop share that one derivation
+ * instead of quietly growing a fourth copy of `<= RUNWAY_WARN_TICKS`.
+ */
+function runwayAttentionRows(
+  runways: Partial<Record<ResourceId, number>>, low: (id: ResourceId) => boolean,
+): AttentionRow[] {
+  const rows: AttentionRow[] = [];
+  for (const [id, ticks] of Object.entries(runways)) {
+    if (ticks !== undefined && low(id as ResourceId)) {
+      rows.push({ id: `runway-${id}`, severity: 'danger', subject: null, highlight: [],
+        message: `${RESOURCES[id as ResourceId].name} empties in ~${ticks}t` });
+    }
+  }
+  return rows;
+}
+
+/**
+ * Attention rows for the colony's people: homeless, starving, and idle
+ * adults. Each is a plural row that pulses the colonists it names (§2.3)
+ * rather than selecting one of them. Split out of `attention` for the same
+ * reason as `buildingAttentionRows` above.
+ */
+function peopleAttentionRows(snapshot: Snapshot): AttentionRow[] {
+  const rows: AttentionRow[] = [];
+  if (snapshot.homeless > 0) {
+    // Plural rows pulse the people they name (§2.3). `homeId === null` is
+    // the same predicate `commuteLabel` calls homeless, not a second one.
+    rows.push({ id: 'homeless', severity: 'warn', subject: null,
+      highlight: snapshot.colonists.filter((c) => c.homeId === null).map((c) => ({ kind: 'colonist' as const, id: c.id })),
+      message: `${snapshot.homeless} colonist${snapshot.homeless === 1 ? ' has' : 's have'} no bed` });
+  }
+  const starving = starvingColonistsIn(snapshot);
+  if (starving.length > 0) {
+    rows.push({ id: 'starving', severity: 'danger', subject: null,
+      highlight: starving.map((c) => ({ kind: 'colonist' as const, id: c.id })),
+      message: `${starving.length} colonist${starving.length === 1 ? ' is' : 's are'} starving` });
+  }
+  if (snapshot.idleAdults > 0) {
+    // The same three conditions `idleAdults` is counted from: an adult
+    // with no building and no haul duty. Derived here rather than
+    // published, because this increment adds no snapshot field.
+    rows.push({ id: 'idle', severity: 'warn', subject: null,
+      highlight: snapshot.colonists
+        .filter((c) => c.stage === 'adult' && c.buildingId === null && !c.hauling)
+        .map((c) => ({ kind: 'colonist' as const, id: c.id })),
+      message: `${snapshot.idleAdults} adult${snapshot.idleAdults === 1 ? ' is' : 's are'} idle` });
+  }
+  return rows;
 }
 
 /**
@@ -164,6 +299,22 @@ export const useGameStore = defineStore('game', {
       }
       return runways;
     },
+    /**
+     * Whether `id`'s runway is at or below `RUNWAY_WARN_TICKS` — the one
+     * predicate behind the "low" styling on three surfaces (ResourceStrip's
+     * chip, ResourceTable's cell, and this store's own `runwayAttentionRows`
+     * threshold above), following §2.7's "one figure, one derivation, two
+     * [or more] surfaces". Before this getter existed each of the first two
+     * wrote `(store.runways[id] ?? Infinity) <= RUNWAY_WARN_TICKS` itself —
+     * identical, three times, the exact drift risk Task 8 already fixed for
+     * the constant but left the comparison free to repeat (M5, whole-branch
+     * review). A getter returning a function, not a plain getter, because the
+     * two callers need it per resource id, the same shape `staffingRefusal`
+     * (`staffing.ts`) takes a building for.
+     */
+    runwayLow(): (id: ResourceId) => boolean {
+      return (id) => (this.runways[id] ?? Infinity) <= RUNWAY_WARN_TICKS;
+    },
     /** Per building def: how many exist, are staffed, and starve for input. */
     staffingByDef(state): Partial<Record<BuildingDefId, DefStaffing>> {
       const byDef: Partial<Record<BuildingDefId, DefStaffing>> = {};
@@ -197,7 +348,7 @@ export const useGameStore = defineStore('game', {
      * construct table AND the build palette bound their `:disabled` to this,
      * so the check existed exactly once; increment 10 §2.1 makes ordering a
      * request instead of a claim, and drops the check everywhere it gated —
-     * BuildPalette, WorldView's `tileValid`, and this getter's own reader in
+     * BuildPalette, `interaction.ts`'s `tileValid`, and this getter's own reader in
      * BuildingsView's `:disabled`. What survives is the tooltip: the getter
      * is unchanged, and BuildingsView's Construct button still reads it to
      * TELL the player what a def is still short of, even though clicking it
@@ -295,6 +446,38 @@ export const useGameStore = defineStore('game', {
      */
     unitsNeededForConstruction(state): number {
       return (state.snapshot?.buildings ?? []).reduce((sum, b) => sum + unitsOf(b.constructionNeeds), 0);
+    },
+    /** Colonists whose starvation clock is running — the figure the Attention
+     * panel names and PopulationSummary's cell shows, derived once via
+     * `starvingColonistsIn` above. */
+    starvingCount(state): number {
+      return starvingColonistsIn(state.snapshot).length;
+    },
+    /**
+     * The problem list, newest concern first by severity then by kind. Pure
+     * derivation over the current snapshot: nothing here is remembered
+     * between ticks, so a fixed problem leaves the list by itself.
+     */
+    attention(state): AttentionRow[] {
+      const snapshot = state.snapshot;
+      if (!snapshot) return [];
+      // A row is EITHER a subject or a highlight set, never both: §2.3's table
+      // gives single-building rows a selection and reserves the pulse for the
+      // plural rows. Carrying both would make one click do two things and blur
+      // the distinction the table exists to draw.
+      //
+      // The three groups below are walked in this order — buildings, then
+      // resources, then people — and each is its own trivial helper (see the
+      // functions above `outstandingSiteDemand`) rather than one function
+      // walking all three, so no single function's branching trips fallow's
+      // complexity gate.
+      const rows = [
+        ...buildingAttentionRows(snapshot),
+        ...runwayAttentionRows(this.runways as Partial<Record<ResourceId, number>>, this.runwayLow),
+        ...peopleAttentionRows(snapshot),
+      ];
+
+      return rows.sort((a, b) => (a.severity === b.severity ? 0 : a.severity === 'danger' ? -1 : 1));
     },
   },
   actions: {

@@ -40,6 +40,17 @@ function homelessClass(homeless: number): string {
     <span data-test="homeless" :class="homelessClass(store.snapshot.homeless)">
       Homeless: <strong>{{ store.snapshot.homeless }}</strong>
     </span>
+    <!-- §2.5's "every number a panel shows is also in a table": the Attention
+         panel's plural "N colonists are starving" row named no table cell
+         anywhere until Task 12's sweep — PopulationView shows each
+         colonist's OWN starvation clock but never the count. `starvingCount`
+         is a store getter (game-store.ts), the same derivation Attention's
+         own row reads, so this cell and that row's message can never
+         disagree about how many (spec §2.7). Beside Homeless because it is
+         the same shape of number — a standing count of people in trouble. -->
+    <span data-test="starving" :class="store.starvingCount > 0 ? 'obsisim-negative' : ''">
+      Starving: <strong>{{ store.starvingCount }}</strong>
+    </span>
     <span data-test="meals" :class="mealsClass(store.snapshot.mealsPerHead)">
       Meals/head: <strong>{{ store.snapshot.mealsPerHead.toFixed(1) }}</strong>
       (birth at {{ BALANCE.birthFoodPerHead }}, nomad at {{ BALANCE.nomadFoodPerHead }})

@@ -1,0 +1,338 @@
+// @vitest-environment happy-dom
+import { describe, expect, it, vi } from 'vitest';
+import { defineComponent, h, KeepAlive, nextTick, ref } from 'vue';
+import { mount, flushPromises } from '@vue/test-utils';
+import { createTestingPinia } from '@pinia/testing';
+import WorldScreen from '../../src/app/views/WorldScreen.vue';
+import { WORLD_RENDERER_KEY } from '../../src/app/world/renderer-key';
+import { ENGINE_KEY } from '../../src/app/engine-key';
+import { useGameStore } from '../../src/app/stores/game-store';
+import { useUiStore } from '../../src/app/stores/ui-store';
+import { makeBuilding, makeFake, makeFakeFactory, makeSnapshot, mountApp } from './fixtures';
+
+function mountScreen() {
+  const pinia = createTestingPinia({ createSpy: vi.fn, stubActions: false });
+  // Seeded BEFORE mount, deliberately. In production `App.vue` gates the
+  // router view on `store.snapshot`, so nothing downstream ever renders
+  // against null — but mounting WorldScreen directly skips that gate, and
+  // several assertions read live figures. ResourceStrip guards on
+  // store.snapshot in its own right, so this is convenience, not a crutch.
+  useGameStore(pinia).ingest(
+    makeSnapshot({ idleAdults: 1, buildings: [makeBuilding(1)] }),
+    { paused: true, speed: 1, error: null },
+  );
+  return mount(WorldScreen, {
+    attachTo: document.body, // window keydown listeners need a live document
+    global: {
+      plugins: [pinia],
+      provide: {
+        [WORLD_RENDERER_KEY as symbol]: makeFake().factory,
+        [ENGINE_KEY as symbol]: { dispatch: vi.fn() },
+      },
+    },
+  });
+}
+
+describe('WorldScreen', () => {
+  it('renders the rail, the stage and the strip, with no dock by default', () => {
+    const wrapper = mountScreen();
+    expect(wrapper.find('[data-test="build-palette"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="world-host"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="resource-strip"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="dock"]').exists()).toBe(false);
+  });
+
+  it('opens the dock when a panel is chosen', async () => {
+    const wrapper = mountScreen();
+    useUiStore().openPanel('attention');
+    await nextTick();
+    expect(wrapper.find('[data-test="dock"]').exists()).toBe(true);
+  });
+
+  // The tab strip is the only route to Colony/Population/Economy/Attention
+  // that does not require selecting a map subject first (WorldScreen.vue's
+  // own comment on the `<nav>`), so it has to be reachable with the dock
+  // closed — and it stays mounted, not merely rendered once, after the dock
+  // closes again.
+  it('offers every panel from a closed dock', async () => {
+    const wrapper = mountScreen();
+    const ui = useUiStore();
+    expect(ui.panel).toBe(null);
+    expect(wrapper.find('[data-test="dock"]').exists()).toBe(false);
+    for (const panel of ['colony', 'population', 'economy', 'attention'] as const) {
+      await wrapper.get(`[data-test="dock-tab-${panel}"]`).trigger('click');
+      expect(ui.panel).toBe(panel);
+    }
+    await wrapper.get('[data-test="dock-close"]').trigger('click');
+    expect(ui.panel).toBe(null);
+    expect(wrapper.get('[data-test="dock-tab-attention"]').isVisible()).toBe(true);
+    wrapper.unmount();
+  });
+
+  // I3 (whole-branch review): before this, nothing in the dock ever opened
+  // the Inspector — `DOCK_PANELS` excluded it outright and no tab rendered
+  // it under any condition, so spec §2.3's "the Inspector one click away"
+  // was only true for a canvas selection (which auto-opens it), never for
+  // one made from a panel row via `selectKeepingPanel` on purpose to stay
+  // put (AttentionPanel.vue). The fifth tab this test pins is gated on
+  // `ui.selection.kind !== 'none'` — absent with nothing selected, present
+  // and functional the moment something is, gone again once the selection
+  // clears.
+  it('offers an Inspector tab once something is selected, and only then', async () => {
+    const wrapper = mountScreen();
+    const ui = useUiStore();
+    expect(wrapper.find('[data-test="dock-tab-inspector"]').exists()).toBe(false);
+
+    ui.selectBuilding(1);
+    await nextTick();
+    expect(wrapper.find('[data-test="dock-tab-inspector"]').exists()).toBe(true);
+
+    ui.openPanel('colony'); // navigate away — the tab must still open Inspector from anywhere
+    await nextTick();
+    expect(ui.panel).toBe('colony');
+    await wrapper.get('[data-test="dock-tab-inspector"]').trigger('click');
+    expect(ui.panel).toBe('inspector');
+
+    ui.clearSelection();
+    await nextTick();
+    expect(wrapper.find('[data-test="dock-tab-inspector"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('unwinds the Escape ladder mode-first', async () => {
+    const wrapper = mountScreen();
+    const ui = useUiStore();
+    ui.selectBuilding(1);
+    ui.armMove(1);
+    await nextTick();
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(ui.mode).toEqual({ kind: 'idle' });
+    expect(ui.selection).toEqual({ kind: 'building', id: 1 });
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(ui.selection).toEqual({ kind: 'none' });
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(ui.panel).toBe(null);
+    wrapper.unmount();
+  });
+
+  it('collapses the rail to a Build control in a narrow pane, and the popover still arms', async () => {
+    const wrapper = mountScreen();
+    const ui = useUiStore();
+    expect(wrapper.find('[data-test="rail-toggle"]').exists()).toBe(false);
+    ui.setNarrow(true);
+    await nextTick();
+    expect(wrapper.find('[data-test="build-palette"]').exists()).toBe(false);
+    await wrapper.get('[data-test="rail-toggle"]').trigger('click');
+    await wrapper.get('[data-test="palette-farm"]').trigger('click');
+    expect(ui.mode).toEqual({ kind: 'place', defId: 'farm' });
+    wrapper.unmount();
+  });
+
+  // M8 (whole-branch review): every other narrow-pane test above drives
+  // `ui.setNarrow` directly, which proves the CONSUMING side of the flag but
+  // never once runs the `ResizeObserver` callback that is supposed to
+  // PRODUCE it — `([entry]) => ui.setNarrow(entry.contentRect.width <
+  // NARROW_PX)`. Both the 720px threshold and the `<` direction could ship
+  // inverted or off-by-one and every existing test would stay green. happy-
+  // dom ships a real `ResizeObserver` constructor, but nothing in a headless
+  // test environment ever triggers a real resize, so this test replaces the
+  // global with a stub that captures the callback WorldScreen.vue's
+  // `onMounted` registers, then invokes it by hand on both sides of the
+  // threshold — the same technique `renderer.ts`'s own ResizeObserver would
+  // need if it were reachable from `tests/app/` at all (it is not; see that
+  // file's header comment).
+  it('derives ui.narrow from its own ResizeObserver callback, on both sides of the threshold', async () => {
+    let observed: ResizeObserverCallback | null = null;
+    const RealResizeObserver = globalThis.ResizeObserver;
+    class StubResizeObserver {
+      constructor(callback: ResizeObserverCallback) { observed = callback; }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    globalThis.ResizeObserver = StubResizeObserver as unknown as typeof ResizeObserver;
+    try {
+      const wrapper = mountScreen();
+      const ui = useUiStore();
+      expect(observed).not.toBeNull();
+      const entry = (width: number) => [{ contentRect: { width } }] as unknown as ResizeObserverEntry[];
+
+      observed!(entry(500), undefined as unknown as ResizeObserver); // below 720: narrow
+      expect(ui.narrow).toBe(true);
+
+      observed!(entry(900), undefined as unknown as ResizeObserver); // above 720: not narrow
+      expect(ui.narrow).toBe(false);
+
+      wrapper.unmount();
+    } finally {
+      globalThis.ResizeObserver = RealResizeObserver;
+    }
+  });
+
+  it('overlays the dock rather than shrinking the canvas in a narrow pane', async () => {
+    const wrapper = mountScreen();
+    const ui = useUiStore();
+    ui.openPanel('attention');
+    await nextTick();
+    expect(wrapper.get('[data-test="dock"]').classes()).not.toContain('is-overlay');
+    ui.setNarrow(true);
+    await nextTick();
+    // The other half of criterion 7. Without this, an implementation that
+    // leaves the dock in a grid column and crushes the canvas passes every
+    // other check, because Task 13's CSS is where that decision lives.
+    expect(wrapper.get('[data-test="dock"]').classes()).toContain('is-overlay');
+    wrapper.unmount();
+  });
+
+  it('stops listening for Escape while deactivated, and resumes on activate', async () => {
+    const active = ref(true);
+    const Harness = defineComponent({
+      setup: () => () => h(KeepAlive, null, [active.value ? h(WorldScreen) : null]),
+    });
+    const pinia = createTestingPinia({ createSpy: vi.fn, stubActions: false });
+    useGameStore(pinia).ingest(makeSnapshot({ idleAdults: 1 }), { paused: true, speed: 1, error: null });
+    mount(Harness, {
+      attachTo: document.body,
+      global: {
+        plugins: [pinia],
+        provide: {
+          [WORLD_RENDERER_KEY as symbol]: makeFake().factory,
+          [ENGINE_KEY as symbol]: { dispatch: vi.fn() },
+        },
+      },
+    });
+    const ui = useUiStore();
+    ui.selectBuilding(1);
+    active.value = false;
+    await nextTick();
+
+    // The Ledger is showing. Escape belongs to it, not to the hidden world.
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(ui.selection).toEqual({ kind: 'building', id: 1 });
+
+    active.value = true;
+    await nextTick();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(ui.selection).toEqual({ kind: 'none' });
+  });
+
+  it('detaches its Escape listener on unmount', () => {
+    const wrapper = mountScreen();
+    const ui = useUiStore();
+    ui.selectBuilding(1);
+    wrapper.unmount();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(ui.selection).toEqual({ kind: 'building', id: 1 }); // untouched
+  });
+
+  // Deliberately NOT seeded, and safe because ResourceStrip guards on
+  // store.snapshot. A component that throws against a null snapshot will throw
+  // in some context nobody has thought of yet; seeding every mount hides that
+  // rather than fixing it.
+  it('shows the fallback message when the stage reports a fatal', async () => {
+    const wrapper = mount(WorldScreen, {
+      global: {
+        plugins: [createTestingPinia({ createSpy: vi.fn, stubActions: false })],
+        provide: {
+          [WORLD_RENDERER_KEY as symbol]: vi.fn(() => { throw new Error('no webgl'); }),
+          [ENGINE_KEY as symbol]: { dispatch: vi.fn() },
+        },
+      },
+    });
+    await nextTick();
+    expect(wrapper.find('[data-test="world-fallback"]').exists()).toBe(true);
+  });
+
+  // Deletion-inventory A12: WorldLegend rendered inside the world view. This
+  // case has no equivalent anywhere else — WorldStage does not render it (the
+  // legend is not renderer-specific), so it is WorldScreen's own to carry.
+  // Lifted intact from tests/app/world-view.test.ts's "renders the encoding
+  // legend" — same swatch-pairing check, so a future entry cannot silently
+  // put its label text inside the swatch element the way "output full" and
+  // "carrying" once did.
+  it('renders the encoding legend', async () => {
+    const wrapper = mountScreen();
+    await nextTick(); // WorldLegend resolves its theme in onMounted
+    const legend = wrapper.find('[data-test="world-legend"]');
+    expect(legend.exists()).toBe(true);
+    expect(legend.text()).toContain('producing');
+    expect(legend.text()).toContain('idle camp');
+    expect(legend.text()).toContain('selected');
+    expect(legend.text()).toContain('ghost: buildable');
+    expect(legend.text()).toContain('ghost: blocked');
+    expect(legend.text()).toContain('output full');
+    expect(legend.text()).toContain('under construction');
+    expect(legend.text()).toContain('relocating');
+    expect(legend.text()).toContain('carrying out');
+    expect(legend.text()).toContain('carrying in');
+    expect(legend.text()).toContain('transfer');
+    expect(legend.text()).toContain('storing');
+    expect(legend.text()).toContain('store fill');
+    expect(legend.text()).toContain('housing');
+    expect(legend.text()).toContain('child');
+    expect(legend.text()).toContain('elder');
+    expect(legend.text()).toContain('homeless');
+
+    const entries = legend.findAll('span');
+    expect(entries.length).toBe(22);
+    let withSwatch = 0;
+    for (const entry of entries) {
+      const ownsChipClass = entry.classes().includes('obsisim-chip');
+      const swatch = entry.find('.obsisim-chip');
+      if (!ownsChipClass && !swatch.exists()) continue; // "idle camp": a literal glyph, no encoded color
+      expect(ownsChipClass).toBe(false);
+      expect(swatch.exists()).toBe(true);
+      expect(swatch.text()).toBe('');
+      withSwatch += 1;
+    }
+    expect(withSwatch).toBe(21);
+  });
+
+  // Criterion 3 requires BOTH of §2.5's renderer failures, not just the one a
+  // throwing factory can reach. `makeFakeFactory(true)` never returns a
+  // renderer at all — the BOOT failure, caught by WorldStage's own `try`.
+  // `makeFakeFactory(false)` hands back a renderer whose `onFatal` callback
+  // this test invokes BY HAND, the POST-boot failure: that callback is only
+  // registered after `factory()` succeeds (WorldStage.vue's own comment), so
+  // a boot-only test could never reach it, and a reviewer had already flagged
+  // that nothing reads `ui.rendererFailure` at all before this task wired it
+  // to navigation. Both paths go through that one store field, and both must
+  // land on the same place: routed to `/ledger`, with App.vue's persistent
+  // banner up (not WorldScreen's own local `world-fallback`, which stops
+  // rendering the moment the route moves away from it — see App.vue's own
+  // comment on why the banner lives there instead).
+  it('routes to the ledger on a boot failure and on a post-boot fatal', async () => {
+    for (const trigger of ['boot', 'post-boot'] as const) {
+      const { renderer, factory } = makeFakeFactory(trigger === 'boot');
+      const { wrapper, router } = await mountApp(factory);
+      if (trigger === 'post-boot') {
+        const report = (renderer!.onFatal as ReturnType<typeof vi.fn>).mock.calls[0][0] as (m: string) => void;
+        report('context lost');
+      }
+      await flushPromises();
+      expect(router.currentRoute.value.path).toBe('/ledger');
+      expect(document.querySelector('[data-test="renderer-banner"]')).not.toBeNull();
+
+      // Defect fix, both trigger paths: a renderer failure is a MODE (spec
+      // §2.5), not a one-shot redirect that only fires on the null -> message
+      // transition. Proving the redirect landed on `/ledger` above is not
+      // enough on its own — the bug this guards against is that the *next*
+      // navigation, after the watcher has already fired once and gone quiet,
+      // was able to walk the player straight back to a dead canvas. Driving
+      // the exact same push the World/Ledger toggle uses (`router.push('/')`)
+      // and asserting it does NOT land on `/` is what tells "mode" apart from
+      // "redirect": the router's own `beforeEach` guard (App.vue) is what
+      // turns this back around, not the watcher, which does not re-run
+      // because `ui.rendererFailure` has not changed.
+      await router.push('/');
+      await flushPromises();
+      expect(router.currentRoute.value.path).toBe('/ledger');
+      expect(document.querySelector('[data-test="renderer-banner"]')).not.toBeNull();
+
+      wrapper.unmount();
+    }
+  });
+});

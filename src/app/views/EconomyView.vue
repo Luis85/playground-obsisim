@@ -1,127 +1,44 @@
 <script setup lang="ts">
-import { computed } from 'vue';
 import { useGameStore } from '../stores/game-store';
-import { BUILDINGS, CHAINS, RESOURCES } from '../../engine/content';
+// The chain-row derivation and the three pressure sentences are shared with
+// EconomyPanel (the dock's version of this same table, Task 10) through this
+// one composable, rather than each view walking CHAINS or building its own
+// sentence — spec §2.7's "one figure, one derivation, two surfaces". See
+// economy.ts's own comment for why a composable rather than a shared
+// component: the two views' COLUMN SETS genuinely differ (nine vs four).
+import { useEconomyChains } from '../economy';
+// The three pressure lines and the chain table's outer shell ARE identical
+// markup in both surfaces, which is the OTHER half of §2.7 ("where a whole
+// block is identical, share the component") — see each component's own
+// comment for what stays shared and what a caller supplies itself.
+import EconomyPressureLines from '../components/EconomyPressureLines.vue';
+import ChainTable from '../components/ChainTable.vue';
 
 // The chain view exists to make bottlenecks visible (PRD §5): a starving
 // stage is the signal that the stage before it is too slow. Verdicts come
 // precomputed from the store (stageStatuses); rows are assembled here so
 // the template stays flat interpolation.
 const store = useGameStore();
-
-// One sentence, because a number nobody can interpret is not a diagnostic:
-// this is the answer to "my production fell and I did not change anything".
-const haulPressure = computed(() => {
-  if (store.unitsWaiting === 0) return 'Hauling is keeping up: nothing is waiting at a building.';
-  const haulers = `${store.haulerCount} hauler${store.haulerCount === 1 ? '' : 's'}`;
-  const stalled = `${store.stalledBuildings} stalled`;
-  return `${store.unitsWaiting} units waiting for collection — ${stalled} — ${haulers} on duty.`;
-});
-
-// The input-side twin of haulPressure above — the answer to "why is my
-// bakery stopped?" (§2.10). Both figures come from the store's own
-// waitingForInput-gated getters, never recomputed here, so this line and the
-// Buildings table's In column cannot disagree about which buildings are short.
-const inputPressure = computed(() => {
-  if (store.buildingsWaitingForInput === 0) return 'Input delivery is keeping up: no building is waiting.';
-  const count = store.buildingsWaitingForInput;
-  const buildings = `${count} building${count === 1 ? '' : 's'}`;
-  return `${store.unitsShort} units short — ${buildings} waiting for input.`;
-});
-
-// The build-side third of the same shape (§2.10, beside haulPressure and
-// inputPressure above): what the colony's construction QUEUE still owes,
-// read off the same per-material shortfall the Buildings table's Needs
-// column publishes, never a second derivation of it.
-const buildPressure = computed(() => {
-  if (store.buildingsUnderConstruction === 0) return 'Nothing is under construction.';
-  const count = store.buildingsUnderConstruction;
-  const sites = `${count} site${count === 1 ? '' : 's'}`;
-  return `${store.unitsNeededForConstruction} units needed — ${sites} under construction.`;
-});
-
-const chains = computed(() => {
-  const snapshot = store.snapshot;
-  if (!snapshot) return [];
-  return CHAINS.map((chain) => ({
-    name: chain.name,
-    steps: chain.steps.map((step) => {
-      const staffing = store.staffingByDef[step.building] ?? { total: 0, staffed: 0, starved: 0 };
-      const status = store.stageStatuses[step.building] ?? { label: 'not built', starved: false };
-      const runway = store.runways[step.output];
-      const stats = snapshot.stockpile[step.output];
-      return {
-        building: step.building,
-        stage: BUILDINGS[step.building].name,
-        crew: `${staffing.total} (${staffing.staffed})`,
-        status: status.label,
-        starved: status.starved,
-        output: RESOURCES[step.output].name,
-        // The gap between made and delivered is this stage's haul backlog —
-        // the per-stage diagnostic the aggregate pressure line cannot give.
-        made: stats.madeRate.toFixed(2),
-        // Store inflow, not gross output: since increment 4 goods reach the
-        // stockpile when a hauler delivers them, not when they are made. The
-        // column is headed "Delivered/t" for that reason — a fully staffed
-        // building with no haulers reads "producing" and 0.00 at the same
-        // time, and under the old "Prod/t" heading that was a contradiction
-        // rather than the haul backlog it actually is (OBS-4-06).
-        delivered: stats.deliveredRate.toFixed(2),
-        cons: stats.consumptionRate.toFixed(2),
-        stock: stats.stock,
-        outputId: step.output,
-        runway: runway !== undefined ? `~${runway}t` : '—',
-      };
-    }),
-  }));
-});
+const { chains } = useEconomyChains();
 </script>
 
 <template>
   <div v-if="store.snapshot">
-    <p
-      class="obsisim-haul-pressure"
-      data-test="haul-pressure"
-      :class="{ 'obsisim-negative': store.stalledBuildings > 0 }"
-    >
-      {{ haulPressure }}
-    </p>
-    <p
-      class="obsisim-haul-pressure"
-      data-test="input-pressure"
-      :class="{ 'obsisim-negative': store.buildingsWaitingForInput > 0 }"
-    >
-      {{ inputPressure }}
-    </p>
-    <!-- No obsisim-negative here, deliberately: unlike the two backlogs
-         above, a site under construction is not a stall — it is the queue
-         doing exactly what the player asked for. Nothing about count alone
-         tells "waiting" from "stuck" (that is what constructionNeeds is
-         for, per building, in the table below); this line states the
-         figure without editorializing on it. -->
-    <p class="obsisim-haul-pressure" data-test="build-pressure">
-      {{ buildPressure }}
-    </p>
-    <section v-for="chain in chains" :key="chain.name">
-      <h3>{{ chain.name }} chain</h3>
-      <table class="obsisim-table">
-        <thead>
-          <tr><th>Stage</th><th>Buildings (staffed)</th><th>Status</th><th>Output</th><th data-test="made-heading">Made/t</th><th data-test="inflow-heading">Delivered/t</th><th>Cons/t</th><th>Stock</th><th>Empties in</th></tr>
-        </thead>
-        <tbody>
-          <tr v-for="row in chain.steps" :key="row.building" :class="{ 'obsisim-starved': row.starved }">
-            <td>{{ row.stage }}</td>
-            <td>{{ row.crew }}</td>
-            <td :data-test="`status-${row.building}`">{{ row.status }}</td>
-            <td>{{ row.output }}</td>
-            <td :data-test="`made-${row.building}`">{{ row.made }}</td>
-            <td :data-test="`delivered-${row.building}`">{{ row.delivered }}</td>
-            <td>{{ row.cons }}</td>
-            <td>{{ row.stock }}</td>
-            <td :data-test="`runway-${row.outputId}`">{{ row.runway }}</td>
-          </tr>
-        </tbody>
-      </table>
-    </section>
+    <EconomyPressureLines />
+    <ChainTable :chains="chains">
+      <template #headers>
+        <th>Buildings (staffed)</th><th>Status</th><th>Output</th><th data-test="made-heading">Made/t</th><th data-test="economy-inflow-heading">Delivered/t</th><th>Cons/t</th><th>Stock</th><th>Empties in</th>
+      </template>
+      <template #cells="{ row }">
+        <td>{{ row.crew }}</td>
+        <td :data-test="`status-${row.building}`">{{ row.status }}</td>
+        <td>{{ row.output }}</td>
+        <td :data-test="`made-${row.building}`">{{ row.made }}</td>
+        <td :data-test="`delivered-${row.building}`">{{ row.delivered }}</td>
+        <td>{{ row.cons }}</td>
+        <td>{{ row.stock }}</td>
+        <td :data-test="`runway-${row.outputId}`">{{ row.runway }}</td>
+      </template>
+    </ChainTable>
   </div>
 </template>

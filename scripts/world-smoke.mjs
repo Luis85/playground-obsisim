@@ -325,7 +325,44 @@ await wait(400);
 const millSite = await shot();
 check('a construction site has a ring colour of its own (only the building\'s state differs)', !millSite.equals(millUnstaffed));
 
-await step(36); // dispose()
+// Selection and highlight. One change per phase (see the harness's phase
+// list from 36 on), so each check below fails for the reason it names —
+// the same OBS-4-04 discipline every group above follows.
+await step(36); // a scene carrying worker 12 and building 1 — settle before measuring
+await wait(400);
+const sceneBaseline = await shot();
+
+await step(37); // ONE change: a colonist ring appears
+await wait(300);
+const colonistRing = await shot();
+check('a colonist selection draws a ring (the phase-11 building ring bundles its selection with a ghost, so only this isolated frame proves it)', !colonistRing.equals(sceneBaseline));
+
+await step(38); // ONE change: the ring moves from the colonist to a building
+await wait(300);
+const buildingRing = await shot();
+check('the selection ring moves from a colonist to a building', !buildingRing.equals(colonistRing));
+
+await step(39); // ONE change: the ring clears — and this is the highlight baseline
+await wait(300);
+const noRing = await shot();
+check('a selection ring clears', !noRing.equals(buildingRing));
+
+await step(40); // ONE change: a building pulse against that cleared baseline
+await wait(300);
+const buildingPulse = await shot();
+check('setHighlight draws a pulse on a building (against the cleared-selection baseline, not bundled with clearing it)', !buildingPulse.equals(noRing));
+
+await step(41); // ONE change: the pulse moves to a colonist
+await wait(300);
+const colonistPulse = await shot();
+check('setHighlight has a colonist branch (the pulse moves off the building)', !colonistPulse.equals(buildingPulse));
+
+await step(42); // ONE change: the pulse clears
+await wait(300);
+const noPulse = await shot();
+check('a highlight pulse clears', !noPulse.equals(colonistPulse));
+
+await step(43); // dispose()
 await wait(300);
 check('dispose() raises no errors', pageErrors.length === 0);
 

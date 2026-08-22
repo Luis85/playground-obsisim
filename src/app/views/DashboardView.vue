@@ -1,17 +1,25 @@
 <script setup lang="ts">
-import { inject } from 'vue';
-import { ENGINE_KEY } from '../engine-key';
 import { useGameStore } from '../stores/game-store';
-import { RESOURCES, RESOURCE_IDS } from '../../engine/content';
 // Shared with the Population view rather than restated here: both screens show
 // the same stage counts, beds and meals-per-head, and two copies of that block
 // are two chances for them to disagree about a number the player is comparing
 // across tabs.
 import PopulationSummary from '../components/PopulationSummary.vue';
+// The resource table itself is shared with the dock's ColonyPanel, per §2.7
+// re-opened at Task 8's fix: once ColonyPanel carries all seven columns
+// spec §2.3 asks for, the two tables are the same markup, not two similarly-
+// shaped ones — see ResourceTable.vue's own comment for the full reasoning
+// and for what deliberately stayed here instead (this headline block).
+import ResourceTable from '../components/ResourceTable.vue';
+// The hauler count and its two verbs, shared with ResourceStrip's own copy
+// of this exact pair — see HaulerControls.vue's own comment for why a
+// shared component, not each view's own markup: §2.2 requires BOTH
+// directions to state their refusal in the panel (not a `title`), and once
+// this file's hauler pair was brought up to that same standard the two
+// blocks were no longer merely similar, they were identical.
+import HaulerControls from '../components/HaulerControls.vue';
 
-const engine = inject(ENGINE_KEY)!;
 const store = useGameStore();
-const fmt = (n: number) => n.toFixed(2);
 </script>
 
 <template>
@@ -21,42 +29,8 @@ const fmt = (n: number) => n.toFixed(2);
       <span>Population: <strong>{{ store.snapshot.population }}</strong> ({{ store.snapshot.idleAdults }} idle)</span>
       <PopulationSummary />
       <span>Buildings: <strong>{{ store.snapshot.buildings.length }}</strong></span>
-      <span class="obsisim-haulers">
-        Haulers: <strong data-test="hauler-count">{{ store.haulerCount }}</strong>
-        <button
-          data-test="unassign-hauler"
-          :disabled="store.haulerCount === 0"
-          title="Send a hauler back to the idle camp"
-          @click="engine.dispatch({ type: 'unassignHauler' })"
-        >−</button>
-        <button
-          data-test="assign-hauler"
-          :disabled="store.snapshot.idleAdults === 0"
-          title="Put an idle worker on hauling duty"
-          @click="engine.dispatch({ type: 'assignHauler' })"
-        >+</button>
-      </span>
+      <HaulerControls />
     </div>
-    <table class="obsisim-table">
-      <thead>
-        <tr><th>Resource</th><th>Tier</th><th>Stock</th><th data-test="inflow-heading">Delivered/t</th><th>Cons/t</th><th>Net</th><th>Empties in</th><th>Value</th></tr>
-      </thead>
-      <tbody>
-        <tr v-for="id in RESOURCE_IDS" :key="id">
-          <td>{{ RESOURCES[id].name }}</td>
-          <td>{{ RESOURCES[id].tier }}</td>
-          <td>{{ store.snapshot.stockpile[id].stock }}</td>
-          <td>{{ fmt(store.snapshot.stockpile[id].deliveredRate) }}</td>
-          <td>{{ fmt(store.snapshot.stockpile[id].consumptionRate) }}</td>
-          <td :class="store.snapshot.stockpile[id].netFlow >= 0 ? 'obsisim-positive' : 'obsisim-negative'">
-            {{ fmt(store.snapshot.stockpile[id].netFlow) }}
-          </td>
-          <td :data-test="`runway-${id}`" :class="{ 'obsisim-negative': (store.runways[id] ?? Infinity) <= 30 }">
-            {{ store.runways[id] !== undefined ? `~${store.runways[id]}t` : '—' }}
-          </td>
-          <td>{{ store.snapshot.stockpile[id].stockValue.toFixed(0) }}</td>
-        </tr>
-      </tbody>
-    </table>
+    <ResourceTable />
   </div>
 </template>

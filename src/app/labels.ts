@@ -1,7 +1,57 @@
-import { BALANCE, RESOURCES, type BuildingDef, type CostMap, type ResourceId } from '../engine/content';
+import { BALANCE, BUILDINGS, RESOURCES, type BuildingDef, type BuildingDefId, type CostMap, type ResourceId } from '../engine/content';
 import type { HaulKind } from '../shared/haul';
 import type { LifeStage } from '../shared/population';
-import type { BuildingState } from '../shared/snapshot';
+import type { BuildingSnapshot, BuildingState, ResourceStats } from '../shared/snapshot';
+import type { Chain } from '../shared/content-types';
+import type { DockPanel } from './stores/ui-store';
+
+/**
+ * "No idle adults — unassign someone first." Read by both staffing verbs
+ * (assignWorker, on both surfaces, via `staffing.ts`) and both hauler verbs
+ * (assignHauler, on both surfaces) — every one of them refuses on the exact
+ * same colony-wide fact, so this is the one sentence, not four independently
+ * worded copies that could drift the day one of them is reworded.
+ */
+export const NO_IDLE_ADULTS_REASON = 'No idle adults — unassign someone first.';
+
+/** "No haulers to send back." — `unassignHauler`'s own refusal at zero, the
+ * unassign-direction twin of `NO_IDLE_ADULTS_REASON` above. Missing on both
+ * the strip and the Ledger before Task 12's sweep: `:disabled` fired, and
+ * nothing said why. */
+export const NO_HAULERS_REASON = 'No haulers to send back.';
+
+/** "A building under construction cannot be moved." — `handleMoveBuilding`'s
+ * one refusal that applies before a target tile is even chosen, read by the
+ * Inspector's Move button (a single check, made before arming) and by the
+ * Ledger's Move button (the first of three checks, since the Ledger already
+ * has a target typed in). */
+export const MOVE_SITE_REASON = 'A building under construction cannot be moved.';
+
+/** "A construction site cannot be staffed until it is finished." — the first
+ * of `staffing.ts`'s `staffingRefusal` branches. Named here, not inlined,
+ * for the same reason every other refusal in this file is (M4, whole-branch
+ * review): presentation strings live in `labels.ts`, so a caller that reads
+ * `staffingRefusal`'s RETURN value never has to also import a literal it
+ * could reword independently of the sentence the function actually returns. */
+export const STAFFING_SITE_REASON = 'A construction site cannot be staffed until it is finished.';
+
+/** "Every slot is filled." — `staffing.ts`'s `staffingRefusal` at capacity. */
+export const STAFFING_FULL_REASON = 'Every slot is filled.';
+
+/** "Nothing is staffed here to unassign." — `staffing.ts`'s `unassignRefusal`
+ * at zero, the unassign-direction twin of the two constants above. */
+export const NOTHING_STAFFED_REASON = 'Nothing is staffed here to unassign.';
+
+/** "Whole tiles only." — `BuildingTableRow.vue`'s `moveRefusal`, guarding the
+ * two typed coordinate inputs against a non-integer before `isTileBuildable`
+ * (which assumes whole tiles) ever sees them. */
+export const WHOLE_TILES_ONLY_REASON = 'Whole tiles only.';
+
+/** "That tile is off the map, in the camp band, or already taken." —
+ * `BuildingTableRow.vue`'s `moveRefusal`, the Ledger's own restatement of
+ * `isTileBuildable`'s three failure modes in one sentence (the canvas shows
+ * the same refusal as a red ghost tile instead of words). */
+export const TILE_UNAVAILABLE_REASON = 'That tile is off the map, in the camp band, or already taken.';
 
 export const BUILDING_STATE_LABELS: Record<BuildingState, string> = {
   producing: 'Producing',
@@ -26,7 +76,7 @@ export function costLabel(cost: CostMap): string {
  * inline ternary) so the table's `<template>` doesn't carry the branch:
  * presentation lives in labels.ts, per BuildingsView's own comment. Its one
  * caller today is that table; the natural second call site,
- * SelectionPanel.vue's relocation countdown, already carries its own inline
+ * InspectorPanel.vue's relocation countdown, already carries its own inline
  * branch with different wording ("Relocating: 9t left", not "6t") — that,
  * not a lack of reuse, is why this has a single caller. */
 export function downtimeLabel(relocatingTicks: number): string {
@@ -76,11 +126,56 @@ export const LIFE_STAGE_LABELS: Record<LifeStage, string> = {
  * cell is therefore the ONLY surface that can identify WHICH hauler is
  * transferring; the legend can only name the encoding.
  */
-export const HAUL_KIND_LABELS: Record<HaulKind, string> = {
+const HAUL_KIND_LABELS: Record<HaulKind, string> = {
   collect: 'Hauling',
   supply: 'Hauling',
   transfer: 'Transferring',
 };
+
+/**
+ * defId -> display name for every building currently in the snapshot — the
+ * lookup `jobLabel` below needs to turn a colonist's bare `buildingId` into
+ * the name its Job cell shows. Shared between PopulationView and
+ * PopulationPanel (spec §2.7 — one derivation, two surfaces): both need this
+ * exact map to feed `jobLabel`, and two components each walking
+ * `snapshot.buildings` themselves would be two chances for the lookup to
+ * disagree the day a def's naming rule changes.
+ */
+export function buildingNamesById(buildings: readonly BuildingSnapshot[]): Map<number, string> {
+  const names = new Map<number, string>();
+  for (const b of buildings) names.set(b.id, BUILDINGS[b.defId].name);
+  return names;
+}
+
+/**
+ * What the Job column shows for one colonist — the Population view's and, as
+ * of the Population panel, the dock's Population panel's, both reading this
+ * one function rather than each keeping its own copy that could drift the
+ * first time either was reworded (the same reasoning as
+ * `BUILDING_STATE_LABELS` and `LIFE_STAGE_LABELS` above, extended to a
+ * function rather than a Record because this cell also depends on the
+ * colonist's own hauling state, not just a lookup key).
+ *
+ * `jobNames` is passed in rather than derived here: `src/app/labels.ts` has
+ * no store to read `snapshot.buildings` from, and a caller recomputing it
+ * once (via `buildingNamesById` above) and handing it to every row is cheaper
+ * than this function re-walking the buildings array per colonist.
+ *
+ * '?' rather than throwing: `jobNames` only tracks buildings still in the
+ * snapshot, so a stale `buildingId` (a building removed mid-tick) degrades to
+ * an unknown label instead of crashing the whole table.
+ *
+ * `haulKind` rather than `haulTargetId`: a transfer names no building for its
+ * whole life, so the id this column otherwise resolves to a name is null on
+ * exactly the rows that need distinguishing. Null kind means a hauler between
+ * trips, which is still hauling — `HAUL_KIND_LABELS` above covers the three
+ * kinds a running trip can be.
+ */
+export function jobLabel(buildingId: number | null, hauling: boolean, haulKind: HaulKind | null, jobNames: Map<number, string>): string {
+  if (hauling) return haulKind === null ? 'Hauling' : HAUL_KIND_LABELS[haulKind];
+  if (buildingId === null) return 'Idle';
+  return jobNames.get(buildingId) ?? '?';
+}
 
 /** "25y". The sim counts only ticks and nothing downstream of BALANCE sees a
  * year (spec 2.8), so the conversion happens here, against the one constant
@@ -138,6 +233,29 @@ export function needsLabel(needs: CostMap): string {
 }
 
 /**
+ * "11 / 25 Wood, 5 / 5 Planks" — what a construction site holds against what it
+ * takes, which is the progress `needsLabel`'s shortfall cannot show: "14 Wood"
+ * reads the same on a site that has just been ordered as on one load from
+ * finishing. The Inspector's Needs line (spec §2.3's "have / need") reads
+ * this, not `needsLabel` — Task 12 will read it too, for the Ledger's own
+ * Needs cell, so its signature is a cross-task interface rather than a
+ * private helper of either caller.
+ *
+ * `have` is derived, not published: `BuildingSnapshot.constructionNeeds` is the
+ * REMAINING need, so cost minus need is what has arrived. Reads the def's cost
+ * from BUILDINGS rather than taking it as an argument, the same way
+ * `recipeLabel` does, so a cost change cannot desync the two halves.
+ */
+export function suppliedLabel(defId: BuildingDefId, needs: CostMap): string {
+  const cost = BUILDINGS[defId].cost;
+  const parts = Object.entries(cost).map(([id, total]) => {
+    const outstanding = needs[id as ResourceId] ?? 0;
+    return `${total - outstanding} / ${total} ${RESOURCES[id as ResourceId].name}`;
+  });
+  return parts.length > 0 ? parts.join(', ') : '—';
+}
+
+/**
  * "3 / 4" for a house, "33%" for a producer — the Buildings table's one
  * progress column, answering the same question for both: is this building
  * doing its job?
@@ -176,3 +294,141 @@ export function mealsClass(perHead: number): string {
 export function starvingLabel(starvingTicks: number): string {
   return starvingTicks > 0 ? `${BALANCE.starvationDeathTicks - starvingTicks}t` : '—';
 }
+
+/**
+ * One rendered stage of an Economy chain — a formatted row over one CHAINS
+ * step, not a def's raw numbers. Shared between EconomyView (the Ledger's
+ * wide table) and EconomyPanel (the dock's narrower one) per spec §2.7's
+ * "one figure, one derivation, two surfaces": both surfaces show the exact
+ * same Made/t, Delivered/t and Status a stage carries, so this is the one
+ * place that walks CHAINS and reads staffingByDef/stageStatuses/runways —
+ * neither view derives its own copy that could drift from the other's.
+ */
+export interface ChainStageRow {
+  building: BuildingDefId;
+  stage: string;
+  crew: string;
+  status: string;
+  starved: boolean;
+  output: string;
+  made: string;
+  delivered: string;
+  cons: string;
+  stock: number;
+  outputId: ResourceId;
+  runway: string;
+}
+
+export interface ChainTableRow {
+  name: string;
+  steps: ChainStageRow[];
+}
+
+/**
+ * Every CHAINS step, formatted for a table row. Takes the store's own
+ * getters as plain data (never the store itself — `labels.ts` has no store
+ * to read, the same boundary `buildingNamesById`/`jobLabel` already keep)
+ * so a def with no buildings still renders — `staffingByDef`/`stageStatuses`
+ * default to "0 (0)"/"not built" for exactly that def, which is what lets an
+ * Economy stage row exist (and be clickable) before the first building of
+ * that kind is ever placed.
+ */
+export function chainTableRows(
+  chains: readonly Chain[],
+  staffingByDef: Partial<Record<BuildingDefId, { total: number; staffed: number; starved: number }>>,
+  stageStatuses: Partial<Record<BuildingDefId, { label: string; starved: boolean }>>,
+  runways: Partial<Record<ResourceId, number>>,
+  stockpile: Record<ResourceId, ResourceStats>,
+): ChainTableRow[] {
+  return chains.map((chain) => ({
+    name: chain.name,
+    steps: chain.steps.map((step) => {
+      const staffing = staffingByDef[step.building] ?? { total: 0, staffed: 0, starved: 0 };
+      const status = stageStatuses[step.building] ?? { label: 'not built', starved: false };
+      const runway = runways[step.output];
+      const stats = stockpile[step.output];
+      return {
+        building: step.building,
+        stage: BUILDINGS[step.building].name,
+        crew: `${staffing.total} (${staffing.staffed})`,
+        status: status.label,
+        starved: status.starved,
+        output: RESOURCES[step.output].name,
+        made: stats.madeRate.toFixed(2),
+        // Store inflow, not gross output (OBS-4-06): since increment 4 goods
+        // reach the stockpile when a hauler delivers them, not when they are
+        // made, so this is the per-stage haul backlog EconomyView's own
+        // "Delivered/t" heading names.
+        delivered: stats.deliveredRate.toFixed(2),
+        cons: stats.consumptionRate.toFixed(2),
+        stock: stats.stock,
+        outputId: step.output,
+        runway: runway !== undefined ? `~${runway}t` : '—',
+      };
+    }),
+  }));
+}
+
+/** The haul backlog sentence — the answer to "my production fell and I did
+ * not change anything" (PRD §5). Shared between EconomyView and EconomyPanel
+ * (spec §2.7): both read the exact same three store getters, so the two
+ * surfaces cannot report different numbers for the same stall. */
+export function haulPressureLabel(unitsWaiting: number, haulerCount: number, stalledBuildings: number): string {
+  if (unitsWaiting === 0) return 'Hauling is keeping up: nothing is waiting at a building.';
+  const haulers = `${haulerCount} hauler${haulerCount === 1 ? '' : 's'}`;
+  const stalled = `${stalledBuildings} stalled`;
+  return `${unitsWaiting} units waiting for collection — ${stalled} — ${haulers} on duty.`;
+}
+
+/** The input-side twin of haulPressureLabel above — the answer to "why is my
+ * bakery stopped?" (§2.10). */
+export function inputPressureLabel(buildingsWaitingForInput: number, unitsShort: number): string {
+  if (buildingsWaitingForInput === 0) return 'Input delivery is keeping up: no building is waiting.';
+  const buildings = `${buildingsWaitingForInput} building${buildingsWaitingForInput === 1 ? '' : 's'}`;
+  return `${unitsShort} units short — ${buildings} waiting for input.`;
+}
+
+/** The build-side third of the same shape (§2.10, beside haulPressureLabel
+ * and inputPressureLabel above): what the colony's construction queue still
+ * owes. No "obsisim-negative" class decision here, deliberately: unlike the
+ * two backlogs above, a site under construction is not a stall — that
+ * judgement stays with the caller, which is why this returns only text. */
+export function buildPressureLabel(buildingsUnderConstruction: number, unitsNeededForConstruction: number): string {
+  if (buildingsUnderConstruction === 0) return 'Nothing is under construction.';
+  const sites = `${buildingsUnderConstruction} site${buildingsUnderConstruction === 1 ? '' : 's'}`;
+  return `${unitsNeededForConstruction} units needed — ${sites} under construction.`;
+}
+
+/**
+ * Keyed by the `DockPanel` union for the same reason `BUILDING_STATE_LABELS`
+ * above is: a sixth panel added to that union with no entry here is a
+ * compile error in this file, not a live tab button that silently renders an
+ * unlabelled blank (WorldScreen.vue's tab strip reads `DOCK_LABELS[p]`
+ * directly, with nothing between the union and the label).
+ */
+export const DOCK_LABELS: Record<DockPanel, string> = {
+  inspector: 'Inspector',
+  colony: 'Colony',
+  population: 'Population',
+  economy: 'Economy',
+  attention: 'Attention',
+};
+
+/**
+ * The dock's four UNCONDITIONAL tabs, in display order — every `DockPanel`
+ * EXCEPT `inspector`. Typed over `Exclude<DockPanel, 'inspector'>` rather
+ * than a bare `DockPanel[]` so that omission is enforced here too, not
+ * merely asserted in this comment.
+ *
+ * Inspector is deliberately absent from this array, but it is NOT
+ * unreachable from the dock: `DockTabs.vue` renders it as a fifth tab of its
+ * own, gated on `ui.selection.kind !== 'none'` rather than always-on like
+ * these four. A tab that opened it with no selection behind it would show an
+ * empty panel with nothing to point at — that is why it is not simply added
+ * here — but excluding it from the dock entirely, the way an earlier version
+ * of this file did, broke spec §2.3's "the Inspector one click away" for
+ * every selection made from a panel row rather than the canvas (I3,
+ * whole-branch review): see `DockTabs.vue`'s own template comment for the
+ * gating logic this array does not carry.
+ */
+export const DOCK_PANELS: readonly Exclude<DockPanel, 'inspector'>[] = ['colony', 'population', 'economy', 'attention'];

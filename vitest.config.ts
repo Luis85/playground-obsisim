@@ -59,11 +59,33 @@ export default defineConfig({
       provider: 'v8',
       include: ['src/engine/**', 'src/shared/**', 'src/app/**'],
       thresholds: {
-        // the sim is the product: gate it hard. Views are gated by the LOC guard
-        // and BuildingsView's interaction tests; their coverage floor comes later.
+        // the sim is the product: gate it hard.
         'src/engine/**': { statements: 90, branches: 85, functions: 90, lines: 90 },
         'src/shared/**': { statements: 90, branches: 85, functions: 90, lines: 90 },
         'src/app/stores/**': { statements: 90, branches: 85, functions: 90, lines: 90 },
+        // Increment 11 is the "later" the comment above used to defer to: it
+        // roughly doubles the view layer, and it is the one increment where the
+        // views ARE the product. 80/70 rather than the engine's 90/85 because
+        // renderer-adjacent branches are not honestly reachable in jsdom, and a
+        // floor set where it cannot be met is a floor that gets loosened later.
+        'src/app/components/**': { statements: 80, branches: 70, functions: 80, lines: 80 },
+        'src/app/views/**': { statements: 80, branches: 70, functions: 80, lines: 80 },
+        // A glob threshold is an aggregate by default, and the PBI this closes
+        // is named *Per-View* Coverage Floors: without perFile a well-covered
+        // TopBar and NoticeBanner could carry a brand-new, nearly-untested panel
+        // over the line, green while the thing the floor exists to protect is
+        // uncovered. `perFile` verified against the installed vitest's own
+        // types (node_modules/vitest/dist/chunks/reporters.d.*.d.ts): it is a
+        // top-level `thresholds` option only — the per-glob entry type
+        // (`Pick<Thresholds, 100 | 'statements' | 'functions' | 'branches' |
+        // 'lines'>`) does not include it, so it cannot be scoped to a glob and
+        // applies to every entry above, engine and shared included. Measured
+        // rather than assumed to be affordable: every src/engine/** and
+        // src/shared/** file already clears 90/85/90/90 individually, so this
+        // costs the sim nothing and buys the view layer real per-file
+        // enforcement instead of an aggregate that hides a thin file behind a
+        // well-tested sibling.
+        perFile: true,
       },
     },
   },

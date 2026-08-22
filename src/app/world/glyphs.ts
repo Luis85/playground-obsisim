@@ -108,6 +108,23 @@ export function selectionRing(theme: WorldTheme): Actor {
   return ring;
 }
 
+/** The plural "highlight" pulse (spec §2.3): a translucent accent glow over a
+ * subject that a panel row lit up without selecting — a Population panel
+ * clicks one colonist into a `selectionRing`, but "3 colonists have no bed" in
+ * Attention names several at once, none of them selected, and no Inspector.
+ * Deliberately a FILLED square rather than the selection ring's outline, so
+ * the two read as different things at a glance rather than one looking like a
+ * flickering copy of the other. Same accent hue as the selection ring on
+ * purpose — both mean "the canvas is pointing at this" — just spoken in a
+ * different register (opacity is set on `graphics`, the same knob `setGhost`
+ * already turns for its own translucent preview). */
+export function highlightPulse(theme: WorldTheme): Actor {
+  const pulse = new Actor({ z: 2 });
+  pulse.graphics.use(new Rectangle({ width: TILE * 1.1, height: TILE * 1.1, color: Color.fromHex(theme.accent) }));
+  pulse.graphics.opacity = 0.35;
+  return pulse;
+}
+
 /** One hidden satellite dot for a colonist. A fixed-hue mark passes its
  * graphic here once; a mark whose hue varies passes null and is given one per
  * sync. */

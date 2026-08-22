@@ -1,9 +1,17 @@
+import { vi } from 'vitest';
+import { mount } from '@vue/test-utils';
+import { createTestingPinia } from '@pinia/testing';
 import type { ResourceStats, Snapshot } from '../../src/shared/snapshot';
 import { RESOURCE_IDS } from '../../src/engine/content/resources';
 import { BALANCE } from '../../src/engine/content/balance';
 import type { ResourceId } from '../../src/shared/content-types';
 import type { BuildingSnapshot, ColonistSnapshot } from '../../src/shared/snapshot';
 import { CAMP_TILE } from '../../src/shared/haul';
+import App from '../../src/app/App.vue';
+import { createGameRouter } from '../../src/app/router';
+import { ENGINE_KEY } from '../../src/app/engine-key';
+import { useGameStore } from '../../src/app/stores/game-store';
+import { WORLD_RENDERER_KEY, type WorldRenderer, type WorldRendererFactory } from '../../src/app/world/renderer-key';
 
 /**
  * A full stockpile with the given resources' `stock` set, everything else at
@@ -65,4 +73,68 @@ export function makeWorker(id: number, overrides: Partial<ColonistSnapshot> = {}
     deliveredWorkPower: null,
     ...overrides,
   };
+}
+
+/**
+ * A fake WorldRenderer whose factory always succeeds, returning the same
+ * renderer instance every call — so `factory` mock-call assertions (criterion
+ * 5: built exactly once) and `renderer` method assertions (start/stop/dispose)
+ * read the one object the component under test actually holds. Shared by
+ * world-screen.test.ts and ledger-view.test.ts rather than each keeping its
+ * own copy of this object literal, which is what fallow's clone detector
+ * would otherwise see as one control duplicated twice.
+ */
+export function makeFake(): { renderer: WorldRenderer; factory: WorldRendererFactory } {
+  const renderer: WorldRenderer = {
+    sync: vi.fn(), pick: vi.fn(() => null), tileAt: vi.fn(() => null),
+    setGhost: vi.fn(), setSelection: vi.fn(), setHighlight: vi.fn(),
+    onFatal: vi.fn(), start: vi.fn(), stop: vi.fn(), dispose: vi.fn(),
+  };
+  return { renderer, factory: vi.fn(() => renderer) };
+}
+
+/**
+ * Criterion 3 needs both of §2.5's two renderer failures, and they are
+ * reached through this one factory shape, toggled by `shouldThrow`: a
+ * throwing factory never returns a renderer at all (the BOOT failure —
+ * `renderer` is null because `WorldStage`'s `onMounted` never gets past the
+ * `try`), while a succeeding factory hands back `makeFake()`'s renderer,
+ * whose captured `onFatal` callback the caller can invoke by hand to drive
+ * the POST-boot failure — the one a throwing factory can never reach, because
+ * that callback is registered only after the factory succeeds
+ * (`WorldStage.vue`'s own comment on `created.onFatal`).
+ */
+export function makeFakeFactory(shouldThrow: boolean): { renderer: WorldRenderer | null; factory: WorldRendererFactory } {
+  if (shouldThrow) return { renderer: null, factory: vi.fn(() => { throw new Error('no webgl'); }) };
+  return makeFake();
+}
+
+/**
+ * Mounts the real `App.vue` behind the real router (`createGameRouter`) —
+ * the one mount neither `world-screen.test.ts`'s `mountScreen` (WorldScreen
+ * alone, no router) nor `dock-panels.test.ts`'s panel mounts reach, and the
+ * one criterion 3 and criterion 5 both need: criterion 3 because `App.vue` is
+ * the component that watches `ui.rendererFailure` and owns the persistent
+ * banner: criterion 5 because a real `/` -> `/ledger` -> `/` round trip only
+ * exists through the real router, not a hand-built `KeepAlive` harness.
+ * `attachTo: document.body` because `App.vue`'s `keydown` listener and the
+ * banner's `document.querySelector` lookups both need a live document, the
+ * same reason `mountScreen` in world-screen.test.ts attaches too.
+ */
+export async function mountApp(factory: WorldRendererFactory) {
+  const pinia = createTestingPinia({ createSpy: vi.fn, stubActions: false });
+  useGameStore(pinia).ingest(makeSnapshot({ idleAdults: 1, buildings: [makeBuilding(1)] }), { paused: true, speed: 1, error: null });
+  const router = createGameRouter();
+  await router.push('/');
+  const wrapper = mount(App, {
+    attachTo: document.body,
+    global: {
+      plugins: [pinia, router],
+      provide: {
+        [WORLD_RENDERER_KEY as symbol]: factory,
+        [ENGINE_KEY as symbol]: { dispatch: vi.fn() },
+      },
+    },
+  });
+  return { wrapper, router };
 }

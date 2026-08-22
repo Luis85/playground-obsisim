@@ -257,12 +257,12 @@ const phases: Array<() => void> = [
   () => renderer.sync(haulScene(9, { hauling: true, haulTargetId: 1, haulPhase: 'returning', haulTicksLeft: 1, carrying: 6, ...HOME_LEG }, { state: 'relocating', relocatingTicks: 6 })),
   () => {
     renderer.setGhost({ defId: 'bakery', col: 10, row: 5, valid: true });
-    renderer.setSelection(1);
+    renderer.setSelection({ kind: 'building', id: 1 });
   },
   () => renderer.setGhost({ defId: 'bakery', col: 10, row: 5, valid: false }),
   () => {
     renderer.setGhost(null);
-    renderer.setSelection(null);
+    renderer.setSelection({ kind: 'none' });
   },
   // colony reset: tick regresses, entity ids restart — the scene must forget
   // the old colony instead of gliding recycled ids from their former posts
@@ -320,7 +320,33 @@ const phases: Array<() => void> = [
   // `state` alone). §2.10's own precedent: 'relocating' got its ring proven
   // this same way (step 10 above).
   () => renderer.sync(constructionScene(21, { state: 'underConstruction', constructionTicks: 20 })),    // 35
-  () => renderer.dispose(),                                         // 36
+  // Seven selection/highlight phases, one change each — the same OBS-4-04
+  // discipline every group above follows. `constructionScene` (phase 35) is a
+  // mill and nothing else, so selecting a colonist there would draw nothing
+  // even in a correct renderer and the first comparison would fail for the
+  // wrong reason — this phase swaps back to a scene that actually carries a
+  // colonist (worker 12) and a building (id 1) before any selection is drawn.
+  () => renderer.sync(haulScene(10, {})),                            // 36: worker 12 and building 1, settled
+  // ONE change: a colonist ring appears. The building-ring phase (11) bundles
+  // its selection with a ghost, so only an isolated frame like this one can
+  // prove the colonist branch draws anything at all.
+  () => renderer.setSelection({ kind: 'colonist', id: 12 }),         // 37
+  // ONE change: the ring moves from the colonist to a building.
+  () => renderer.setSelection({ kind: 'building', id: 1 }),          // 38
+  // ONE change: the ring clears. Also the BASELINE the two highlight frames
+  // below are measured against — clearing a selection and adding a highlight
+  // in the same phase would be two changes, and the frame would differ from
+  // its predecessor because the ring vanished, leaving setHighlight's own
+  // building branch free to draw nothing and still pass.
+  () => renderer.setSelection({ kind: 'none' }),                     // 39
+  // ONE change: a building pulse appears against that cleared baseline.
+  () => renderer.setHighlight([{ kind: 'building', id: 1 }]),        // 40
+  // ONE change: the pulse moves to a colonist — the second setHighlight
+  // branch, which phase 40 cannot reach on its own.
+  () => renderer.setHighlight([{ kind: 'colonist', id: 12 }]),       // 41
+  // ONE change: the pulse clears.
+  () => renderer.setHighlight([]),                                   // 42
+  () => renderer.dispose(),                                         // 43
 ];
 
 window.__step = (index: number) => {

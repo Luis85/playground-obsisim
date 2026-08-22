@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { efficiencyBucket, resolveWorldTheme } from '../../src/app/world/theme';
 import { BUILDING_IDS } from '../../src/engine/content/buildings';
@@ -8,6 +9,16 @@ import { BUILDING_IDS } from '../../src/engine/content/buildings';
 // never pass through). The reader function is injected, so these tests never
 // need a DOM. The same resolved palette also feeds the WorldView legend, so
 // a fallback here is a legend chip color too — one source of truth.
+//
+// Task 13 (spec §2.9, "one palette, two renderers"): theme.ts no longer reads
+// an Obsidian vault variable (`--color-green`) directly — it reads an
+// `--obsisim-*` custom property that styles.css defines on `.obsisim`, and
+// THAT declaration is what nests the vault lookup (see styles.css's own
+// comment on the token block). The tests below that used to feed
+// `--color-green` etc. now feed the `--obsisim-*` name theme.ts actually
+// reads, and a new describe block below reads both files' source text to
+// assert the two cannot drift apart: every token name theme.ts passes to
+// `pick()` has to be one styles.css actually declares.
 
 const HEX = /^#[0-9a-f]{6}$/i;
 const none = () => '';
@@ -31,15 +42,68 @@ function minChannelDistance(a: string, b: string): number {
 
 describe('resolveWorldTheme', () => {
   it('uses a CSS variable when it resolves to a hex color', () => {
-    const theme = resolveWorldTheme((name) => (name === '--color-green' ? ' #11aa55 ' : ''));
+    const theme = resolveWorldTheme((name) => (name === '--obsisim-state-producing' ? ' #11aa55 ' : ''));
     expect(theme.stateRing.producing).toBe('#11aa55');
   });
 
   it('falls back to a built-in hex when the variable is missing or not hex', () => {
     const missing = resolveWorldTheme(none);
-    const garbage = resolveWorldTheme(() => 'hsl(120, 50%, 50%)');
+    const garbage = resolveWorldTheme(() => 'not-a-colour');
     expect(missing.stateRing.producing).toMatch(HEX);
     expect(garbage.stateRing.producing).toBe(missing.stateRing.producing);
+  });
+
+  // hsl()/hsla() are a documented, deliberate gap (see theme.ts's own comment
+  // on normalizeColor): this pins that the fallback still fires for them,
+  // the same as any other unparseable value, rather than silently changing
+  // behaviour in a way this suite would not catch.
+  it('still falls back for hsl()/hsla(), the one documented gap in the normalizer', () => {
+    const hsl = resolveWorldTheme(() => 'hsl(120, 50%, 50%)');
+    const hsla = resolveWorldTheme(() => 'hsla(120, 50%, 50%, 0.5)');
+    const missing = resolveWorldTheme(none);
+    expect(hsl.stateRing.producing).toBe(missing.stateRing.producing);
+    expect(hsla.stateRing.producing).toBe(missing.stateRing.producing);
+  });
+
+  // The defect this fix closes (spec §2.9, "one palette, two renderers"): a
+  // theme whose --color-orange resolves through getComputedStyle() as
+  // something other than 6-digit hex used to make the canvas silently fall
+  // back to the hardcoded literal while the HTML chrome rendered the theme's
+  // actual colour — the exact divergence between the Attention row and the
+  // ring on that building that §2.9 says is impossible by construction. This
+  // is the assertion that would have failed before the fix: the resolved
+  // value must be the theme's colour, not '#e5a63a'.
+  it('resolves a non-hex-but-valid waiting colour to the theme colour, not the hardcoded fallback', () => {
+    const themed = resolveWorldTheme((name) => (name === '--obsisim-state-waiting' ? 'rgb(229, 165, 75)' : ''));
+    expect(themed.stateRing.waitingForInput).toBe('#e5a54b');
+    expect(themed.stateRing.waitingForInput).not.toBe('#e5a63a');
+  });
+
+  it('normalizes "#rgb" shorthand to full 6-digit hex', () => {
+    const themed = resolveWorldTheme((name) => (name === '--obsisim-state-waiting' ? '#e5a' : ''));
+    expect(themed.stateRing.waitingForInput).toBe('#ee55aa');
+  });
+
+  it('normalizes rgb()/rgba() in both comma- and space-separated forms', () => {
+    const cases: Array<[string, string]> = [
+      ['rgb(229, 165, 75)', '#e5a54b'],
+      ['rgba(229, 165, 75, 0.8)', '#e5a54b'],
+      ['rgb(229 165 75)', '#e5a54b'],
+      ['rgb(229 165 75 / 0.8)', '#e5a54b'],
+      ['RGB(229,165,75)', '#e5a54b'],
+    ];
+    for (const [input, expected] of cases) {
+      const themed = resolveWorldTheme((name) => (name === '--obsisim-state-waiting' ? input : ''));
+      expect(themed.stateRing.waitingForInput).toBe(expected);
+    }
+  });
+
+  it('still falls back for genuinely unparseable values and the empty string', () => {
+    const missing = resolveWorldTheme(none);
+    for (const bad of ['', 'not-a-colour', 'rgb(1, 2)', 'rgb(1, 2, 3, 4, 5)', '#12', '#1234']) {
+      const themed = resolveWorldTheme((name) => (name === '--obsisim-state-waiting' ? bad : ''));
+      expect(themed.stateRing.waitingForInput).toBe(missing.stateRing.waitingForInput);
+    }
   });
 
   it.each(BUILDING_IDS)('defines a fill and a glyph for %s', (id) => {
@@ -61,17 +125,102 @@ describe('resolveWorldTheme', () => {
     expect(theme.background).toMatch(HEX);
   });
 
-  it('resolves accent from --interactive-accent with a hex fallback', () => {
-    const themed = resolveWorldTheme((name) => (name === '--interactive-accent' ? '#123abc' : ''));
+  it('resolves accent from --obsisim-color-accent with a hex fallback', () => {
+    const themed = resolveWorldTheme((name) => (name === '--obsisim-color-accent' ? '#123abc' : ''));
     expect(themed.accent).toBe('#123abc');
     const fallback = resolveWorldTheme(() => '');
     expect(fallback.accent).toBe('#7c8cf0');
   });
 
   it('danger is the resolved red', () => {
-    const themed = resolveWorldTheme((name) => (name === '--color-red' ? '#aa1122' : ''));
+    const themed = resolveWorldTheme((name) => (name === '--obsisim-color-danger' ? '#aa1122' : ''));
     expect(themed.danger).toBe('#aa1122');
     expect(themed.colonistColors[0]).toBe('#aa1122'); // same source as starving-worker red
+  });
+
+  // Step 1 of this task's own brief: every stateRing/mark colour now reads an
+  // `--obsisim-*` token rather than an Obsidian vault variable directly, and
+  // BOTH halves of that contract need a test — the token is read when
+  // present, and theme.ts's own hardcoded literal still applies when it is
+  // not (a stylesheet that failed to load, or a call made before `.obsisim`
+  // is mounted around the queried element).
+  it('reads the new --obsisim-state-* tokens for the building-state ring', () => {
+    const themed = resolveWorldTheme((name) => {
+      switch (name) {
+        case '--obsisim-state-waiting': return '#123456';
+        case '--obsisim-state-output-full': return '#234567';
+        case '--obsisim-state-under-construction': return '#345678';
+        case '--obsisim-state-relocating': return '#456789';
+        case '--obsisim-state-housing': return '#56789a';
+        case '--obsisim-state-storing': return '#6789ab';
+        default: return '';
+      }
+    });
+    expect(themed.stateRing.waitingForInput).toBe('#123456');
+    expect(themed.stateRing.outputFull).toBe('#234567');
+    expect(themed.stateRing.underConstruction).toBe('#345678');
+    expect(themed.stateRing.relocating).toBe('#456789');
+    expect(themed.stateRing.housing).toBe('#56789a');
+    expect(themed.stateRing.storing).toBe('#6789ab');
+    // carriedLoad/carriedInput deliberately read the SAME tokens as
+    // relocating/storing (see theme.ts's own comments on both fields) —
+    // proving that here, rather than only via the fixed-literal test further
+    // down, is what would catch a future edit that gave them their own
+    // property and quietly split the "on purpose" match apart.
+    expect(themed.carriedLoad).toBe('#456789');
+    expect(themed.carriedInput).toBe('#6789ab');
+
+    // And the fallback half: with every token absent, every one of these
+    // still resolves to theme.ts's own hardcoded hex, unchanged by this task.
+    const fallback = resolveWorldTheme(() => '');
+    expect(fallback.stateRing.waitingForInput).toBe('#e5a63a');
+    expect(fallback.stateRing.outputFull).toBe('#8f6fbf');
+    expect(fallback.stateRing.underConstruction).toBe('#cf8b2f');
+    expect(fallback.stateRing.relocating).toBe('#4bbfd4');
+    expect(fallback.stateRing.housing).toBe('#4c8bf5');
+    expect(fallback.stateRing.storing).toBe('#a9835a');
+  });
+
+  it('reads the new --obsisim-mark-* tokens for the demographic marks, with the same fallback', () => {
+    const themed = resolveWorldTheme((name) => {
+      switch (name) {
+        case '--obsisim-mark-child': return '#111111';
+        case '--obsisim-mark-elder': return '#222222';
+        case '--obsisim-mark-homeless': return '#333333';
+        default: return '';
+      }
+    });
+    expect(themed.stageMark.child).toBe('#111111');
+    expect(themed.stageMark.elder).toBe('#222222');
+    expect(themed.homelessMark).toBe('#333333');
+
+    const fallback = resolveWorldTheme(() => '');
+    expect(fallback.stageMark.child).toBe('#e6c84a');
+    expect(fallback.stageMark.elder).toBe('#b9c2d0');
+    expect(fallback.homelessMark).toBe('#e0619e');
+  });
+
+  it('reads the new --obsisim-color-* tokens for background/ground/tool-ring/progress-fill', () => {
+    const themed = resolveWorldTheme((name) => {
+      switch (name) {
+        case '--obsisim-color-background': return '#444444';
+        case '--obsisim-color-ground-a': return '#555555';
+        case '--obsisim-color-ground-b': return '#666666';
+        case '--obsisim-color-tool-ring': return '#777777';
+        case '--obsisim-color-progress-fill': return '#888888';
+        default: return '';
+      }
+    });
+    expect(themed.background).toBe('#444444');
+    expect(themed.ground).toEqual(['#555555', '#666666']);
+    expect(themed.workerToolRing).toBe('#777777');
+    expect(themed.progressFill).toBe('#888888');
+
+    const fallback = resolveWorldTheme(() => '');
+    expect(fallback.background).toBe('#20242b');
+    expect(fallback.ground).toEqual(['#55714a', '#4d6743']);
+    expect(fallback.workerToolRing).toBe('#f2ecdd');
+    expect(fallback.progressFill).toBe('#f5efdc');
   });
 
   it('gives the output-full stall its own ring, distinct from every other state', () => {
@@ -169,5 +318,43 @@ describe('efficiencyBucket', () => {
       expect(bucket).toBeGreaterThanOrEqual(last);
       last = bucket;
     }
+  });
+});
+
+/*
+ * The by-eye half of spec §2.9's "light and dark come free from Obsidian's
+ * variables... both themes are a verification step rather than an
+ * assumption" cannot run here: this is a headless environment, there is no
+ * Obsidian to load the vault into, and no light/dark theme to look at (see
+ * this task's own report for the plain statement that step was not done).
+ * What CAN run headlessly is the STRUCTURAL half of that same promise: every
+ * `--obsisim-*` name theme.ts passes to `pick()` has to be a property
+ * styles.css actually declares on `.obsisim`, or the "one palette" in "one
+ * palette, two renderers" is a lie for that one colour — theme.ts's fallback
+ * would fire on every real mount, silently, with nothing here to catch it.
+ * Reading both files' source text and cross-referencing them is the
+ * automated substitute this task's report describes.
+ */
+describe('CSS token coverage (spec §2.9 — one palette, two renderers)', () => {
+  const themeSource = readFileSync(new URL('../../src/app/world/theme.ts', import.meta.url), 'utf8');
+  const cssSource = readFileSync(new URL('../../styles.css', import.meta.url), 'utf8');
+  // Every distinct `--obsisim-...` identifier theme.ts's own source text
+  // mentions as a `pick()` call's second argument. A plain regex over the
+  // whole file (not just resolveWorldTheme's body) is deliberately broader
+  // than it needs to be: a token added anywhere in this file, not only
+  // inside the one function this test suite otherwise exercises, still has
+  // to be declared for the fallback promise above to hold.
+  const tokenNames = [...new Set([...themeSource.matchAll(/'(--obsisim-[a-z-]+)'/g)].map((m) => m[1]))];
+
+  it('reads at least one token per themed colour', () => {
+    // A regression guard on the guard: if this ever reads 0, the regex
+    // above stopped matching (a quoting style change in theme.ts) rather
+    // than theme.ts having genuinely lost every token, and the loop below
+    // would then vacuously pass on an empty list.
+    expect(tokenNames.length).toBeGreaterThanOrEqual(18);
+  });
+
+  it.each(tokenNames)('%s is declared on .obsisim in styles.css', (name) => {
+    expect(cssSource).toContain(`${name}:`);
   });
 });

@@ -1,19 +1,18 @@
 import { createMemoryHistory, createRouter, type Router } from 'vue-router';
-import DashboardView from './views/DashboardView.vue';
-import WorldView from './views/WorldView.vue';
-import BuildingsView from './views/BuildingsView.vue';
-import PopulationView from './views/PopulationView.vue';
-import EconomyView from './views/EconomyView.vue';
+import WorldScreen from './views/WorldScreen.vue';
+import LedgerView from './views/LedgerView.vue';
 
+// Five routes become two (Task 12, spec §2.5): the canvas is the primary
+// play surface now, and Dashboard/Buildings/Population/Economy — each its
+// own tab through increment 11 — collapse into one Ledger route that
+// composes all four views in sequence. `/world` is gone too: WorldScreen
+// simply IS `/` now, nothing shares the shell with it.
 export function createGameRouter(): Router {
   return createRouter({
     history: createMemoryHistory(),
     routes: [
-      { path: '/', name: 'dashboard', component: DashboardView },
-      { path: '/world', name: 'world', component: WorldView },
-      { path: '/buildings', name: 'buildings', component: BuildingsView },
-      { path: '/population', name: 'population', component: PopulationView },
-      { path: '/economy', name: 'economy', component: EconomyView },
+      { path: '/', name: 'world', component: WorldScreen },
+      { path: '/ledger', name: 'ledger', component: LedgerView },
     ],
   });
 }
